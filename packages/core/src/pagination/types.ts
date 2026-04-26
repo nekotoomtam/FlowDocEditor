@@ -1,0 +1,111 @@
+/**
+ * Pagination types — รู้จัก page และ cursor
+ * รับ FlowBox จาก layout แล้วตัดเป็น pages
+ */
+
+// ─── Page Metrics ─────────────────────────────────────────────────────────────
+
+export interface PageContentBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PageMetrics {
+  pageWidth: number
+  pageHeight: number
+  contentBox: PageContentBox
+}
+
+// ─── Cursor ───────────────────────────────────────────────────────────────────
+
+// cursor ติดตามตำแหน่ง flow ปัจจุบัน
+export interface PageFlowCursor {
+  pageIndex: number
+  cursorY: number
+}
+
+// ─── Table Cell Render Props ──────────────────────────────────────────────────
+
+export interface ResolvedBorderSide {
+  style: "solid" | "dashed" | "dotted" | "none"
+  width: number  // abstract pt
+  color: string  // hex ไม่มี #
+}
+
+export interface ResolvedCellBorder {
+  top?: ResolvedBorderSide
+  right?: ResolvedBorderSide
+  bottom?: ResolvedBorderSide
+  left?: ResolvedBorderSide
+}
+
+export interface TableCellRenderProps {
+  colspan: number
+  rowspan: number
+  border: ResolvedCellBorder
+  background?: string
+  padding: number  // abstract pt
+  verticalAlign: "top" | "middle" | "bottom"
+}
+
+// ─── Render Props ─────────────────────────────────────────────────────────────
+
+// ข้อมูลที่ renderer ต้องการสำหรับ paragraph — ค่าทุกอย่างแปลงเป็น abstract pt แล้ว
+export interface ParagraphRenderProps {
+  fontSize: number
+  fontFamilyKey: string
+  align: "left" | "center" | "right" | "justify"
+  lineHeight: number
+  spacingBefore: number
+  spacingAfter: number
+  textIndent: number
+  indentLeft: number
+  indentRight: number
+}
+
+// ─── Page Fragments ───────────────────────────────────────────────────────────
+
+export interface PageFragment {
+  nodeId: string
+  nodeType: "paragraph" | "spacer" | "stack" | "row" | "body" | "table"
+  parentNodeId?: string
+  pageIndex: number
+  x: number
+  y: number
+  width: number
+  height: number
+  lines?: PaginatedLine[]
+  renderProps?: ParagraphRenderProps
+  cellRenderProps?: TableCellRenderProps
+}
+
+export interface PaginatedLine {
+  text: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+// ─── Paginated Document ───────────────────────────────────────────────────────
+
+export interface PaginatedPage {
+  index: number
+  width: number
+  height: number
+  contentBox: PageContentBox
+  fragments: PageFragment[]          // body fragments
+  headerFragments: PageFragment[]    // header fragments สำหรับหน้านี้
+  footerFragments: PageFragment[]    // footer fragments สำหรับหน้านี้
+}
+
+export interface PaginatedSection {
+  sectionId: string
+  pages: PaginatedPage[]
+}
+
+export interface PaginatedDocument {
+  sections: PaginatedSection[]
+}
