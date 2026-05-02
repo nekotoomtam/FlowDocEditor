@@ -280,6 +280,16 @@ export function detectPlacementTarget(input: DetectTargetInput): { zone: Placeme
         target: { kind: "row-stack-inner", rowId: rowStack.rowId, stackId: rowStack.stackId },
       }
     }
+
+    // hovering directly on the stack column itself (not on content inside it) —
+    // treat entire non-edge area as insert-into-stack, since the stack is short
+    // (minHeight 24pt) and resolveNodeZone would route top/bottom to insert-before/after-row
+    if (rowStack.stackId === hoveredNodeId) {
+      return {
+        zone: "center" as const,
+        target: { kind: "row-stack-inner", rowId: rowStack.rowId, stackId: rowStack.stackId },
+      }
+    }
   }
 
   // node ทั่วไป

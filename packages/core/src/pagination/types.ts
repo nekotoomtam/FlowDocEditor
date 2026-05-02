@@ -69,7 +69,7 @@ export interface ParagraphRenderProps {
 
 export interface PageFragment {
   nodeId: string
-  nodeType: "paragraph" | "spacer" | "stack" | "row" | "body" | "table"
+  nodeType: "paragraph" | "spacer" | "stack" | "row" | "body" | "table" | "toc"
   parentNodeId?: string
   pageIndex: number
   x: number
@@ -87,6 +87,16 @@ export interface PaginatedLine {
   y: number
   width: number
   height: number
+  fontSize?: number  // per-line font size override (ใช้ใน TOC title vs entry)
+}
+
+// ─── TOC ──────────────────────────────────────────────────────────────────────
+
+export interface TocEntry {
+  nodeId: string
+  text: string
+  level: 1 | 2 | 3
+  pageNumber: number  // 1-based
 }
 
 // ─── Paginated Document ───────────────────────────────────────────────────────
@@ -108,4 +118,5 @@ export interface PaginatedSection {
 
 export interface PaginatedDocument {
   sections: PaginatedSection[]
+  tocEntries: TocEntry[]
 }

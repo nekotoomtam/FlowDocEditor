@@ -99,18 +99,18 @@ export class PdfRenderer implements Renderer {
         continue
       }
 
-      if (fragment.nodeType !== "paragraph") continue
+      if (fragment.nodeType !== "paragraph" && fragment.nodeType !== "toc") continue
       if (!fragment.lines?.length || !fragment.renderProps) continue
 
       const font = await this.resolveFont(pdfDoc, fontCache, fragment.renderProps.fontFamilyKey)
-      const fontSize = fragment.renderProps.fontSize
+      const defaultFontSize = fragment.renderProps.fontSize
 
       for (const line of fragment.lines) {
         if (line.text.trim() === "") continue
         pdfPage.drawText(line.text, {
           x: line.x,
           y: flipY(line.y, line.height, page.height),
-          size: fontSize,
+          size: line.fontSize ?? defaultFontSize,
           font,
         })
       }

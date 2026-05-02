@@ -39,6 +39,7 @@ export const ParagraphPropsSchema = z.object({
   textIndent: UnitValueSchema,
   indentLeft: UnitValueSchema,
   indentRight: UnitValueSchema,
+  headingLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
 })
 
 export const SpacerPropsSchema = z.object({
@@ -83,6 +84,17 @@ export const SpacerNodeSchema = z.object({
   props: SpacerPropsSchema,
 })
 
+export const TocPropsSchema = z.object({
+  title: z.string().optional(),
+  maxLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+})
+
+export const TocNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("toc"),
+  props: TocPropsSchema,
+})
+
 // ─── Union ───────────────────────────────────────────────────────────────────
 
 export const LayoutNodeSchema = z.discriminatedUnion("type", [
@@ -92,6 +104,7 @@ export const LayoutNodeSchema = z.discriminatedUnion("type", [
   ParagraphNodeSchema,
   SpacerNodeSchema,
   TableNodeSchema,
+  TocNodeSchema,
 ])
 
 export type BodyProps = z.infer<typeof BodyPropsSchema>
@@ -105,4 +118,6 @@ export type StackNode = z.infer<typeof StackNodeSchema>
 export type RowNode = z.infer<typeof RowNodeSchema>
 export type ParagraphNode = z.infer<typeof ParagraphNodeSchema>
 export type SpacerNode = z.infer<typeof SpacerNodeSchema>
+export type TocProps = z.infer<typeof TocPropsSchema>
+export type TocNode = z.infer<typeof TocNodeSchema>
 export type LayoutNode = z.infer<typeof LayoutNodeSchema>

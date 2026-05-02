@@ -59,8 +59,8 @@ function getSubtreeIds(document: DocumentNode, nodeId: string): Set<string> {
       const node = section.nodes[id]
       if (node == null) return
       ids.add(id)
-      if (node.type !== "paragraph" && node.type !== "spacer" && node.type !== "table") {
-        node.childIds.forEach(visit)
+      if ("childIds" in node) {
+        (node as { childIds: string[] }).childIds.forEach(visit)
       }
     }
     visit(nodeId)

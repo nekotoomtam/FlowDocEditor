@@ -78,7 +78,7 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
     reachable.add(nodeId)
     assertNoLayoutKeys(node, nodePath)
 
-    if (node.type === "paragraph" || node.type === "spacer" || node.type === "table") return
+    if (node.type === "paragraph" || node.type === "spacer" || node.type === "table" || node.type === "toc") return
 
     active.add(nodeId)
 

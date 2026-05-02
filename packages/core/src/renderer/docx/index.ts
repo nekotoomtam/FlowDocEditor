@@ -43,6 +43,7 @@ type RenderItem =
   | { kind: "spacer"; fragment: PageFragment }
   | { kind: "row"; group: RowGroup }
   | { kind: "table"; group: TableGroup }
+  | { kind: "toc"; fragment: PageFragment }
 
 // ─── Grouping ─────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,8 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
       if (parentCell) parentCell.children.push(fragment)
       else if (parentStack) parentStack.children.push(fragment)
       else items.push({ kind: "spacer", fragment })
+    } else if (fragment.nodeType === "toc") {
+      items.push({ kind: "toc", fragment })
     }
   }
 
@@ -219,12 +222,28 @@ function buildDataTable(group: TableGroup): Table {
   return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows })
 }
 
+function buildToc(fragment: PageFragment): Paragraph[] {
+  if (!fragment.lines?.length || !fragment.renderProps) return []
+  return fragment.lines
+    .filter((line) => line.text.trim() !== "")
+    .map((line) => {
+      const size = ptToHalfPoints(line.fontSize ?? fragment.renderProps!.fontSize)
+      const indentLeft = Math.max(0, line.x - fragment.x)
+      return new Paragraph({
+        children: [new TextRun({ text: line.text, size, font: resolveFontName(fragment.renderProps!.fontFamilyKey) })],
+        indent: { left: ptToTwips(indentLeft) },
+        spacing: { after: ptToTwips(2) },
+      })
+    })
+}
+
 function buildItems(items: RenderItem[]): (Paragraph | Table)[] {
   return items.flatMap((item) => {
     if (item.kind === "paragraph") { const p = buildParagraph(item.fragment); return p ? [p] : [] }
     if (item.kind === "spacer") return [buildSpacer(item.fragment)]
     if (item.kind === "row") return [buildLayoutTable(item.group)]
     if (item.kind === "table") return [buildDataTable(item.group)]
+    if (item.kind === "toc") return buildToc(item.fragment)
     return []
   })
 }

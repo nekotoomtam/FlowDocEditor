@@ -10,9 +10,16 @@ export default function Home() {
         document layout engine — work in progress
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 280 }}>
-        <Link href="/debug" style={{
+        <Link href="/editor" style={{
           display: "block", padding: "10px 18px",
           background: "#2563eb", color: "white", borderRadius: 6,
+          textDecoration: "none", fontSize: 13, textAlign: "center",
+        }}>
+          Editor
+        </Link>
+        <Link href="/debug" style={{
+          display: "block", padding: "10px 18px",
+          background: "#6b7280", color: "white", borderRadius: 6,
           textDecoration: "none", fontSize: 13, textAlign: "center",
         }}>
           Debug View

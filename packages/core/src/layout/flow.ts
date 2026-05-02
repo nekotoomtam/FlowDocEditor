@@ -1,4 +1,4 @@
-import type { BodyNode, DocumentSection, LayoutNode, RowNode, StackNode } from "../schema"
+import type { BodyNode, DocumentSection, LayoutNode, RowNode, StackNode, TocNode } from "../schema"
 import type { TableNode, TableCellNode } from "../schema"
 import { DEFAULT_STACK_MIN_HEIGHT } from "../document/defaults"
 import { measureParagraph, measureSpacer, toAbstractUnit } from "./measure"
@@ -115,7 +115,34 @@ function flowNode(
     case "table": {
       return flowTable(section, node as unknown as TableNode, x, y, width, measurer, wordBreaker)
     }
+    case "toc": {
+      const toc = node as unknown as TocNode
+      const maxLevel = toc.props.maxLevel ?? 3
+      const headingCount = countHeadings(section, maxLevel)
+      const titleH = TOC_TITLE_FS * TOC_TITLE_LH + TOC_TITLE_AFTER
+      const entryH = TOC_ENTRY_FS * TOC_ENTRY_LH
+      const height = titleH + Math.max(headingCount, 1) * entryH
+      return { nodeId: node.id, nodeType: "toc", x, y, width, height, children: [] }
+    }
   }
+}
+
+// ─── TOC Helpers ──────────────────────────────────────────────────────────────
+
+const TOC_TITLE_FS = 14
+const TOC_TITLE_LH = 1.5
+const TOC_TITLE_AFTER = 8
+export const TOC_ENTRY_FS = 11
+export const TOC_ENTRY_LH = 1.5
+
+function countHeadings(section: DocumentSection, maxLevel: number): number {
+  let count = 0
+  for (const node of Object.values(section.nodes)) {
+    if (node.type === "paragraph" && node.props.headingLevel && node.props.headingLevel <= maxLevel) {
+      count++
+    }
+  }
+  return count
 }
 
 function flowVerticalContainer(

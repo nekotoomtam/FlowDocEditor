@@ -9,7 +9,7 @@ import type { LayoutNode } from "../schema"
 
 // ─── Drag Source ──────────────────────────────────────────────────────────────
 
-export type PaletteBlockType = "paragraph" | "row" | "columns"
+export type PaletteBlockType = "paragraph" | "row" | "columns" | "table" | "toc"
 
 export type DragSource =
   | { source: "palette"; blockType: PaletteBlockType }
