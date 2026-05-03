@@ -54,6 +54,25 @@ type EditorAction =
   | { type: "TABLE_REMOVE_ROW"; tableId: string; rowIndex: number }
   | { type: "TABLE_ADD_COL"; tableId: string }
   | { type: "TABLE_REMOVE_COL"; tableId: string; colIndex: number }
+  | { type: "LOAD_DOCUMENT"; doc: DocumentNode }
+
+// ─── Persistence ─────────────────────────────────────────────────────────────
+
+const STORAGE_KEY = "flowdoc_document"
+
+function saveToStorage(doc: DocumentNode): void {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(doc)) } catch { /* full / disabled */ }
+}
+
+function loadFromStorage(): DocumentNode | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (parsed?.version === 1 && Array.isArray(parsed?.document?.sections)) return parsed as DocumentNode
+    return null
+  } catch { return null }
+}
 
 function paginate(doc: DocumentNode): PaginatedDocument {
   return paginateDocument(doc, defaultTextMeasurer)
@@ -103,7 +122,7 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         past: state.past.slice(0, -1),
         doc: prev,
         future: [state.doc, ...state.future],
-        paginated: paginate(prev),
+        // paginated stays — server จะ update ผ่าน useEffect (dumb renderer)
       }
     }
     case "REDO": {
@@ -114,9 +133,11 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         past: [...state.past, state.doc],
         doc: next,
         future: state.future.slice(1),
-        paginated: paginate(next),
+        // paginated stays — server จะ update ผ่าน useEffect
       }
     }
+    case "LOAD_DOCUMENT":
+      return { ...state, past: [], doc: action.doc, future: [], paginated: paginate(action.doc), selectedNodeId: null, drag: null }
     case "TABLE_ADD_ROW":
       return pushDoc(state, addTableRow(state.doc, action.tableId, action.afterIndex))
     case "TABLE_REMOVE_ROW":
@@ -150,7 +171,7 @@ function zoneToIntent(zone: PlacementZone): PlacementIntentType {
 
 export default function EditorShell() {
   const [scale, setScale] = useState(0.6)
-  const initialDoc = createDefaultDocument("Untitled")
+  const initialDoc = loadFromStorage() ?? createDefaultDocument("Untitled")
   const [state, dispatch] = useReducer(reducer, {
     past: [] as DocumentNode[],
     doc: initialDoc,
@@ -163,6 +184,20 @@ export default function EditorShell() {
   const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
   const pendingDragRef = useRef<{ source: DragSource; clientX: number; clientY: number } | null>(null)
   const [isExporting, setIsExporting] = useState(false)
+  const [savedAt, setSavedAt] = useState<Date | null>(null)
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
+
+  // ─── Auto-save ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+    saveTimeoutRef.current = setTimeout(() => {
+      saveToStorage(state.doc)
+      setSavedAt(new Date())
+    }, 500)
+    return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.doc])
 
   const handleExport = useCallback(async (format: "pdf" | "docx") => {
     setIsExporting(true)
@@ -187,6 +222,53 @@ export default function EditorShell() {
       setIsExporting(false)
     }
   }, [state.doc])
+
+  const importRef = useRef<HTMLInputElement>(null)
+
+  const handleExportJson = useCallback(() => {
+    const title = state.doc.document.meta?.title ?? "document"
+    const blob = new Blob([JSON.stringify(state.doc, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url; a.download = `${title}.json`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 100)
+  }, [state.doc])
+
+  const handleImportJson = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string)
+        if (parsed?.version === 1 && Array.isArray(parsed?.document?.sections)) {
+          dispatch({ type: "LOAD_DOCUMENT", doc: parsed as DocumentNode })
+        }
+      } catch { /* invalid JSON */ }
+    }
+    reader.readAsText(file)
+    e.target.value = ""
+  }, [])
+
+  const handleNewDocument = useCallback(() => {
+    if (!confirm("สร้างเอกสารใหม่? history จะถูกล้าง")) return
+    dispatch({ type: "LOAD_DOCUMENT", doc: createDefaultDocument("Untitled") })
+  }, [])
+
+  // ─── Inline editing ───────────────────────────────────────────────────────────
+  const handleInlineEditStart = useCallback((nodeId: string) => {
+    dispatch({ type: "SELECT_NODE", nodeId })
+    setInlineEditNodeId(nodeId)
+  }, [])
+
+  const handleInlineEditChange = useCallback((nodeId: string, text: string) => {
+    dispatch({ type: "UPDATE_TEXT", nodeId, text })
+  }, [])
+
+  const handleInlineEditEnd = useCallback(() => {
+    setInlineEditNodeId(null)
+  }, [])
 
   // ─── Server-side layout ────────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
@@ -225,6 +307,11 @@ export default function EditorShell() {
     if (el) pageRefs.current.set(key, el)
     else pageRefs.current.delete(key)
   }, [])
+
+  const handleBackgroundPointerDown = useCallback(() => {
+    if (inlineEditNodeId) return
+    dispatch({ type: "SELECT_NODE", nodeId: null })
+  }, [inlineEditNodeId])
 
   // Palette drag: starts immediately
   const startPaletteDrag = useCallback((source: DragSource, e: React.PointerEvent) => {
@@ -269,7 +356,26 @@ export default function EditorShell() {
             }
           }
 
-          if (!hit) continue
+          if (!hit) {
+            // ไม่เจอ fragment → fallback ไป body (empty body หรือ gap เหนือ/ล่าง content)
+            const cb = page.contentBox
+            if (docX >= cb.x && docX <= cb.x + cb.width && docY >= cb.y && docY <= cb.y + cb.height) {
+              const sectionDef = doc.document.sections[si]
+              if (sectionDef) {
+                const bodyId = sectionDef.bodyRootId
+                const bodyTarget = { kind: "node" as const, nodeId: bodyId, nodeType: "body" as const }
+                const rawIntent = { zone: "center" as const, intent: "insertInside" as const, target: bodyTarget }
+                const lawResult = resolvePlacementLaw(doc, rawIntent, state.drag?.source ?? null)
+                if (lawResult.ok) {
+                  return {
+                    preview: { hoverNodeId: bodyId, zone: "center" as const, target: bodyTarget, placement: lawResult.value.intent, isValid: true },
+                    sectionId: section.sectionId,
+                  }
+                }
+              }
+            }
+            continue
+          }
 
           const localX = docX - hit.x
           const localY = docY - hit.y
@@ -362,6 +468,7 @@ export default function EditorShell() {
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
+      if (inlineEditNodeId) { setInlineEditNodeId(null); return }
       if (state.drag) dispatch({ type: "DRAG_CANCEL" })
       else if (pendingDragRef.current) pendingDragRef.current = null
       else dispatch({ type: "SELECT_NODE", nodeId: null })
@@ -397,45 +504,57 @@ export default function EditorShell() {
       {/* Toolbar */}
       <div style={{ padding: "10px 20px", background: "white", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <span style={{ fontSize: 13, fontWeight: "bold", color: "#111827" }}>FlowDoc Editor</span>
+        {/* Undo / Redo */}
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {(["Undo", "Redo"] as const).map((label) => {
             const isUndo = label === "Undo"
             const disabled = isUndo ? state.past.length === 0 : state.future.length === 0
             return (
-              <button
-                key={label}
-                disabled={disabled}
+              <button key={label} disabled={disabled}
                 onClick={() => dispatch({ type: isUndo ? "UNDO" : "REDO" })}
                 title={`${label} (${isUndo ? "Ctrl+Z" : "Ctrl+Y"})`}
-                style={{
-                  padding: "4px 8px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer",
-                  border: "1px solid #e5e7eb", borderRadius: 4,
-                  background: "white", color: disabled ? "#d1d5db" : "#374151",
-                }}
-              >
+                style={{ padding: "4px 8px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: disabled ? "#d1d5db" : "#374151" }}>
                 {label}
               </button>
             )
           })}
         </div>
+
+        {/* Separator */}
+        <div style={{ width: 1, height: 16, background: "#e5e7eb" }} />
+
+        {/* Document actions */}
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <button onClick={handleNewDocument}
+            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
+            New
+          </button>
+          <button onClick={() => importRef.current?.click()}
+            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
+            Open…
+          </button>
+          <input ref={importRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleImportJson} />
+          <button onClick={handleExportJson}
+            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
+            Save JSON
+          </button>
+        </div>
+
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-          {(["pdf", "docx"] as const).map((fmt) => (
-            <button
-              key={fmt}
-              disabled={isExporting}
-              onClick={() => handleExport(fmt)}
-              style={{
-                padding: "4px 10px", fontSize: 11, cursor: isExporting ? "not-allowed" : "pointer",
-                border: "1px solid #e5e7eb", borderRadius: 4,
-                background: isExporting ? "#f9fafb" : "white", color: isExporting ? "#9ca3af" : "#374151",
-              }}
-            >
-              {isExporting ? "…" : `Export ${fmt.toUpperCase()}`}
-            </button>
-          ))}
+          {savedAt && !isLayoutLoading && (
+            <span style={{ fontSize: 10, color: "#9ca3af" }}>
+              saved {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            </span>
+          )}
           {isLayoutLoading && !state.drag && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>↻ layout…</span>
           )}
+          {(["pdf", "docx"] as const).map((fmt) => (
+            <button key={fmt} disabled={isExporting} onClick={() => handleExport(fmt)}
+              style={{ padding: "4px 10px", fontSize: 11, cursor: isExporting ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: isExporting ? "#f9fafb" : "white", color: isExporting ? "#9ca3af" : "#374151" }}>
+              {isExporting ? "…" : `Export ${fmt.toUpperCase()}`}
+            </button>
+          ))}
         </div>
         {state.drag && (
           <span style={{ fontSize: 11, color: "#6b7280" }}>
@@ -454,8 +573,13 @@ export default function EditorShell() {
           scale={scale}
           selectedNodeId={state.selectedNodeId}
           isLayoutLoading={isLayoutLoading}
+          inlineEditNodeId={inlineEditNodeId}
+          onInlineEditStart={handleInlineEditStart}
+          onInlineEditChange={handleInlineEditChange}
+          onInlineEditEnd={handleInlineEditEnd}
           setPageRef={setPageRef}
           onNodePointerDown={startNodePointerDown}
+          onBackgroundPointerDown={handleBackgroundPointerDown}
           onScaleChange={setScale}
         />
         <PropertyPanel

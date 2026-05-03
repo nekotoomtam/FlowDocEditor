@@ -244,11 +244,8 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     if (location.node.type !== "stack" && location.node.type !== "body") {
       return err(rawIntent, "invalid-zone", "Center placement only allowed on body or stack.")
     }
-    if (isRowLikeSource(document, source)) {
-      return err(rawIntent, "invalid-parent", "Row-like source cannot be inserted into a stack.")
-    }
-    if (paletteBlockType === "columns" && location.node.type === "stack" && isNestedInRow(document, target.nodeId)) {
-      return err(rawIntent, "invalid-parent", "Columns cannot be inserted into a stack already in a row.")
+    if (isRowLikeSource(document, source) && location.node.type === "stack") {
+      return err(rawIntent, "invalid-parent", "Cannot create columns inside a column.")
     }
     const subtreeErr = rejectSubtree(document, rawIntent, sourceNodeId, target.nodeId)
     if (subtreeErr != null) return subtreeErr
@@ -333,6 +330,9 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     if (location.parent == null) return err(rawIntent, "invalid-parent", "Node has no parent.")
     if (location.parent.type !== "body" && location.parent.type !== "stack") {
       return err(rawIntent, "invalid-parent", "Horizontal placement requires body or stack parent.")
+    }
+    if (location.parent.type === "stack") {
+      return err(rawIntent, "invalid-parent", "Cannot create columns inside a column.")
     }
 
     const subtreeErr = rejectSubtree(document, rawIntent, sourceNodeId, target.nodeId)

@@ -59,7 +59,23 @@ export interface TextMeasurer {
 
 export const defaultTextMeasurer: TextMeasurer = {
   measureText(text, _fontFamilyKey, fontSize) {
-    return { width: text.length * fontSize * 0.5 }
+    let width = 0
+    for (const ch of text) {
+      const code = ch.codePointAt(0) ?? 0
+      if (code >= 0x0E00 && code <= 0x0E7F) {
+        // Thai — Leelawadee Thai chars are moderately wide
+        width += fontSize * 0.62
+      } else if (code >= 0x0020 && code <= 0x007E) {
+        // ASCII printable — average Latin width
+        width += fontSize * 0.48
+      } else if (code >= 0x0E80) {
+        // Other CJK / extended unicode — assume wide
+        width += fontSize * 0.6
+      } else {
+        width += fontSize * 0.5
+      }
+    }
+    return { width }
   },
   measureLineHeight(_fontFamilyKey, fontSize, lineHeightRatio) {
     return fontSize * lineHeightRatio

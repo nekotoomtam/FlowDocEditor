@@ -48,7 +48,7 @@ export interface NodeZoneEdges {
 
 export function getNodeZoneEdges(width: number, height: number): NodeZoneEdges {
   return {
-    edgeX: Math.min(Math.max(width * 0.12, 12), 22, width / 3),
+    edgeX: Math.min(Math.max(width * 0.08, 10), 18, width / 3),
     edgeY: Math.min(Math.max(height * 0.09, 10), 18, height / 3),
   }
 }
@@ -293,11 +293,16 @@ export function detectPlacementTarget(input: DetectTargetInput): { zone: Placeme
   }
 
   // node ทั่วไป
-  const zone = resolveNodeZone(localX, localY, width, height)
+  let zone = resolveNodeZone(localX, localY, width, height)
 
-  // body และ stack รับ center ได้ (insert into container)
-  // paragraph รับ center ไม่ได้
-  if (zone === "center" && nodeType !== "stack" && nodeType !== "body") return null
+  if (zone === "center") {
+    if (nodeType === "stack" || nodeType === "body") {
+      // container รับ center ได้ → insert into container
+    } else {
+      // non-container: แยก top/bottom ตาม Y position
+      zone = localY < height / 2 ? "top" : "bottom"
+    }
+  }
 
   return {
     zone,

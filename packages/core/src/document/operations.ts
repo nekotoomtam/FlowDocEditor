@@ -85,21 +85,55 @@ function removeFromParent(nodes: Nodes, nodeId: string): { nodes: Nodes; parentI
 
 function cleanupAfterRemoval(nodes: Nodes, removedFromId: string): Nodes {
   const parent = nodes[removedFromId]
-  if (parent?.type !== "stack") return nodes
+  if (!parent) return nodes
 
-  const remaining = getChildIds(nodes, removedFromId)
-  if (remaining.length > 0) return nodes
+  // Stack: เก็บ empty stack ไว้ (user อาจต้องการ empty cell)
+  // ยกเว้นกรณีที่มีหลาย sibling → ลบ empty stack + redistribute widths
+  if (parent.type === "stack") {
+    const remaining = getChildIds(nodes, removedFromId)
+    if (remaining.length > 0) return nodes
+    const rowInfo = findParentInfo(nodes, removedFromId)
+    if (rowInfo == null) return nodes
+    const row = nodes[rowInfo.parentId]
+    if (row?.type !== "row" || row.childIds.length <= 1) return nodes
+    const newRowChildIds = row.childIds.filter((id) => id !== removedFromId)
+    const result: Nodes = { ...nodes, [rowInfo.parentId]: { ...row, childIds: newRowChildIds } as LayoutNode }
+    delete result[removedFromId]
+    return redistributeRowWidths(result, rowInfo.parentId)
+  }
 
-  const rowInfo = findParentInfo(nodes, removedFromId)
-  if (rowInfo == null) return nodes
-  const row = nodes[rowInfo.parentId]
-  if (row?.type !== "row") return nodes
-  if (row.childIds.length <= 1) return nodes
+  // Row: single-stack → lift stack's children ขึ้น parent แล้วลบ row+stack
+  //       empty → cascade ลบ row ออก
+  if (parent.type === "row") {
+    const remaining = getChildIds(nodes, removedFromId)
+    const parentInfo = findParentInfo(nodes, removedFromId)
+    if (parentInfo == null) return nodes
 
-  const newRowChildIds = row.childIds.filter((id) => id !== removedFromId)
-  const result: Nodes = { ...nodes, [rowInfo.parentId]: { ...row, childIds: newRowChildIds } as LayoutNode }
-  delete result[removedFromId]
-  return redistributeRowWidths(result, rowInfo.parentId)
+    if (remaining.length === 1) {
+      const soloStackId = remaining[0]
+      const stackChildren = getChildIds(nodes, soloStackId)
+      const parentChildIds = getChildIds(nodes, parentInfo.parentId)
+      const rowIdx = parentChildIds.indexOf(removedFromId)
+      let result = setChildIds(nodes, parentInfo.parentId, [
+        ...parentChildIds.slice(0, rowIdx),
+        ...stackChildren,
+        ...parentChildIds.slice(rowIdx + 1),
+      ])
+      delete result[removedFromId]
+      delete result[soloStackId]
+      return result
+    }
+
+    if (remaining.length === 0) {
+      let result = setChildIds(nodes, parentInfo.parentId, getChildIds(nodes, parentInfo.parentId).filter((id) => id !== removedFromId))
+      delete result[removedFromId]
+      return cleanupAfterRemoval(result, parentInfo.parentId)
+    }
+
+    return nodes
+  }
+
+  return nodes
 }
 
 // ─── Node Creation ─────────────────────────────────────────────────────────────
