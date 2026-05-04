@@ -19,6 +19,7 @@ import type {
 import { EditorPalette } from "./EditorPalette"
 import { EditorCanvas } from "./EditorCanvas"
 import { PropertyPanel } from "./PropertyPanel"
+import { OutlinePanel } from "./OutlinePanel"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,33 @@ export interface DragState {
   clientX: number
   clientY: number
   preview: PlacementPreview | null
+}
+
+export interface ResizeDrag {
+  rowId: string
+  leftStackId: string
+  rightStackId: string
+  rowFragX: number       // row's x in doc coords
+  rowFragWidth: number   // row's width in doc coords
+  svgLeft: number        // SVG client left at drag start
+  currentDocX: number    // current drag position in doc coords
+  leftShareOriginal: number
+  rightShareOriginal: number
+  totalShare: number     // leftShare + rightShare
+  minWidthPt: number     // min column width in pt
+  committed?: boolean    // true = waiting for server, keep visual override alive
+}
+
+export interface MinHeightDrag {
+  rowId: string
+  rowFragY: number       // row top in doc coords
+  svgTop: number         // SVG client top at drag start
+  lineHeightPt: number   // snap unit
+  minPt: number          // minimum allowed (1 line)
+  maxPt: number          // cap (page content height)
+  currentMinHeight: number
+  pageKey: string
+  committed?: boolean
 }
 
 interface EditorState {
@@ -55,6 +83,8 @@ type EditorAction =
   | { type: "TABLE_ADD_COL"; tableId: string }
   | { type: "TABLE_REMOVE_COL"; tableId: string; colIndex: number }
   | { type: "LOAD_DOCUMENT"; doc: DocumentNode }
+  | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number }
+  | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
 
@@ -146,6 +176,13 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, addTableColumn(state.doc, action.tableId))
     case "TABLE_REMOVE_COL":
       return pushDoc(state, removeTableColumn(state.doc, action.tableId, action.colIndex))
+    case "RESIZE_COLUMNS": {
+      let doc = updateNodeProps(state.doc, action.leftStackId, { widthShare: action.leftShare })
+      doc = updateNodeProps(doc, action.rightStackId, { widthShare: action.rightShare })
+      return pushDoc(state, doc)
+    }
+    case "RESIZE_ROW_MIN_HEIGHT":
+      return pushDoc(state, updateNodeProps(state.doc, action.rowId, { minHeight: action.minHeight }))
   }
 }
 
@@ -183,6 +220,8 @@ export default function EditorShell() {
 
   const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
   const pendingDragRef = useRef<{ source: DragSource; clientX: number; clientY: number } | null>(null)
+  const [resizeDrag, setResizeDrag] = useState<ResizeDrag | null>(null)
+  const [minHeightDrag, setMinHeightDrag] = useState<MinHeightDrag | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -303,6 +342,13 @@ export default function EditorShell() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.doc])
 
+  useEffect(() => {
+    if (!isLayoutLoading) {
+      setResizeDrag((prev) => prev?.committed ? null : prev)
+      setMinHeightDrag((prev) => prev?.committed ? null : prev)
+    }
+  }, [isLayoutLoading])
+
   const setPageRef = useCallback((key: string, el: SVGSVGElement | null) => {
     if (el) pageRefs.current.set(key, el)
     else pageRefs.current.delete(key)
@@ -312,6 +358,64 @@ export default function EditorShell() {
     if (inlineEditNodeId) return
     dispatch({ type: "SELECT_NODE", nodeId: null })
   }, [inlineEditNodeId])
+
+  const handleResizeStart = useCallback((
+    rowId: string, leftStackId: string, rightStackId: string,
+    rowFragX: number, rowFragWidth: number,
+    startClientX: number, pageKey: string,
+  ) => {
+    const svgEl = pageRefs.current.get(pageKey)
+    if (!svgEl) return
+    const svgLeft = svgEl.getBoundingClientRect().left
+    const startDocX = (startClientX - svgLeft) / scale
+
+    let leftShare = 50, rightShare = 50
+    for (const section of state.doc.document.sections) {
+      const l = section.nodes[leftStackId], r = section.nodes[rightStackId]
+      if (l?.type === "stack" && r?.type === "stack") {
+        leftShare = l.props.widthShare ?? 50
+        rightShare = r.props.widthShare ?? 50
+        break
+      }
+    }
+
+    // min width = 15% of content box width (approx 451pt for A4)
+    const contentWidth = state.paginated.sections[0]?.pages[0]?.contentBox.width ?? 451
+    const minWidthPt = contentWidth * 0.15
+
+    setResizeDrag({
+      rowId, leftStackId, rightStackId,
+      rowFragX, rowFragWidth, svgLeft,
+      currentDocX: startDocX,
+      leftShareOriginal: leftShare, rightShareOriginal: rightShare,
+      totalShare: leftShare + rightShare,
+      minWidthPt,
+    })
+  }, [scale, state.doc, state.paginated])
+
+  const handleMinHeightResizeStart = useCallback((
+    rowId: string, rowFragY: number, pageKey: string,
+  ) => {
+    const svgEl = pageRefs.current.get(pageKey)
+    if (!svgEl) return
+    const svgTop = svgEl.getBoundingClientRect().top
+    const lineHeightPt = 18 // 12pt * 1.5
+    const contentHeight = state.paginated.sections[0]?.pages[0]?.contentBox.height ?? 700
+
+    let currentMinHeight = lineHeightPt
+    for (const section of state.doc.document.sections) {
+      const n = section.nodes[rowId]
+      if (n?.type === "row") { currentMinHeight = n.props.minHeight ?? lineHeightPt; break }
+    }
+
+    setMinHeightDrag({
+      rowId, rowFragY, svgTop, lineHeightPt,
+      minPt: lineHeightPt,
+      maxPt: contentHeight,
+      currentMinHeight,
+      pageKey,
+    })
+  }, [state.doc, state.paginated])
 
   // Palette drag: starts immediately
   const startPaletteDrag = useCallback((source: DragSource, e: React.PointerEvent) => {
@@ -326,8 +430,9 @@ export default function EditorShell() {
   }, [])
 
   const computePreview = useCallback(
-    (clientX: number, clientY: number): { preview: PlacementPreview | null; sectionId: string | null } => {
+    (clientX: number, clientY: number, sourceOverride?: DragSource | null): { preview: PlacementPreview | null; sectionId: string | null } => {
       const { doc, paginated } = state
+      const dragSource = sourceOverride !== undefined ? sourceOverride : state.drag?.source ?? null
 
       for (let si = 0; si < paginated.sections.length; si++) {
         const section = paginated.sections[si]
@@ -365,7 +470,7 @@ export default function EditorShell() {
                 const bodyId = sectionDef.bodyRootId
                 const bodyTarget = { kind: "node" as const, nodeId: bodyId, nodeType: "body" as const }
                 const rawIntent = { zone: "center" as const, intent: "insertInside" as const, target: bodyTarget }
-                const lawResult = resolvePlacementLaw(doc, rawIntent, state.drag?.source ?? null)
+                const lawResult = resolvePlacementLaw(doc, rawIntent, dragSource)
                 if (lawResult.ok) {
                   return {
                     preview: { hoverNodeId: bodyId, zone: "center" as const, target: bodyTarget, placement: lawResult.value.intent, isValid: true },
@@ -386,7 +491,7 @@ export default function EditorShell() {
             localX, localY,
             width: hit.width,
             height: hit.height,
-            source: state.drag?.source ?? null,
+            source: dragSource,
           })
 
           if (!targetResult) {
@@ -394,7 +499,7 @@ export default function EditorShell() {
           }
 
           const rawIntent = { zone: targetResult.zone, intent: zoneToIntent(targetResult.zone), target: targetResult.target }
-          const lawResult = resolvePlacementLaw(doc, rawIntent, state.drag?.source ?? null)
+          const lawResult = resolvePlacementLaw(doc, rawIntent, dragSource)
 
           if (lawResult.ok) {
             return {
@@ -416,6 +521,23 @@ export default function EditorShell() {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
+      // Resize row minHeight drag
+      if (minHeightDrag && !minHeightDrag.committed) {
+        const rawHeight = (e.clientY - minHeightDrag.svgTop) / scale - minHeightDrag.rowFragY
+        const snapped = Math.round(rawHeight / minHeightDrag.lineHeightPt) * minHeightDrag.lineHeightPt
+        const currentMinHeight = Math.max(minHeightDrag.minPt, Math.min(minHeightDrag.maxPt, snapped))
+        setMinHeightDrag((prev) => prev ? { ...prev, currentMinHeight } : null)
+        return
+      }
+      // Resize column drag
+      if (resizeDrag) {
+        const rawDocX = (e.clientX - resizeDrag.svgLeft) / scale
+        const minX = resizeDrag.rowFragX + resizeDrag.minWidthPt
+        const maxX = resizeDrag.rowFragX + resizeDrag.rowFragWidth - resizeDrag.minWidthPt
+        const currentDocX = Math.max(minX, Math.min(maxX, rawDocX))
+        setResizeDrag((prev) => prev ? { ...prev, currentDocX } : null)
+        return
+      }
       // Convert pendingDrag to real drag after 5px movement
       if (pendingDragRef.current && !state.drag) {
         const dx = e.clientX - pendingDragRef.current.clientX
@@ -423,7 +545,9 @@ export default function EditorShell() {
         if (Math.hypot(dx, dy) > 5) {
           const { source } = pendingDragRef.current
           pendingDragRef.current = null
+          const { preview } = computePreview(e.clientX, e.clientY, source)
           dispatch({ type: "DRAG_START", source, clientX: e.clientX, clientY: e.clientY })
+          dispatch({ type: "DRAG_MOVE", clientX: e.clientX, clientY: e.clientY, preview })
         }
         return
       }
@@ -431,11 +555,27 @@ export default function EditorShell() {
       const { preview } = computePreview(e.clientX, e.clientY)
       dispatch({ type: "DRAG_MOVE", clientX: e.clientX, clientY: e.clientY, preview })
     },
-    [state.drag, computePreview],
+    [minHeightDrag, resizeDrag, state.drag, computePreview, scale],
   )
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
+      // Commit minHeight resize
+      if (minHeightDrag && !minHeightDrag.committed) {
+        dispatch({ type: "RESIZE_ROW_MIN_HEIGHT", rowId: minHeightDrag.rowId, minHeight: minHeightDrag.currentMinHeight })
+        setMinHeightDrag((prev) => prev ? { ...prev, committed: true } : null)
+        return
+      }
+      // Commit resize
+      if (resizeDrag && !resizeDrag.committed) {
+        const { leftStackId, rightStackId, rowFragX, rowFragWidth, currentDocX, totalShare } = resizeDrag
+        const leftWidthPt = currentDocX - rowFragX
+        const newLeftShare = Math.round((leftWidthPt / rowFragWidth) * totalShare * 100) / 100
+        const newRightShare = Math.round((totalShare - newLeftShare) * 100) / 100
+        dispatch({ type: "RESIZE_COLUMNS", leftStackId, leftShare: newLeftShare, rightStackId, rightShare: newRightShare })
+        setResizeDrag((prev) => prev ? { ...prev, committed: true } : null)
+        return
+      }
       // PendingDrag released without moving → treat as click → select node
       if (pendingDragRef.current) {
         const { source } = pendingDragRef.current
@@ -463,7 +603,7 @@ export default function EditorShell() {
       }
       dispatch({ type: "DRAG_CANCEL" })
     },
-    [state.drag, state.doc, computePreview],
+    [minHeightDrag, resizeDrag, state.drag, state.doc, computePreview],
   )
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -495,7 +635,7 @@ export default function EditorShell() {
 
   return (
     <div
-      style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : "default", userSelect: state.drag ? "none" : undefined }}
+      style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onKeyDown={handleKeyDown}
@@ -580,21 +720,36 @@ export default function EditorShell() {
           setPageRef={setPageRef}
           onNodePointerDown={startNodePointerDown}
           onBackgroundPointerDown={handleBackgroundPointerDown}
+          onResizeStart={handleResizeStart}
+          resizeDrag={resizeDrag}
+          minHeightDrag={minHeightDrag}
+          onMinHeightResizeStart={handleMinHeightResizeStart}
           onScaleChange={setScale}
         />
-        <PropertyPanel
-          doc={state.doc}
-          selectedNodeId={state.selectedNodeId}
-          onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
-          onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
-          onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
-          tableOps={{
-            addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
-            removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
-            addCol: (tableId) => dispatch({ type: "TABLE_ADD_COL", tableId }),
-            removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
-          }}
-        />
+        <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>
+          <div style={{ flexShrink: 0 }}>
+            <PropertyPanel
+              doc={state.doc}
+              selectedNodeId={state.selectedNodeId}
+              onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
+              onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
+              onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
+              tableOps={{
+                addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
+                removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
+                addCol: (tableId) => dispatch({ type: "TABLE_ADD_COL", tableId }),
+                removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
+              }}
+            />
+          </div>
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <OutlinePanel
+              doc={state.doc}
+              selectedNodeId={state.selectedNodeId}
+              onSelect={(nodeId) => dispatch({ type: "SELECT_NODE", nodeId })}
+            />
+          </div>
+        </div>
       </div>
     </div>
   )

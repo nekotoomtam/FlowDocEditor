@@ -4,7 +4,7 @@ import { useRef, useEffect, useState } from "react"
 import type { PaginatedDocument, PageFragment, PaginatedPage } from "@/pagination"
 import type { DocumentNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
-import type { DragState } from "./EditorShell"
+import type { DragState, ResizeDrag, MinHeightDrag } from "./EditorShell"
 import { getRowGeometry } from "@/placement/geometry"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -87,6 +87,7 @@ function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading,
   inlineEditNodeId, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
+  resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
@@ -97,6 +98,10 @@ function PageView({
   pageKey: string; setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent) => void
   onBackgroundPointerDown: () => void
+  resizeDrag: ResizeDrag | null
+  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, rowFragX: number, rowFragWidth: number, startClientX: number, pageKey: string) => void
+  minHeightDrag: MinHeightDrag | null
+  onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
 }) {
   const W = page.width * scale
   const H = page.height * scale
@@ -167,10 +172,21 @@ function PageView({
         const docNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === f.nodeId)
         const isEmpty = f.nodeType === "stack" && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
 
+        // visual override ระหว่าง resize
+        let fragX = f.x, fragWidth = f.width
+        if (resizeDrag && f.nodeType === "stack") {
+          if (f.nodeId === resizeDrag.leftStackId) {
+            fragWidth = resizeDrag.currentDocX - f.x
+          } else if (f.nodeId === resizeDrag.rightStackId) {
+            fragX = resizeDrag.currentDocX
+            fragWidth = (f.x + f.width) - resizeDrag.currentDocX
+          }
+        }
+
         return (
           <g
             key={i}
-            onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !isInlineEditing
+            onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => { e.stopPropagation(); onNodePointerDown({ source: "document", nodeId: selectNodeId }, e) }
               : undefined}
             onDoubleClick={f.nodeType === "paragraph" && !drag
@@ -179,8 +195,8 @@ function PageView({
             style={{ cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default" }}
           >
             <rect
-              x={f.x * scale} y={f.y * scale}
-              width={f.width * scale} height={Math.max(f.height * scale, 2)}
+              x={fragX * scale} y={f.y * scale}
+              width={Math.max(fragWidth * scale, 2)} height={Math.max(f.height * scale, 2)}
               fill={isInlineEditing ? "#dbeafe" : color}
               stroke={isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"}
               strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
@@ -299,9 +315,77 @@ function PageView({
           fill="#fef9c3" stroke="#9ca3af" strokeWidth={0.5} opacity={0.6} />
       ))}
 
+      {/* resize handles — แสดงระหว่าง stacks ของแต่ละ row */}
+      {!drag && page.fragments.filter((f) => f.nodeType === "row").map((rowFrag) => {
+        const rowNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === rowFrag.nodeId)
+        if (rowNode?.type !== "row") return null
+        return rowNode.childIds.slice(0, -1).map((leftStackId, i) => {
+          const rightStackId = rowNode.childIds[i + 1]
+          const leftFrag = page.fragments.find((f) => f.nodeId === leftStackId)
+          if (!leftFrag) return null
+          const isActive = resizeDrag?.leftStackId === leftStackId
+          const handleDocX = isActive ? resizeDrag!.currentDocX : leftFrag.x + leftFrag.width
+          const hx = handleDocX * scale
+          const hy = rowFrag.y * scale
+          const hh = Math.max(rowFrag.height * scale, 8)
+          return (
+            <g key={`rh-${leftStackId}`}>
+              {/* hit area */}
+              <rect x={hx - 6} y={hy} width={12} height={hh}
+                fill="transparent" style={{ cursor: "col-resize" }}
+                onPointerDown={(e) => {
+                  e.stopPropagation(); e.preventDefault()
+                  onResizeStart(rowFrag.nodeId, leftStackId, rightStackId, rowFrag.x, rowFrag.width, e.clientX, pageKey)
+                }}
+              />
+              {/* visual line */}
+              <rect x={hx - (isActive ? 1 : 0.5)} y={hy} width={isActive ? 2 : 1} height={hh}
+                fill={isActive ? "#2563eb" : "#9ca3af"} opacity={isActive ? 1 : 0.5}
+                style={{ pointerEvents: "none" }} />
+            </g>
+          )
+        })
+      })}
+
+      {/* minHeight resize handles — แสดงด้านล่างของ row */}
+      {!drag && page.fragments.filter((f) => f.nodeType === "row").map((rowFrag) => {
+        const isActive = minHeightDrag?.rowId === rowFrag.nodeId
+        const rowNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === rowFrag.nodeId)
+        if (rowNode?.type !== "row") return null
+        const currentMinH = isActive ? minHeightDrag!.currentMinHeight : (rowNode.props.minHeight ?? 0)
+        const ghostY = (rowFrag.y + currentMinH) * scale
+        const hx = rowFrag.x * scale
+        const hw = rowFrag.width * scale
+        const rowBottomY = (rowFrag.y + rowFrag.height) * scale
+        return (
+          <g key={`mh-${rowFrag.nodeId}`}>
+            {/* hit area at row bottom */}
+            <rect x={hx} y={rowBottomY - 5} width={hw} height={10}
+              fill="transparent" style={{ cursor: "row-resize" }}
+              onPointerDown={(e) => {
+                e.stopPropagation(); e.preventDefault()
+                onMinHeightResizeStart(rowFrag.nodeId, rowFrag.y, pageKey)
+              }}
+            />
+            {/* ghost line แสดง minHeight ที่จะ set */}
+            {(isActive || currentMinH > 0) && ghostY < rowBottomY - 2 && (
+              <line x1={hx} y1={ghostY} x2={hx + hw} y2={ghostY}
+                stroke={isActive ? "#2563eb" : "#c4b5fd"}
+                strokeWidth={isActive ? 1.5 : 1}
+                strokeDasharray={isActive ? "none" : "4 3"}
+                style={{ pointerEvents: "none" }} />
+            )}
+            {/* visual handle line at bottom */}
+            <rect x={hx} y={rowBottomY - (isActive ? 1 : 0.5)} width={hw} height={isActive ? 2 : 1}
+              fill={isActive ? "#2563eb" : "#9ca3af"} opacity={isActive ? 1 : 0.4}
+              style={{ pointerEvents: "none" }} />
+          </g>
+        )
+      })}
+
       <DropHighlight doc={doc} drag={drag} fragments={page.fragments} scale={scale} contentBox={page.contentBox} />
 
-      {isLayoutLoading && !drag && (
+      {isLayoutLoading && !drag && !resizeDrag?.committed && !minHeightDrag?.committed && (
         <rect x={0} y={0} width={W} height={H} fill="white" opacity={0.15}
           style={{ pointerEvents: "none" }} />
       )}
@@ -315,6 +399,8 @@ interface Props {
   paginated: PaginatedDocument
   doc: DocumentNode
   drag: DragState | null
+  resizeDrag: ResizeDrag | null
+  minHeightDrag: MinHeightDrag | null
   scale: number
   selectedNodeId: string | null
   isLayoutLoading: boolean
@@ -325,13 +411,15 @@ interface Props {
   setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent) => void
   onBackgroundPointerDown: () => void
+  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, rowFragX: number, rowFragWidth: number, startClientX: number, pageKey: string) => void
+  onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   onScaleChange: (scale: number) => void
 }
 
 export function EditorCanvas({
-  paginated, doc, drag, scale, selectedNodeId, isLayoutLoading,
+  paginated, doc, drag, resizeDrag, minHeightDrag, scale, selectedNodeId, isLayoutLoading,
   inlineEditNodeId, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
-  setPageRef, onNodePointerDown, onBackgroundPointerDown, onScaleChange,
+  setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onScaleChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -369,6 +457,10 @@ export function EditorCanvas({
                   setPageRef={setPageRef}
                   onNodePointerDown={onNodePointerDown}
                   onBackgroundPointerDown={onBackgroundPointerDown}
+                  resizeDrag={resizeDrag}
+                  onResizeStart={onResizeStart}
+                  minHeightDrag={minHeightDrag}
+                  onMinHeightResizeStart={onMinHeightResizeStart}
                 />
               </div>
             ))}

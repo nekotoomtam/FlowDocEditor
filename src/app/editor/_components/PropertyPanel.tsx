@@ -93,7 +93,7 @@ const btnDanger: React.CSSProperties = {
 export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText, onDelete, tableOps }: Props) {
   if (!selectedNodeId) {
     return (
-      <div style={{ width: 220, flexShrink: 0, borderLeft: "1px solid #e5e7eb", background: "white", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "white", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px 0" }}>
         <span style={{ fontSize: 11, color: "#d1d5db" }}>select a block</span>
       </div>
     )
@@ -105,7 +105,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
   const canDelete = isTopLevel(doc, selectedNodeId)
 
   return (
-    <div style={{ width: 220, flexShrink: 0, borderLeft: "1px solid #e5e7eb", background: "white", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ background: "white", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {/* Header */}
       <div style={{ padding: "8px 14px", fontSize: 10, fontWeight: "bold", color: "#9ca3af", borderBottom: "1px solid #f3f4f6", background: "#fafafa", textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0 }}>
         {node.type}
@@ -203,13 +203,26 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
 
         {/* ── Row ── */}
         {node.type === "row" && (
-          <div>
-            <label style={label}>Gap (pt)</label>
-            <input type="number" min={0}
-              value={node.props.gap ?? 0}
-              onChange={(e) => onUpdateProps(selectedNodeId, { gap: Number(e.target.value) })}
-              style={input} />
-          </div>
+          <>
+            <div>
+              <label style={label}>Gap (pt)</label>
+              <input type="number" min={0}
+                value={node.props.gap ?? 0}
+                onChange={(e) => onUpdateProps(selectedNodeId, { gap: Number(e.target.value) })}
+                style={input} />
+            </div>
+            <div>
+              <label style={label}>Min height (lines)</label>
+              <input type="number" min={0} step={1}
+                value={node.props.minHeight ? Math.round(node.props.minHeight / 18) : 0}
+                onChange={(e) => {
+                  const lines = Math.max(0, Number(e.target.value))
+                  onUpdateProps(selectedNodeId, { minHeight: lines > 0 ? lines * 18 : undefined })
+                }}
+                style={input} />
+              <span style={{ ...label, marginTop: 4, fontSize: 9 }}>0 = auto (content height)</span>
+            </div>
+          </>
         )}
 
         {/* ── Stack ── */}

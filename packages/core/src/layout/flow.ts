@@ -220,7 +220,7 @@ function flowRow(
     return box.height
   })
 
-  const rowHeight = Math.max(0, ...measuredHeights)
+  const rowHeight = Math.max(node.props.minHeight ?? 0, ...measuredHeights)
 
   let cursorX = x
   const children: FlowBox[] = []

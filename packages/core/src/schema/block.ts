@@ -27,6 +27,7 @@ export const StackPropsSchema = BodyPropsSchema.extend({
 export const RowPropsSchema = z.object({
   gap: z.number().nonnegative().optional(),
   alignY: AlignYSchema.optional(),
+  minHeight: z.number().positive().optional(),
 })
 
 export const ParagraphPropsSchema = z.object({
