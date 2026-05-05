@@ -5,29 +5,25 @@ import { paginateDocument } from "@/pagination"
 import { thaiWordBreaker } from "@/layout/word-breaker"
 import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { PdfRenderer, DocxRenderer } from "@/renderer"
+import { assertDocument, DocumentAssertionError } from "@/document"
+import { DEFAULT_FONT_KEY, resolveFontFileName } from "@/font-registry"
 import type { FontProvider } from "@/renderer"
 
 // ─── Font Loader ───────────────────────────────────────────────────────────────
-
-const FONT_PATHS = [
-  (key: string) => path.join(process.cwd(), "public", "fonts", `${key}.ttf`),
-  () => "C:\\Windows\\Fonts\\leelawad.ttf",
-  () => "C:\\Windows\\Fonts\\tahoma.ttf",
-]
 
 const fontCache = new Map<string, Uint8Array | null>()
 
 function loadFontSync(key: string): Uint8Array | null {
   if (fontCache.has(key)) return fontCache.get(key)!
-  for (const resolvePath of FONT_PATHS) {
-    try {
-      const buf = new Uint8Array(fs.readFileSync(resolvePath(key)))
-      fontCache.set(key, buf)
-      return buf
-    } catch { /* try next */ }
+  const fontPath = path.join(process.cwd(), "public", "fonts", resolveFontFileName(key))
+  try {
+    const buf = new Uint8Array(fs.readFileSync(fontPath))
+    fontCache.set(key, buf)
+    return buf
+  } catch {
+    fontCache.set(key, null)
+    return null
   }
-  fontCache.set(key, null)
-  return null
 }
 
 // Measurer cache — keyed to "default" font
@@ -35,7 +31,7 @@ let cachedMeasurer: ReturnType<typeof createFontkitMeasurer> | null = null
 
 function getMeasurer() {
   if (cachedMeasurer) return cachedMeasurer
-  const buf = loadFontSync("leelawad") ?? loadFontSync("tahoma")
+  const buf = loadFontSync(DEFAULT_FONT_KEY)
   cachedMeasurer = createFontkitMeasurer(buf ?? null)
   return cachedMeasurer
 }
@@ -51,10 +47,22 @@ const fontProvider: FontProvider = {
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  const { doc, format } = await req.json() as { doc: unknown; format: "pdf" | "docx" }
+  const { doc, format } = await req.json() as { doc: unknown; format: unknown }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const paginated = paginateDocument(doc as any, getMeasurer(), thaiWordBreaker)
+  if (format !== "pdf" && format !== "docx") {
+    return NextResponse.json({ error: "Invalid export format" }, { status: 400 })
+  }
+
+  try {
+    assertDocument(doc)
+  } catch (error) {
+    if (error instanceof DocumentAssertionError) {
+      return NextResponse.json({ error: "Invalid document", errors: error.errors }, { status: 400 })
+    }
+    throw error
+  }
+
+  const paginated = paginateDocument(doc, getMeasurer(), thaiWordBreaker)
   const renderer = format === "pdf" ? new PdfRenderer(fontProvider) : new DocxRenderer()
   const result = await renderer.render(paginated)
 

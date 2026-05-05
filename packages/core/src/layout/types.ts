@@ -90,9 +90,17 @@ export interface WordBreaker {
   segment(text: string): string[]
 }
 
-// Default — space-based fallback สำหรับ Latin และ testing
+// Default — uses the platform word segmenter when available. Segments preserve
+// authored whitespace because wrapping must not reconstruct spaces manually.
 export const defaultWordBreaker: WordBreaker = {
   segment(text: string): string[] {
-    return text.split(" ")
+    const Segmenter = Intl.Segmenter
+    if (Segmenter) {
+      const segmenter = new Segmenter(["th", "en"], { granularity: "word" })
+      return Array.from(segmenter.segment(text))
+        .map((part) => part.segment)
+        .filter((segment) => segment.length > 0)
+    }
+    return text.match(/\s+|\S+/g) ?? []
   },
 }

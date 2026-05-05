@@ -686,7 +686,7 @@ export default function EditorShell() {
               saved {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </span>
           )}
-          {isLayoutLoading && !state.drag && (
+          {isLayoutLoading && !state.drag && !inlineEditNodeId && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>↻ layout…</span>
           )}
           {(["pdf", "docx"] as const).map((fmt) => (

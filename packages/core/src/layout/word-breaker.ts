@@ -3,64 +3,30 @@ import type { WordBreaker } from "./types"
 /**
  * Concrete WordBreaker implementations
  *
- * - thaiWordBreaker: ใช้ wordcut (dictionary) สำหรับ Thai, space-based สำหรับ Latin
- *   → Node.js only (dictionary bundle ใหญ่เกินสำหรับ browser)
+ * - intlWordBreaker: ใช้ Intl.Segmenter เป็นตัวหลักสำหรับช่วง prototype
+ * - thaiWordBreaker: alias เดิมสำหรับ server call sites
  */
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function isThaiChar(char: string): boolean {
-  const code = char.codePointAt(0) ?? 0
-  return code >= 0x0e00 && code <= 0x0e7f
-}
-
-// lazy init เพื่อไม่ให้ load dictionary ซ้ำ
-let _wordcut: { init(): void; cut(text: string): string } | null = null
-
-function getWordcut() {
-  if (_wordcut == null) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    _wordcut = require("wordcut") as typeof _wordcut
-    _wordcut!.init()
-  }
-  return _wordcut!
-}
-
-function segmentThai(text: string): string[] {
-  return getWordcut()
-    .cut(text)
-    .split("|")
-    .filter((w: string) => w.length > 0)
+function fallbackSegment(text: string): string[] {
+  return text.match(/\s+|\S+/g) ?? []
 }
 
 // ─── Thai Word Breaker ────────────────────────────────────────────────────────
 
-function segmentMixed(text: string): string[] {
-  if (text.length === 0) return []
+function segmentWithIntl(text: string): string[] {
+  const Segmenter = Intl.Segmenter
+  if (!Segmenter) return fallbackSegment(text)
 
-  const segments: string[] = []
-  let chunk = ""
-  let chunkIsThai = isThaiChar(text[0])
-
-  for (const char of text) {
-    const charIsThai = isThaiChar(char)
-
-    if (charIsThai !== chunkIsThai && chunk.length > 0) {
-      segments.push(...(chunkIsThai ? segmentThai(chunk) : chunk.split(" ").filter((w) => w.length > 0)))
-      chunk = ""
-      chunkIsThai = charIsThai
-    }
-
-    chunk += char
-  }
-
-  if (chunk.length > 0) {
-    segments.push(...(chunkIsThai ? segmentThai(chunk) : chunk.split(" ").filter((w) => w.length > 0)))
-  }
-
-  return segments
+  const segmenter = new Segmenter(["th", "en"], { granularity: "word" })
+  return Array.from(segmenter.segment(text))
+    .map((part) => part.segment)
+    .filter((segment) => segment.length > 0)
 }
 
-export const thaiWordBreaker: WordBreaker = {
-  segment: segmentMixed,
+export const intlWordBreaker: WordBreaker = {
+  segment: segmentWithIntl,
 }
+
+export const thaiWordBreaker = intlWordBreaker

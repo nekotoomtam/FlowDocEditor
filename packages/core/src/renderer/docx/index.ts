@@ -17,6 +17,7 @@ import type { PaginatedDocument, PageFragment, ResolvedBorderSide, ResolvedCellB
 import type { ParagraphRenderProps } from "../../pagination"
 import type { RenderResult, Renderer } from "../shared"
 import { ptToTwips, ptToHalfPoints } from "../shared"
+import { resolveDocxFontName } from "../../font-registry"
 
 /**
  * DOCX Renderer
@@ -117,11 +118,6 @@ const INVISIBLE_BORDERS = {
   insideHorizontal: NO_BORDER, insideVertical: NO_BORDER,
 }
 
-function resolveFontName(fontFamilyKey: string): string {
-  if (fontFamilyKey === "default") return "TH Sarabun New"
-  return fontFamilyKey
-}
-
 function toBorderOpts(side: ResolvedBorderSide | undefined) {
   if (!side || side.style === "none") return NO_BORDER
   const styleMap: Record<string, string> = {
@@ -159,7 +155,7 @@ function buildParagraph(fragment: PageFragment): Paragraph | null {
     children: [new TextRun({
       text,
       size: ptToHalfPoints(props.fontSize),
-      font: resolveFontName(props.fontFamilyKey),
+      font: resolveDocxFontName(props.fontFamilyKey),
     })],
     alignment: ALIGNMENT[props.align] as any,
     spacing: {
@@ -230,7 +226,7 @@ function buildToc(fragment: PageFragment): Paragraph[] {
       const size = ptToHalfPoints(line.fontSize ?? fragment.renderProps!.fontSize)
       const indentLeft = Math.max(0, line.x - fragment.x)
       return new Paragraph({
-        children: [new TextRun({ text: line.text, size, font: resolveFontName(fragment.renderProps!.fontFamilyKey) })],
+        children: [new TextRun({ text: line.text, size, font: resolveDocxFontName(fragment.renderProps!.fontFamilyKey) })],
         indent: { left: ptToTwips(indentLeft) },
         spacing: { after: ptToTwips(2) },
       })

@@ -6,6 +6,7 @@ import type { DocumentNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag } from "./EditorShell"
 import { getRowGeometry } from "@/placement/geometry"
+import { resolveFontCssFamily } from "@/font-registry"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -171,6 +172,8 @@ function PageView({
         const isInlineEditing = f.nodeId === inlineEditNodeId
         const docNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === f.nodeId)
         const isEmpty = f.nodeType === "stack" && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
+        const editFontSize = (f.renderProps?.fontSize ?? 12) * scale
+        const editLineHeight = (f.renderProps?.lineHeight ?? (f.renderProps?.fontSize ?? 12) * 1.5) * scale
 
         // visual override ระหว่าง resize
         let fragX = f.x, fragWidth = f.width
@@ -246,12 +249,12 @@ function PageView({
                     outline: "2px solid #2563eb",
                     outlineOffset: -2,
                     borderRadius: 2,
-                    fontFamily: "Leelawadee, Tahoma, sans-serif",
-                    fontSize: (f.renderProps?.fontSize ?? 12) * scale,
-                    lineHeight: String(f.renderProps?.lineHeight ?? 1.5),
+                    fontFamily: resolveFontCssFamily(f.renderProps?.fontFamilyKey),
+                    fontSize: editFontSize,
+                    lineHeight: `${editLineHeight}px`,
                     resize: "none",
                     overflow: "hidden",
-                    padding: "3px 5px",
+                    padding: 0,
                     boxSizing: "border-box",
                   }}
                   onInput={(e) => {
@@ -277,14 +280,14 @@ function PageView({
               const clipId = `url(#cp-${pageKey}-${f.nodeId})`
 
               // dumb renderer: เมื่อ loading และ text เปลี่ยน → แสดง live text
-              if (isLayoutLoading && f.nodeType === "paragraph") {
+              if (isLayoutLoading && !inlineEditNodeId && f.nodeType === "paragraph") {
                 const liveText = getLiveParaText(doc, f.nodeId)
                 const paginatedText = f.lines?.map((l) => l.text).join("") ?? ""
                 if (liveText !== null && liveText !== paginatedText && f.lines?.length) {
                   const fl = f.lines[0]
                   return (
                     <text x={fl.x * scale} y={(fl.y + fl.height * 0.78) * scale}
-                      fontSize={fs} fontFamily="Leelawadee, Tahoma, sans-serif"
+                      fontSize={fs} fontFamily={resolveFontCssFamily(f.renderProps?.fontFamilyKey)}
                       fill="#1e40af" opacity={0.75} clipPath={clipId}
                       style={{ pointerEvents: "none", userSelect: "none" }}>
                       {liveText}
@@ -297,7 +300,7 @@ function PageView({
                 <text key={li}
                   x={line.x * scale} y={(line.y + line.height * 0.78) * scale}
                   fontSize={line.fontSize ? line.fontSize * scale : fs}
-                  fontFamily="Leelawadee, Tahoma, sans-serif"
+                  fontFamily={resolveFontCssFamily(f.renderProps?.fontFamilyKey)}
                   fill="#1e40af" clipPath={clipId}
                   style={{ pointerEvents: "none", userSelect: "none" }}>
                   {line.text}
@@ -385,7 +388,7 @@ function PageView({
 
       <DropHighlight doc={doc} drag={drag} fragments={page.fragments} scale={scale} contentBox={page.contentBox} />
 
-      {isLayoutLoading && !drag && !resizeDrag?.committed && !minHeightDrag?.committed && (
+      {isLayoutLoading && !inlineEditNodeId && !drag && !resizeDrag?.committed && !minHeightDrag?.committed && (
         <rect x={0} y={0} width={W} height={H} fill="white" opacity={0.15}
           style={{ pointerEvents: "none" }} />
       )}

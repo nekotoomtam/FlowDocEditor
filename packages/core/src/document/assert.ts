@@ -1,6 +1,11 @@
-import { z } from "zod"
-import { DocumentNodeSchema } from "../schema"
-import type { DocumentNode, DocumentSection, LayoutNode, RowNode, BodyNode, StackNode } from "../schema"
+import {
+  DocumentNodeSchema,
+  ParagraphNodeSchema,
+  SpacerNodeSchema,
+  TableCellNodeSchema,
+  TableRowNodeSchema,
+} from "../schema"
+import type { DocumentNode, DocumentSection, LayoutNode, RowNode, TableCellNode, TableNode } from "../schema"
 
 // ─── Error Types ──────────────────────────────────────────────────────────────
 
@@ -62,6 +67,163 @@ function assertWidthShareSum(section: DocumentSection, row: RowNode, path: strin
   }
 }
 
+// ─── Table Internals ──────────────────────────────────────────────────────────
+
+function assertUniqueIds(ids: string[], path: string, label: string): void {
+  const seen = new Set<string>()
+  ids.forEach((id, index) => {
+    if (seen.has(id)) fail(`${path}[${index}]`, `duplicate ${label} "${id}"`)
+    seen.add(id)
+  })
+}
+
+function assertNodeIdMatchesKey(node: { id: string }, key: string, path: string): void {
+  if (node.id !== key) {
+    fail(path, `node id "${node.id}" must match map key "${key}"`)
+  }
+}
+
+function assertTableInternalSchema(node: { type: string }, path: string): void {
+  const schema =
+    node.type === "table-row" ? TableRowNodeSchema :
+    node.type === "table-cell" ? TableCellNodeSchema :
+    node.type === "paragraph" ? ParagraphNodeSchema :
+    node.type === "spacer" ? SpacerNodeSchema :
+    null
+
+  if (schema == null) {
+    fail(path, `unsupported table internal node type "${node.type}"`)
+  }
+
+  const result = schema.safeParse(node)
+  if (!result.success) {
+    const issue = result.error.issues[0]
+    fail(`${path}.${issue?.path.join(".") ?? ""}`, issue?.message ?? "invalid table internal node")
+  }
+}
+
+function assertTableCellContents(
+  table: TableNode,
+  cell: TableCellNode,
+  tablePath: string,
+  path: string,
+  reachable: Set<string>,
+  seenContentParents: Map<string, string>,
+): void {
+  assertUniqueIds(cell.childIds, `${path}.childIds`, "cell child")
+
+  cell.childIds.forEach((childId, index) => {
+    const childPath = `${path}.childIds[${index}]`
+    const child = table.nodes[childId]
+
+    if (child == null) fail(childPath, `missing child "${childId}"`)
+    if (child.type !== "paragraph" && child.type !== "spacer") {
+      fail(childPath, `table cell child must be paragraph or spacer — got "${child.type}"`)
+    }
+
+    const existingParent = seenContentParents.get(childId)
+    if (existingParent != null && existingParent !== cell.id) {
+      fail(childPath, `node "${childId}" has multiple table cell parents`)
+    }
+    seenContentParents.set(childId, cell.id)
+
+    reachable.add(childId)
+    assertNoLayoutKeys(child, `${tablePath}.nodes.${childId}`)
+  })
+}
+
+function assertTableGrid(
+  table: TableNode,
+  path: string,
+  reachable: Set<string>,
+  seenCellParents: Map<string, string>,
+  seenContentParents: Map<string, string>,
+): void {
+  const colCount = table.columns.length
+  const occupiedCols: Set<number>[] = Array.from(
+    { length: table.rowIds.length },
+    () => new Set<number>(),
+  )
+
+  table.rowIds.forEach((rowId, rowIndex) => {
+    const rowPath = `${path}.nodes.${rowId}`
+    const row = table.nodes[rowId]
+
+    if (row == null) fail(`${path}.rowIds[${rowIndex}]`, `missing row "${rowId}"`)
+    if (row.type !== "table-row") {
+      fail(`${path}.rowIds[${rowIndex}]`, `table row id must reference table-row — got "${row.type}"`)
+    }
+
+    reachable.add(rowId)
+    assertUniqueIds(row.cellIds, `${rowPath}.cellIds`, "table cell")
+
+    let colCursor = 0
+    row.cellIds.forEach((cellId, cellIndex) => {
+      while (colCursor < colCount && occupiedCols[rowIndex].has(colCursor)) colCursor++
+      if (colCursor >= colCount) {
+        fail(`${rowPath}.cellIds[${cellIndex}]`, `cell "${cellId}" exceeds table column count`)
+      }
+
+      const cell = table.nodes[cellId]
+      const cellRefPath = `${rowPath}.cellIds[${cellIndex}]`
+
+      if (cell == null) fail(cellRefPath, `missing cell "${cellId}"`)
+      if (cell.type !== "table-cell") {
+        fail(cellRefPath, `table row child must be table-cell — got "${cell.type}"`)
+      }
+
+      const existingParent = seenCellParents.get(cellId)
+      if (existingParent != null && existingParent !== row.id) {
+        fail(cellRefPath, `cell "${cellId}" has multiple table row parents`)
+      }
+      seenCellParents.set(cellId, row.id)
+
+      const colspan = cell.props.colspan ?? 1
+      const rowspan = cell.props.rowspan ?? 1
+      if (colCursor + colspan > colCount) {
+        fail(`${path}.nodes.${cellId}.props.colspan`, `cell "${cellId}" colspan exceeds table column count`)
+      }
+      if (rowIndex + rowspan > table.rowIds.length) {
+        fail(`${path}.nodes.${cellId}.props.rowspan`, `cell "${cellId}" rowspan exceeds table row count`)
+      }
+
+      reachable.add(cellId)
+      assertTableCellContents(table, cell, path, `${path}.nodes.${cellId}`, reachable, seenContentParents)
+
+      for (let dr = 1; dr < rowspan; dr++) {
+        for (let dc = 0; dc < colspan; dc++) {
+          occupiedCols[rowIndex + dr].add(colCursor + dc)
+        }
+      }
+
+      colCursor += colspan
+    })
+  })
+}
+
+function assertTable(table: TableNode, path: string): void {
+  assertUniqueIds(table.rowIds, `${path}.rowIds`, "table row")
+
+  Object.entries(table.nodes).forEach(([nodeId, node]) => {
+    const nodePath = `${path}.nodes.${nodeId}`
+    assertNodeIdMatchesKey(node, nodeId, nodePath)
+    assertNoLayoutKeys(node, nodePath)
+    assertTableInternalSchema(node, nodePath)
+  })
+
+  const reachable = new Set<string>()
+  const seenCellParents = new Map<string, string>()
+  const seenContentParents = new Map<string, string>()
+
+  assertTableGrid(table, path, reachable, seenCellParents, seenContentParents)
+
+  Object.keys(table.nodes).forEach((nodeId) => {
+    if (!reachable.has(nodeId)) {
+      fail(`${path}.nodes.${nodeId}`, `orphan table node — not reachable from table rows`)
+    }
+  })
+}
+
 // ─── Section Graph ────────────────────────────────────────────────────────────
 
 function assertSectionGraph(section: DocumentSection, path: string): void {
@@ -78,7 +240,12 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
     reachable.add(nodeId)
     assertNoLayoutKeys(node, nodePath)
 
-    if (node.type === "paragraph" || node.type === "spacer" || node.type === "table" || node.type === "toc") return
+    if (node.type === "table") {
+      assertTable(node as unknown as TableNode, nodePath)
+      return
+    }
+
+    if (node.type === "paragraph" || node.type === "spacer" || node.type === "toc") return
 
     active.add(nodeId)
 

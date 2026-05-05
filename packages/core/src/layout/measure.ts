@@ -41,31 +41,26 @@ function wrapLines(
   for (const segment of segments) {
     if (segment.length === 0) continue
 
-    // Thai segments ต่อกันตรงๆ, Latin segments คั่นด้วย space
-    const needsSpace = currentLine.length > 0 && !isThaiChar(currentLine.slice(-1)) && !isThaiChar(segment[0])
-    const candidate = currentLine.length === 0 ? segment : needsSpace ? `${currentLine} ${segment}` : `${currentLine}${segment}`
+    const candidate = `${currentLine}${segment}`
     const { width } = measurer.measureText(candidate, fontFamilyKey, fontSize)
 
     if (width <= availableWidth || currentLine.length === 0) {
       currentLine = candidate
     } else {
-      if (currentLine.length > 0) {
-        lines.push({ text: currentLine, width: measurer.measureText(currentLine, fontFamilyKey, fontSize).width, height: fontSize })
+      const lineText = currentLine.trimEnd()
+      if (lineText.length > 0) {
+        lines.push({ text: lineText, width: measurer.measureText(lineText, fontFamilyKey, fontSize).width, height: fontSize })
       }
-      currentLine = segment
+      currentLine = segment.trimStart()
     }
   }
 
-  if (currentLine.length > 0) {
-    lines.push({ text: currentLine, width: measurer.measureText(currentLine, fontFamilyKey, fontSize).width, height: fontSize })
+  const lineText = currentLine.trimEnd()
+  if (lineText.length > 0) {
+    lines.push({ text: lineText, width: measurer.measureText(lineText, fontFamilyKey, fontSize).width, height: fontSize })
   }
 
   return lines
-}
-
-function isThaiChar(char: string): boolean {
-  const code = char.codePointAt(0) ?? 0
-  return code >= 0x0E00 && code <= 0x0E7F
 }
 
 export function measureParagraph(
