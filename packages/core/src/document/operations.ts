@@ -455,19 +455,44 @@ export function removeTableRow(doc: DocumentNode, tableId: string, rowIndex: num
   })
 }
 
-export function addTableColumn(doc: DocumentNode, tableId: string): DocumentNode {
+export function addTableColumn(doc: DocumentNode, tableId: string, afterColIndex?: number): DocumentNode {
   return updateTableInSection(doc, tableId, (table) => {
+    const insertAt = afterColIndex != null
+      ? Math.min(Math.max(0, afterColIndex + 1), table.columns.length)
+      : table.columns.length
+
+    const newColumns = [
+      ...table.columns.slice(0, insertAt),
+      { width: pt(150) },
+      ...table.columns.slice(insertAt),
+    ]
+
     const internalNodes = { ...table.nodes }
+
     table.rowIds.forEach((rowId) => {
       const row = internalNodes[rowId] as TableRowNode | undefined
       if (!row) return
+
+      // หา position ใน cellIds ที่ตรงกับ column insertAt โดยนับ colspan
+      let colCursor = 0
+      let cellInsertIdx = row.cellIds.length
+      for (let i = 0; i < row.cellIds.length; i++) {
+        if (colCursor >= insertAt) { cellInsertIdx = i; break }
+        const cellNode = internalNodes[row.cellIds[i]] as TableCellNode | undefined
+        colCursor += cellNode?.props.colspan ?? 1
+      }
+
       const para = createParagraphNode("", { spacingBefore: pt(2), spacingAfter: pt(2) })
       const cell = createTableCellNode([para.id])
       internalNodes[para.id] = para
       internalNodes[cell.id] = cell
-      internalNodes[rowId] = { ...row, cellIds: [...row.cellIds, cell.id] }
+      internalNodes[rowId] = {
+        ...row,
+        cellIds: [...row.cellIds.slice(0, cellInsertIdx), cell.id, ...row.cellIds.slice(cellInsertIdx)],
+      }
     })
-    return { ...table, columns: [...table.columns, { width: pt(150) }], nodes: internalNodes }
+
+    return { ...table, columns: newColumns, nodes: internalNodes }
   })
 }
 
@@ -475,19 +500,41 @@ export function removeTableColumn(doc: DocumentNode, tableId: string, colIndex: 
   return updateTableInSection(doc, tableId, (table) => {
     if (table.columns.length <= 1) return table
     const internalNodes = { ...table.nodes }
+
     table.rowIds.forEach((rowId) => {
       const row = internalNodes[rowId] as TableRowNode | undefined
       if (!row) return
-      const cellId = row.cellIds[colIndex]
-      if (cellId) {
-        const cell = internalNodes[cellId] as TableCellNode | undefined
+
+      // ติดตาม column position ด้วย colspan เพื่อหา cell ที่ถูกต้อง
+      let colCursor = 0
+      let removeCellId: string | null = null
+
+      for (const cellId of row.cellIds) {
+        const cellNode = internalNodes[cellId] as TableCellNode | undefined
+        if (!cellNode) { colCursor++; continue }
+        const colspan = cellNode.props.colspan ?? 1
+        if (colCursor <= colIndex && colIndex < colCursor + colspan) {
+          if (colspan > 1) {
+            // ลด colspan แทนการลบ — cell ยังคงอยู่แต่แคบลง
+            internalNodes[cellId] = { ...cellNode, props: { ...cellNode.props, colspan: colspan - 1 } }
+          } else {
+            removeCellId = cellId
+          }
+          break
+        }
+        colCursor += colspan
+      }
+
+      if (removeCellId != null) {
+        const cell = internalNodes[removeCellId] as TableCellNode | undefined
         if (cell) {
           cell.childIds.forEach((id) => { delete internalNodes[id] })
-          delete internalNodes[cellId]
+          delete internalNodes[removeCellId]
         }
+        internalNodes[rowId] = { ...row, cellIds: row.cellIds.filter((id) => id !== removeCellId) }
       }
-      internalNodes[rowId] = { ...row, cellIds: row.cellIds.filter((_, i) => i !== colIndex) }
     })
+
     return { ...table, columns: table.columns.filter((_, i) => i !== colIndex), nodes: internalNodes }
   })
 }

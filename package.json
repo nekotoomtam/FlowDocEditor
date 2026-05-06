@@ -5,9 +5,9 @@
   "workspaces": ["packages/*"],
   "main": "index.js",
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "next dev --webpack --port 4000",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --port 4000",
     "type-check": "tsc --noEmit"
   },
   "keywords": [],
