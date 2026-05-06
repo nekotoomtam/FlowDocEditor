@@ -74,6 +74,7 @@ export type PlacementOperation =
   | { kind: "insert-into-container"; containerId: string; containerType: "body" | "stack"; index: number }
   | { kind: "expand-row-left"; rowId: string; targetStackId: string; index: number }
   | { kind: "expand-row-right"; rowId: string; targetStackId: string; index: number }
+  | { kind: "insert-stacks-into-row"; rowId: string; targetStackId: string; index: number; count: number }
   | { kind: "wrap-in-row-left"; parentId: string; parentType: "body" | "stack"; index: number; targetNodeId: string }
   | { kind: "wrap-in-row-right"; parentId: string; parentType: "body" | "stack"; index: number; targetNodeId: string }
 

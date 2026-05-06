@@ -5,7 +5,6 @@ import {
   createParagraphNode,
   createRowNode,
   createRowSubtree,
-  createColumnsSubtree,
   createStackNode,
   getEqualWidthShares,
   DEFAULT_STACK_MIN_HEIGHT,
@@ -58,6 +57,16 @@ function splitWidthPercent(percent: number): { original: number; inserted: numbe
   return { original, inserted: Math.round((safe - original) * 100) / 100 }
 }
 
+function splitWidthShare(total: number, count: number): number[] {
+  const safeTotal = Math.round(Math.max(total, 0) * 100) / 100
+  const safeCount = Math.max(1, Math.floor(count))
+  const base = Math.floor((safeTotal / safeCount) * 100) / 100
+  const shares = Array.from({ length: safeCount }, () => base)
+  const assignedExceptLast = base * Math.max(0, safeCount - 1)
+  shares[safeCount - 1] = Math.round((safeTotal - assignedExceptLast) * 100) / 100
+  return shares
+}
+
 function redistributeRowWidths(nodes: Nodes, rowId: string): Nodes {
   const row = nodes[rowId]
   if (row?.type !== "row") return nodes
@@ -74,6 +83,32 @@ function redistributeRowWidths(nodes: Nodes, rowId: string): Nodes {
   return result
 }
 
+function transferDeletedStackWidth(nodes: Nodes, rowId: string, deletedStackId: string, deletedIndex: number): Nodes {
+  const row = nodes[rowId]
+  if (row?.type !== "row" || row.childIds.length === 0) return nodes
+
+  const deletedStack = nodes[deletedStackId]
+  const deletedShare = deletedStack?.type === "stack" ? deletedStack.props.widthShare ?? 0 : 0
+  if (deletedShare <= 0) return nodes
+
+  const receiverId = deletedIndex > 0
+    ? row.childIds[deletedIndex - 1]
+    : row.childIds[0]
+  const receiver = nodes[receiverId]
+  if (receiver?.type !== "stack") return nodes
+
+  return {
+    ...nodes,
+    [receiverId]: {
+      ...receiver,
+      props: {
+        ...receiver.props,
+        widthShare: Math.round(((receiver.props.widthShare ?? 0) + deletedShare) * 100) / 100,
+      },
+    } as LayoutNode,
+  }
+}
+
 // ─── Removal & Cleanup ─────────────────────────────────────────────────────────
 
 function removeFromParent(nodes: Nodes, nodeId: string): { nodes: Nodes; parentInfo: ParentInfo | null } {
@@ -87,42 +122,17 @@ function cleanupAfterRemoval(nodes: Nodes, removedFromId: string): Nodes {
   const parent = nodes[removedFromId]
   if (!parent) return nodes
 
-  // Stack: เก็บ empty stack ไว้ (user อาจต้องการ empty cell)
-  // ยกเว้นกรณีที่มีหลาย sibling → ลบ empty stack + redistribute widths
+  // Stack: keep empty stacks as intentional layout regions.
+  // A selected stack is deleted explicitly by deleteNode, not by cleanup.
   if (parent.type === "stack") {
-    const remaining = getChildIds(nodes, removedFromId)
-    if (remaining.length > 0) return nodes
-    const rowInfo = findParentInfo(nodes, removedFromId)
-    if (rowInfo == null) return nodes
-    const row = nodes[rowInfo.parentId]
-    if (row?.type !== "row" || row.childIds.length <= 1) return nodes
-    const newRowChildIds = row.childIds.filter((id) => id !== removedFromId)
-    const result: Nodes = { ...nodes, [rowInfo.parentId]: { ...row, childIds: newRowChildIds } as LayoutNode }
-    delete result[removedFromId]
-    return redistributeRowWidths(result, rowInfo.parentId)
+    return nodes
   }
 
-  // Row: single-stack → lift stack's children ขึ้น parent แล้วลบ row+stack
-  //       empty → cascade ลบ row ออก
+  // Row: keep single-stack rows. Delete the row only when no stacks remain.
   if (parent.type === "row") {
     const remaining = getChildIds(nodes, removedFromId)
     const parentInfo = findParentInfo(nodes, removedFromId)
     if (parentInfo == null) return nodes
-
-    if (remaining.length === 1) {
-      const soloStackId = remaining[0]
-      const stackChildren = getChildIds(nodes, soloStackId)
-      const parentChildIds = getChildIds(nodes, parentInfo.parentId)
-      const rowIdx = parentChildIds.indexOf(removedFromId)
-      let result = setChildIds(nodes, parentInfo.parentId, [
-        ...parentChildIds.slice(0, rowIdx),
-        ...stackChildren,
-        ...parentChildIds.slice(rowIdx + 1),
-      ])
-      delete result[removedFromId]
-      delete result[soloStackId]
-      return result
-    }
 
     if (remaining.length === 0) {
       let result = setChildIds(nodes, parentInfo.parentId, getChildIds(nodes, parentInfo.parentId).filter((id) => id !== removedFromId))
@@ -156,7 +166,7 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
       const toc = createTocNode()
       return { insertId: toc.id, newNodes: { [toc.id]: toc as unknown as LayoutNode } }
     }
-    const { row, nodes } = createColumnsSubtree(2)
+    const { row, nodes } = createRowSubtree()
     return { insertId: row.id, newNodes: nodes }
   }
   return { insertId: source.nodeId, newNodes: {} }
@@ -218,6 +228,49 @@ function doExpandRow(
 
   const rowChildIds = [...getChildIds(result, rowId)]
   rowChildIds.splice(insertionIndex, 0, newStack.id)
+  return setChildIds(result, rowId, rowChildIds)
+}
+
+function doInsertStacksIntoRow(
+  nodes: Nodes,
+  rowId: string,
+  targetStackId: string,
+  insertionIndex: number,
+  count: number,
+): Nodes {
+  const row = nodes[rowId]
+  if (row?.type !== "row") return nodes
+  const targetStack = nodes[targetStackId]
+  if (targetStack?.type !== "stack") return nodes
+
+  const safeCount = Math.max(0, Math.floor(count))
+  if (safeCount === 0) return nodes
+
+  const shares = splitWidthShare(targetStack.props.widthShare ?? 100, safeCount + 1)
+  const newStacks = Array.from({ length: safeCount }, () =>
+    createStackNode([], { minHeight: DEFAULT_STACK_MIN_HEIGHT }),
+  )
+
+  let result: Nodes = {
+    ...nodes,
+    [targetStackId]: {
+      ...targetStack,
+      props: { ...targetStack.props, widthShare: shares[0] },
+    } as LayoutNode,
+  }
+
+  newStacks.forEach((stack, index) => {
+    result = {
+      ...result,
+      [stack.id]: {
+        ...stack,
+        props: { ...stack.props, widthShare: shares[index + 1] },
+      } as LayoutNode,
+    }
+  })
+
+  const rowChildIds = [...getChildIds(result, rowId)]
+  rowChildIds.splice(insertionIndex, 0, ...newStacks.map((stack) => stack.id))
   return setChildIds(result, rowId, rowChildIds)
 }
 
@@ -444,12 +497,23 @@ export function deleteNode(doc: DocumentNode, nodeId: string): DocumentNode {
     const section = doc.document.sections[si]
     if (section.nodes[nodeId] == null) continue
 
+    const node = section.nodes[nodeId]
     const toDelete = collectSubtreeIds(section.nodes, nodeId)
     let nodes: Nodes = { ...section.nodes }
 
     const { nodes: afterRemoval, parentInfo } = removeFromParent(nodes, nodeId)
     if (parentInfo == null) return doc // bodyRoot — ลบไม่ได้
     nodes = afterRemoval
+
+    if (node?.type === "stack") {
+      const parent = nodes[parentInfo.parentId]
+      if (parent?.type === "row") {
+        nodes = parent.childIds.length > 0
+          ? transferDeletedStackWidth(nodes, parentInfo.parentId, nodeId, parentInfo.index)
+          : cleanupAfterRemoval(nodes, parentInfo.parentId)
+      }
+    }
+
     nodes = cleanupAfterRemoval(nodes, parentInfo.parentId)
 
     toDelete.forEach((id) => { delete nodes[id] })
@@ -477,7 +541,9 @@ export function applyPlacementOperation(
   let nodes: Nodes = { ...section.nodes }
 
   // Phase 1: merge new nodes (palette source)
-  const { insertId, newNodes } = createNodesForSource(source)
+  const { insertId, newNodes } = op.kind === "insert-stacks-into-row"
+    ? { insertId: "", newNodes: {} }
+    : createNodesForSource(source)
   if (Object.keys(newNodes).length > 0) {
     nodes = { ...nodes, ...newNodes }
   }
@@ -519,6 +585,9 @@ export function applyPlacementOperation(
       break
     case "expand-row-right":
       nodes = doExpandRow(nodes, op.rowId, op.targetStackId, op.index, insertId)
+      break
+    case "insert-stacks-into-row":
+      nodes = doInsertStacksIntoRow(nodes, op.rowId, op.targetStackId, op.index, op.count)
       break
     case "wrap-in-row-left":
       nodes = doWrapInRow(nodes, op.parentId, op.targetNodeId, insertId, true)

@@ -172,6 +172,13 @@ function getPaletteBlockType(source?: DragSource | null): PaletteBlockType | nul
   return source?.source === "palette" ? source.blockType : null
 }
 
+function getPaletteStackInsertCount(source?: DragSource | null): number | null {
+  if (source?.source !== "palette") return null
+  if (source.blockType === "row") return 1
+  if (source.blockType === "columns") return 1
+  return null
+}
+
 function isRowLikeSource(document: DocumentNode, source?: DragSource | null): boolean {
   return getSourceBlockType(document, source) === "row"
 }
@@ -262,25 +269,6 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
 
   // top/bottom → vertical placement
   if (zone === "top" || zone === "bottom") {
-    // ถ้าอยู่ใน row → insert before/after row
-    const rowAnchor = findDirectRowAnchor(document, target.nodeId)
-    if (rowAnchor != null) {
-      const rowLocation = findLocation(document, rowAnchor.rowId)
-      if (rowLocation?.parent == null) return err(rawIntent, "invalid-target", "Row anchor has no parent.")
-      const rowIndex = (rowLocation.parent as LayoutNode & { childIds: string[] }).childIds.indexOf(rowAnchor.rowId)
-      const subtreeErr = rejectSubtree(document, rawIntent, sourceNodeId, rowAnchor.rowId)
-      if (subtreeErr != null) return subtreeErr
-
-      const intent = makeIntent(rawIntent, rowAnchor.rowId, rowLocation.parent.id, rowLocation.parent.type)
-      return ok(intent, {
-        kind: zone === "top" ? "insert-before" : "insert-after",
-        parentId: rowLocation.parent.id,
-        parentType: rowLocation.parent.type as "body" | "stack",
-        index: zone === "top" ? rowIndex : rowIndex + 1,
-        anchorNodeId: rowAnchor.rowId,
-      })
-    }
-
     if (location.parent == null) return err(rawIntent, "invalid-parent", "Node has no parent.")
     if (location.parent.type !== "body" && location.parent.type !== "stack") {
       return err(rawIntent, "invalid-parent", "Vertical placement requires body or stack parent.")
@@ -307,10 +295,7 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
 
   // left/right → horizontal placement
   if (zone === "left" || zone === "right") {
-    // row source ห้าม left/right บน node target
-    if (isRowLikeSource(document, source) && getPaletteBlockType(source) == null) {
-      return err(rawIntent, "invalid-zone", "Row source cannot be placed on left/right node edges.")
-    }
+    const stackInsertCount = getPaletteStackInsertCount(source)
 
     const rowAnchor = findDirectRowAnchor(document, target.nodeId)
     if (rowAnchor != null) {
@@ -320,11 +305,26 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
       const subtreeErr = rejectSubtree(document, rawIntent, sourceNodeId, rowAnchor.childNodeId)
       if (subtreeErr != null) return subtreeErr
 
+      if (stackInsertCount != null) {
+        const intent = makeIntent(rawIntent, rowAnchor.childNodeId, rowAnchor.rowId, "row")
+        return ok(intent, {
+          kind: "insert-stacks-into-row",
+          rowId: rowAnchor.rowId,
+          targetStackId: rowAnchor.childNodeId,
+          index: zone === "left" ? stackIndex : stackIndex + 1,
+          count: stackInsertCount,
+        })
+      }
+
       return createRowExpansion(
         document, rawIntent, zone,
         rowAnchor.rowId, rowAnchor.childNodeId,
         zone === "left" ? stackIndex : stackIndex + 1,
       )
+    }
+
+    if (isRowLikeSource(document, source)) {
+      return err(rawIntent, "invalid-zone", "Row-like source cannot be placed on left/right edges.")
     }
 
     if (location.parent == null) return err(rawIntent, "invalid-parent", "Node has no parent.")
@@ -394,6 +394,22 @@ function resolveRowStackLaw(document: DocumentNode, rawIntent: RawPlacementInten
   if (subtreeErr != null) return subtreeErr
 
   if (zone === "left" || zone === "right") {
+    const stackInsertCount = getPaletteStackInsertCount(source)
+    if (stackInsertCount != null) {
+      const intent = makeIntent(rawIntent, target.stackId, target.rowId, "row")
+      return ok(intent, {
+        kind: "insert-stacks-into-row",
+        rowId: target.rowId,
+        targetStackId: target.stackId,
+        index: zone === "left" ? stackLocation.index : stackLocation.index + 1,
+        count: stackInsertCount,
+      })
+    }
+
+    if (isRowLikeSource(document, source)) {
+      return err(rawIntent, "invalid-zone", "Row-like source cannot expand an existing row.")
+    }
+
     return createRowExpansion(
       document, rawIntent, zone,
       target.rowId, target.stackId,

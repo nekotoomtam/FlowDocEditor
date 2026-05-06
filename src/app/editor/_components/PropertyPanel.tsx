@@ -212,15 +212,15 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
                 style={input} />
             </div>
             <div>
-              <label style={label}>Min height (lines)</label>
+              <label style={label}>Min height (pt)</label>
               <input type="number" min={0} step={1}
-                value={node.props.minHeight ? Math.round(node.props.minHeight / 18) : 0}
+                value={node.props.minHeight ?? 0}
                 onChange={(e) => {
-                  const lines = Math.max(0, Number(e.target.value))
-                  onUpdateProps(selectedNodeId, { minHeight: lines > 0 ? lines * 18 : undefined })
+                  const height = Math.max(0, Number(e.target.value))
+                  onUpdateProps(selectedNodeId, { minHeight: height > 0 ? height : undefined })
                 }}
                 style={input} />
-              <span style={{ ...label, marginTop: 4, fontSize: 9 }}>0 = auto (content height)</span>
+              <span style={{ ...label, marginTop: 4, fontSize: 9 }}>0 = auto; content stays as minimum</span>
             </div>
           </>
         )}

@@ -100,7 +100,7 @@ function PageView({
   onNodePointerDown: (source: DragSource, e: React.PointerEvent) => void
   onBackgroundPointerDown: () => void
   resizeDrag: ResizeDrag | null
-  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, rowFragX: number, rowFragWidth: number, startClientX: number, pageKey: string) => void
+  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, startClientX: number, pageKey: string) => void
   minHeightDrag: MinHeightDrag | null
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
 }) {
@@ -166,9 +166,8 @@ function PageView({
         const isLayoutNode = doc.document.sections.some((s) => s.nodes[f.nodeId] != null)
         const isDraggable = DRAGGABLE_TYPES.has(f.nodeType) && isLayoutNode
         const isSelectable = SELECTABLE.has(f.nodeType)
-        // stack click → select parent row แทน
-        const selectNodeId = f.nodeType === "stack" && f.parentNodeId ? f.parentNodeId : f.nodeId
-        const isSelected = f.nodeId === selectedNodeId || (f.nodeType === "stack" && f.parentNodeId === selectedNodeId)
+        const selectNodeId = f.nodeId
+        const isSelected = f.nodeId === selectedNodeId
         const isInlineEditing = f.nodeId === inlineEditNodeId
         const docNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === f.nodeId)
         const isEmpty = f.nodeType === "stack" && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
@@ -176,13 +175,18 @@ function PageView({
         const editLineHeight = (f.renderProps?.lineHeight ?? (f.renderProps?.fontSize ?? 12) * 1.5) * scale
 
         // visual override ระหว่าง resize
-        let fragX = f.x, fragWidth = f.width
+        let fragX = f.x, fragWidth = f.width, fragHeight = f.height
         if (resizeDrag && f.nodeType === "stack") {
           if (f.nodeId === resizeDrag.leftStackId) {
             fragWidth = resizeDrag.currentDocX - f.x
           } else if (f.nodeId === resizeDrag.rightStackId) {
             fragX = resizeDrag.currentDocX
             fragWidth = (f.x + f.width) - resizeDrag.currentDocX
+          }
+        }
+        if (minHeightDrag && !minHeightDrag.committed) {
+          if (f.nodeId === minHeightDrag.rowId || f.parentNodeId === minHeightDrag.rowId) {
+            fragHeight = Math.max(fragHeight, minHeightDrag.currentMinHeight)
           }
         }
 
@@ -199,7 +203,7 @@ function PageView({
           >
             <rect
               x={fragX * scale} y={f.y * scale}
-              width={Math.max(fragWidth * scale, 2)} height={Math.max(f.height * scale, 2)}
+              width={Math.max(fragWidth * scale, 2)} height={Math.max(fragHeight * scale, 2)}
               fill={isInlineEditing ? "#dbeafe" : color}
               stroke={isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"}
               strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
@@ -208,7 +212,7 @@ function PageView({
             {isSelected && !isInlineEditing && (
               <rect
                 x={f.x * scale - 1} y={f.y * scale - 1}
-                width={f.width * scale + 2} height={Math.max(f.height * scale, 2) + 2}
+                width={f.width * scale + 2} height={Math.max(fragHeight * scale, 2) + 2}
                 fill="none" stroke="#2563eb" strokeWidth={1.5}
                 style={{ pointerEvents: "none" }}
               />
@@ -219,7 +223,7 @@ function PageView({
             </text>
             {isEmpty && (
               <text
-                x={(f.x + f.width / 2) * scale} y={(f.y + f.height / 2 + 3) * scale}
+                x={(f.x + f.width / 2) * scale} y={(f.y + fragHeight / 2 + 3) * scale}
                 textAnchor="middle" fontSize={8 * scale} fill="#9ca3af"
                 style={{ pointerEvents: "none", userSelect: "none" }}>
                 วางที่นี่
@@ -325,7 +329,8 @@ function PageView({
         return rowNode.childIds.slice(0, -1).map((leftStackId, i) => {
           const rightStackId = rowNode.childIds[i + 1]
           const leftFrag = page.fragments.find((f) => f.nodeId === leftStackId)
-          if (!leftFrag) return null
+          const rightFrag = page.fragments.find((f) => f.nodeId === rightStackId)
+          if (!leftFrag || !rightFrag) return null
           const isActive = resizeDrag?.leftStackId === leftStackId
           const handleDocX = isActive ? resizeDrag!.currentDocX : leftFrag.x + leftFrag.width
           const hx = handleDocX * scale
@@ -338,7 +343,7 @@ function PageView({
                 fill="transparent" style={{ cursor: "col-resize" }}
                 onPointerDown={(e) => {
                   e.stopPropagation(); e.preventDefault()
-                  onResizeStart(rowFrag.nodeId, leftStackId, rightStackId, rowFrag.x, rowFrag.width, e.clientX, pageKey)
+                  onResizeStart(rowFrag.nodeId, leftStackId, rightStackId, leftFrag.x, leftFrag.width + rightFrag.width, e.clientX, pageKey)
                 }}
               />
               {/* visual line */}
@@ -356,10 +361,11 @@ function PageView({
         const rowNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === rowFrag.nodeId)
         if (rowNode?.type !== "row") return null
         const currentMinH = isActive ? minHeightDrag!.currentMinHeight : (rowNode.props.minHeight ?? 0)
+        const visualHeight = isActive ? Math.max(rowFrag.height, currentMinH) : rowFrag.height
         const ghostY = (rowFrag.y + currentMinH) * scale
         const hx = rowFrag.x * scale
         const hw = rowFrag.width * scale
-        const rowBottomY = (rowFrag.y + rowFrag.height) * scale
+        const rowBottomY = (rowFrag.y + visualHeight) * scale
         return (
           <g key={`mh-${rowFrag.nodeId}`}>
             {/* hit area at row bottom */}
@@ -371,7 +377,7 @@ function PageView({
               }}
             />
             {/* ghost line แสดง minHeight ที่จะ set */}
-            {(isActive || currentMinH > 0) && ghostY < rowBottomY - 2 && (
+            {(isActive || (currentMinH > 0 && ghostY < rowBottomY - 2)) && (
               <line x1={hx} y1={ghostY} x2={hx + hw} y2={ghostY}
                 stroke={isActive ? "#2563eb" : "#c4b5fd"}
                 strokeWidth={isActive ? 1.5 : 1}
@@ -414,7 +420,7 @@ interface Props {
   setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent) => void
   onBackgroundPointerDown: () => void
-  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, rowFragX: number, rowFragWidth: number, startClientX: number, pageKey: string) => void
+  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, startClientX: number, pageKey: string) => void
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   onScaleChange: (scale: number) => void
 }
@@ -425,22 +431,23 @@ export function EditorCanvas({
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onScaleChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const sections = Array.isArray(paginated.sections) ? paginated.sections : []
 
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const pageWidth = paginated.sections[0]?.pages[0]?.width ?? 595
+    const pageWidth = sections[0]?.pages[0]?.width ?? 595
     const observer = new ResizeObserver(() => {
       const available = el.clientWidth - 48
       onScaleChange(Math.max(0.3, Math.min(2, available / pageWidth)))
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [paginated, onScaleChange])
+  }, [sections, onScaleChange])
 
   return (
     <div ref={containerRef} style={{ flex: 1, overflow: "auto", padding: 24 }}>
-      {paginated.sections.map((section, si) => (
+      {sections.map((section, si) => (
         <div key={si} style={{ marginBottom: 32 }}>
           <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 10 }}>
             Section {si + 1} · {section.pages.length} page{section.pages.length !== 1 ? "s" : ""}

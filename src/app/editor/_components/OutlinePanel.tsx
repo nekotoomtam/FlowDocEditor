@@ -68,9 +68,10 @@ function NodeRow({ label, icon, depth, nodeId, selectedNodeId, onClick, children
 
 // ─── Tree Builder ─────────────────────────────────────────────────────────────
 
-function OutlineNode({ nodes, nodeId, depth, selectedNodeId, onSelect }: {
+function OutlineNode({ nodes, nodeId, depth, selectedNodeId, onSelect, labelOverride }: {
   nodes: Record<string, LayoutNode>; nodeId: string; depth: number
   selectedNodeId: string | null; onSelect: (id: string) => void
+  labelOverride?: string
 }) {
   const node = nodes[nodeId]
   if (!node) return null
@@ -105,33 +106,42 @@ function OutlineNode({ nodes, nodeId, depth, selectedNodeId, onSelect }: {
   }
 
   if (node.type === "row") {
-    const stackCount = node.childIds.length
+    const childIds = node.childIds ?? []
+    const stackCount = childIds.length
     return (
       <NodeRow icon="⫿" label={`${stackCount} คอลัมน์`} depth={depth} nodeId={nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}>
-        {node.childIds.map((stackId, i) => {
+        {childIds.map((stackId, i) => {
           const stack = nodes[stackId]
           if (stack?.type !== "stack") return null
           return (
-            <div key={stackId}>
-              <div style={{ paddingLeft: 8 + (depth + 1) * 14, fontSize: 10, color: "#9ca3af", padding: `2px 8px 2px ${8 + (depth + 1) * 14}px`, userSelect: "none" }}>
-                คอลัมน์ {i + 1}
-              </div>
-              {stack.childIds.map((childId) => (
-                <OutlineNode key={childId} nodes={nodes} nodeId={childId}
-                  depth={depth + 2} selectedNodeId={selectedNodeId} onSelect={onSelect} />
-              ))}
-            </div>
+            <OutlineNode key={stackId} nodes={nodes} nodeId={stackId}
+              depth={depth + 1} selectedNodeId={selectedNodeId} onSelect={onSelect}
+              labelOverride={`คอลัมน์ ${i + 1}`} />
           )
         })}
       </NodeRow>
     )
   }
 
+  if (node.type === "stack") {
+    const childIds = node.childIds ?? []
+    return (
+      <NodeRow icon="▯" label={labelOverride ?? "คอลัมน์"} depth={depth} nodeId={nodeId}
+        selectedNodeId={selectedNodeId} onClick={onSelect}>
+        {childIds.map((childId) => (
+          <OutlineNode key={childId} nodes={nodes} nodeId={childId}
+            depth={depth + 1} selectedNodeId={selectedNodeId} onSelect={onSelect} />
+        ))}
+      </NodeRow>
+    )
+  }
+
   if (node.type === "body") {
+    const childIds = node.childIds ?? []
     return (
       <>
-        {node.childIds.map((childId) => (
+        {childIds.map((childId) => (
           <OutlineNode key={childId} nodes={nodes} nodeId={childId}
             depth={depth} selectedNodeId={selectedNodeId} onSelect={onSelect} />
         ))}

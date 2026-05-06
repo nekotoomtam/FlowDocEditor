@@ -3,7 +3,7 @@
 import { useReducer, useCallback, useRef, useState, useEffect } from "react"
 import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer } from "@/layout"
-import { createDefaultDocument } from "@/document"
+import { createDefaultDocument, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn } from "@/document"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
@@ -34,8 +34,8 @@ export interface ResizeDrag {
   rowId: string
   leftStackId: string
   rightStackId: string
-  rowFragX: number       // row's x in doc coords
-  rowFragWidth: number   // row's width in doc coords
+  pairX: number          // left stack x in doc coords
+  pairWidth: number      // left + right stack width in doc coords
   svgLeft: number        // SVG client left at drag start
   currentDocX: number    // current drag position in doc coords
   leftShareOriginal: number
@@ -49,9 +49,7 @@ export interface MinHeightDrag {
   rowId: string
   rowFragY: number       // row top in doc coords
   svgTop: number         // SVG client top at drag start
-  lineHeightPt: number   // snap unit
-  minPt: number          // minimum allowed (1 line)
-  maxPt: number          // cap (page content height)
+  minPt: number          // natural content height
   currentMinHeight: number
   pageKey: string
   committed?: boolean
@@ -108,15 +106,42 @@ function paginate(doc: DocumentNode): PaginatedDocument {
   return paginateDocument(doc, defaultTextMeasurer)
 }
 
+function isPaginatedDocument(value: unknown): value is PaginatedDocument {
+  return !!value && typeof value === "object" && Array.isArray((value as PaginatedDocument).sections)
+}
+
+function getRowFragmentHeight(paginated: PaginatedDocument, rowId: string): number | null {
+  for (const section of paginated.sections) {
+    for (const page of section.pages) {
+      const fragment = page.fragments.find((f) => f.nodeId === rowId && f.nodeType === "row")
+      if (fragment) return fragment.height
+    }
+  }
+  return null
+}
+
 const MAX_HISTORY = 50
 
 function pushDoc(state: EditorState, newDoc: DocumentNode): EditorState {
+  const normalizedDoc = normalizeDocument(newDoc)
   return {
     ...state,
     past: [...state.past.slice(-(MAX_HISTORY - 1)), state.doc],
-    doc: newDoc,
+    doc: normalizedDoc,
     future: [],
-    // paginated ไม่ update — server จะ update ผ่าน useEffect (dumb renderer)
+    paginated: paginate(normalizedDoc),
+  }
+}
+
+function createInitialEditorState(): EditorState {
+  const initialDoc = normalizeDocument(loadFromStorage() ?? createDefaultDocument("Untitled"))
+  return {
+    past: [],
+    doc: initialDoc,
+    future: [],
+    paginated: paginate(initialDoc),
+    drag: null,
+    selectedNodeId: null,
   }
 }
 
@@ -152,7 +177,7 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         past: state.past.slice(0, -1),
         doc: prev,
         future: [state.doc, ...state.future],
-        // paginated stays — server จะ update ผ่าน useEffect (dumb renderer)
+        paginated: paginate(prev),
       }
     }
     case "REDO": {
@@ -163,11 +188,12 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         past: [...state.past, state.doc],
         doc: next,
         future: state.future.slice(1),
-        // paginated stays — server จะ update ผ่าน useEffect
+        paginated: paginate(next),
       }
     }
     case "LOAD_DOCUMENT":
-      return { ...state, past: [], doc: action.doc, future: [], paginated: paginate(action.doc), selectedNodeId: null, drag: null }
+      const normalizedDoc = normalizeDocument(action.doc)
+      return { ...state, past: [], doc: normalizedDoc, future: [], paginated: paginate(normalizedDoc), selectedNodeId: null, drag: null }
     case "TABLE_ADD_ROW":
       return pushDoc(state, addTableRow(state.doc, action.tableId, action.afterIndex))
     case "TABLE_REMOVE_ROW":
@@ -208,15 +234,7 @@ function zoneToIntent(zone: PlacementZone): PlacementIntentType {
 
 export default function EditorShell() {
   const [scale, setScale] = useState(0.6)
-  const initialDoc = loadFromStorage() ?? createDefaultDocument("Untitled")
-  const [state, dispatch] = useReducer(reducer, {
-    past: [] as DocumentNode[],
-    doc: initialDoc,
-    future: [] as DocumentNode[],
-    paginated: paginate(initialDoc),
-    drag: null,
-    selectedNodeId: null,
-  })
+  const [state, dispatch] = useReducer(reducer, undefined, createInitialEditorState)
 
   const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
   const pendingDragRef = useRef<{ source: DragSource; clientX: number; clientY: number } | null>(null)
@@ -329,8 +347,12 @@ export default function EditorShell() {
           body: JSON.stringify(state.doc),
           signal: controller.signal,
         })
-        const paginated: PaginatedDocument = await res.json()
-        dispatch({ type: "SET_PAGINATED", paginated })
+        const result: unknown = await res.json()
+        if (!res.ok || !isPaginatedDocument(result)) {
+          console.error("layout error:", result)
+          return
+        }
+        dispatch({ type: "SET_PAGINATED", paginated: result })
       } catch (err) {
         if ((err as Error).name !== "AbortError") console.error("layout error:", err)
       } finally {
@@ -361,7 +383,7 @@ export default function EditorShell() {
 
   const handleResizeStart = useCallback((
     rowId: string, leftStackId: string, rightStackId: string,
-    rowFragX: number, rowFragWidth: number,
+    pairX: number, pairWidth: number,
     startClientX: number, pageKey: string,
   ) => {
     const svgEl = pageRefs.current.get(pageKey)
@@ -379,13 +401,11 @@ export default function EditorShell() {
       }
     }
 
-    // min width = 15% of content box width (approx 451pt for A4)
-    const contentWidth = state.paginated.sections[0]?.pages[0]?.contentBox.width ?? 451
-    const minWidthPt = contentWidth * 0.15
+    const minWidthPt = Math.max(16, pairWidth * 0.15)
 
     setResizeDrag({
       rowId, leftStackId, rightStackId,
-      rowFragX, rowFragWidth, svgLeft,
+      pairX, pairWidth, svgLeft,
       currentDocX: startDocX,
       leftShareOriginal: leftShare, rightShareOriginal: rightShare,
       totalShare: leftShare + rightShare,
@@ -399,19 +419,18 @@ export default function EditorShell() {
     const svgEl = pageRefs.current.get(pageKey)
     if (!svgEl) return
     const svgTop = svgEl.getBoundingClientRect().top
-    const lineHeightPt = 18 // 12pt * 1.5
-    const contentHeight = state.paginated.sections[0]?.pages[0]?.contentBox.height ?? 700
+    const naturalDoc = updateNodeProps(state.doc, rowId, { minHeight: undefined })
+    const naturalHeight = getRowFragmentHeight(paginate(naturalDoc), rowId) ?? 0
 
-    let currentMinHeight = lineHeightPt
+    let currentMinHeight = naturalHeight
     for (const section of state.doc.document.sections) {
       const n = section.nodes[rowId]
-      if (n?.type === "row") { currentMinHeight = n.props.minHeight ?? lineHeightPt; break }
+      if (n?.type === "row") { currentMinHeight = Math.max(n.props.minHeight ?? naturalHeight, naturalHeight); break }
     }
 
     setMinHeightDrag({
-      rowId, rowFragY, svgTop, lineHeightPt,
-      minPt: lineHeightPt,
-      maxPt: contentHeight,
+      rowId, rowFragY, svgTop,
+      minPt: naturalHeight,
       currentMinHeight,
       pageKey,
     })
@@ -524,16 +543,15 @@ export default function EditorShell() {
       // Resize row minHeight drag
       if (minHeightDrag && !minHeightDrag.committed) {
         const rawHeight = (e.clientY - minHeightDrag.svgTop) / scale - minHeightDrag.rowFragY
-        const snapped = Math.round(rawHeight / minHeightDrag.lineHeightPt) * minHeightDrag.lineHeightPt
-        const currentMinHeight = Math.max(minHeightDrag.minPt, Math.min(minHeightDrag.maxPt, snapped))
+        const currentMinHeight = Math.max(minHeightDrag.minPt, rawHeight)
         setMinHeightDrag((prev) => prev ? { ...prev, currentMinHeight } : null)
         return
       }
       // Resize column drag
       if (resizeDrag) {
         const rawDocX = (e.clientX - resizeDrag.svgLeft) / scale
-        const minX = resizeDrag.rowFragX + resizeDrag.minWidthPt
-        const maxX = resizeDrag.rowFragX + resizeDrag.rowFragWidth - resizeDrag.minWidthPt
+        const minX = resizeDrag.pairX + resizeDrag.minWidthPt
+        const maxX = resizeDrag.pairX + resizeDrag.pairWidth - resizeDrag.minWidthPt
         const currentDocX = Math.max(minX, Math.min(maxX, rawDocX))
         setResizeDrag((prev) => prev ? { ...prev, currentDocX } : null)
         return
@@ -568,9 +586,9 @@ export default function EditorShell() {
       }
       // Commit resize
       if (resizeDrag && !resizeDrag.committed) {
-        const { leftStackId, rightStackId, rowFragX, rowFragWidth, currentDocX, totalShare } = resizeDrag
-        const leftWidthPt = currentDocX - rowFragX
-        const newLeftShare = Math.round((leftWidthPt / rowFragWidth) * totalShare * 100) / 100
+        const { leftStackId, rightStackId, pairX, pairWidth, currentDocX, totalShare } = resizeDrag
+        const leftWidthPt = currentDocX - pairX
+        const newLeftShare = Math.round((leftWidthPt / pairWidth) * totalShare * 100) / 100
         const newRightShare = Math.round((totalShare - newLeftShare) * 100) / 100
         dispatch({ type: "RESIZE_COLUMNS", leftStackId, leftShare: newLeftShare, rightStackId, rightShare: newRightShare })
         setResizeDrag((prev) => prev ? { ...prev, committed: true } : null)
