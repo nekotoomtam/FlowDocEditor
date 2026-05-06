@@ -539,6 +539,28 @@ export function removeTableColumn(doc: DocumentNode, tableId: string, colIndex: 
   })
 }
 
+export function updateSectionMargin(
+  doc: DocumentNode,
+  sectionIndex: number,
+  margin: { top: number; right: number; bottom: number; left: number },
+): DocumentNode {
+  const sections = doc.document.sections.map((s, i) =>
+    i !== sectionIndex ? s : {
+      ...s,
+      page: {
+        ...s.page,
+        margin: {
+          top: pt(margin.top),
+          right: pt(margin.right),
+          bottom: pt(margin.bottom),
+          left: pt(margin.left),
+        },
+      },
+    },
+  )
+  return { ...doc, document: { ...doc.document, sections } }
+}
+
 export function deleteNode(doc: DocumentNode, nodeId: string): DocumentNode {
   for (let si = 0; si < doc.document.sections.length; si++) {
     const section = doc.document.sections[si]

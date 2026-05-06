@@ -4,7 +4,7 @@ import { useReducer, useCallback, useRef, useState, useEffect } from "react"
 import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer } from "@/layout"
 import { createDefaultDocument, normalizeDocument } from "@/document"
-import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn } from "@/document"
+import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin } from "@/document"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
 import type { DocumentNode } from "@/schema"
@@ -55,6 +55,17 @@ export interface MinHeightDrag {
   committed?: boolean
 }
 
+export interface MarginDrag {
+  sectionIndex: number
+  side: "top" | "right" | "bottom" | "left"
+  pageWidthPt: number
+  pageHeightPt: number
+  currentMargins: { top: number; right: number; bottom: number; left: number }
+  pageKey: string
+  altKey: boolean        // true = single-side mode (no mirror)
+  committed?: boolean
+}
+
 interface EditorState {
   past: DocumentNode[]
   doc: DocumentNode
@@ -83,6 +94,7 @@ type EditorAction =
   | { type: "LOAD_DOCUMENT"; doc: DocumentNode }
   | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
+  | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
 
@@ -209,6 +221,8 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     }
     case "RESIZE_ROW_MIN_HEIGHT":
       return pushDoc(state, updateNodeProps(state.doc, action.rowId, { minHeight: action.minHeight }))
+    case "UPDATE_MARGIN":
+      return pushDoc(state, updateSectionMargin(state.doc, action.sectionIndex, action.margin))
   }
 }
 
@@ -240,6 +254,7 @@ export default function EditorShell() {
   const pendingDragRef = useRef<{ source: DragSource; clientX: number; clientY: number } | null>(null)
   const [resizeDrag, setResizeDrag] = useState<ResizeDrag | null>(null)
   const [minHeightDrag, setMinHeightDrag] = useState<MinHeightDrag | null>(null)
+  const [marginDrag, setMarginDrag] = useState<MarginDrag | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -368,6 +383,7 @@ export default function EditorShell() {
     if (!isLayoutLoading) {
       setResizeDrag((prev) => prev?.committed ? null : prev)
       setMinHeightDrag((prev) => prev?.committed ? null : prev)
+      setMarginDrag((prev) => prev?.committed ? null : prev)
     }
   }, [isLayoutLoading])
 
@@ -435,6 +451,18 @@ export default function EditorShell() {
       pageKey,
     })
   }, [state.doc, state.paginated])
+
+  const handleMarginResizeStart = useCallback((
+    sectionIndex: number,
+    side: "top" | "right" | "bottom" | "left",
+    currentMargins: { top: number; right: number; bottom: number; left: number },
+    pageWidthPt: number,
+    pageHeightPt: number,
+    pageKey: string,
+    altKey: boolean,
+  ) => {
+    setMarginDrag({ sectionIndex, side, pageWidthPt, pageHeightPt, currentMargins, pageKey, altKey })
+  }, [])
 
   // Palette drag: starts immediately
   const startPaletteDrag = useCallback((source: DragSource, e: React.PointerEvent) => {
@@ -540,6 +568,28 @@ export default function EditorShell() {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
+      // Margin resize drag
+      if (marginDrag && !marginDrag.committed) {
+        const svgEl = pageRefs.current.get(marginDrag.pageKey)
+        if (!svgEl) return
+        const rect = svgEl.getBoundingClientRect()
+        const { side, pageWidthPt, pageHeightPt } = marginDrag
+        let rawValue: number
+        if (side === "left") rawValue = (e.clientX - rect.left) / scale
+        else if (side === "right") rawValue = pageWidthPt - (e.clientX - rect.left) / scale
+        else if (side === "top") rawValue = (e.clientY - rect.top) / scale
+        else rawValue = pageHeightPt - (e.clientY - rect.top) / scale
+        const isHoriz = side === "left" || side === "right"
+        const max = (isHoriz ? pageWidthPt : pageHeightPt) / 2 - 36
+        const newValue = Math.max(0, Math.min(max, rawValue))
+        const newMargins = { ...marginDrag.currentMargins, [side]: newValue }
+        if (!marginDrag.altKey) {
+          const opposite = side === "top" ? "bottom" : side === "bottom" ? "top" : side === "left" ? "right" : "left"
+          newMargins[opposite] = newValue
+        }
+        setMarginDrag((prev) => prev ? { ...prev, currentMargins: newMargins } : null)
+        return
+      }
       // Resize row minHeight drag
       if (minHeightDrag && !minHeightDrag.committed) {
         const rawHeight = (e.clientY - minHeightDrag.svgTop) / scale - minHeightDrag.rowFragY
@@ -573,11 +623,17 @@ export default function EditorShell() {
       const { preview } = computePreview(e.clientX, e.clientY)
       dispatch({ type: "DRAG_MOVE", clientX: e.clientX, clientY: e.clientY, preview })
     },
-    [minHeightDrag, resizeDrag, state.drag, computePreview, scale],
+    [marginDrag, minHeightDrag, resizeDrag, state.drag, computePreview, scale],
   )
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
+      // Commit margin resize
+      if (marginDrag && !marginDrag.committed) {
+        dispatch({ type: "UPDATE_MARGIN", sectionIndex: marginDrag.sectionIndex, margin: marginDrag.currentMargins })
+        setMarginDrag((prev) => prev ? { ...prev, committed: true } : null)
+        return
+      }
       // Commit minHeight resize
       if (minHeightDrag && !minHeightDrag.committed) {
         dispatch({ type: "RESIZE_ROW_MIN_HEIGHT", rowId: minHeightDrag.rowId, minHeight: minHeightDrag.currentMinHeight })
@@ -621,7 +677,7 @@ export default function EditorShell() {
       }
       dispatch({ type: "DRAG_CANCEL" })
     },
-    [minHeightDrag, resizeDrag, state.drag, state.doc, computePreview],
+    [marginDrag, minHeightDrag, resizeDrag, state.drag, state.doc, computePreview],
   )
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -653,7 +709,7 @@ export default function EditorShell() {
 
   return (
     <div
-      style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) ? "none" : undefined }}
+      style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onKeyDown={handleKeyDown}
@@ -742,6 +798,8 @@ export default function EditorShell() {
           resizeDrag={resizeDrag}
           minHeightDrag={minHeightDrag}
           onMinHeightResizeStart={handleMinHeightResizeStart}
+          marginDrag={marginDrag}
+          onMarginResizeStart={handleMarginResizeStart}
           onScaleChange={setScale}
         />
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>

@@ -49,15 +49,15 @@ function drawBorderSide(
 function drawCellBorders(pdfPage: PDFPage, fragment: PageFragment, pageHeight: number): void {
   if (!fragment.cellRenderProps) return
   const { x, y, width, height } = fragment
-  const { border } = fragment.cellRenderProps
+  const { border, continuesOnNext, continuedFromPrev } = fragment.cellRenderProps
 
   const pdfTop    = pageHeight - y
   const pdfBottom = pageHeight - y - height
 
-  drawBorderSide(pdfPage, border.top,    x,         pdfTop,    x + width, pdfTop)
-  drawBorderSide(pdfPage, border.bottom, x,         pdfBottom, x + width, pdfBottom)
-  drawBorderSide(pdfPage, border.left,   x,         pdfBottom, x,         pdfTop)
-  drawBorderSide(pdfPage, border.right,  x + width, pdfBottom, x + width, pdfTop)
+  if (!continuedFromPrev) drawBorderSide(pdfPage, border.top,    x,         pdfTop,    x + width, pdfTop)
+  if (!continuesOnNext)   drawBorderSide(pdfPage, border.bottom, x,         pdfBottom, x + width, pdfBottom)
+                          drawBorderSide(pdfPage, border.left,   x,         pdfBottom, x,         pdfTop)
+                          drawBorderSide(pdfPage, border.right,  x + width, pdfBottom, x + width, pdfTop)
 }
 
 // ─── Renderer ─────────────────────────────────────────────────────────────────

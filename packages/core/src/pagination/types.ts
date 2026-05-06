@@ -48,6 +48,8 @@ export interface TableCellRenderProps {
   background?: string
   padding: number  // abstract pt
   verticalAlign: "top" | "middle" | "bottom"
+  continuesOnNext?: boolean    // cell ถูกตัดข้ามหน้า — ไม่วาด border ด้านล่าง
+  continuedFromPrev?: boolean  // cell ต่อจากหน้าก่อน — ไม่วาด border ด้านบน
 }
 
 // ─── Render Props ─────────────────────────────────────────────────────────────

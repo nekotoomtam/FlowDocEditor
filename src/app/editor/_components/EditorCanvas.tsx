@@ -4,7 +4,7 @@ import { useRef, useEffect, useState } from "react"
 import type { PaginatedDocument, PageFragment, PaginatedPage } from "@/pagination"
 import type { DocumentNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
-import type { DragState, ResizeDrag, MinHeightDrag } from "./EditorShell"
+import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import { getRowGeometry } from "@/placement/geometry"
 import { resolveFontCssFamily } from "@/font-registry"
 
@@ -89,6 +89,7 @@ function PageView({
   inlineEditNodeId, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
+  sectionIndex, marginDrag, onMarginResizeStart,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
@@ -103,6 +104,9 @@ function PageView({
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, startClientX: number, pageKey: string) => void
   minHeightDrag: MinHeightDrag | null
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
+  sectionIndex: number
+  marginDrag: MarginDrag | null
+  onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
 }) {
   const W = page.width * scale
   const H = page.height * scale
@@ -137,12 +141,59 @@ function PageView({
         ))}
       </defs>
 
-      {/* content box guide */}
-      <rect
-        x={page.contentBox.x * scale} y={page.contentBox.y * scale}
-        width={page.contentBox.width * scale} height={page.contentBox.height * scale}
-        fill="none" stroke="#e5e7eb" strokeDasharray="4 2" strokeWidth={0.5}
-      />
+      {/* margin handles — 4 drag lines แทน content box guide */}
+      {(() => {
+        const isThisSection = marginDrag?.sectionIndex === sectionIndex
+        const liveMargins = isThisSection ? marginDrag!.currentMargins : {
+          left: page.contentBox.x,
+          top: page.contentBox.y,
+          right: page.width - page.contentBox.x - page.contentBox.width,
+          bottom: page.height - page.contentBox.y - page.contentBox.height,
+        }
+        const lx = liveMargins.left * scale
+        const rx = (page.width - liveMargins.right) * scale
+        const ty = liveMargins.top * scale
+        const by = (page.height - liveMargins.bottom) * scale
+
+        const sides = [
+          { side: "left"   as const, x1: lx, y1: 0,  x2: lx, y2: H,  hx: lx - 6, hy: 0,     hw: 12, hh: H,  cur: "ew-resize" },
+          { side: "right"  as const, x1: rx, y1: 0,  x2: rx, y2: H,  hx: rx - 6, hy: 0,     hw: 12, hh: H,  cur: "ew-resize" },
+          { side: "top"    as const, x1: 0,  y1: ty, x2: W,  y2: ty, hx: 0,      hy: ty - 6, hw: W,  hh: 12, cur: "ns-resize" },
+          { side: "bottom" as const, x1: 0,  y1: by, x2: W,  y2: by, hx: 0,      hy: by - 6, hw: W,  hh: 12, cur: "ns-resize" },
+        ]
+
+        const isActive = (s: string) => isThisSection && marginDrag!.side === s
+        const isMirror = (s: string) =>
+          isThisSection && !marginDrag!.altKey && (
+            (marginDrag!.side === "left" && s === "right") ||
+            (marginDrag!.side === "right" && s === "left") ||
+            (marginDrag!.side === "top" && s === "bottom") ||
+            (marginDrag!.side === "bottom" && s === "top")
+          )
+
+        return sides.map(({ side, x1, y1, x2, y2, hx, hy, hw, hh, cur }) => (
+          <g key={`mg-${side}`}>
+            <rect x={hx} y={hy} width={hw} height={hh}
+              fill="transparent" style={{ cursor: cur }}
+              onPointerDown={(e) => {
+                e.stopPropagation(); e.preventDefault()
+                onMarginResizeStart(sectionIndex, side, {
+                  left: page.contentBox.x,
+                  top: page.contentBox.y,
+                  right: page.width - page.contentBox.x - page.contentBox.width,
+                  bottom: page.height - page.contentBox.y - page.contentBox.height,
+                }, page.width, page.height, pageKey, e.altKey)
+              }}
+            />
+            <line x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke={isActive(side) ? "#2563eb" : isMirror(side) ? "#93c5fd" : "#e5e7eb"}
+              strokeWidth={isActive(side) ? 1.5 : isMirror(side) ? 1 : 0.5}
+              strokeDasharray={isActive(side) || isMirror(side) ? "none" : "4 2"}
+              style={{ pointerEvents: "none" }}
+            />
+          </g>
+        ))
+      })()}
 
       {/* empty body placeholder */}
       {page.fragments.length === 0 && (() => {
@@ -422,13 +473,15 @@ interface Props {
   onBackgroundPointerDown: () => void
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, startClientX: number, pageKey: string) => void
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
+  marginDrag: MarginDrag | null
+  onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
   onScaleChange: (scale: number) => void
 }
 
 export function EditorCanvas({
-  paginated, doc, drag, resizeDrag, minHeightDrag, scale, selectedNodeId, isLayoutLoading,
+  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
   inlineEditNodeId, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
-  setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onScaleChange,
+  setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
@@ -471,6 +524,9 @@ export function EditorCanvas({
                   onResizeStart={onResizeStart}
                   minHeightDrag={minHeightDrag}
                   onMinHeightResizeStart={onMinHeightResizeStart}
+                  sectionIndex={si}
+                  marginDrag={marginDrag}
+                  onMarginResizeStart={onMarginResizeStart}
                 />
               </div>
             ))}

@@ -112,6 +112,61 @@ colCursor เริ่มที่ 0
 
 ---
 
+---
+
+## 4. Table Row Split ข้ามหน้า
+
+### พฤติกรรมใหม่
+
+Row ที่มี `allowBreak: true` จะสามารถแตกข้ามหน้าได้ระดับบรรทัด แทนที่จะย้ายทั้งก้อนไปหน้าถัดไป
+
+### การใช้งาน
+
+```typescript
+// ใน TableRowProps
+const row = createTableRowNode(cellIds)
+row.props.allowBreak = true  // เปิดให้ตัดข้ามหน้าได้
+```
+
+### สิ่งที่แก้ไข
+
+**`pagination/types.ts`**
+- เพิ่ม `continuesOnNext?: boolean` และ `continuedFromPrev?: boolean` ใน `TableCellRenderProps`
+- ใช้สำหรับบอก renderer ว่า cell นี้ถูกตัดครึ่ง
+
+**`pagination/paginator.ts`**
+เพิ่ม helper functions:
+- `computeSplitPoint()` — คำนวณจุดตัดของ cell: ค้นหาว่า content ไหนพอดีหน้าแรก โดยแตกระดับบรรทัดสำหรับ paragraph
+- `pushCellFirstSlice()` — push content ของ cell ที่อยู่หน้าแรก (ถึงจุดตัด)
+- `pushCellSecondSlice()` — push content ของ cell ที่อยู่หน้าถัดไป (หลังจุดตัด)
+- `paginateTableRowFull()` — วาง row เต็มๆ บนหน้าปัจจุบัน (extracted จากโค้ดเดิม)
+- `paginateTableRowSplit()` — วาง row แบบแตกข้ามหน้า:
+  - ถ้าพื้นที่เหลือน้อยกว่า 20pt → ย้ายทั้งก้อนไปหน้าถัดไปแทน
+  - หน้าแรก: emit row + cell fragments ด้วย `continuesOnNext: true` + content บรรทัดที่พอดี
+  - หน้าถัดไป: emit row + cell fragments ด้วย `continuedFromPrev: true` + content ที่เหลือ
+
+Logic `paginateTable` ใหม่:
+```
+row ไม่พอดีหน้า + allowBreak = true  → paginateTableRowSplit
+row ไม่พอดีหน้า + allowBreak = false → ย้ายทั้งก้อน (เดิม)
+row พอดีหน้า                         → paginateTableRowFull
+```
+
+**`renderer/pdf/index.ts`**
+- `drawCellBorders()` — ตรวจ `continuesOnNext` และ `continuedFromPrev`:
+  - `continuesOnNext = true` → ไม่วาด border ด้านล่าง (cell ยังต่อในหน้าถัดไป)
+  - `continuedFromPrev = true` → ไม่วาด border ด้านบน (cell ต่อมาจากหน้าก่อน)
+
+**`renderer/docx/index.ts`**
+- ไม่ต้องแก้ — Word จัดการ table pagination ของตัวเองโดย default (`cantSplit` ไม่ได้ set = Word ตัดได้ตามใจ)
+
+### ข้อสังเกต
+
+- PDF: จุดตัดหน้าแม่นยำ ควบคุมโดย engine
+- DOCX: Word ตัดเอง อาจต่างจาก PDF เล็กน้อย แต่ content ครบ
+
+---
+
 ## ข้อจำกัดที่ยังเหลืออยู่
 
 - **removeTableRow + rowspan**: ถ้า cell ในแถวที่จะลบมี rowspan ข้ามไปแถวอื่น การลบแถวจะทำให้โครงสร้างเสีย `assertDocument` จะจับได้ แต่ยังไม่ได้ auto-fix
