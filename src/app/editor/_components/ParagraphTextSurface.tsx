@@ -15,6 +15,8 @@ interface Props {
   initialCaretIndex: number | null
   onChange: (nodeId: string, text: string) => void
   onEndEdit: () => void
+  onSplitParagraph: (nodeId: string, splitIndex: number) => void
+  onMergeParagraph: (nodeId: string) => void
 }
 
 function getEditableParagraphText(doc: DocumentNode, nodeId: string): string | null {
@@ -148,6 +150,8 @@ export function ParagraphTextSurface({
   initialCaretIndex,
   onChange,
   onEndEdit,
+  onSplitParagraph,
+  onMergeParagraph,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const renderProps = fragment.renderProps
@@ -218,6 +222,21 @@ export function ParagraphTextSurface({
               if (event.key === "Escape") {
                 event.preventDefault()
                 onEndEdit()
+              }
+              if (event.key === "Enter") {
+                event.preventDefault()
+                const splitIndex = event.currentTarget.selectionStart ?? event.currentTarget.value.length
+                onChange(fragment.nodeId, event.currentTarget.value)
+                onSplitParagraph(fragment.nodeId, splitIndex)
+              }
+              if (
+                event.key === "Backspace" &&
+                event.currentTarget.selectionStart === 0 &&
+                event.currentTarget.selectionEnd === 0
+              ) {
+                event.preventDefault()
+                onChange(fragment.nodeId, event.currentTarget.value)
+                onMergeParagraph(fragment.nodeId)
               }
             }}
             onClick={(event) => event.stopPropagation()}

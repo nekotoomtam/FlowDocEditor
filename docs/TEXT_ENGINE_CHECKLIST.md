@@ -26,8 +26,8 @@ editor-only shortcuts.
 - [x] Add grapheme fallback for over-wide segments so long unbroken text wraps.
 - [x] Use segment data for paragraph caret hit testing instead of line-width ratios.
 - [x] Make inline editing spacing and displayed line spacing continue to converge.
-- [ ] Add focused fixtures for Thai, English, mixed Thai/English, numbers, and long unbroken text.
-- [ ] Add golden checks for paragraph wrapping at fixed widths.
+- [x] Add focused fixtures for Thai, English, mixed Thai/English, numbers, and long unbroken text.
+- [x] Add golden checks for paragraph wrapping at fixed widths.
 - [x] Add debug visualization for line segments and break points.
 - [ ] Keep server/export pagination authoritative while browser preview catches up.
 
@@ -50,12 +50,12 @@ editor-only shortcuts.
 - [ ] Consider a Web Worker for browser-side layout.
 - [ ] Consider HarfBuzz/WASM only after the current fontkit + segment contracts become limiting.
 - [ ] Add PDF/DOCX smoke tests that compare expected text flow behavior.
-- [ ] Build paragraph-local reflow for typing, delete, and resize previews.
+- [x] Build paragraph-local reflow for typing, delete, and resize previews.
 - [ ] Add incremental reflow from the edited line forward.
 
 ## Open Questions
 
-- [ ] Should text offsets use UTF-16 indices, Unicode code points, or grapheme indices?
+- [x] Should text offsets use UTF-16 indices, Unicode code points, or grapheme indices? → UTF-16 (matching textarea); grapheme snapping applied at caret layer.
 - [ ] How should `fieldRef` offsets map when the display value differs from the template placeholder?
 - [ ] How much temporary browser preview drift is acceptable during active typing?
 - [ ] Should resize previews reflow only the active paragraph or also nearby paragraphs?

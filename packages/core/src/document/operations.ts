@@ -438,6 +438,103 @@ export function updateParagraphText(
   return doc
 }
 
+// ─── Paragraph Split ─────────────────────────────────────────────────────────
+
+export function splitParagraphAtIndex(
+  doc: DocumentNode,
+  nodeId: string,
+  splitIndex: number,
+): { doc: DocumentNode; newNodeId: string } {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type !== "paragraph") continue
+
+    const firstRun = node.children[0]
+    if (!firstRun || firstRun.type !== "text") continue
+
+    const textBefore = firstRun.text.slice(0, splitIndex)
+    const textAfter = firstRun.text.slice(splitIndex)
+
+    const updatedNode: LayoutNode = {
+      ...node,
+      children: [{ ...firstRun, text: textBefore }, ...node.children.slice(1)],
+    }
+    const newPara = createParagraphNode(textAfter, node.props)
+
+    const parentInfo = findParentInfo(section.nodes, nodeId)
+    if (!parentInfo) continue
+
+    let newNodes: Nodes = {
+      ...section.nodes,
+      [nodeId]: updatedNode,
+      [newPara.id]: newPara as unknown as LayoutNode,
+    }
+    const childIds = getChildIds(newNodes, parentInfo.parentId)
+    newNodes = setChildIds(newNodes, parentInfo.parentId, [
+      ...childIds.slice(0, parentInfo.index + 1),
+      newPara.id,
+      ...childIds.slice(parentInfo.index + 1),
+    ])
+
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes: newNodes } : s,
+    )
+    return {
+      doc: { ...doc, document: { ...doc.document, sections: newSections } },
+      newNodeId: newPara.id,
+    }
+  }
+  return { doc, newNodeId: "" }
+}
+
+export function mergeParagraphWithPrevious(
+  doc: DocumentNode,
+  nodeId: string,
+): { doc: DocumentNode; prevNodeId: string; caretIndex: number } | null {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type !== "paragraph") continue
+
+    const parentInfo = findParentInfo(section.nodes, nodeId)
+    if (!parentInfo || parentInfo.index === 0) return null
+
+    const childIds = getChildIds(section.nodes, parentInfo.parentId)
+    const prevId = childIds[parentInfo.index - 1]
+    if (!prevId) return null
+
+    const prevNode = section.nodes[prevId]
+    if (prevNode?.type !== "paragraph") return null
+
+    const prevFirstRun = prevNode.children[0]
+    const curFirstRun = node.children[0]
+    if (!prevFirstRun || prevFirstRun.type !== "text") return null
+    if (!curFirstRun || curFirstRun.type !== "text") return null
+
+    const caretIndex = prevFirstRun.text.length
+    const mergedText = prevFirstRun.text + curFirstRun.text
+    const updatedPrev: LayoutNode = {
+      ...prevNode,
+      children: [{ ...prevFirstRun, text: mergedText }, ...prevNode.children.slice(1)],
+    }
+    const newChildIds = childIds.filter((id) => id !== nodeId)
+    let newNodes: Nodes = { ...section.nodes, [prevId]: updatedPrev }
+    delete newNodes[nodeId]
+    newNodes = setChildIds(newNodes, parentInfo.parentId, newChildIds)
+
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes: newNodes } : s,
+    )
+    return {
+      doc: { ...doc, document: { ...doc.document, sections: newSections } },
+      prevNodeId: prevId,
+      caretIndex,
+    }
+  }
+  return null
+}
+
 // ─── Table Structural Mutations ───────────────────────────────────────────────
 
 export function addTableRow(doc: DocumentNode, tableId: string, afterIndex?: number): DocumentNode {

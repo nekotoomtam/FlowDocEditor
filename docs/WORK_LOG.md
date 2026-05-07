@@ -17,6 +17,174 @@ Each entry should include:
 
 ## 2026-05-07
 
+### Merge Paragraph on Backspace at Start
+
+Goal: When the user presses Backspace at position 0 of a paragraph, merge it with the paragraph above — the inverse of the Enter split.
+
+Completed:
+
+- Added `mergeParagraphWithPrevious(doc, nodeId)` to `packages/core/src/document/operations.ts`.
+  Returns `{ doc, prevNodeId, caretIndex }` where `caretIndex` is the join point (length of previous paragraph text before merge), or `null` if no previous paragraph exists.
+- Added `MERGE_PARAGRAPH` and `CLEAR_MERGE_RESULT` actions to `EditorState` reducer.
+- Added `mergeResult: { prevNodeId, caretIndex } | null` field to `EditorState`.
+- Added `handleMergeParagraph` callback and a `useEffect` in `EditorShell` that watches `mergeResult`, starts inline editing on the previous paragraph at the join point, then clears the field.
+- Threaded `onMergeParagraph` prop down through `EditorCanvas` → `PageView` → `ParagraphTextSurface`.
+- Handled `Backspace` at `selectionStart === 0` and `selectionEnd === 0` (no selection, cursor at very start) in `ParagraphTextSurface`: commits current text, then calls `onMergeParagraph`.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 34/34 passed.
+
+Notes:
+
+- Merge is only available when a previous paragraph sibling exists in the same parent (body/stack). Backspace at the first paragraph of a section is a no-op.
+- Caret is placed at the exact join point so the user sees the cursor between the two merged texts.
+
+### Split Paragraph on Enter Key
+
+Goal: When the user presses Enter while editing a paragraph, split it at the cursor position — text before cursor stays in the current paragraph, text after cursor moves to a new paragraph below.
+
+Completed:
+
+- Added `splitParagraphAtIndex(doc, nodeId, splitIndex)` to `packages/core/src/document/operations.ts`.
+  Returns `{ doc: DocumentNode, newNodeId: string }`. The new paragraph inherits all props (font, size, align, spacing) from the current paragraph.
+- Added `SPLIT_PARAGRAPH` and `CLEAR_SPLIT_NODE_ID` actions to `EditorState` reducer.
+- Added `lastSplitNodeId: string | null` field to `EditorState` to carry the new paragraph's ID out of the reducer.
+- Added `handleSplitParagraph` callback and a `useEffect` in `EditorShell` that watches `lastSplitNodeId`, starts inline editing on the new paragraph at caret index 0, then clears the field.
+- Threaded `onSplitParagraph` prop down through `EditorCanvas` → `PageView` → `ParagraphTextSurface`.
+- Handled `Enter` key in `ParagraphTextSurface`: prevents default textarea newline, reads `selectionStart`, commits current text via `onChange` first, then calls `onSplitParagraph`.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 34/34 passed.
+
+Notes:
+
+- `onChange` is called before `onSplitParagraph` so the split operation always sees the latest textarea content, not the last committed document state.
+- Split is section-level only; paragraphs inside table cells are not yet split by Enter.
+
+### Add Grapheme Boundary Snapping for Thai Caret
+
+Goal: Prevent caret from landing inside Thai combining sequences like "งุ่" when the user clicks on text.
+
+Completed:
+
+- Added `snapToGraphemeBoundary(text, index)` to `packages/core/src/layout/measure.ts` and exported it.
+  The function uses `Intl.Segmenter` with grapheme granularity to find the nearest grapheme cluster boundary to a given UTF-16 index.
+- Applied snapping in `caretIndexFromSegments` in `EditorCanvas.tsx` — after computing the ratio-based index within a segment, the result is snapped before being returned.
+- Imported `snapToGraphemeBoundary` from `@/layout` in `EditorCanvas.tsx`.
+- Added 8 tests for `snapToGraphemeBoundary` covering: boundary edges, already-on-boundary index, inside "องุ่น" cluster, ASCII text, empty string, and "ก้" (consonant + tone mark).
+- Decided and documented text offset encoding: segment `start/end` use UTF-16 indices matching the textarea; grapheme-aware navigation is enforced at the caret layer via `snapToGraphemeBoundary`.
+
+Files changed:
+
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/layout/__tests__/measure.test.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test` — 34/34 passed.
+- `npm.cmd run type-check` passed.
+
+Notes:
+
+- Tie-breaking (distance to start = distance to end) snaps to the cluster start, which is the more natural choice for Thai — the user lands before the combined character rather than after.
+- The fallback ratio path in `caretIndexFromPointer` (used when no segments exist) is not yet snapped, but segments are always populated for Thai paragraphs so this path is rarely hit.
+
+### Add Paragraph-Local Reflow During Inline Editing
+
+Goal: Make text line wrapping respond immediately as the user types, without waiting for full document pagination.
+
+Completed:
+
+- Added `measureParagraph` and `MeasuredParagraph` imports to `EditorShell`.
+- Added four module-level helper functions:
+  - `findParagraphNode` — locates a paragraph node in `previewDoc` by id.
+  - `findParagraphFragment` — locates the paragraph's `PageFragment` in the current paginated state.
+  - `buildLocalLines` — converts `MeasuredLine[]` to `PaginatedLine[]` using the fragment's existing x/y origin.
+  - `replaceFragmentLines` — returns a new `PaginatedDocument` with only the active paragraph's lines and height replaced.
+- Added a `paginatedRef` that tracks the latest `paginated` state without being a reactive dependency, so the local reflow effect can read it without creating a loop.
+- Split the single pagination `useEffect` into two:
+  - **Local reflow effect**: fires immediately on each `previewDoc` change while `inlineEditNodeId` is set; re-measures only the active paragraph and patches just that fragment in the paginated state.
+  - **Full pagination effect**: debounced at 16ms when not editing, 200ms during inline editing; corrects page breaks and surrounding layout after the user pauses.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 27/27 passed.
+
+Notes:
+
+- The local reflow updates only the active paragraph's `lines` and `height`. Surrounding fragments do not shift positions until full pagination completes (200ms after the last keystroke). This is acceptable because the active text is always correct and layout settles quickly after typing stops.
+- `paginatedRef` is used (not `state.paginated`) inside the local reflow effect to avoid a re-render loop.
+
+### Add measureParagraph Fixtures and Test Runner
+
+Goal: Add the first test infrastructure to the project and lock in measureParagraph behavior with golden fixtures.
+
+Completed:
+
+- Installed Vitest as a root devDependency.
+- Added `vitest.config.ts` to `packages/core` with node environment.
+- Added `test` and `test:watch` scripts to `packages/core/package.json`.
+- Added a root `test` script that delegates to the core workspace.
+- Created `packages/core/src/layout/__tests__/measure.test.ts` with 27 fixture tests covering:
+  - Empty text (produces a single empty line, correct totalHeight)
+  - English: single word, word wrap, trailing space trimming, no leading space on new line
+  - Numbers: digit strings, decimal numbers, number sequence wrap
+  - Long unbroken text: grapheme fallback splitting, no line exceeds width, kind=grapheme
+  - Thai text (mock word breaker): two words on one line, narrow-width break, Thai char widths
+  - Mixed Thai/English (mock word breaker): correct wrap order, no line exceeds width
+  - Spacing: spacingBefore/After added to totalHeight, mm→pt conversion
+  - LineSegment metadata: no source offset gaps, x values non-decreasing, breakableAfter correct
+  - fieldRef inline node: segment classified as kind=field
+  - defaultWordBreaker integration: structural checks for English, Thai, and mixed text
+- Marked the fixture checklist items as complete in `docs/TEXT_ENGINE_CHECKLIST.md`.
+
+Files changed:
+
+- `package.json`
+- `packages/core/package.json`
+- `packages/core/vitest.config.ts`
+- `packages/core/src/layout/__tests__/measure.test.ts`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test` — 27 tests passed (0 failed).
+- `npm.cmd run type-check` passed.
+
+Notes:
+
+- Thai and mixed tests use deterministic mock WordBreakers for exact golden checks. The `defaultWordBreaker` integration tests use structural assertions (width ≤ available, text preserved) to stay ICU-version-independent.
+- The `spaceBreaker` mock splits on whitespace only and is the default for English/number/grapheme tests.
+
 ### Add Text Segment Debug Overlay
 
 Goal: Make the editor show how the text engine sees paragraph line segments.

@@ -2,15 +2,16 @@
 
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
 import { paginateDocument } from "@/pagination"
-import { defaultTextMeasurer } from "@/layout"
+import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
-import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin } from "@/document"
+import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
 import { bindDocument } from "@/binding"
 import type { FieldData, FieldValue } from "@/binding"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
 import type { DocumentNode } from "@/schema"
-import type { PaginatedDocument, PageFragment } from "@/pagination"
+import type { PaginatedDocument, PaginatedLine, PageFragment } from "@/pagination"
+import type { MeasuredParagraph } from "@/layout"
 import type {
   DragSource,
   PlacementPreview,
@@ -78,6 +79,8 @@ interface EditorState {
   paginated: PaginatedDocument
   drag: DragState | null
   selectedNodeId: string | null
+  lastSplitNodeId: string | null
+  mergeResult: { prevNodeId: string; caretIndex: number } | null
 }
 
 type EditorAction =
@@ -100,6 +103,10 @@ type EditorAction =
   | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
   | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
+  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number }
+  | { type: "CLEAR_SPLIT_NODE_ID" }
+  | { type: "MERGE_PARAGRAPH"; nodeId: string }
+  | { type: "CLEAR_MERGE_RESULT" }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
 
@@ -160,6 +167,8 @@ function createInitialEditorState(): EditorState {
     paginated: paginate(initialDoc),
     drag: null,
     selectedNodeId: null,
+    lastSplitNodeId: null,
+    mergeResult: null,
   }
 }
 
@@ -227,6 +236,23 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, updateNodeProps(state.doc, action.rowId, { minHeight: action.minHeight }))
     case "UPDATE_MARGIN":
       return pushDoc(state, updateSectionMargin(state.doc, action.sectionIndex, action.margin))
+    case "SPLIT_PARAGRAPH": {
+      const result = splitParagraphAtIndex(state.doc, action.nodeId, action.splitIndex)
+      if (!result.newNodeId) return state
+      return { ...pushDoc(state, result.doc), lastSplitNodeId: result.newNodeId }
+    }
+    case "CLEAR_SPLIT_NODE_ID":
+      return { ...state, lastSplitNodeId: null }
+    case "MERGE_PARAGRAPH": {
+      const result = mergeParagraphWithPrevious(state.doc, action.nodeId)
+      if (!result) return state
+      return {
+        ...pushDoc(state, result.doc),
+        mergeResult: { prevNodeId: result.prevNodeId, caretIndex: result.caretIndex },
+      }
+    }
+    case "CLEAR_MERGE_RESULT":
+      return { ...state, mergeResult: null }
   }
 }
 
@@ -272,6 +298,64 @@ function setFieldDataValue(data: FieldData, key: string, value: FieldValue): Fie
 
   cursor[parts[parts.length - 1]] = value
   return root
+}
+
+// ─── Local Reflow Helpers ─────────────────────────────────────────────────────
+
+function findParagraphNode(doc: DocumentNode, nodeId: string) {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[nodeId]
+    if (node?.type === "paragraph") return node
+  }
+  return null
+}
+
+function findParagraphFragment(paginated: PaginatedDocument, nodeId: string): PageFragment | null {
+  for (const section of paginated.sections) {
+    for (const page of section.pages) {
+      const f = page.fragments.find((f) => f.nodeId === nodeId && f.nodeType === "paragraph")
+      if (f) return f
+    }
+  }
+  return null
+}
+
+function buildLocalLines(measured: MeasuredParagraph, fragment: PageFragment): PaginatedLine[] {
+  let lineY = fragment.y + measured.spacingBefore
+  return measured.lines.map((line) => {
+    const result: PaginatedLine = {
+      text: line.text,
+      x: fragment.x,
+      y: lineY,
+      width: line.width,
+      height: line.height,
+      segments: line.segments,
+    }
+    lineY += line.height
+    return result
+  })
+}
+
+function replaceFragmentLines(
+  paginated: PaginatedDocument,
+  nodeId: string,
+  lines: PaginatedLine[],
+  height: number,
+): PaginatedDocument {
+  return {
+    ...paginated,
+    sections: paginated.sections.map((section) => ({
+      ...section,
+      pages: section.pages.map((page) => ({
+        ...page,
+        fragments: page.fragments.map((f) =>
+          f.nodeId === nodeId && f.nodeType === "paragraph"
+            ? { ...f, lines, height }
+            : f,
+        ),
+      })),
+    })),
+  }
 }
 
 // ─── Shell ────────────────────────────────────────────────────────────────────
@@ -391,10 +475,55 @@ export default function EditorShell() {
     setInlineEditCaretIndex(null)
   }, [])
 
+  const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number) => {
+    dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex })
+  }, [])
+
+  const handleMergeParagraph = useCallback((nodeId: string) => {
+    dispatch({ type: "MERGE_PARAGRAPH", nodeId })
+  }, [])
+
+  // Focus the new paragraph after a split
+  useEffect(() => {
+    if (!state.lastSplitNodeId) return
+    setInlineEditNodeId(state.lastSplitNodeId)
+    setInlineEditCaretIndex(0)
+    dispatch({ type: "CLEAR_SPLIT_NODE_ID" })
+  }, [state.lastSplitNodeId])
+
+  // Focus the previous paragraph after a merge, caret at join point
+  useEffect(() => {
+    if (!state.mergeResult) return
+    setInlineEditNodeId(state.mergeResult.prevNodeId)
+    setInlineEditCaretIndex(state.mergeResult.caretIndex)
+    dispatch({ type: "CLEAR_MERGE_RESULT" })
+  }, [state.mergeResult])
+
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const paginatedRef = useRef(state.paginated)
+  useEffect(() => { paginatedRef.current = state.paginated })
 
+  // Local reflow — re-measure only the active paragraph immediately on each
+  // text change so line wrapping feels live while the full paginator catches up.
+  useEffect(() => {
+    if (!inlineEditNodeId) return
+    const paraNode = findParagraphNode(previewDoc, inlineEditNodeId)
+    if (!paraNode) return
+    const fragment = findParagraphFragment(paginatedRef.current, inlineEditNodeId)
+    if (!fragment) return
+    const measured = measureParagraph(paraNode, fragment.width, editorTextMeasurer)
+    const newLines = buildLocalLines(measured, fragment)
+    dispatch({
+      type: "SET_PAGINATED",
+      paginated: replaceFragmentLines(paginatedRef.current, inlineEditNodeId, newLines, measured.totalHeight),
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewDoc, inlineEditNodeId])
+
+  // Full pagination — corrects page breaks and surrounding layout.
+  // Debounce is longer during inline editing so local reflow has time to show first.
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
 
@@ -402,11 +531,11 @@ export default function EditorShell() {
       setIsLayoutLoading(true)
       dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
       setIsLayoutLoading(false)
-    }, 16)
+    }, inlineEditNodeId ? 200 : 16)
 
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorTextMeasurer, fontReadyVersion, previewDoc])
+  }, [editorTextMeasurer, fontReadyVersion, previewDoc, inlineEditNodeId])
 
   useEffect(() => {
     if (!isLayoutLoading) {
@@ -869,6 +998,8 @@ export default function EditorShell() {
           onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
           onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
           onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
+          onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
+          onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
           setPageRef={setPageRef}
           onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
           onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}

@@ -6,6 +6,7 @@ import type { DocumentNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import { getRowGeometry } from "@/placement/geometry"
+import { snapToGraphemeBoundary } from "@/layout"
 import { ParagraphTextSurface } from "./ParagraphTextSurface"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -49,7 +50,8 @@ function caretIndexFromSegments(line: PaginatedLine, docX: number, visualLeft: n
     if (docX <= right) {
       if (segment.width <= 0 || segment.end <= segment.start) return segment.start
       const ratio = clamp((docX - left) / segment.width, 0, 1)
-      return segment.start + Math.round(ratio * (segment.end - segment.start))
+      const localIndex = Math.round(ratio * (segment.end - segment.start))
+      return segment.start + snapToGraphemeBoundary(segment.text, localIndex)
     }
   }
 
@@ -141,7 +143,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
+  inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments,
@@ -154,6 +156,8 @@ function PageView({
   onInlineEditStart: (nodeId: string, caretIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string) => void
   onInlineEditEnd: () => void
+  onSplitParagraph: (nodeId: string, splitIndex: number) => void
+  onMergeParagraph: (nodeId: string) => void
   pageKey: string; setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent) => void
   onBackgroundPointerDown: () => void
@@ -370,6 +374,8 @@ function PageView({
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
                 onEndEdit={onInlineEditEnd}
+                onSplitParagraph={onSplitParagraph}
+                onMergeParagraph={onMergeParagraph}
               />
             )}
           </g>
@@ -479,6 +485,8 @@ interface Props {
   onInlineEditStart: (nodeId: string, caretIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string) => void
   onInlineEditEnd: () => void
+  onSplitParagraph: (nodeId: string, splitIndex: number) => void
+  onMergeParagraph: (nodeId: string) => void
   setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent) => void
   onBackgroundPointerDown: () => void
@@ -492,7 +500,7 @@ interface Props {
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
+  inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   showTextSegments,
 }: Props) {
@@ -530,6 +538,8 @@ export function EditorCanvas({
                   onInlineEditStart={onInlineEditStart}
                   onInlineEditChange={onInlineEditChange}
                   onInlineEditEnd={onInlineEditEnd}
+                  onSplitParagraph={onSplitParagraph}
+                  onMergeParagraph={onMergeParagraph}
                   pageKey={`${si}-${pi}`}
                   setPageRef={setPageRef}
                   onNodePointerDown={onNodePointerDown}

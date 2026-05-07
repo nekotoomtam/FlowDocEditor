@@ -30,6 +30,24 @@ function getSegmentKind(text: string, start: number, end: number, fieldRanges: F
   return /^\s+$/.test(text) ? "space" : "word"
 }
 
+// Snap a UTF-16 index to the nearest grapheme cluster boundary in `text`.
+// Prevents caret landing inside a Thai combining sequence like "งุ่".
+export function snapToGraphemeBoundary(text: string, index: number): number {
+  if (index <= 0) return 0
+  if (index >= text.length) return text.length
+  const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "grapheme" })
+  let clusterStart = 0
+  for (const { segment } of segmenter.segment(text)) {
+    const clusterEnd = clusterStart + segment.length
+    if (index <= clusterStart) return clusterStart
+    if (index < clusterEnd) {
+      return (index - clusterStart) <= (clusterEnd - index) ? clusterStart : clusterEnd
+    }
+    clusterStart = clusterEnd
+  }
+  return text.length
+}
+
 function getGraphemes(text: string): string[] {
   const Segmenter = Intl.Segmenter
   if (Segmenter) {
