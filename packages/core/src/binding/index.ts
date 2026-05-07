@@ -1,11 +1,12 @@
 /**
- * Binding Layer — DRAFT
+ * Binding Layer
  *
  * หน้าที่: เชื่อม Field Registry กับ Document Template
  *
- * ยังไม่ implement ครบ — วางโครงไว้ก่อน
  * TODO: repeat region, resolver, composite key สำหรับ diff
  */
+
+import type { DocumentNode, LayoutNode, ParagraphNode, TableNode } from "../schema"
 
 // ─── Field Registry ───────────────────────────────────────────────────────────
 
@@ -88,4 +89,49 @@ export function resolveFieldValue(path: string, context: BindingContext): string
     context.data,
   )
   return value != null ? String(value) : ""
+}
+
+function bindParagraph(node: ParagraphNode, context: BindingContext): ParagraphNode {
+  return {
+    ...node,
+    children: node.children.map((child) => {
+      if (child.type !== "fieldRef") return child
+      const value = resolveFieldValue(child.key, context)
+      return {
+        id: child.id,
+        type: "text" as const,
+        text: value.length > 0 ? value : child.fallback ?? "",
+      }
+    }),
+  }
+}
+
+function bindTable(table: TableNode, context: BindingContext): TableNode {
+  const nodes: TableNode["nodes"] = {}
+  Object.entries(table.nodes).forEach(([nodeId, node]) => {
+    nodes[nodeId] = node.type === "paragraph" ? bindParagraph(node, context) : node
+  })
+  return { ...table, nodes }
+}
+
+function bindLayoutNode(node: LayoutNode, context: BindingContext): LayoutNode {
+  if (node.type === "paragraph") return bindParagraph(node, context)
+  if (node.type === "table") return bindTable(node as unknown as TableNode, context) as unknown as LayoutNode
+  return node
+}
+
+export function bindDocument(template: DocumentNode, context: BindingContext): DocumentNode {
+  return {
+    ...template,
+    document: {
+      ...template.document,
+      sections: template.document.sections.map((section) => {
+        const nodes: Record<string, LayoutNode> = {}
+        Object.entries(section.nodes).forEach(([nodeId, node]) => {
+          nodes[nodeId] = bindLayoutNode(node, context)
+        })
+        return { ...section, nodes }
+      }),
+    },
+  }
 }

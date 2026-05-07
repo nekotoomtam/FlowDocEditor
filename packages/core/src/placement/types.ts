@@ -9,10 +9,18 @@ import type { LayoutNode } from "../schema"
 
 // ─── Drag Source ──────────────────────────────────────────────────────────────
 
-export type PaletteBlockType = "paragraph" | "row" | "columns" | "table" | "toc"
+export type PaletteBlockType = "paragraph" | "row" | "columns" | "table"
+
+export interface FieldDragData {
+  key: string
+  label?: string
+  fallback?: string
+  fieldType: "text" | "number" | "date" | "boolean" | "enum" | "image" | "collection"
+}
 
 export type DragSource =
   | { source: "palette"; blockType: PaletteBlockType }
+  | { source: "field"; field: FieldDragData }
   | { source: "document"; nodeId: string }
 
 // ─── Hit Zone ─────────────────────────────────────────────────────────────────
@@ -69,6 +77,7 @@ export interface ValidPlacementIntent extends RawPlacementIntent {
 
 // operation คือ canonical execution-level action
 export type PlacementOperation =
+  | { kind: "insert-inline-field"; paragraphId: string; index: number }
   | { kind: "insert-before"; parentId: string; parentType: "body" | "stack"; index: number; anchorNodeId: string }
   | { kind: "insert-after"; parentId: string; parentType: "body" | "stack"; index: number; anchorNodeId: string }
   | { kind: "insert-into-container"; containerId: string; containerType: "body" | "stack"; index: number }

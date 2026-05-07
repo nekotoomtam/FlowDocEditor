@@ -154,6 +154,7 @@ export function getRowGeometry(
 
 function isRowLikeDragSource(document: DocumentNode, source?: DragSource | null): boolean {
   if (source == null) return false
+  if (source.source === "field") return false
   if (source.source === "palette") return source.blockType === "row" || source.blockType === "columns"
 
   for (const section of document.document.sections) {
@@ -161,6 +162,10 @@ function isRowLikeDragSource(document: DocumentNode, source?: DragSource | null)
     if (node != null) return node.type === "row"
   }
   return false
+}
+
+function isFieldDragSource(source?: DragSource | null): boolean {
+  return source?.source === "field"
 }
 
 function shouldRejectCenterOnEmptyStack(
@@ -296,6 +301,13 @@ export function detectPlacementTarget(input: DetectTargetInput): { zone: Placeme
   let zone = resolveNodeZone(localX, localY, width, height)
 
   if (zone === "center") {
+    if (isFieldDragSource(source) && nodeType === "paragraph") {
+      return {
+        zone,
+        target: { kind: "node", nodeId: hoveredNodeId, nodeType },
+      }
+    }
+
     if (nodeType === "stack" || nodeType === "body") {
       // container รับ center ได้ → insert into container
     } else {

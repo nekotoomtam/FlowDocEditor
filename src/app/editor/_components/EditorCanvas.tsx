@@ -1,12 +1,12 @@
 "use client"
 
-import { useRef, useEffect, useState } from "react"
-import type { PaginatedDocument, PageFragment, PaginatedPage } from "@/pagination"
+import { useRef, useEffect } from "react"
+import type { PaginatedDocument, PageFragment, PaginatedLine, PaginatedPage, ParagraphRenderProps } from "@/pagination"
 import type { DocumentNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import { getRowGeometry } from "@/placement/geometry"
-import { resolveFontCssFamily } from "@/font-registry"
+import { ParagraphTextSurface } from "./ParagraphTextSurface"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -22,16 +22,48 @@ const NODE_COLORS: Record<string, string> = {
 
 const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "table", "toc"])
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
 
-function getLiveParaText(doc: DocumentNode, nodeId: string): string | null {
-  for (const section of doc.document.sections) {
-    const node = section.nodes[nodeId]
-    if (node?.type === "paragraph") {
-      return node.children.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join("")
-    }
-  }
-  return null
+function lineVisualLeft(
+  line: PaginatedLine,
+  fragment: PageFragment,
+  align: ParagraphRenderProps["align"] | undefined,
+): number {
+  if (align === "center") return fragment.x + (fragment.width - line.width) / 2
+  if (align === "right") return fragment.x + fragment.width - line.width
+  return line.x
+}
+
+function caretIndexFromPointer(
+  fragment: PageFragment,
+  event: React.PointerEvent | React.MouseEvent,
+  scale: number,
+): number | null {
+  const svg = (event.currentTarget as SVGGElement).ownerSVGElement
+  const lines = fragment.lines ?? []
+  if (!svg || lines.length === 0) return null
+
+  const rect = svg.getBoundingClientRect()
+  const docX = (event.clientX - rect.left) / scale
+  const docY = (event.clientY - rect.top) / scale
+  const directLineIndex = lines.findIndex((line) => docY >= line.y && docY <= line.y + line.height)
+  const lineIndex = directLineIndex >= 0
+    ? directLineIndex
+    : lines.reduce((nearest, line, index) => {
+      const distance = Math.abs(docY - (line.y + line.height / 2))
+      const nearestLine = lines[nearest]
+      const nearestDistance = Math.abs(docY - (nearestLine.y + nearestLine.height / 2))
+      return distance < nearestDistance ? index : nearest
+    }, 0)
+
+  const line = lines[lineIndex]
+  const visualLeft = lineVisualLeft(line, fragment, fragment.renderProps?.align)
+  const ratio = line.width > 0 ? clamp((docX - visualLeft) / line.width, 0, 1) : 0
+  const lineOffset = Math.round(ratio * line.text.length)
+  const previousChars = lines.slice(0, lineIndex).reduce((sum, previousLine) => sum + previousLine.text.length, 0)
+  return previousChars + lineOffset
 }
 
 // ─── Drop Highlight ───────────────────────────────────────────────────────────
@@ -86,7 +118,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
+  inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart,
@@ -94,7 +126,8 @@ function PageView({
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
   inlineEditNodeId: string | null
-  onInlineEditStart: (nodeId: string) => void
+  inlineEditCaretIndex: number | null
+  onInlineEditStart: (nodeId: string, caretIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string) => void
   onInlineEditEnd: () => void
   pageKey: string; setPageRef: (key: string, el: SVGSVGElement | null) => void
@@ -112,16 +145,11 @@ function PageView({
   const H = page.height * scale
   const hoverNodeId = drag?.preview?.hoverNodeId ?? null
   const SELECTABLE = new Set(["paragraph", "spacer", "row", "table", "toc"])
+  const editFragmentRef = useRef<{ nodeId: string; pageKey: string; fragment: PageFragment } | null>(null)
 
-  // foreignObject textarea auto-grow height
-  const [editHeight, setEditHeight] = useState(40)
-
-  // reset editHeight when switching to a different node
-  const prevEditNodeRef = useRef<string | null>(null)
-  if (prevEditNodeRef.current !== inlineEditNodeId) {
-    prevEditNodeRef.current = inlineEditNodeId
-    // will set after mount via ref callback
-  }
+  useEffect(() => {
+    if (inlineEditNodeId == null) editFragmentRef.current = null
+  }, [inlineEditNodeId])
 
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
@@ -220,13 +248,31 @@ function PageView({
         const selectNodeId = f.nodeId
         const isSelected = f.nodeId === selectedNodeId
         const isInlineEditing = f.nodeId === inlineEditNodeId
+        if (isInlineEditing) {
+          if (
+            editFragmentRef.current?.nodeId !== f.nodeId ||
+            editFragmentRef.current?.pageKey !== pageKey
+          ) {
+            editFragmentRef.current = { nodeId: f.nodeId, pageKey, fragment: { ...f } }
+          } else if (editFragmentRef.current.fragment.height !== f.height) {
+            editFragmentRef.current = {
+              ...editFragmentRef.current,
+              fragment: {
+                ...editFragmentRef.current.fragment,
+                height: Math.max(editFragmentRef.current.fragment.height, f.height),
+                lines: f.lines,
+                renderProps: f.renderProps,
+              },
+            }
+          }
+        }
+        const displayFragment = isInlineEditing
+          ? editFragmentRef.current?.fragment ?? f
+          : f
         const docNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === f.nodeId)
         const isEmpty = f.nodeType === "stack" && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
-        const editFontSize = (f.renderProps?.fontSize ?? 12) * scale
-        const editLineHeight = (f.renderProps?.lineHeight ?? (f.renderProps?.fontSize ?? 12) * 1.5) * scale
-
         // visual override ระหว่าง resize
-        let fragX = f.x, fragWidth = f.width, fragHeight = f.height
+        let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = displayFragment.height
         if (resizeDrag && f.nodeType === "stack") {
           if (f.nodeId === resizeDrag.leftStackId) {
             fragWidth = resizeDrag.currentDocX - f.x
@@ -245,15 +291,22 @@ function PageView({
           <g
             key={i}
             onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
-              ? (e) => { e.stopPropagation(); onNodePointerDown({ source: "document", nodeId: selectNodeId }, e) }
+              ? (e) => {
+                e.stopPropagation()
+                if (f.nodeType === "paragraph" && isSelected) {
+                  onInlineEditStart(f.nodeId, caretIndexFromPointer(f, e, scale))
+                  return
+                }
+                onNodePointerDown({ source: "document", nodeId: selectNodeId }, e)
+              }
               : undefined}
             onDoubleClick={f.nodeType === "paragraph" && !drag
-              ? (e) => { e.stopPropagation(); setEditHeight(Math.max(f.height * scale, 40)); onInlineEditStart(f.nodeId) }
+              ? (e) => { e.stopPropagation(); onInlineEditStart(f.nodeId, caretIndexFromPointer(f, e, scale)) }
               : undefined}
             style={{ cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default" }}
           >
             <rect
-              x={fragX * scale} y={f.y * scale}
+              x={fragX * scale} y={displayFragment.y * scale}
               width={Math.max(fragWidth * scale, 2)} height={Math.max(fragHeight * scale, 2)}
               fill={isInlineEditing ? "#dbeafe" : color}
               stroke={isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"}
@@ -262,19 +315,19 @@ function PageView({
             />
             {isSelected && !isInlineEditing && (
               <rect
-                x={f.x * scale - 1} y={f.y * scale - 1}
-                width={f.width * scale + 2} height={Math.max(fragHeight * scale, 2) + 2}
+                x={displayFragment.x * scale - 1} y={displayFragment.y * scale - 1}
+                width={displayFragment.width * scale + 2} height={Math.max(fragHeight * scale, 2) + 2}
                 fill="none" stroke="#2563eb" strokeWidth={1.5}
                 style={{ pointerEvents: "none" }}
               />
             )}
-            <text x={f.x * scale + 3} y={f.y * scale + 8} fontSize={6} fill="#374151"
+            <text x={displayFragment.x * scale + 3} y={displayFragment.y * scale + 8} fontSize={6} fill="#374151"
               style={{ pointerEvents: "none", userSelect: "none" }}>
               {f.nodeType}
             </text>
             {isEmpty && (
               <text
-                x={(f.x + f.width / 2) * scale} y={(f.y + fragHeight / 2 + 3) * scale}
+                x={(displayFragment.x + displayFragment.width / 2) * scale} y={(displayFragment.y + fragHeight / 2 + 3) * scale}
                 textAnchor="middle" fontSize={8 * scale} fill="#9ca3af"
                 style={{ pointerEvents: "none", userSelect: "none" }}>
                 วางที่นี่
@@ -282,86 +335,20 @@ function PageView({
             )}
 
             {/* ── text lines หรือ inline editor ── */}
-            {isInlineEditing ? (
-              // foreignObject: coordinate system เดียวกับ SVG → width ถูกต้องเสมอ
-              <foreignObject
-                x={f.x * scale}
-                y={f.y * scale}
-                width={f.width * scale}
-                height={Math.max(editHeight, f.height * scale, 40)}
-              >
-                <textarea
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  {...{ xmlns: "http://www.w3.org/1999/xhtml" } as any}
-                  autoFocus
-                  defaultValue={getLiveParaText(doc, f.nodeId) ?? ""}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    minHeight: Math.max(f.height * scale, 40),
-                    background: "rgba(219,234,254,0.97)",
-                    border: "none",
-                    outline: "2px solid #2563eb",
-                    outlineOffset: -2,
-                    borderRadius: 2,
-                    fontFamily: resolveFontCssFamily(f.renderProps?.fontFamilyKey),
-                    fontSize: editFontSize,
-                    lineHeight: `${editLineHeight}px`,
-                    resize: "none",
-                    overflow: "hidden",
-                    padding: 0,
-                    boxSizing: "border-box",
-                  }}
-                  onInput={(e) => {
-                    const el = e.currentTarget
-                    el.style.height = "auto"
-                    const sh = Math.max(el.scrollHeight, f.height * scale, 40)
-                    el.style.height = sh + "px"
-                    setEditHeight(sh)
-                    onInlineEditChange(f.nodeId, el.value)
-                  }}
-                  onBlur={onInlineEditEnd}
-                  onKeyDown={(e) => {
-                    e.stopPropagation()
-                    if (e.key === "Escape") { e.preventDefault(); onInlineEditEnd() }
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  onPointerDown={(e) => e.stopPropagation()}
-                />
-              </foreignObject>
-            ) : (() => {
-              const rp = f.renderProps
-              const fs = (rp?.fontSize ?? 8) * scale
-              const clipId = `url(#cp-${pageKey}-${f.nodeId})`
-
-              // dumb renderer: เมื่อ loading และ text เปลี่ยน → แสดง live text
-              if (isLayoutLoading && !inlineEditNodeId && f.nodeType === "paragraph") {
-                const liveText = getLiveParaText(doc, f.nodeId)
-                const paginatedText = f.lines?.map((l) => l.text).join("") ?? ""
-                if (liveText !== null && liveText !== paginatedText && f.lines?.length) {
-                  const fl = f.lines[0]
-                  return (
-                    <text x={fl.x * scale} y={(fl.y + fl.height * 0.78) * scale}
-                      fontSize={fs} fontFamily={resolveFontCssFamily(f.renderProps?.fontFamilyKey)}
-                      fill="#1e40af" opacity={0.75} clipPath={clipId}
-                      style={{ pointerEvents: "none", userSelect: "none" }}>
-                      {liveText}
-                    </text>
-                  )
-                }
-              }
-
-              return f.lines?.map((line, li) => (
-                <text key={li}
-                  x={line.x * scale} y={(line.y + line.height * 0.78) * scale}
-                  fontSize={line.fontSize ? line.fontSize * scale : fs}
-                  fontFamily={resolveFontCssFamily(f.renderProps?.fontFamilyKey)}
-                  fill="#1e40af" clipPath={clipId}
-                  style={{ pointerEvents: "none", userSelect: "none" }}>
-                  {line.text}
-                </text>
-              )) ?? null
-            })()}
+            {f.nodeType === "paragraph" && (
+              <ParagraphTextSurface
+                fragment={displayFragment}
+                doc={doc}
+                pageKey={pageKey}
+                scale={scale}
+                isEditing={isInlineEditing}
+                isLayoutLoading={isLayoutLoading}
+                hasActiveInlineEditor={!!inlineEditNodeId}
+                initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
+                onChange={onInlineEditChange}
+                onEndEdit={onInlineEditEnd}
+              />
+            )}
           </g>
         )
       })}
@@ -465,7 +452,8 @@ interface Props {
   selectedNodeId: string | null
   isLayoutLoading: boolean
   inlineEditNodeId: string | null
-  onInlineEditStart: (nodeId: string) => void
+  inlineEditCaretIndex: number | null
+  onInlineEditStart: (nodeId: string, caretIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string) => void
   onInlineEditEnd: () => void
   setPageRef: (key: string, el: SVGSVGElement | null) => void
@@ -480,7 +468,7 @@ interface Props {
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
+  inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -513,6 +501,7 @@ export function EditorCanvas({
                   page={page} doc={doc} drag={drag} scale={scale}
                   selectedNodeId={selectedNodeId} isLayoutLoading={isLayoutLoading}
                   inlineEditNodeId={inlineEditNodeId}
+                  inlineEditCaretIndex={inlineEditCaretIndex}
                   onInlineEditStart={onInlineEditStart}
                   onInlineEditChange={onInlineEditChange}
                   onInlineEditEnd={onInlineEditEnd}

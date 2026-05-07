@@ -163,6 +163,7 @@ function getSourceNodeId(source?: DragSource | null): string | null {
 
 function getSourceBlockType(document: DocumentNode, source?: DragSource | null): LayoutNode["type"] | null {
   if (source == null) return null
+  if (source.source === "field") return null
   if (source.source === "palette") return source.blockType === "paragraph" ? "paragraph" : "row"
   const location = findLocation(document, source.nodeId)
   return location?.node.type ?? null
@@ -170,6 +171,15 @@ function getSourceBlockType(document: DocumentNode, source?: DragSource | null):
 
 function getPaletteBlockType(source?: DragSource | null): PaletteBlockType | null {
   return source?.source === "palette" ? source.blockType : null
+}
+
+function isFieldSource(source?: DragSource | null): boolean {
+  return source?.source === "field"
+}
+
+function isInlineFieldSource(source?: DragSource | null): boolean {
+  if (source?.source !== "field") return false
+  return source.field.fieldType !== "image" && source.field.fieldType !== "collection"
 }
 
 function getPaletteStackInsertCount(source?: DragSource | null): number | null {
@@ -245,6 +255,22 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
   const location = findLocation(document, target.nodeId)
 
   if (location == null) return err(rawIntent, "missing-target", `Node "${target.nodeId}" not found.`)
+
+  if (isFieldSource(source)) {
+    if (zone !== "center" || location.node.type !== "paragraph") {
+      return err(rawIntent, "invalid-target", "Fields can only be inserted into paragraphs.")
+    }
+    if (!isInlineFieldSource(source)) {
+      return err(rawIntent, "invalid-source", "This field type needs a block/control node.")
+    }
+
+    const intent = makeIntent(rawIntent, target.nodeId, location.parent?.id ?? null, location.parent?.type ?? null)
+    return ok(intent, {
+      kind: "insert-inline-field",
+      paragraphId: target.nodeId,
+      index: location.node.children.length,
+    })
+  }
 
   // center → insert into container
   if (zone === "center") {

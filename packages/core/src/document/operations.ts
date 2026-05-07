@@ -11,7 +11,7 @@ import {
   createDefaultTable,
   createTableCellNode,
   createTableRowNode,
-  createTocNode,
+  createFieldRefInline,
 } from "./defaults"
 
 // ─── Internal Types ────────────────────────────────────────────────────────────
@@ -162,14 +162,11 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
       const table = createDefaultTable()
       return { insertId: table.id, newNodes: { [table.id]: table as unknown as LayoutNode } }
     }
-    if (source.blockType === "toc") {
-      const toc = createTocNode()
-      return { insertId: toc.id, newNodes: { [toc.id]: toc as unknown as LayoutNode } }
-    }
     const { row, nodes } = createRowSubtree()
     return { insertId: row.id, newNodes: nodes }
   }
-  return { insertId: source.nodeId, newNodes: {} }
+  if (source.source === "document") return { insertId: source.nodeId, newNodes: {} }
+  return { insertId: "", newNodes: {} }
 }
 
 // ─── Index Adjustment ─────────────────────────────────────────────────────────
@@ -331,6 +328,31 @@ function updateTableInSection(
     const newTable = updater(tableNode as unknown as TableNode)
     const newSections = doc.document.sections.map((s, i) =>
       i === si ? { ...s, nodes: { ...s.nodes, [tableId]: newTable as unknown as LayoutNode } } : s,
+    )
+    return { ...doc, document: { ...doc.document, sections: newSections } }
+  }
+  return doc
+}
+
+function insertInlineField(
+  doc: DocumentNode,
+  paragraphId: string,
+  index: number,
+  field: { key: string; label?: string; fallback?: string },
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[paragraphId]
+    if (node?.type !== "paragraph") continue
+
+    const insertAt = Math.min(Math.max(0, index), node.children.length)
+    const fieldRef = createFieldRefInline(field.key, field.label, field.fallback)
+    const updated: LayoutNode = {
+      ...node,
+      children: [...node.children.slice(0, insertAt), fieldRef, ...node.children.slice(insertAt)],
+    }
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes: { ...s.nodes, [paragraphId]: updated } } : s,
     )
     return { ...doc, document: { ...doc.document, sections: newSections } }
   }
@@ -603,6 +625,11 @@ export function applyPlacementOperation(
   op: PlacementOperation,
   source: DragSource,
 ): DocumentNode {
+  if (op.kind === "insert-inline-field") {
+    if (source.source !== "field") return doc
+    return insertInlineField(doc, op.paragraphId, op.index, source.field)
+  }
+
   const sectionIndex = doc.document.sections.findIndex((s) => s.id === sectionId)
   if (sectionIndex === -1) return doc
 

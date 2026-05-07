@@ -96,6 +96,16 @@ Expected concepts:
 - clear API errors when required data is missing
 - render endpoints that accept template id plus data
 
+Current field direction:
+
+- fields are exposed in a dedicated editor panel, separate from layout blocks
+- scalar fields are inserted as inline `fieldRef` children inside paragraphs
+- field values belong to filling/submission data, not to the template tree
+- filling mode binds template + field data into a temporary resolved document for
+  preview/export while leaving the template document unchanged
+- block-like fields such as images, collections, and composite objects should
+  become dedicated field block/control nodes later, after scalar binding is stable
+
 Example future flow:
 
 ```txt
@@ -127,6 +137,24 @@ Known areas to strengthen:
 - tests and golden fixtures are needed for layout and pagination stability.
 - API routes should validate/normalize input before pagination/export.
 - editor-specific state should stay out of core.
+
+## Temporarily Deferred Features
+
+TOC is intentionally disabled in the editor for now. The schema/layout/rendering
+code may still contain early TOC support, but users should not be able to create
+TOC blocks until field binding, resolved document pagination, and page-number
+stability are stronger.
+
+Expected future TOC flow:
+
+```txt
+template + binding data
+  -> resolved document
+  -> stable pagination
+  -> collect headings/page numbers
+  -> fill TOC
+  -> render/export
+```
 
 ## Implementation Preference
 

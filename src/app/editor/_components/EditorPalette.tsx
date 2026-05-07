@@ -5,7 +5,6 @@ const BLOCKS: { type: PaletteBlockType; label: string; icon: string; desc: strin
   { type: "row",       label: "Row",       icon: "▥", desc: "Single column" },
   { type: "columns",   label: "Columns",   icon: "⊞", desc: "Two columns" },
   { type: "table",     label: "Table",     icon: "⊡", desc: "3×3 table" },
-  { type: "toc",       label: "TOC",       icon: "≡", desc: "Table of contents" },
 ]
 
 interface Props {
@@ -16,8 +15,7 @@ interface Props {
 export function EditorPalette({ onDragStart, isDragging }: Props) {
   return (
     <div style={{
-      width: 160, flexShrink: 0,
-      borderRight: "1px solid #e5e7eb", background: "white",
+      background: "white",
       display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
       <div style={{
@@ -61,7 +59,7 @@ export function EditorPalette({ onDragStart, isDragging }: Props) {
         ))}
       </div>
 
-      <div style={{ padding: "12px 14px", fontSize: 9, color: "#d1d5db", marginTop: "auto" }}>
+      <div style={{ padding: "8px 14px 10px", fontSize: 9, color: "#d1d5db" }}>
         drag block onto canvas
       </div>
     </div>

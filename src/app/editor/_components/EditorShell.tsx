@@ -1,10 +1,12 @@
 "use client"
 
-import { useReducer, useCallback, useRef, useState, useEffect } from "react"
+import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
 import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer } from "@/layout"
 import { createDefaultDocument, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin } from "@/document"
+import { bindDocument } from "@/binding"
+import type { FieldData, FieldValue } from "@/binding"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
 import type { DocumentNode } from "@/schema"
@@ -17,9 +19,11 @@ import type {
   PlacementIntentType,
 } from "@/placement/types"
 import { EditorPalette } from "./EditorPalette"
+import { FieldPalette } from "./FieldPalette"
 import { EditorCanvas } from "./EditorCanvas"
 import { PropertyPanel } from "./PropertyPanel"
 import { OutlinePanel } from "./OutlinePanel"
+import { FillingPanel } from "./FillingPanel"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -141,7 +145,6 @@ function pushDoc(state: EditorState, newDoc: DocumentNode): EditorState {
     past: [...state.past.slice(-(MAX_HISTORY - 1)), state.doc],
     doc: normalizedDoc,
     future: [],
-    paginated: paginate(normalizedDoc),
   }
 }
 
@@ -189,7 +192,6 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         past: state.past.slice(0, -1),
         doc: prev,
         future: [state.doc, ...state.future],
-        paginated: paginate(prev),
       }
     }
     case "REDO": {
@@ -200,12 +202,11 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         past: [...state.past, state.doc],
         doc: next,
         future: state.future.slice(1),
-        paginated: paginate(next),
       }
     }
     case "LOAD_DOCUMENT":
       const normalizedDoc = normalizeDocument(action.doc)
-      return { ...state, past: [], doc: normalizedDoc, future: [], paginated: paginate(normalizedDoc), selectedNodeId: null, drag: null }
+      return { ...state, past: [], doc: normalizedDoc, future: [], selectedNodeId: null, drag: null }
     case "TABLE_ADD_ROW":
       return pushDoc(state, addTableRow(state.doc, action.tableId, action.afterIndex))
     case "TABLE_REMOVE_ROW":
@@ -244,11 +245,45 @@ function zoneToIntent(zone: PlacementZone): PlacementIntentType {
   }
 }
 
+function describeDragSource(source: DragSource): string {
+  if (source.source === "palette") return source.blockType
+  if (source.source === "field") return source.field.label ?? source.field.key
+  return "node"
+}
+
+function setFieldDataValue(data: FieldData, key: string, value: FieldValue): FieldData {
+  const parts = key.split(".").filter(Boolean)
+  if (parts.length === 0) return data
+
+  const root: FieldData = { ...data }
+  let cursor: FieldData = root
+
+  parts.slice(0, -1).forEach((part) => {
+    const current = cursor[part]
+    const next = typeof current === "object" && current != null && !Array.isArray(current)
+      ? { ...current } as FieldData
+      : {}
+    cursor[part] = next
+    cursor = next
+  })
+
+  cursor[parts[parts.length - 1]] = value
+  return root
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function EditorShell() {
   const [scale, setScale] = useState(0.6)
   const [state, dispatch] = useReducer(reducer, undefined, createInitialEditorState)
+  const [mode, setMode] = useState<"template" | "fill">("template")
+  const [fieldData, setFieldData] = useState<FieldData>({})
+  const isTemplateMode = mode === "template"
+  const previewDoc = useMemo(() => (
+    isTemplateMode
+      ? state.doc
+      : bindDocument(state.doc, { registry: { fields: [] }, data: fieldData })
+  ), [fieldData, isTemplateMode, state.doc])
 
   const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
   const pendingDragRef = useRef<{ source: DragSource; clientX: number; clientY: number } | null>(null)
@@ -259,6 +294,7 @@ export default function EditorShell() {
   const [savedAt, setSavedAt] = useState<Date | null>(null)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
+  const [inlineEditCaretIndex, setInlineEditCaretIndex] = useState<number | null>(null)
 
   // ─── Auto-save ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -277,7 +313,7 @@ export default function EditorShell() {
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc: state.doc, format }),
+        body: JSON.stringify({ doc: previewDoc, format }),
       })
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
@@ -293,7 +329,7 @@ export default function EditorShell() {
     } finally {
       setIsExporting(false)
     }
-  }, [state.doc])
+  }, [previewDoc])
 
   const importRef = useRef<HTMLInputElement>(null)
 
@@ -329,9 +365,10 @@ export default function EditorShell() {
   }, [])
 
   // ─── Inline editing ───────────────────────────────────────────────────────────
-  const handleInlineEditStart = useCallback((nodeId: string) => {
+  const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null) => {
     dispatch({ type: "SELECT_NODE", nodeId })
     setInlineEditNodeId(nodeId)
+    setInlineEditCaretIndex(caretIndex)
   }, [])
 
   const handleInlineEditChange = useCallback((nodeId: string, text: string) => {
@@ -340,6 +377,7 @@ export default function EditorShell() {
 
   const handleInlineEditEnd = useCallback(() => {
     setInlineEditNodeId(null)
+    setInlineEditCaretIndex(null)
   }, [])
 
   // ─── Server-side layout ────────────────────────────────────────────────────
@@ -359,7 +397,7 @@ export default function EditorShell() {
         const res = await fetch("/api/paginate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(state.doc),
+          body: JSON.stringify(previewDoc),
           signal: controller.signal,
         })
         const result: unknown = await res.json()
@@ -377,7 +415,7 @@ export default function EditorShell() {
 
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.doc])
+  }, [previewDoc])
 
   useEffect(() => {
     if (!isLayoutLoading) {
@@ -682,7 +720,7 @@ export default function EditorShell() {
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
-      if (inlineEditNodeId) { setInlineEditNodeId(null); return }
+      if (inlineEditNodeId) { setInlineEditNodeId(null); setInlineEditCaretIndex(null); return }
       if (state.drag) dispatch({ type: "DRAG_CANCEL" })
       else if (pendingDragRef.current) pendingDragRef.current = null
       else dispatch({ type: "SELECT_NODE", nodeId: null })
@@ -737,6 +775,26 @@ export default function EditorShell() {
         {/* Separator */}
         <div style={{ width: 1, height: 16, background: "#e5e7eb" }} />
 
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {(["template", "fill"] as const).map((m) => (
+            <button key={m}
+              onClick={() => {
+                  setMode(m)
+                  if (m === "fill") {
+                    dispatch({ type: "DRAG_CANCEL" })
+                    setInlineEditNodeId(null)
+                    setInlineEditCaretIndex(null)
+                    setResizeDrag(null)
+                  setMinHeightDrag(null)
+                  setMarginDrag(null)
+                }
+              }}
+              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: mode === m ? "#dbeafe" : "white", color: mode === m ? "#1d4ed8" : "#374151", fontWeight: mode === m ? "bold" : "normal" }}>
+              {m === "template" ? "Template" : "Fill"}
+            </button>
+          ))}
+        </div>
+
         {/* Document actions */}
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           <button onClick={handleNewDocument}
@@ -772,57 +830,79 @@ export default function EditorShell() {
         </div>
         {state.drag && (
           <span style={{ fontSize: 11, color: "#6b7280" }}>
-            dragging {state.drag.source.source === "palette" ? state.drag.source.blockType : "node"} — Esc to cancel
+            dragging {describeDragSource(state.drag.source)} — Esc to cancel
           </span>
         )}
       </div>
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <EditorPalette onDragStart={startPaletteDrag} isDragging={!!state.drag} />
+        <div style={{ width: 160, flexShrink: 0, borderRight: "1px solid #e5e7eb", background: "white", display: "flex", flexDirection: "column", overflow: "auto" }}>
+          {isTemplateMode ? (
+            <>
+              <EditorPalette onDragStart={startPaletteDrag} isDragging={!!state.drag} />
+              <FieldPalette onDragStart={startPaletteDrag} isDragging={!!state.drag} />
+            </>
+          ) : (
+            <div style={{ padding: 14, fontSize: 11, color: "#9ca3af", lineHeight: 1.5 }}>
+              Fill mode locks the template. Edit values in the right panel.
+            </div>
+          )}
+        </div>
         <EditorCanvas
           paginated={state.paginated}
-          doc={state.doc}
-          drag={state.drag}
+          doc={previewDoc}
+          drag={isTemplateMode ? state.drag : null}
           scale={scale}
-          selectedNodeId={state.selectedNodeId}
+          selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
           isLayoutLoading={isLayoutLoading}
-          inlineEditNodeId={inlineEditNodeId}
-          onInlineEditStart={handleInlineEditStart}
-          onInlineEditChange={handleInlineEditChange}
-          onInlineEditEnd={handleInlineEditEnd}
+          inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
+          inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
+          onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
+          onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
+          onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
           setPageRef={setPageRef}
-          onNodePointerDown={startNodePointerDown}
-          onBackgroundPointerDown={handleBackgroundPointerDown}
-          onResizeStart={handleResizeStart}
-          resizeDrag={resizeDrag}
-          minHeightDrag={minHeightDrag}
-          onMinHeightResizeStart={handleMinHeightResizeStart}
-          marginDrag={marginDrag}
-          onMarginResizeStart={handleMarginResizeStart}
+          onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
+          onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
+          onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
+          resizeDrag={isTemplateMode ? resizeDrag : null}
+          minHeightDrag={isTemplateMode ? minHeightDrag : null}
+          onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
+          marginDrag={isTemplateMode ? marginDrag : null}
+          onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
           onScaleChange={setScale}
         />
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>
-          <div style={{ flexShrink: 0 }}>
-            <PropertyPanel
+          {isTemplateMode ? (
+            <div style={{ flexShrink: 0 }}>
+              <PropertyPanel
+                doc={state.doc}
+                selectedNodeId={state.selectedNodeId}
+                onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
+                onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
+                onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
+                tableOps={{
+                  addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
+                  removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
+                  addCol: (tableId) => dispatch({ type: "TABLE_ADD_COL", tableId }),
+                  removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
+                }}
+              />
+            </div>
+          ) : (
+            <FillingPanel
               doc={state.doc}
-              selectedNodeId={state.selectedNodeId}
-              onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
-              onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
-              onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
-              tableOps={{
-                addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
-                removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
-                addCol: (tableId) => dispatch({ type: "TABLE_ADD_COL", tableId }),
-                removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
-              }}
+              data={fieldData}
+              onChange={(key, value) => setFieldData((prev) => setFieldDataValue(prev, key, value))}
             />
-          </div>
+          )}
           <div style={{ flex: 1, overflow: "hidden" }}>
             <OutlinePanel
-              doc={state.doc}
-              selectedNodeId={state.selectedNodeId}
-              onSelect={(nodeId) => dispatch({ type: "SELECT_NODE", nodeId })}
+              doc={isTemplateMode ? state.doc : previewDoc}
+              selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
+              onSelect={(nodeId) => {
+                if (isTemplateMode) dispatch({ type: "SELECT_NODE", nodeId })
+              }}
             />
           </div>
         </div>
