@@ -3,7 +3,7 @@
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
 import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer } from "@/layout"
-import { createDefaultDocument, normalizeDocument } from "@/document"
+import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin } from "@/document"
 import { bindDocument } from "@/binding"
 import type { FieldData, FieldValue } from "@/binding"
@@ -24,6 +24,7 @@ import { EditorCanvas } from "./EditorCanvas"
 import { PropertyPanel } from "./PropertyPanel"
 import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
+import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,7 @@ export interface ResizeDrag {
   rightShareOriginal: number
   totalShare: number     // leftShare + rightShare
   minWidthPt: number     // min column width in pt
-  committed?: boolean    // true = waiting for server, keep visual override alive
+  committed?: boolean
 }
 
 export interface MinHeightDrag {
@@ -122,10 +123,6 @@ function paginate(doc: DocumentNode): PaginatedDocument {
   return paginateDocument(doc, defaultTextMeasurer)
 }
 
-function isPaginatedDocument(value: unknown): value is PaginatedDocument {
-  return !!value && typeof value === "object" && Array.isArray((value as PaginatedDocument).sections)
-}
-
 function getRowFragmentHeight(paginated: PaginatedDocument, rowId: string): number | null {
   for (const section of paginated.sections) {
     for (const page of section.pages) {
@@ -140,6 +137,12 @@ const MAX_HISTORY = 50
 
 function pushDoc(state: EditorState, newDoc: DocumentNode): EditorState {
   const normalizedDoc = normalizeDocument(newDoc)
+  try {
+    assertDocument(normalizedDoc)
+  } catch (error) {
+    console.error("document operation produced invalid document:", error)
+    return { ...state, drag: null }
+  }
   return {
     ...state,
     past: [...state.past.slice(-(MAX_HISTORY - 1)), state.doc],
@@ -276,6 +279,8 @@ function setFieldDataValue(data: FieldData, key: string, value: FieldValue): Fie
 export default function EditorShell() {
   const [scale, setScale] = useState(0.6)
   const [state, dispatch] = useReducer(reducer, undefined, createInitialEditorState)
+  const editorTextMeasurer = useMemo(() => createBrowserTextMeasurer(), [])
+  const [fontReadyVersion, setFontReadyVersion] = useState(0)
   const [mode, setMode] = useState<"template" | "fill">("template")
   const [fieldData, setFieldData] = useState<FieldData>({})
   const isTemplateMode = mode === "template"
@@ -292,9 +297,15 @@ export default function EditorShell() {
   const [marginDrag, setMarginDrag] = useState<MarginDrag | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
+  const [showTextSegments, setShowTextSegments] = useState(false)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
   const [inlineEditCaretIndex, setInlineEditCaretIndex] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (typeof document === "undefined" || !("fonts" in document)) return
+    void document.fonts.ready.then(() => setFontReadyVersion((version) => version + 1))
+  }, [])
 
   // ─── Auto-save ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -380,42 +391,22 @@ export default function EditorShell() {
     setInlineEditCaretIndex(null)
   }, [])
 
-  // ─── Server-side layout ────────────────────────────────────────────────────
+  // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
 
-    debounceRef.current = setTimeout(async () => {
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
+    debounceRef.current = setTimeout(() => {
       setIsLayoutLoading(true)
-      try {
-        const res = await fetch("/api/paginate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(previewDoc),
-          signal: controller.signal,
-        })
-        const result: unknown = await res.json()
-        if (!res.ok || !isPaginatedDocument(result)) {
-          console.error("layout error:", result)
-          return
-        }
-        dispatch({ type: "SET_PAGINATED", paginated: result })
-      } catch (err) {
-        if ((err as Error).name !== "AbortError") console.error("layout error:", err)
-      } finally {
-        if (!controller.signal.aborted) setIsLayoutLoading(false)
-      }
-    }, 80)
+      dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
+      setIsLayoutLoading(false)
+    }, 16)
 
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewDoc])
+  }, [editorTextMeasurer, fontReadyVersion, previewDoc])
 
   useEffect(() => {
     if (!isLayoutLoading) {
@@ -440,6 +431,9 @@ export default function EditorShell() {
     pairX: number, pairWidth: number,
     startClientX: number, pageKey: string,
   ) => {
+    dispatch({ type: "SELECT_NODE", nodeId: null })
+    setInlineEditNodeId(null)
+    setInlineEditCaretIndex(null)
     const svgEl = pageRefs.current.get(pageKey)
     if (!svgEl) return
     const svgLeft = svgEl.getBoundingClientRect().left
@@ -470,11 +464,14 @@ export default function EditorShell() {
   const handleMinHeightResizeStart = useCallback((
     rowId: string, rowFragY: number, pageKey: string,
   ) => {
+    dispatch({ type: "SELECT_NODE", nodeId: null })
+    setInlineEditNodeId(null)
+    setInlineEditCaretIndex(null)
     const svgEl = pageRefs.current.get(pageKey)
     if (!svgEl) return
     const svgTop = svgEl.getBoundingClientRect().top
     const naturalDoc = updateNodeProps(state.doc, rowId, { minHeight: undefined })
-    const naturalHeight = getRowFragmentHeight(paginate(naturalDoc), rowId) ?? 0
+    const naturalHeight = getRowFragmentHeight(paginateDocument(naturalDoc, editorTextMeasurer), rowId) ?? 0
 
     let currentMinHeight = naturalHeight
     for (const section of state.doc.document.sections) {
@@ -488,7 +485,7 @@ export default function EditorShell() {
       currentMinHeight,
       pageKey,
     })
-  }, [state.doc, state.paginated])
+  }, [editorTextMeasurer, state.doc, state.paginated])
 
   const handleMarginResizeStart = useCallback((
     sectionIndex: number,
@@ -499,6 +496,9 @@ export default function EditorShell() {
     pageKey: string,
     altKey: boolean,
   ) => {
+    dispatch({ type: "SELECT_NODE", nodeId: null })
+    setInlineEditNodeId(null)
+    setInlineEditCaretIndex(null)
     setMarginDrag({ sectionIndex, side, pageWidthPt, pageHeightPt, currentMargins, pageKey, altKey })
   }, [])
 
@@ -636,7 +636,7 @@ export default function EditorShell() {
         return
       }
       // Resize column drag
-      if (resizeDrag) {
+      if (resizeDrag && !resizeDrag.committed) {
         const rawDocX = (e.clientX - resizeDrag.svgLeft) / scale
         const minX = resizeDrag.pairX + resizeDrag.minWidthPt
         const maxX = resizeDrag.pairX + resizeDrag.pairWidth - resizeDrag.minWidthPt
@@ -669,13 +669,13 @@ export default function EditorShell() {
       // Commit margin resize
       if (marginDrag && !marginDrag.committed) {
         dispatch({ type: "UPDATE_MARGIN", sectionIndex: marginDrag.sectionIndex, margin: marginDrag.currentMargins })
-        setMarginDrag((prev) => prev ? { ...prev, committed: true } : null)
+        setMarginDrag(null)
         return
       }
       // Commit minHeight resize
       if (minHeightDrag && !minHeightDrag.committed) {
         dispatch({ type: "RESIZE_ROW_MIN_HEIGHT", rowId: minHeightDrag.rowId, minHeight: minHeightDrag.currentMinHeight })
-        setMinHeightDrag((prev) => prev ? { ...prev, committed: true } : null)
+        setMinHeightDrag(null)
         return
       }
       // Commit resize
@@ -685,7 +685,7 @@ export default function EditorShell() {
         const newLeftShare = Math.round((leftWidthPt / pairWidth) * totalShare * 100) / 100
         const newRightShare = Math.round((totalShare - newLeftShare) * 100) / 100
         dispatch({ type: "RESIZE_COLUMNS", leftStackId, leftShare: newLeftShare, rightStackId, rightShare: newRightShare })
-        setResizeDrag((prev) => prev ? { ...prev, committed: true } : null)
+        setResizeDrag(null)
         return
       }
       // PendingDrag released without moving → treat as click → select node
@@ -795,6 +795,14 @@ export default function EditorShell() {
           ))}
         </div>
 
+        <button
+          onClick={() => setShowTextSegments((value) => !value)}
+          title="Toggle text segment overlay"
+          style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: showTextSegments ? "#dcfce7" : "white", color: showTextSegments ? "#166534" : "#374151" }}
+        >
+          Segments
+        </button>
+
         {/* Document actions */}
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           <button onClick={handleNewDocument}
@@ -871,6 +879,7 @@ export default function EditorShell() {
           marginDrag={isTemplateMode ? marginDrag : null}
           onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
           onScaleChange={setScale}
+          showTextSegments={showTextSegments}
         />
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>
           {isTemplateMode ? (

@@ -169,6 +169,10 @@ function getSourceBlockType(document: DocumentNode, source?: DragSource | null):
   return location?.node.type ?? null
 }
 
+function isStructuralStackSource(document: DocumentNode, source?: DragSource | null): boolean {
+  return getSourceBlockType(document, source) === "stack"
+}
+
 function getPaletteBlockType(source?: DragSource | null): PaletteBlockType | null {
   return source?.source === "palette" ? source.blockType : null
 }
@@ -471,6 +475,10 @@ export function resolvePlacementLaw(
   rawIntent: RawPlacementIntent,
   source?: DragSource | null,
 ): PlacementResult {
+  if (isStructuralStackSource(document, source)) {
+    return err(rawIntent, "invalid-source", "Stack nodes are structural row regions and cannot be dragged as standalone blocks.")
+  }
+
   const { target } = rawIntent
 
   if (target.kind === "row-outer-top" || target.kind === "row-outer-bottom") {

@@ -11,6 +11,7 @@ interface Props {
   isEditing: boolean
   isLayoutLoading: boolean
   hasActiveInlineEditor: boolean
+  showTextSegments: boolean
   initialCaretIndex: number | null
   onChange: (nodeId: string, text: string) => void
   onEndEdit: () => void
@@ -48,8 +49,21 @@ function lineX(line: PaginatedLine, fragment: PageFragment, align: ParagraphRend
   return line.x
 }
 
+function lineVisualLeft(line: PaginatedLine, fragment: PageFragment, align: ParagraphRenderProps["align"] | undefined): number {
+  if (align === "center") return fragment.x + (fragment.width - line.width) / 2
+  if (align === "right") return fragment.x + fragment.width - line.width
+  return line.x
+}
+
 function lineBaselineY(line: PaginatedLine): number {
   return line.y + line.height * 0.78
+}
+
+function segmentColor(kind: NonNullable<PaginatedLine["segments"]>[number]["kind"]): string {
+  if (kind === "space") return "#f59e0b"
+  if (kind === "field") return "#8b5cf6"
+  if (kind === "grapheme") return "#ef4444"
+  return "#10b981"
 }
 
 function renderLine(
@@ -81,6 +95,47 @@ function renderLine(
   )
 }
 
+function renderSegmentDebug(
+  lines: PaginatedLine[] | undefined,
+  fragment: PageFragment,
+  renderProps: ParagraphRenderProps | undefined,
+  scale: number,
+) {
+  return lines?.flatMap((line, lineIndex) => {
+    const segments = line.segments ?? []
+    const visualLeft = lineVisualLeft(line, fragment, renderProps?.align)
+    return segments.map((segment, segmentIndex) => {
+      const color = segmentColor(segment.kind)
+      return (
+        <g key={`seg-${lineIndex}-${segmentIndex}`} style={{ pointerEvents: "none" }}>
+          <rect
+            x={(visualLeft + segment.x) * scale}
+            y={line.y * scale}
+            width={Math.max(segment.width * scale, 1)}
+            height={line.height * scale}
+            fill={color}
+            opacity={segment.kind === "space" ? 0.22 : 0.14}
+            stroke={color}
+            strokeWidth={0.75}
+            strokeDasharray={segment.kind === "space" ? "2 2" : undefined}
+          >
+            <title>{`${segment.kind}: ${segment.start}-${segment.end} (${Math.round(segment.width * 100) / 100})`}</title>
+          </rect>
+          <line
+            x1={(visualLeft + segment.x) * scale}
+            y1={line.y * scale}
+            x2={(visualLeft + segment.x) * scale}
+            y2={(line.y + line.height) * scale}
+            stroke={color}
+            strokeWidth={0.75}
+            opacity={0.55}
+          />
+        </g>
+      )
+    })
+  }) ?? null
+}
+
 export function ParagraphTextSurface({
   fragment,
   doc,
@@ -89,6 +144,7 @@ export function ParagraphTextSurface({
   isEditing,
   isLayoutLoading,
   hasActiveInlineEditor,
+  showTextSegments,
   initialCaretIndex,
   onChange,
   onEndEdit,
@@ -98,6 +154,8 @@ export function ParagraphTextSurface({
   const editHeight = Math.max(fragment.height * scale, 1)
   const fontSize = (renderProps?.fontSize ?? 12) * scale
   const lineHeight = (renderProps?.lineHeight ?? (renderProps?.fontSize ?? 12) * 1.5) * scale
+  const spacingBefore = (renderProps?.spacingBefore ?? 0) * scale
+  const spacingAfter = (renderProps?.spacingAfter ?? 0) * scale
 
   useEffect(() => {
     if (!isEditing || initialCaretIndex == null) return
@@ -112,54 +170,61 @@ export function ParagraphTextSurface({
 
   if (isEditing) {
     return (
-      <foreignObject
-        x={fragment.x * scale}
-        y={fragment.y * scale}
-        width={fragment.width * scale}
-        height={editHeight}
-      >
-        <textarea
-          ref={textareaRef}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          {...{ xmlns: "http://www.w3.org/1999/xhtml" } as any}
-          autoFocus
-          spellCheck={false}
-          defaultValue={getEditableParagraphText(doc, fragment.nodeId) ?? ""}
-          style={{
-            width: "100%",
-            height: "100%",
-            background: "rgba(219,234,254,0.97)",
-            border: "none",
-            outline: "2px solid #2563eb",
-            outlineOffset: -2,
-            borderRadius: 2,
-            fontFamily: resolveFontCssFamily(renderProps?.fontFamilyKey),
-            fontSize,
-            lineHeight: `${lineHeight}px`,
-            textAlign: textAlignForParagraph(renderProps?.align),
-            color: "#1e40af",
-            caretColor: "#1e40af",
-            resize: "none",
-            overflow: "hidden",
-            padding: 0,
-            margin: 0,
-            boxSizing: "border-box",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "break-word",
-          }}
-          onInput={(event) => onChange(fragment.nodeId, event.currentTarget.value)}
-          onBlur={onEndEdit}
-          onKeyDown={(event) => {
-            event.stopPropagation()
-            if (event.key === "Escape") {
-              event.preventDefault()
-              onEndEdit()
-            }
-          }}
-          onClick={(event) => event.stopPropagation()}
-          onPointerDown={(event) => event.stopPropagation()}
-        />
-      </foreignObject>
+      <>
+        {fragment.lines?.map((line, index) =>
+          renderLine(line, index, fragment, renderProps, pageKey, scale),
+        )}
+        {showTextSegments && renderSegmentDebug(fragment.lines, fragment, renderProps, scale)}
+        <foreignObject
+          x={fragment.x * scale}
+          y={fragment.y * scale}
+          width={fragment.width * scale}
+          height={editHeight}
+        >
+          <textarea
+            ref={textareaRef}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            {...{ xmlns: "http://www.w3.org/1999/xhtml" } as any}
+            autoFocus
+            spellCheck={false}
+            defaultValue={getEditableParagraphText(doc, fragment.nodeId) ?? ""}
+            style={{
+              width: "100%",
+              height: "100%",
+              background: "transparent",
+              border: "none",
+              outline: "2px solid #2563eb",
+              outlineOffset: -2,
+              borderRadius: 2,
+              fontFamily: resolveFontCssFamily(renderProps?.fontFamilyKey),
+              fontSize,
+              lineHeight: `${lineHeight}px`,
+              textAlign: textAlignForParagraph(renderProps?.align),
+              color: "transparent",
+              caretColor: "#1e40af",
+              resize: "none",
+              overflow: "hidden",
+              padding: `${spacingBefore}px 0 ${spacingAfter}px`,
+              margin: 0,
+              boxSizing: "border-box",
+              whiteSpace: "pre-wrap",
+              overflowWrap: "normal",
+              wordBreak: "normal",
+            }}
+            onInput={(event) => onChange(fragment.nodeId, event.currentTarget.value)}
+            onBlur={onEndEdit}
+            onKeyDown={(event) => {
+              event.stopPropagation()
+              if (event.key === "Escape") {
+                event.preventDefault()
+                onEndEdit()
+              }
+            }}
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          />
+        </foreignObject>
+      </>
     )
   }
 
@@ -174,5 +239,5 @@ export function ParagraphTextSurface({
 
   return fragment.lines?.map((line, index) =>
     renderLine(line, index, fragment, renderProps, pageKey, scale),
-  ) ?? null
+  ).concat(showTextSegments ? renderSegmentDebug(fragment.lines, fragment, renderProps, scale) ?? [] : []) ?? null
 }

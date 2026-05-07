@@ -1,3 +1,5 @@
+import type { LineSegment } from "../layout"
+
 /**
  * Pagination types — รู้จัก page และ cursor
  * รับ FlowBox จาก layout แล้วตัดเป็น pages
@@ -90,6 +92,7 @@ export interface PaginatedLine {
   width: number
   height: number
   fontSize?: number  // per-line font size override (ใช้ใน TOC title vs entry)
+  segments?: LineSegment[]
 }
 
 // ─── TOC ──────────────────────────────────────────────────────────────────────

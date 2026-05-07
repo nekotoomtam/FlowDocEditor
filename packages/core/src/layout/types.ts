@@ -12,11 +12,25 @@ export interface Size {
 
 // ─── Measured Results ─────────────────────────────────────────────────────────
 
+// ส่วนย่อยของบรรทัดที่ได้จาก line breaking/measurement
+// x เป็นตำแหน่งสัมพัทธ์จากต้นบรรทัด; start/end เป็น index ใน display text
+// เป็น layout result เท่านั้น ไม่ใช่ authored document data
+export interface LineSegment {
+  text: string
+  start: number
+  end: number
+  x: number
+  width: number
+  kind: "word" | "space" | "field" | "grapheme"
+  breakableAfter: boolean
+}
+
 // ผลลัพธ์การ measure paragraph — แต่ละบรรทัด
 export interface MeasuredLine {
   text: string
   width: number
   height: number  // lineHeight
+  segments?: LineSegment[]
 }
 
 // ผลลัพธ์ measure paragraph ทั้งก้อน

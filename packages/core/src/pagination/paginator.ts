@@ -1,6 +1,6 @@
 import type { DocumentNode, DocumentSection, ParagraphNode, TableNode, TableCellNode, CellBorder, BorderSide, TocNode } from "../schema"
 import { flowSection, flowZone, measureParagraph, toAbstractUnit, TOC_ENTRY_FS, TOC_ENTRY_LH } from "../layout"
-import type { FlowBox, TextMeasurer, WordBreaker } from "../layout"
+import type { FlowBox, MeasuredLine, TextMeasurer, WordBreaker } from "../layout"
 import { defaultWordBreaker } from "../layout"
 import type {
   PageFlowCursor,
@@ -82,14 +82,14 @@ function buildRenderProps(node: ParagraphNode, lineHeight: number): ParagraphRen
 }
 
 function buildPaginatedLines(
-  lines: { text: string; width: number; height: number }[],
+  lines: MeasuredLine[],
   fragmentX: number,
   fragmentY: number,
   spacingBefore: number,
 ): PaginatedLine[] {
   let lineY = fragmentY + spacingBefore
   return lines.map((line) => {
-    const result: PaginatedLine = { text: line.text, x: fragmentX, y: lineY, width: line.width, height: line.height }
+    const result: PaginatedLine = { text: line.text, x: fragmentX, y: lineY, width: line.width, height: line.height, segments: line.segments }
     lineY += line.height
     return result
   })

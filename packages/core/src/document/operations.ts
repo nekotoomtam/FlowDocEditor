@@ -5,6 +5,7 @@ import {
   createParagraphNode,
   createRowNode,
   createRowSubtree,
+  createColumnsSubtree,
   createStackNode,
   getEqualWidthShares,
   DEFAULT_STACK_MIN_HEIGHT,
@@ -156,6 +157,10 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
     }
     if (source.blockType === "row") {
       const { row, nodes } = createRowSubtree()
+      return { insertId: row.id, newNodes: nodes }
+    }
+    if (source.blockType === "columns") {
+      const { row, nodes } = createColumnsSubtree(2)
       return { insertId: row.id, newNodes: nodes }
     }
     if (source.blockType === "table") {

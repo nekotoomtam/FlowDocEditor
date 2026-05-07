@@ -36,6 +36,26 @@ function lineVisualLeft(
   return line.x
 }
 
+function caretIndexFromSegments(line: PaginatedLine, docX: number, visualLeft: number): number | null {
+  const segments = line.segments
+  if (!segments || segments.length === 0) return null
+
+  if (docX <= visualLeft) return segments[0].start
+
+  for (const segment of segments) {
+    const left = visualLeft + segment.x
+    const right = left + segment.width
+
+    if (docX <= right) {
+      if (segment.width <= 0 || segment.end <= segment.start) return segment.start
+      const ratio = clamp((docX - left) / segment.width, 0, 1)
+      return segment.start + Math.round(ratio * (segment.end - segment.start))
+    }
+  }
+
+  return segments[segments.length - 1].end
+}
+
 function caretIndexFromPointer(
   fragment: PageFragment,
   event: React.PointerEvent | React.MouseEvent,
@@ -60,6 +80,9 @@ function caretIndexFromPointer(
 
   const line = lines[lineIndex]
   const visualLeft = lineVisualLeft(line, fragment, fragment.renderProps?.align)
+  const segmentCaretIndex = caretIndexFromSegments(line, docX, visualLeft)
+  if (segmentCaretIndex != null) return segmentCaretIndex
+
   const ratio = line.width > 0 ? clamp((docX - visualLeft) / line.width, 0, 1) : 0
   const lineOffset = Math.round(ratio * line.text.length)
   const previousChars = lines.slice(0, lineIndex).reduce((sum, previousLine) => sum + previousLine.text.length, 0)
@@ -121,10 +144,11 @@ function PageView({
   inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
-  sectionIndex, marginDrag, onMarginResizeStart,
+  sectionIndex, marginDrag, onMarginResizeStart, showTextSegments,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
+  showTextSegments: boolean
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
   onInlineEditStart: (nodeId: string, caretIndex?: number | null) => void
@@ -254,14 +278,12 @@ function PageView({
             editFragmentRef.current?.pageKey !== pageKey
           ) {
             editFragmentRef.current = { nodeId: f.nodeId, pageKey, fragment: { ...f } }
-          } else if (editFragmentRef.current.fragment.height !== f.height) {
+          } else {
             editFragmentRef.current = {
               ...editFragmentRef.current,
               fragment: {
-                ...editFragmentRef.current.fragment,
+                ...f,
                 height: Math.max(editFragmentRef.current.fragment.height, f.height),
-                lines: f.lines,
-                renderProps: f.renderProps,
               },
             }
           }
@@ -344,6 +366,7 @@ function PageView({
                 isEditing={isInlineEditing}
                 isLayoutLoading={isLayoutLoading}
                 hasActiveInlineEditor={!!inlineEditNodeId}
+                showTextSegments={showTextSegments}
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
                 onEndEdit={onInlineEditEnd}
@@ -464,12 +487,14 @@ interface Props {
   marginDrag: MarginDrag | null
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
   onScaleChange: (scale: number) => void
+  showTextSegments: boolean
 }
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
   inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
+  showTextSegments,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
@@ -516,6 +541,7 @@ export function EditorCanvas({
                   sectionIndex={si}
                   marginDrag={marginDrag}
                   onMarginResizeStart={onMarginResizeStart}
+                  showTextSegments={showTextSegments}
                 />
               </div>
             ))}
