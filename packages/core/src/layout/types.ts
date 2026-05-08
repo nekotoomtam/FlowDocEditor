@@ -21,7 +21,7 @@ export interface LineSegment {
   end: number
   x: number
   width: number
-  kind: "word" | "space" | "field" | "grapheme"
+  kind: "word" | "space" | "field" | "grapheme" | "pageNumber"
   breakableAfter: boolean
 }
 

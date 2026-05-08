@@ -25,7 +25,14 @@ export function toAbstractUnit(value: number, unit: "pt" | "mm"): number {
 type SourceLineSegment = Omit<LineSegment, "x" | "breakableAfter">
 type FieldRange = { start: number; end: number }
 
-function getSegmentKind(text: string, start: number, end: number, fieldRanges: FieldRange[]): LineSegment["kind"] {
+function getSegmentKind(
+  text: string,
+  start: number,
+  end: number,
+  fieldRanges: FieldRange[],
+  pageNumberRanges: FieldRange[] = [],
+): LineSegment["kind"] {
+  if (pageNumberRanges.some((range) => start >= range.start && end <= range.end)) return "pageNumber"
   if (fieldRanges.some((range) => start >= range.start && end <= range.end)) return "field"
   return /^\s+$/.test(text) ? "space" : "word"
 }
@@ -75,6 +82,7 @@ function createSourceSegments(
   wordBreaker: WordBreaker,
   fieldRanges: FieldRange[] = [],
   offsetBase: number = 0,
+  pageNumberRanges: FieldRange[] = [],
 ): SourceLineSegment[] {
   const segments = wordBreaker.segment(text)
   const sourceSegments: SourceLineSegment[] = []
@@ -87,7 +95,7 @@ function createSourceSegments(
     const end = cursor + segment.length
     cursor = end
     const width = measureSegmentWidth(segment, measurer, fontFamilyKey, fontSize)
-    const kind = getSegmentKind(segment, start, end, fieldRanges)
+    const kind = getSegmentKind(segment, start, end, fieldRanges, pageNumberRanges)
 
     if (kind === "word" && width > availableWidth) {
       let graphemeStart = start
@@ -146,12 +154,13 @@ function wrapLines(
   wordBreaker: WordBreaker,
   fieldRanges: FieldRange[] = [],
   offsetBase: number = 0,
+  pageNumberRanges: FieldRange[] = [],
 ): MeasuredLine[] {
   if (text.length === 0) {
     return [{ text: "", width: 0, height: fontSize }]
   }
 
-  const segments = createSourceSegments(text, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, offsetBase)
+  const segments = createSourceSegments(text, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, offsetBase, pageNumberRanges)
   const lines: MeasuredLine[] = []
   let currentLine: SourceLineSegment[] = []
   let currentWidth = 0
@@ -198,15 +207,21 @@ export function measureParagraph(
   const spacingBefore = toAbstractUnit(node.props.spacingBefore.value, node.props.spacingBefore.unit)
   const spacingAfter = toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
 
-  // รวม text จาก inline children ทั้งหมด พร้อมจำช่วง fieldRef ใน text ที่ใช้แสดงผล
+  // รวม text จาก inline children ทั้งหมด พร้อมจำช่วง fieldRef และ pageNumber
   let fullText = ""
   const fieldRanges: FieldRange[] = []
+  const pageNumberRanges: FieldRange[] = []
   for (const child of node.children) {
     if (child.type === "text") {
       fullText += child.text
       continue
     }
-
+    if (child.type === "pageNumber") {
+      const start = fullText.length
+      fullText += "0"  // single-digit placeholder for layout measurement
+      pageNumberRanges.push({ start, end: fullText.length })
+      continue
+    }
     const start = fullText.length
     fullText += child.label ?? `{${child.key}}`
     fieldRanges.push({ start, end: fullText.length })
@@ -223,7 +238,10 @@ export function measureParagraph(
     const lineFieldRanges = fieldRanges
       .filter((r) => r.end > globalOffset && r.start < lineEnd)
       .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
-    const wrapped = wrapLines(hardLine, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, lineFieldRanges, globalOffset)
+    const linePageNumberRanges = pageNumberRanges
+      .filter((r) => r.end > globalOffset && r.start < lineEnd)
+      .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
+    const wrapped = wrapLines(hardLine, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, lineFieldRanges, globalOffset, linePageNumberRanges)
     rawLines.push(...wrapped)
     globalOffset += hardLine.length + 1 // +1 for the \n character
   }

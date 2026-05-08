@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { paginateDocument } from "../index"
+import { assertPaginatedDocument } from "../assertPaginated"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { pt } from "../../schema"
 import type { DocumentNode, ParagraphNode, SpacerNode, LayoutNode, TableNode } from "../../schema"
@@ -131,22 +132,24 @@ describe("paginator — page breaks", () => {
     expect(pages).toHaveLength(1)
   })
 
-  it("moves paragraph to next page when it does not fit at current cursor", () => {
-    // p1 is short; p2 is tall enough that it doesn't fit after p1 → moves to page 2
+  it("paragraph splits across pages when it does not fit on one page", () => {
+    // p1 is short (1 line); p2 is 60 lines → splits across pages
     const p1 = makePara("p1", "A")
-    // Make p2 height ≈ 700pt so it doesn't fit remaining space (698 - LH = 686 < 700)
-    // Use 60 hard newline-separated lines: 60 × LH = 720 > 686
     const p2Text = Array.from({ length: 60 }, (_, i) => String.fromCharCode(65 + (i % 26))).join("\n")
     const p2 = makePara("p2", p2Text)
     const pages = getPages(makeDoc(["p1", "p2"], { p1, p2 }))
+    // p2 spans multiple pages
     expect(pages.length).toBeGreaterThanOrEqual(2)
-    const p1Frag = pages[0].fragments.find((f) => f.nodeId === "p1")
-    const p2Frag = pages.find((pg) => pg.fragments.some((f) => f.nodeId === "p2"))
-    expect(p1Frag).toBeDefined()
-    expect(p2Frag).toBeDefined()
-    // p2 should be on a different page than p1
-    const p2Page = pages.findIndex((pg) => pg.fragments.some((f) => f.nodeId === "p2"))
-    expect(p2Page).toBeGreaterThan(0)
+    // p2 has fragments on page 0 (partial) and page 1 (remainder)
+    const p2OnPage0 = pages[0].fragments.some((f) => f.nodeId === "p2")
+    const p2OnPage1 = pages[1]?.fragments.some((f) => f.nodeId === "p2")
+    expect(p2OnPage0).toBe(true)
+    expect(p2OnPage1).toBe(true)
+    // Total line count across all fragments equals original line count
+    const totalLines = pages.flatMap((pg) => pg.fragments)
+      .filter((f) => f.nodeId === "p2")
+      .reduce((sum, f) => sum + (f.lines?.length ?? 0), 0)
+    expect(totalLines).toBe(60)
   })
 
   it("spacer moves to next page when it does not fit", () => {
@@ -244,6 +247,95 @@ describe("paginator — line metadata", () => {
     for (let i = 1; i < lines.length; i++) {
       expect(lines[i].y).toBeGreaterThan(lines[i - 1].y)
     }
+  })
+})
+
+// ─── Paragraph split across pages ────────────────────────────────────────────
+
+describe("paginator — paragraph split across pages", () => {
+  // A4 + 72pt margins: contentHeight=698, LH=12 → floor(698/12)=58 lines per page
+  const LINES_PER_PAGE = Math.floor(698 / LH)  // = 58
+
+  it("paragraph split preserves total line count", () => {
+    const lineCount = LINES_PER_PAGE + 10  // spans 2 pages
+    const p = makePara("p1", Array.from({ length: lineCount }, () => "A").join("\n"))
+    const pages = getPages(makeDoc(["p1"], { p1: p }))
+    const total = pages.flatMap((pg) => pg.fragments)
+      .filter((f) => f.nodeId === "p1")
+      .reduce((sum, f) => sum + (f.lines?.length ?? 0), 0)
+    expect(total).toBe(lineCount)
+  })
+
+  it("first split fragment starts at contentBox.y", () => {
+    const p = makePara("p1", Array.from({ length: LINES_PER_PAGE + 5 }, () => "A").join("\n"))
+    const pages = getPages(makeDoc(["p1"], { p1: p }))
+    const firstFrag = pages[0].fragments.find((f) => f.nodeId === "p1")!
+    expect(firstFrag.y).toBe(CY)
+  })
+
+  it("continuation fragment starts at contentBox.y on next page", () => {
+    const p = makePara("p1", Array.from({ length: LINES_PER_PAGE + 5 }, () => "A").join("\n"))
+    const pages = getPages(makeDoc(["p1"], { p1: p }))
+    const contFrag = pages[1]?.fragments.find((f) => f.nodeId === "p1")!
+    expect(contFrag).toBeDefined()
+    expect(contFrag.y).toBe(CY)
+  })
+
+  it("spacingBefore is only on the first fragment", () => {
+    const p = makePara("p1",
+      Array.from({ length: LINES_PER_PAGE + 5 }, () => "A").join("\n"),
+      { spacingBefore: pt(20) },
+    )
+    const pages = getPages(makeDoc(["p1"], { p1: p }))
+    const allFrags = pages.flatMap((pg) => pg.fragments).filter((f) => f.nodeId === "p1")
+    // First fragment: y=CY, first line y = CY + 20 (spacingBefore)
+    expect(allFrags[0].lines![0].y).toBe(CY + 20)
+    // Continuation fragment: first line y = CY (no spacingBefore)
+    expect(allFrags[1].lines![0].y).toBe(CY)
+  })
+
+  it("spacingAfter is only on the last fragment", () => {
+    const lineCount = LINES_PER_PAGE + 3
+    const p = makePara("p1",
+      Array.from({ length: lineCount }, () => "A").join("\n"),
+      { spacingAfter: pt(16) },
+    )
+    const pages = getPages(makeDoc(["p1"], { p1: p }))
+    const allFrags = pages.flatMap((pg) => pg.fragments).filter((f) => f.nodeId === "p1")
+    // First fragment height = lines × LH (no spacingAfter)
+    const firstLineCount = allFrags[0].lines!.length
+    expect(allFrags[0].height).toBe(firstLineCount * LH)
+    // Last fragment height = lines × LH + 16 (spacingAfter)
+    const lastFrag = allFrags[allFrags.length - 1]
+    const lastLineCount = lastFrag.lines!.length
+    expect(lastFrag.height).toBe(lastLineCount * LH + 16)
+  })
+
+  it("paragraph spanning 3 pages preserves all lines", () => {
+    const lineCount = LINES_PER_PAGE * 2 + 10  // spans 3 pages
+    const p = makePara("p1", Array.from({ length: lineCount }, () => "A").join("\n"))
+    const pages = getPages(makeDoc(["p1"], { p1: p }))
+    expect(pages.length).toBe(3)
+    const total = pages.flatMap((pg) => pg.fragments)
+      .filter((f) => f.nodeId === "p1")
+      .reduce((sum, f) => sum + (f.lines?.length ?? 0), 0)
+    expect(total).toBe(lineCount)
+  })
+
+  it("split fragments pass assertPaginatedDocument", () => {
+    const p = makePara("p1", Array.from({ length: LINES_PER_PAGE + 10 }, () => "A").join("\n"))
+    const result = paginateDocument(makeDoc(["p1"], { p1: p }), defaultTextMeasurer, defaultWordBreaker)
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+  })
+
+  it("paragraph after a split paragraph is placed correctly", () => {
+    // p1 splits, p2 should land right after p1's last fragment
+    const p1 = makePara("p1", Array.from({ length: LINES_PER_PAGE + 5 }, () => "A").join("\n"))
+    const p2 = makePara("p2", "After")
+    const pages = getPages(makeDoc(["p1", "p2"], { p1, p2 }))
+    const p1LastFrag = [...pages.flatMap((pg) => pg.fragments).filter((f) => f.nodeId === "p1")].pop()!
+    const p2Frag = pages.flatMap((pg) => pg.fragments).find((f) => f.nodeId === "p2")!
+    expect(p2Frag.y).toBeCloseTo(p1LastFrag.y + p1LastFrag.height, 0)
   })
 })
 

@@ -31,6 +31,7 @@ export const TableColumnDefSchema = z.object({
 
 export const TablePropsSchema = z.object({
   border: CellBorderSchema.optional(),  // default border สำหรับทุก cell
+  headerRowCount: z.number().int().nonnegative().optional(),  // first N rows repeat on each page
 })
 
 export const TableRowPropsSchema = z.object({

@@ -110,6 +110,21 @@ function measureParagraphFragment(
   }
 }
 
+// ─── Page Number Resolution ───────────────────────────────────────────────────
+
+// Replace page-number placeholder segments ("0") with the actual page number.
+// Called after a fragment's pageIndex is known.
+function resolvePageNumbers(lines: PaginatedLine[], pageNumber: number): PaginatedLine[] {
+  const pageStr = String(pageNumber)
+  return lines.map((line) => {
+    if (!line.segments?.some((s) => s.kind === "pageNumber")) return line
+    const newSegments = line.segments.map((s) =>
+      s.kind === "pageNumber" ? { ...s, text: pageStr } : s,
+    )
+    return { ...line, text: newSegments.map((s) => s.text).join(""), segments: newSegments }
+  })
+}
+
 // ─── Paragraph Pagination ─────────────────────────────────────────────────────
 
 function paginateParagraph(
@@ -130,27 +145,84 @@ function paginateParagraph(
     current = advancePage(current, contentTop)
   }
 
-  if (shouldMoveBlockToNextPage(current.cursorY, box.height, contentTop, contentBottom)) {
-    current = advancePage(current, contentTop)
+  const node = section.nodes[box.nodeId]
+  if (node?.type !== "paragraph") {
+    pushFragment(pages, template, {
+      nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
+      pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
+      width: box.width, height: box.height,
+    })
+    return { ...current, cursorY: current.cursorY + box.height }
   }
 
-  const paragraphData = measureParagraphFragment(box, section, measurer, wordBreaker)
-  const lines = paragraphData?.lines.map((l) => ({ ...l, y: l.y + current.cursorY }))
+  const measured = measureParagraph(node, box.width, measurer, wordBreaker)
+  const renderProps = buildRenderProps(node, measured.lineHeight)
+  const spacingBefore = measured.spacingBefore
+  const spacingAfter = measured.spacingAfter
 
-  pushFragment(pages, template, {
-    nodeId: box.nodeId,
-    nodeType: "paragraph",
-    parentNodeId,
-    pageIndex: current.pageIndex,
-    x: box.x,
-    y: current.cursorY,
-    width: box.width,
-    height: box.height,
-    lines,
-    renderProps: paragraphData?.renderProps,
-  })
+  // Fast path: whole paragraph fits on the current page without splitting
+  if (current.cursorY + measured.totalHeight <= contentBottom) {
+    const rawLines = buildPaginatedLines(measured.lines, box.x, current.cursorY, spacingBefore)
+    const lines = resolvePageNumbers(rawLines, current.pageIndex + 1)
+    pushFragment(pages, template, {
+      nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
+      pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
+      width: box.width, height: measured.totalHeight, lines, renderProps,
+    })
+    return { ...current, cursorY: current.cursorY + measured.totalHeight }
+  }
 
-  return { ...current, cursorY: current.cursorY + box.height }
+  // Split path: paragraph crosses one or more page boundaries.
+  // spacingBefore goes on the first fragment only; spacingAfter on the last.
+  let remainingLines = [...measured.lines]
+  let isFirstFragment = true
+
+  while (remainingLines.length > 0) {
+    if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
+      current = advancePage(current, contentTop)
+    }
+
+    const currSpacingBefore = isFirstFragment ? spacingBefore : 0
+    const availableForLines = contentBottom - current.cursorY - currSpacingBefore
+
+    let count = 0
+    let used = 0
+    for (const line of remainingLines) {
+      if (used + line.height > availableForLines) break
+      used += line.height
+      count++
+    }
+
+    if (count === 0) {
+      if (current.cursorY > contentTop + 1) {
+        // No lines fit in the remaining space — advance to the next page and retry
+        current = advancePage(current, contentTop)
+        continue
+      }
+      // At page top and still no room (line is taller than the page) — force one line
+      // to prevent an infinite loop. This is the documented overflow case.
+      count = 1
+    }
+
+    const isLastFragment = count >= remainingLines.length
+    const currSpacingAfter = isLastFragment ? spacingAfter : 0
+    const fragLines = remainingLines.slice(0, count)
+    const fragHeight = currSpacingBefore + fragLines.reduce((s, l) => s + l.height, 0) + currSpacingAfter
+
+    const rawPositioned = buildPaginatedLines(fragLines, box.x, current.cursorY, currSpacingBefore)
+    const positionedLines = resolvePageNumbers(rawPositioned, current.pageIndex + 1)
+    pushFragment(pages, template, {
+      nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
+      pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
+      width: box.width, height: fragHeight, lines: positionedLines, renderProps,
+    })
+
+    current = { ...current, cursorY: current.cursorY + fragHeight }
+    remainingLines = remainingLines.slice(count)
+    isFirstFragment = false
+  }
+
+  return current
 }
 
 // ─── Spacer Pagination ────────────────────────────────────────────────────────
@@ -749,29 +821,46 @@ function paginateTable(
 
   const groups = buildRowspanGroups(tableNode, box.children)
 
+  // ─── Header row repetition ───────────────────────────────────────────────────
+  // The first headerRowCount rows repeat at the top of every continuation page.
+  const headerRowCount = tableNode.props.headerRowCount ?? 0
+  const headerBoxes = box.children.slice(0, headerRowCount)
+  const headerHeight = headerBoxes.reduce((s, r) => s + r.height, 0)
+
+  const placeHeaders = (c: PageFlowCursor): PageFlowCursor => {
+    for (const rowBox of headerBoxes) {
+      c = paginateTableRowFull(rowBox, tableNode, pages, template, c, box.nodeId, measurer, wordBreaker)
+    }
+    return c
+  }
+
   for (const { rowIndices, totalHeight } of groups) {
+    // Header groups contain only header rows. They are placed normally on the first
+    // page and do not trigger header re-insertion when advancing to a new page.
+    const isHeaderGroup = rowIndices.every((i) => i < headerRowCount)
+
     if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
       current = advancePage(current, contentTop)
+      if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
     }
 
     if (rowIndices.length > 1) {
       // Multi-row rowspan group: decide page as a unit so all rows land together.
       if (shouldMoveBlockToNextPage(current.cursorY, totalHeight, contentTop, contentBottom)) {
-        const nextPage = advancePage(current, contentTop)
-        if (nextPage.cursorY + totalHeight <= contentBottom) current = nextPage
-        // else: group is taller than one page — place at current top and let it overflow
+        current = advancePage(current, contentTop)
+        if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
       }
       for (const rowIdx of rowIndices) {
         const rowBox = box.children[rowIdx]
         if (!rowBox) continue
-        // Advance page only when cursor has already passed contentBottom (overflow case)
         if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
           current = advancePage(current, contentTop)
+          if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
         }
         current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
       }
     } else {
-      // Single-row group: existing behavior preserved
+      // Single-row group: existing behavior with header insertion on page advance.
       const rowIdx = rowIndices[0]
       const rowBox = box.children[rowIdx]
       if (!rowBox) continue
@@ -780,11 +869,16 @@ function paginateTable(
       const doesntFit = shouldMoveBlockToNextPage(current.cursorY, rowBox.height, contentTop, contentBottom)
       if (!doesntFit) {
         current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
-      } else if (allowBreak) {
+      } else if (allowBreak && !isHeaderGroup) {
         current = paginateTableRowSplit(rowBox, tableNode, pages, template, contentTop, contentBottom, current, box.nodeId, measurer, wordBreaker)
       } else {
         const nextPage = advancePage(current, contentTop)
-        if (nextPage.cursorY + rowBox.height <= contentBottom) current = nextPage
+        // Account for headers that will be placed before the row on the new page.
+        const reservedForHeaders = isHeaderGroup ? 0 : headerHeight
+        if (nextPage.cursorY + reservedForHeaders + rowBox.height <= contentBottom) {
+          current = nextPage
+          if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
+        }
         current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
       }
     }

@@ -227,6 +227,28 @@ describe("tablePagination — rowspan groups stay on same page", () => {
     expect(getPageOfFragment(result, "tbl-row2")).toBeGreaterThanOrEqual(0)
   })
 
+  it("too-tall rowspan group starts at contentTop of next page, not mid-page", () => {
+    // Fill part of page 1 (filler ~300pt), then add a rowspan group taller than
+    // one content page (698pt). The group should move to page 2 contentTop (72pt),
+    // not start at the mid-page cursor after the filler.
+    const fillerText = Array.from({ length: 25 }, () => "A").join("\n")  // 25×12=300pt
+    const filler = makePara("filler", fillerText)
+    // Each row: 40 hard lines × 12pt = 480pt, group = 960pt > contentHeight 698pt
+    const tallText = Array.from({ length: 40 }, () => "A").join("\n")
+    const tbl = makeTable("tbl", [200, 200], [
+      [{ text: tallText, rowspan: 2 }, { text: tallText }],
+      [{ text: tallText }],
+    ])
+    const result = paginate(makeDoc(["filler", "tbl"], { filler, tbl }))
+    // Row 0 must start at contentTop (72), not at ~300+72=372 (mid-page)
+    const row0Frag = result.sections[0].pages
+      .flatMap((pg) => pg.fragments)
+      .find((f) => f.nodeId === "tbl-row0")!
+    expect(row0Frag.y).toBe(CY)  // contentTop = 72
+    // Both rows still on the same page (group integrity preserved)
+    expect(getPageOfFragment(result, "tbl-row0")).toBe(getPageOfFragment(result, "tbl-row1"))
+  })
+
   it("assertPaginatedDocument passes for table with rowspan", () => {
     const tbl = makeTable("tbl", [100, 100], [
       [{ text: "Top", rowspan: 2 }, { text: "R" }],
@@ -238,6 +260,75 @@ describe("tablePagination — rowspan groups stay on same page", () => {
 })
 
 // ─── Grid invariants after operations ────────────────────────────────────────
+
+// ─── Repeating table headers ──────────────────────────────────────────────────
+
+describe("tablePagination — repeating headers", () => {
+  // Build a table where row 0 is a header and rows 1..N are content.
+  // Each row has 2 cells with short text (~1 line = 12pt each).
+  function makeHeaderTable(id: string, contentRowCount: number): TableNode {
+    // Header row with tall content so we can measure it: 3 lines × 12pt = 36pt
+    const headerText = "H1\nH2\nH3"
+    const contentText = "A"
+    return makeTable(id, [200, 200], [
+      [{ text: headerText }, { text: headerText }],
+      ...Array.from({ length: contentRowCount }, () => [{ text: contentText }, { text: contentText }]),
+    ])
+  }
+
+  it("table without headerRowCount has no repeating headers (baseline)", () => {
+    const tbl = makeHeaderTable("tbl", 60)
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+    // Header row (row0) should appear exactly once
+    const headerFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-row0"),
+    )
+    expect(headerFrags).toHaveLength(1)
+  })
+
+  it("table with headerRowCount=1 repeats header on each continuation page", () => {
+    const tbl = { ...makeHeaderTable("tbl", 60), props: { headerRowCount: 1 } }
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+    // Table should span at least 2 pages
+    expect(result.sections[0].pages.length).toBeGreaterThanOrEqual(2)
+    // Header row (row0) should appear on every page
+    for (const page of result.sections[0].pages) {
+      const hasHeader = page.fragments.some((f) => f.nodeId === "tbl-row0")
+      expect(hasHeader).toBe(true)
+    }
+  })
+
+  it("repeated header starts at contentTop on continuation page", () => {
+    const tbl = { ...makeHeaderTable("tbl", 60), props: { headerRowCount: 1 } }
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const page1 = result.sections[0].pages[1]!
+    const headerOnPage1 = page1.fragments.find((f) => f.nodeId === "tbl-row0")!
+    expect(headerOnPage1).toBeDefined()
+    expect(headerOnPage1.y).toBe(CY)  // contentTop = 72
+  })
+
+  it("content rows on continuation pages start below repeated header", () => {
+    const tbl = { ...makeHeaderTable("tbl", 60), props: { headerRowCount: 1 } }
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const page1 = result.sections[0].pages[1]!
+    const headerOnPage1 = page1.fragments.find((f) => f.nodeId === "tbl-row0")!
+    const firstContentOnPage1 = page1.fragments.find(
+      (f) => f.nodeId !== "tbl-row0" && f.nodeType === "row" && f.parentNodeId === "tbl",
+    )
+    if (firstContentOnPage1) {
+      expect(firstContentOnPage1.y).toBeGreaterThanOrEqual(headerOnPage1.y + headerOnPage1.height)
+    }
+  })
+
+  it("header fragments appear in ascending page order (assertPaginatedDocument passes)", () => {
+    const tbl = { ...makeHeaderTable("tbl", 60), props: { headerRowCount: 1 } }
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    // assertPaginatedDocument's split-fragment-order rule verifies ascending pages
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+  })
+})
 
 describe("tablePagination — grid invariants after operations", () => {
   function makeSimpleTableDoc() {

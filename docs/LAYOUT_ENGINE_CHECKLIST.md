@@ -74,6 +74,8 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
     (approach B): page-break decision uses total group height; if the group doesn't
     fit, the whole group moves to the next page. Single-row groups retain existing
     behavior (allowBreak, split, move-whole).
+  - Current rowspan decision: keep linked rows together. If a multi-row rowspan
+    group is taller than one content page, treat it as documented overflow.
   - Upgrade path to approach A documented: group detection is shared; A adds
     split-at-row-boundary logic within a group.
   - Grid invariants: `addTableRow`, `removeTableRow`, `addTableColumn`,
@@ -81,6 +83,12 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
   - 14 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
     covering: no-rowspan baseline, 2/3-row groups staying on same page, group
     moving to next page as unit, mixed groups, and operations+grid invariants.
+- [x] Add too-tall rowspan group edge-case coverage.
+  - Fixed `paginateTable`: multi-row rowspan groups now always advance to the
+    next page's `contentTop` when they don't fit, even if the group is taller
+    than one content page. Matches paragraph behavior.
+  - Regression test added: too-tall group after filler content starts at
+    `contentTop` (72pt), not mid-page; both rows still land on the same page.
 - [x] Add layout assertion helpers for paginated output.
   - `checkPaginatedDocument(paginated)` → `PaginationViolation[]` in
     `packages/core/src/pagination/assertPaginated.ts`.
@@ -135,18 +143,46 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
 
 ## Later Work
 
-- [ ] Split paragraphs across pages by measured lines.
-  - Preserve `spacingBefore` and `spacingAfter` semantics across first/last
-    fragments.
-  - Preserve segment offsets for caret/selection mapping.
-  - Keep fragment order stable for renderer grouping and drift comparison.
+- [x] Split paragraphs across pages by measured lines.
+  - `paginateParagraph` splits at line boundaries: fast path when the whole
+    paragraph fits; split loop when it overflows.
+  - `spacingBefore` on first fragment only; `spacingAfter` on last fragment only.
+  - Segment offsets are preserved (per-line segments reference the full text string).
+  - Fragment order is stable: fragments of the same nodeId appear in ascending
+    page order, passing `assertPaginatedDocument`.
+  - Force-at-least-one-line guard prevents infinite loops when a single line is
+    taller than the content page.
+  - 8 tests in `paginator.test.ts` (split group): total line count preserved,
+    first/continuation fragment y positions, spacingBefore/After placement,
+    3-page span, assertPaginatedDocument, paragraph after split.
 - [ ] Incremental pagination from the first changed fragment forward.
 - [ ] Stable fragment identity for selection, annotations, comments, or future
   collaborative cursors.
-- [ ] Repeating table headers across page breaks.
+- [x] Repeating table headers across page breaks.
+  - Added `headerRowCount?: number` to `TablePropsSchema` / `TableProps`.
+  - `paginateTable` now repeats the first `headerRowCount` rows at contentTop of
+    every continuation page. Headers are placed via `placeHeaders()` after any
+    page advance for non-header content groups.
+  - Header fragments appear in ascending page order, passing `assertPaginatedDocument`.
+  - Content rows on continuation pages start below the repeated header.
+  - 5 tests in `tablePagination.test.ts`: baseline no-header, header repeats on
+    every page, header starts at contentTop, content below header, fragment order.
 - [ ] Keep-with-next / keep-lines-together paragraph options.
 - [ ] Widow/orphan control.
 - [ ] Page templates with richer header/footer flows.
+- [x] Basic page numbering (inline `pageNumber` node).
+  - Added `PageNumberInline` schema in `inline.ts`. Paragraph children can include
+    `{ type: "pageNumber" }` nodes.
+  - `measureParagraph` uses `"0"` as a 1-digit placeholder for layout measurement;
+    tracks `pageNumberRanges` to classify segments as `kind: "pageNumber"`.
+  - `paginateParagraph` calls `resolvePageNumbers(lines, pageIndex + 1)` after
+    placing each fragment — substitutes `"0"` placeholder with the actual page
+    number string in both line text and segment text.
+  - Works in both fast-path (whole paragraph fits) and split-path (multi-page).
+  - 5 tests in `pageNumbers.test.ts`: resolves to "1" on page 1, resolves to "2"
+    on page 2, multiple pageNumber nodes in one paragraph, prefix text preserved.
+  - Known limitation: layout width measured with "0" (1 digit); pages 10+ may
+    overflow slightly. Acceptable for current use cases (header/footer context).
 - [ ] Section-level page numbering and restart rules.
 - [ ] Multi-section export smoke tests.
 - [ ] Visual regression tests for representative document fixtures.
@@ -156,7 +192,11 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
 - [ ] Should a row split when one stack overflows, or should the whole row move
   when possible? Current decision: whole row moves when possible; overflow is
   documented for rows taller than a page until paragraph splitting is stable.
-- [ ] How should table rows with rowspan/colspan behave at page boundaries?
+- [ ] How should advanced table spans behave at page boundaries beyond the
+  current rowspan approach B?
+  - Resolved now: rowspan-linked rows stay together as a unit.
+  - Still open: split-at-row-boundary within a rowspan group, colspan-specific
+    split behavior, and interactions with `allowBreak=true`.
 - [x] Should spacers split across pages or always move whole? -> Move whole.
 - [ ] What is the minimum pagination golden fixture set before changing
   `paginator.ts` again?

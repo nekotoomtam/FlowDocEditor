@@ -17,6 +17,151 @@ Each entry should include:
 
 ## 2026-05-08
 
+### Add Page Numbering (Inline pageNumber Node)
+
+Goal: Allow paragraph children to include a page number that gets resolved to the actual page number during pagination.
+
+Completed:
+
+- Added `PageNumberInlineSchema` and `PageNumberInline` type to `schema/inline.ts`. The `InlineNodeSchema` discriminated union now includes `{ type: "pageNumber" }`.
+- Added `"pageNumber"` to `LineSegment.kind` in `layout/types.ts`.
+- Modified `measureParagraph` in `layout/measure.ts`: `pageNumber` children append `"0"` (single-digit placeholder) to `fullText` and track `pageNumberRanges`. `getSegmentKind` now accepts `pageNumberRanges` and returns `"pageNumber"` for matching segments. `wrapLines` and `createSourceSegments` thread `pageNumberRanges` through.
+- Added `resolvePageNumbers(lines, pageNumber)` helper in `paginator.ts`: replaces segments with `kind: "pageNumber"` with the actual page number string and rebuilds the line's text.
+- Applied `resolvePageNumbers` in `paginateParagraph` for both fast path and split path, using `current.pageIndex + 1` (1-based page number).
+- Created 5 tests in `pageNumbers.test.ts`: "หน้า 1" on page 1, "หน้า 2" on page 2, multiple pageNumber nodes, prefix text preserved, standalone node.
+
+Files changed:
+
+- `packages/core/src/schema/inline.ts`
+- `packages/core/src/layout/types.ts`
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/pageNumbers.test.ts` (new)
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 147 core + 8 app = 155 tests passed.
+
+Notes:
+
+- Layout width is measured using "0" (1 digit). Pages 10+ will have slight overflow at the measurement boundary. Acceptable for typical header/footer use.
+- Total page count ("Page X of Y") deferred — requires two pagination passes.
+
+---
+
+### Add Repeating Table Headers
+
+Goal: Make the first N rows of a table repeat at the top of each continuation page, matching standard document behavior for multi-page tables.
+
+Completed:
+
+- Added `headerRowCount?: number` to `TablePropsSchema` in `schema/table.ts`. Specifies how many rows from the top are header rows.
+- Modified `paginateTable` in `paginator.ts`:
+  - Slices `box.children.slice(0, headerRowCount)` as header boxes and computes `headerHeight`.
+  - `placeHeaders(cursor)` helper pushes all header rows using `paginateTableRowFull`.
+  - Each group is classified as `isHeaderGroup` (all row indices < headerRowCount) or content. Header groups are placed normally; content groups call `placeHeaders` after any page advance.
+  - Single-row group page-fit check accounts for `reservedForHeaders` so content rows are not placed when they won't fit after headers.
+- Added 5 tests in `tablePagination.test.ts`: baseline (no headers), header repeats on every page, header at contentTop, content below header, fragment order passes `assertPaginatedDocument`.
+
+Files changed:
+
+- `packages/core/src/schema/table.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 142 core + 8 app = 150 tests passed.
+
+---
+
+### Split Paragraphs Across Pages by Measured Lines
+
+Goal: Make body-level paragraphs split at line boundaries across pages instead of overflowing as a single block.
+
+Completed:
+
+- Rewrote `paginateParagraph` in `paginator.ts`:
+  - Fast path: `current.cursorY + totalHeight <= contentBottom` → push whole paragraph as one fragment (unchanged from before for short paragraphs).
+  - Split loop: when the paragraph overflows, iterate remaining lines until all are placed. On each iteration, count lines that fit in the available space, push a fragment, advance cursor, and continue with remaining lines on the next page.
+  - `spacingBefore` added only to the first fragment; `spacingAfter` added only to the last fragment.
+  - If no lines fit and cursor is not at contentTop, advance to the next page and retry. If no lines fit even at contentTop (line taller than page), force 1 line to prevent infinite loops.
+- Updated paginator.test.ts: replaced the old "paragraph moves whole to next page" test with a new test verifying split behavior. Added 8 new tests in a dedicated "paragraph split across pages" group.
+- Key bug fixed during testing: the original fast-path check used `shouldMoveBlockToNextPage` which returns `false` at contentTop regardless of height. Changed to `cursorY + totalHeight <= contentBottom` to correctly identify when the whole paragraph actually fits.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/paginator.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 137 core + 8 app = 145 tests passed.
+
+Notes:
+
+- Paragraphs inside table cells were already split at line level (existing `pushCellFirstSlice`/`pushCellSecondSlice`). This change brings body-level paragraphs to the same level.
+- Stack contents (paragraphs inside row/columns) use `pushStackContents` which does not split — that is acceptable for now since column content is bounded by the row height.
+
+---
+
+### Fix Too-Tall Rowspan Group Edge Case
+
+Goal: Ensure rowspan groups taller than one content page start at contentTop of the next page, consistent with paragraph overflow behavior.
+
+Completed:
+
+- Fixed `paginateTable` in `paginator.ts`: removed the conditional that only advanced the page if the group fit. Now always calls `advancePage` when the group doesn't fit at the current cursor, matching how `paginateParagraph` handles tall blocks.
+- Added 1 regression test in `tablePagination.test.ts`: a rowspan group taller than one page, placed after filler content, must start at `contentTop` (72pt) on the next page, not at a mid-page position. Both rows still land on the same page.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 129 core + 8 app = 137 tests passed.
+
+---
+
+### Refine Layout Span Follow-Up Checklist
+
+Goal: Capture the remaining edge cases after reviewing the current rowspan-group pagination implementation.
+
+Completed:
+
+- Clarified that current rowspan behavior is approach B: linked rows stay together, and groups taller than one content page are documented overflow.
+- Added a follow-up item for the too-tall rowspan group edge case: when such a group starts after earlier content, it should move to the next page's content top before overflowing.
+- Refined the open table span question to distinguish resolved rowspan grouping from still-open split-at-row-boundary, colspan, and `allowBreak=true` interactions.
+
+Files changed:
+
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; no code checks required.
+
+Notes:
+
+- The current implementation direction remains aligned with the conservative layout strategy. The added item is a narrow regression target, not a change in the overall table split policy.
+
+---
+
 ### Stabilize Table Pagination — Rowspan Groups and Grid Invariants
 
 Goal: Keep rowspan-linked table rows on the same page (approach B) and verify row/column operations preserve grid invariants.
