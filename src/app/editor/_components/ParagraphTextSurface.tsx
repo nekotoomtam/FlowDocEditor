@@ -223,21 +223,6 @@ export function ParagraphTextSurface({
                 event.preventDefault()
                 onEndEdit()
               }
-              if (event.key === "Enter") {
-                event.preventDefault()
-                const splitIndex = event.currentTarget.selectionStart ?? event.currentTarget.value.length
-                onChange(fragment.nodeId, event.currentTarget.value)
-                onSplitParagraph(fragment.nodeId, splitIndex)
-              }
-              if (
-                event.key === "Backspace" &&
-                event.currentTarget.selectionStart === 0 &&
-                event.currentTarget.selectionEnd === 0
-              ) {
-                event.preventDefault()
-                onChange(fragment.nodeId, event.currentTarget.value)
-                onMergeParagraph(fragment.nodeId)
-              }
             }}
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
@@ -251,7 +236,7 @@ export function ParagraphTextSurface({
     const liveText = getEditableParagraphText(doc, fragment.nodeId)
     const paginatedText = fragment.lines?.map((line) => line.text).join("") ?? ""
     const firstLine = fragment.lines?.[0]
-    if (liveText !== null && liveText !== paginatedText && firstLine) {
+    if (liveText !== null && liveText.replace(/\n/g, "") !== paginatedText && firstLine) {
       return renderLine({ ...firstLine, text: liveText }, 0, fragment, renderProps, pageKey, scale, 0.75)
     }
   }

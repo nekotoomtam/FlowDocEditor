@@ -11,7 +11,8 @@
     "build": "next build",
     "start": "next start --port 4000",
     "type-check": "tsc --noEmit",
-    "test": "npm run test -w packages/core"
+    "test": "npm run test -w packages/core && npm run test:app",
+    "test:app": "vitest run"
   },
   "keywords": [],
   "author": "",

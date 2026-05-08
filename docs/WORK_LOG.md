@@ -15,6 +15,298 @@ Each entry should include:
 
 ---
 
+## 2026-05-08
+
+### Document Layout Page-Break Decisions
+
+Goal: Record current page-break behavior and near-term layout split direction before changing the paginator.
+
+Completed:
+
+- Updated `docs/LAYOUT_ENGINE_CHECKLIST.md` to reflect current behavior verified in `packages/core/src/pagination/paginator.ts`.
+- Documented spacer behavior as whole-block move with overflow only as an authored edge case.
+- Documented row/stack behavior as atomic for now: rows move as a whole when possible; stacks do not split independently.
+- Documented table row behavior as `allowBreak=false` whole-row move and `allowBreak=true` split.
+- Documented TOC placeholder behavior as temporary fixed-height placement with post-processing and no repagination yet.
+- Corrected paragraph behavior: paragraphs currently move as whole blocks and can overflow when taller than a page; line-level paragraph splitting is the next preferred layout split slice.
+
+Files changed:
+
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; no code checks required.
+
+Notes:
+
+- The chosen direction is conservative: split paragraphs first because measured lines already exist, and defer row/stack splitting until paragraph pagination is stable.
+
+---
+
+### Add Pagination Golden Fixtures
+
+Goal: Lock in paginator behavior with focused tests before making layout changes, covering geometry, page breaks, fragment relationships, and line metadata.
+
+Completed:
+
+- Created `packages/core/src/pagination/__tests__/paginator.test.ts` with 15 golden fixture tests.
+- **Geometry group**: first paragraph at content box origin (x=72, y=72, width=451), height equals one line height, two paragraphs stacked vertically, spacer height/position.
+- **Page break group**: single paragraph stays on one page, tall paragraph moves whole to next page (body-level paragraphs are not split line-by-line), spacer moves whole to next page, tall paragraph at page top stays without crash.
+- **Fragment relationships group**: row.parentNodeId=bodyId, stack.parentNodeId=rowId, paragraph-in-stack.parentNodeId=stackId, two-column widths sum to contentBox.width.
+- **Line metadata group**: hard-newline lines produce correct text per line, line x=fragment x, lines ordered top-to-bottom.
+- Marked `Add pagination golden fixtures` complete in `docs/LAYOUT_ENGINE_CHECKLIST.md`.
+
+Files changed:
+
+- `packages/core/src/pagination/__tests__/paginator.test.ts` (new)
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 49 core + 8 app = 57 tests passed.
+
+Notes:
+
+- Body-level paragraphs and spacers are moved whole to the next page when they don't fit — no line-level splitting. Line-level splitting only happens for paragraphs inside table cells.
+- All tests use `defaultTextMeasurer` and fixed IDs for stable, deterministic assertions.
+
+---
+
+### Add Layout Engine Checklist
+
+Goal: Create a dedicated checklist for flow layout, pagination, page breaks, renderer layout output, and editor layout interactions.
+
+Completed:
+
+- Added `docs/LAYOUT_ENGINE_CHECKLIST.md`.
+- Split layout work into current foundation, near-term checklist, design rules, later work, and open questions.
+- Captured follow-up areas for pagination golden fixtures, renderer smoke tests, page-break rules, row/stack pagination, table pagination, paginated output assertions, and resize-preview convergence.
+- Kept text caret/segment details in `docs/TEXT_ENGINE_CHECKLIST.md` and made the new checklist focus on shared layout behavior.
+
+Files changed:
+
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; no code checks required.
+
+Notes:
+
+- This checklist should become the guide for future changes in `packages/core/src/layout`, `packages/core/src/pagination`, renderer layout consumption, and editor resize/page-preview behavior.
+
+---
+
+### Complete Drift Comparison Follow-Up Items
+
+Goal: Close the four follow-up checklist items added after the initial drift comparison implementation.
+
+Completed:
+
+- **Split-page aggregation** (`comparePagination.ts`): `buildSnapshotMap` now aggregates line counts and heights across all fragments with the same `nodeId` (paragraph spanning multiple pages). `FragmentSnapshot` stores `pages: PageLocation[]` instead of a single `pageIndex`/`sectionIndex`. `pagesMatch` helper compares page lists for page-movement detection.
+- **Page-break-only drift overlay** (`EditorCanvas.tsx`): drift overlay now shows purple fill + `"PG"` badge when `pageMovement` is true but `lineDelta === 0`. `FragmentDrift` type gains a `pageMovement: boolean` field.
+- **`comparePagination` tests** (`src/app/editor/_components/__tests__/comparePagination.test.ts`): 8 focused tests covering no-drift, positive/negative line delta, page movement, split-page aggregation, non-paragraph ignored, and totalParagraphs count. Added root-level `vitest.config.ts` and `test:app` script.
+- **Tracking reset on edit session end** (`EditorShell.tsx`): added `useEffect` that resets `prevLineCountRef` and `prevEditNodeIdRef` to `null` when `inlineEditNodeId` becomes `null`, preventing stale state on re-entry to the same paragraph.
+
+Files changed:
+
+- `src/app/editor/_components/comparePagination.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/comparePagination.test.ts` (new)
+- `vitest.config.ts` (new)
+- `package.json`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 34 core + 8 app = 42 tests passed.
+
+---
+
+### Refine Text Engine Follow-Up Checklist
+
+Goal: Make the checklist capture the implementation gaps found while reviewing the current server-authoritative preview and drift tooling work.
+
+Completed:
+
+- Added follow-up items for split-across-page drift comparison.
+- Added a checklist item for page-break-only drift overlay behavior.
+- Added a checklist item for focused `comparePagination` tests.
+- Added a checklist item to reset soft/hard line-count tracking for every inline edit session, including re-entering the same paragraph.
+
+Files changed:
+
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; no code checks required.
+
+Notes:
+
+- The existing direction remains valid. These items make the next implementation slices more explicit and easier to verify.
+
+---
+
+### Add Soft/Hard Reflow Rules During Inline Editing
+
+Goal: Eliminate the visual overlap between the active paragraph and surrounding content when a line wrap or unwrap occurs during typing.
+
+Completed:
+
+- Added `prevLineCountRef` and `prevEditNodeIdRef` to `EditorShell` to track the active paragraph's line count across keystrokes.
+- Modified the local reflow effect to classify each text change as soft or hard:
+  - **Soft** (line count unchanged): patch only the active paragraph's lines in the paginated state, leaving surrounding fragments untouched. Existing behavior, unchanged.
+  - **Hard** (line count changed): dispatch a full browser pagination immediately (synchronous, 0ms) so all fragments below the active paragraph shift to their correct positions without waiting for the 200ms debounce.
+- `prevLineCountRef` resets to `null` each time a new paragraph enters edit mode, so the first measurement never triggers a spurious hard event.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 34/34 passed.
+
+Notes:
+
+- The 200ms debounce full pagination still fires after the hard-event pagination, which confirms the layout. This is harmless — it runs with the same browser measurer and produces the same result.
+- Server authoritative pagination (500ms debounce) continues unchanged.
+
+---
+
+### Add Layout Drift Comparison
+
+Goal: Measure how different browser pagination (Canvas measurer) is from server pagination (fontkit), so we can decide whether calibration or fontkit-in-browser is needed.
+
+Completed:
+
+- Created `src/app/editor/_components/comparePagination.ts` with `comparePagination(browser, server)` → `DriftReport`. Compares paragraph fragment line counts and page break positions between two `PaginatedDocument` results.
+- Added `FragmentDrift` (per-fragment delta) and `DriftReport` (summary + `driftMap`) types.
+- Modified `EditorShell.tsx`: added `showDrift` state, `driftReport` state, and `showDriftRef`. After each authoritative pagination response, runs `comparePagination(paginatedRef.current, paginated)` and stores the report. When drift overlay is active, logs a grouped console summary listing each drifted paragraph with browser/server line counts.
+- Added "Drift" toolbar button — toggles the overlay, shows live count (`Drift 2/8`) when drift is detected.
+- Modified `EditorCanvas.tsx` and `PageView`: added `showDrift` and `driftMap` props. When active, renders a semi-transparent orange (+lines) or blue (-lines) overlay on drifted paragraph fragments, with a small badge (e.g. "+1L") in the top-right corner.
+
+Files changed:
+
+- `src/app/editor/_components/comparePagination.ts` (new)
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 34/34 passed.
+
+Notes:
+
+- Orange overlay = server wraps to more lines (PDF will be longer than preview).
+- Blue overlay = server wraps to fewer lines (PDF will be shorter than preview).
+- Console log fires only when Drift overlay is active and drift is detected, to avoid noise.
+- Next step: observe real drift in practice, then decide between calibration factor or fontkit-in-browser.
+
+---
+
+### Reconcile Editor Preview To Server Pagination
+
+Goal: Keep server/API pagination as the layout truth while preserving responsive browser-side editing.
+
+Completed:
+
+- Added an authoritative pagination path in `EditorShell` that posts the current preview document to `/api/paginate` after debounce.
+- Kept browser pagination and paragraph-local reflow as the fast interactive preview path.
+- Added version guarding so stale server pagination responses cannot overwrite newer document state.
+- Deferred applying server pagination while inline editing is active, then settled the canvas back to the latest authoritative result after editing ends.
+- Added a small layout status indicator for optimistic preview vs authoritative layout reconciliation.
+- Updated the text engine checklist with the completed reconcile slice and the remaining drift/soft-reflow work.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` passed — 34/34 tests.
+
+Notes:
+
+- The first sandboxed test run failed with Vitest `spawn EPERM`; rerunning with approved escalation passed.
+- This is the first implementation slice for the server-authoritative direction. The larger task remains open until browser/server drift is measured and wrap/page-break UX gets soft/hard reflow rules.
+
+---
+
+### Clarify Server Pagination As Layout Truth
+
+Goal: Decide how to interpret "Keep server/export pagination authoritative while browser preview catches up" before changing editor reflow behavior.
+
+Completed:
+
+- Confirmed the intended model: `/api/paginate` and `/api/export` remain the layout truth because they use the server/export measurement path.
+- Defined browser pagination, paragraph-local reflow, and future soft/hard reflow behavior as interaction preview only.
+- Documented that browser/server differences should be measured as layout drift rather than accepted as a second source of truth.
+- Added design rules to avoid letting browser canvas measurement become an independent authoritative layout engine.
+
+Files changed:
+
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; no code checks required.
+
+Notes:
+
+- This decision leaves room for UX improvements such as freezing surrounding layout near wrap/page-break boundaries, while still reconciling back to server/API pagination after idle, blur, or export.
+
+---
+
+### Change Enter to Newline Within Paragraph
+
+Goal: Enter key inserts `\n` within the same paragraph instead of splitting into a new paragraph node, to avoid excessive inter-paragraph spacing and feel more natural for form/document editing.
+
+Completed:
+
+- Modified `measureParagraph` in `packages/core/src/layout/measure.ts` to split `fullText` on `\n` before word-wrapping. Each hard line is wrapped separately and concatenated. Segment `start`/`end` offsets are adjusted by `globalOffset` so caret hit testing stays correct across hard breaks.
+- Added `offsetBase` parameter to `createSourceSegments` and `wrapLines` (defaults to 0, fully backward-compatible).
+- Removed Enter and Backspace-at-0 special handling from `ParagraphTextSurface.tsx` keyboard handler. Enter now falls through to default textarea behavior, inserting `\n` naturally.
+- Fixed live text overlay comparison to strip `\n` before comparing with paginated text, preventing false overlay triggers on multi-line paragraphs.
+
+Files changed:
+
+- `packages/core/src/layout/measure.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 34/34 passed.
+
+Notes:
+
+- `onSplitParagraph` and `onMergeParagraph` remain in the `ParagraphTextSurface` props interface for potential future use (e.g., paragraph link / text frame threading feature).
+- Paragraph split/merge operations remain in `packages/core/src/document/operations.ts` for when the paragraph link feature is built.
+- Empty hard lines (from `\n\n`) produce a single empty `MeasuredLine` with height = lineHeight, giving visual blank line spacing that respects the paragraph's line height setting.
+
+---
+
 ## 2026-05-07
 
 ### Merge Paragraph on Backspace at Start

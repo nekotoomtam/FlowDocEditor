@@ -5,6 +5,7 @@ import type { PaginatedDocument, PageFragment, PaginatedLine, PaginatedPage, Par
 import type { DocumentNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
+import type { FragmentDrift } from "./comparePagination"
 import { getRowGeometry } from "@/placement/geometry"
 import { snapToGraphemeBoundary } from "@/layout"
 import { ParagraphTextSurface } from "./ParagraphTextSurface"
@@ -146,11 +147,13 @@ function PageView({
   inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
-  sectionIndex, marginDrag, onMarginResizeStart, showTextSegments,
+  sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
   showTextSegments: boolean
+  showDrift: boolean
+  driftMap: Map<string, FragmentDrift> | null
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
   onInlineEditStart: (nodeId: string, caretIndex?: number | null) => void
@@ -347,6 +350,38 @@ function PageView({
                 style={{ pointerEvents: "none" }}
               />
             )}
+            {showDrift && f.nodeType === "paragraph" && (() => {
+              const drift = driftMap?.get(f.nodeId)
+              if (!drift) return null
+              // page-break-only drift: purple; line-count drift: orange (+) or blue (-)
+              const driftColor = drift.lineDelta !== 0
+                ? (drift.lineDelta > 0 ? "#f97316" : "#3b82f6")
+                : "#a855f7"
+              const label = drift.lineDelta !== 0
+                ? `${drift.lineDelta > 0 ? "+" : ""}${drift.lineDelta}L`
+                : "PG"
+              return (
+                <g style={{ pointerEvents: "none" }}>
+                  <rect
+                    x={f.x * scale} y={f.y * scale}
+                    width={f.width * scale} height={Math.max(fragHeight * scale, 2)}
+                    fill={driftColor} opacity={0.18}
+                  />
+                  <rect
+                    x={f.x * scale} y={f.y * scale}
+                    width={f.width * scale} height={Math.max(fragHeight * scale, 2)}
+                    fill="none" stroke={driftColor} strokeWidth={1} opacity={0.6}
+                  />
+                  <text
+                    x={(f.x + f.width) * scale - 3} y={(f.y + 7) * scale}
+                    textAnchor="end" fontSize={6} fill={driftColor} fontWeight="bold"
+                    style={{ userSelect: "none" }}
+                  >
+                    {label}
+                  </text>
+                </g>
+              )
+            })()}
             <text x={displayFragment.x * scale + 3} y={displayFragment.y * scale + 8} fontSize={6} fill="#374151"
               style={{ pointerEvents: "none", userSelect: "none" }}>
               {f.nodeType}
@@ -496,13 +531,15 @@ interface Props {
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
   onScaleChange: (scale: number) => void
   showTextSegments: boolean
+  showDrift: boolean
+  driftMap: Map<string, FragmentDrift> | null
 }
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
   inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
-  showTextSegments,
+  showTextSegments, showDrift, driftMap,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
@@ -552,6 +589,8 @@ export function EditorCanvas({
                   marginDrag={marginDrag}
                   onMarginResizeStart={onMarginResizeStart}
                   showTextSegments={showTextSegments}
+                  showDrift={showDrift}
+                  driftMap={driftMap}
                 />
               </div>
             ))}

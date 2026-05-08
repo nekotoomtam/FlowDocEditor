@@ -26,6 +26,8 @@ import { PropertyPanel } from "./PropertyPanel"
 import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
+import { comparePagination } from "./comparePagination"
+import type { DriftReport } from "./comparePagination"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +84,8 @@ interface EditorState {
   lastSplitNodeId: string | null
   mergeResult: { prevNodeId: string; caretIndex: number } | null
 }
+
+type LayoutStatus = "authoritative" | "optimistic" | "reconciling"
 
 type EditorAction =
   | { type: "DRAG_START"; source: DragSource; clientX: number; clientY: number }
@@ -382,6 +386,10 @@ export default function EditorShell() {
   const [isExporting, setIsExporting] = useState(false)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
   const [showTextSegments, setShowTextSegments] = useState(false)
+  const [showDrift, setShowDrift] = useState(false)
+  const [driftReport, setDriftReport] = useState<DriftReport | null>(null)
+  const showDriftRef = useRef(showDrift)
+  useEffect(() => { showDriftRef.current = showDrift }, [showDrift])
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
   const [inlineEditCaretIndex, setInlineEditCaretIndex] = useState<number | null>(null)
@@ -501,12 +509,33 @@ export default function EditorShell() {
 
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("authoritative")
+  const [authoritativePaginated, setAuthoritativePaginated] = useState<PaginatedDocument | null>(null)
+  const [authoritativeVersion, setAuthoritativeVersion] = useState(0)
+  const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const authoritativeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const layoutVersionRef = useRef(0)
+  const inlineEditNodeIdRef = useRef(inlineEditNodeId)
   const paginatedRef = useRef(state.paginated)
+  const prevLineCountRef = useRef<number | null>(null)
+  const prevEditNodeIdRef = useRef<string | null>(null)
   useEffect(() => { paginatedRef.current = state.paginated })
+  useEffect(() => { inlineEditNodeIdRef.current = inlineEditNodeId }, [inlineEditNodeId])
+  // Reset line-count tracking when leaving edit mode so re-entering the same
+  // paragraph starts fresh and does not fire a spurious hard event.
+  useEffect(() => {
+    if (inlineEditNodeId === null) {
+      prevLineCountRef.current = null
+      prevEditNodeIdRef.current = null
+    }
+  }, [inlineEditNodeId])
 
   // Local reflow — re-measure only the active paragraph immediately on each
   // text change so line wrapping feels live while the full paginator catches up.
+  //
+  // Soft event (line count unchanged): patch only the active paragraph's lines.
+  // Hard event (line count changed): run full browser pagination immediately so
+  // surrounding fragments shift without waiting for the debounce timer.
   useEffect(() => {
     if (!inlineEditNodeId) return
     const paraNode = findParagraphNode(previewDoc, inlineEditNodeId)
@@ -515,27 +544,104 @@ export default function EditorShell() {
     if (!fragment) return
     const measured = measureParagraph(paraNode, fragment.width, editorTextMeasurer)
     const newLines = buildLocalLines(measured, fragment)
-    dispatch({
-      type: "SET_PAGINATED",
-      paginated: replaceFragmentLines(paginatedRef.current, inlineEditNodeId, newLines, measured.totalHeight),
-    })
+
+    if (prevEditNodeIdRef.current !== inlineEditNodeId) {
+      prevLineCountRef.current = null
+      prevEditNodeIdRef.current = inlineEditNodeId
+    }
+    const prevLineCount = prevLineCountRef.current
+    const newLineCount = measured.lines.length
+    prevLineCountRef.current = newLineCount
+    const isHardEvent = prevLineCount !== null && newLineCount !== prevLineCount
+
+    if (isHardEvent) {
+      dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
+    } else {
+      dispatch({
+        type: "SET_PAGINATED",
+        paginated: replaceFragmentLines(paginatedRef.current, inlineEditNodeId, newLines, measured.totalHeight),
+      })
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewDoc, inlineEditNodeId])
 
   // Full pagination — corrects page breaks and surrounding layout.
   // Debounce is longer during inline editing so local reflow has time to show first.
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current)
 
-    debounceRef.current = setTimeout(() => {
-      setIsLayoutLoading(true)
+    interactiveDebounceRef.current = setTimeout(() => {
       dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
-      setIsLayoutLoading(false)
     }, inlineEditNodeId ? 200 : 16)
 
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+    return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorTextMeasurer, fontReadyVersion, previewDoc, inlineEditNodeId])
+
+  // Authoritative pagination — server/export layout truth. Browser pagination
+  // remains the interaction preview, then settles back to this result when idle.
+  useEffect(() => {
+    const layoutVersion = ++layoutVersionRef.current
+    let controller: AbortController | null = null
+    setLayoutStatus("optimistic")
+
+    if (authoritativeDebounceRef.current) clearTimeout(authoritativeDebounceRef.current)
+    authoritativeDebounceRef.current = setTimeout(() => {
+      controller = new AbortController()
+      setIsLayoutLoading(true)
+      setLayoutStatus("reconciling")
+
+      void fetch("/api/paginate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(previewDoc),
+        signal: controller.signal,
+      })
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`paginate failed: ${res.status}`)
+          return await res.json() as PaginatedDocument
+        })
+        .then((paginated) => {
+          if (layoutVersion !== layoutVersionRef.current) return
+          const report = comparePagination(paginatedRef.current, paginated)
+          setDriftReport(report)
+          if (showDriftRef.current && report.driftCount > 0) {
+            console.group(`[FlowDoc drift] ${report.driftCount}/${report.totalParagraphs} paragraphs differ${report.pageBreakChanged ? " · page break changed" : ""}`)
+            report.driftMap.forEach((d) => {
+              console.log(`  ${d.nodeId}: browser=${d.browserLineCount}L server=${d.serverLineCount}L (${d.lineDelta > 0 ? "+" : ""}${d.lineDelta})`)
+            })
+            console.groupEnd()
+          }
+          setAuthoritativePaginated(paginated)
+          setAuthoritativeVersion(layoutVersion)
+          setLayoutStatus("authoritative")
+          if (!inlineEditNodeIdRef.current) {
+            dispatch({ type: "SET_PAGINATED", paginated })
+          }
+        })
+        .catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") return
+          if (layoutVersion !== layoutVersionRef.current) return
+          console.error("authoritative pagination failed:", error)
+          setLayoutStatus("optimistic")
+        })
+        .finally(() => {
+          if (layoutVersion === layoutVersionRef.current) setIsLayoutLoading(false)
+        })
+    }, inlineEditNodeId ? 500 : 120)
+
+    return () => {
+      if (authoritativeDebounceRef.current) clearTimeout(authoritativeDebounceRef.current)
+      controller?.abort()
+    }
+  }, [previewDoc, inlineEditNodeId])
+
+  useEffect(() => {
+    if (inlineEditNodeId) return
+    if (!authoritativePaginated) return
+    if (authoritativeVersion !== layoutVersionRef.current) return
+    dispatch({ type: "SET_PAGINATED", paginated: authoritativePaginated })
+  }, [authoritativePaginated, authoritativeVersion, inlineEditNodeId])
 
   useEffect(() => {
     if (!isLayoutLoading) {
@@ -931,6 +1037,15 @@ export default function EditorShell() {
         >
           Segments
         </button>
+        <button
+          onClick={() => setShowDrift((value) => !value)}
+          title="Toggle layout drift overlay (browser vs server pagination)"
+          style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: showDrift ? "#fff7ed" : "white", color: showDrift ? "#c2410c" : "#374151" }}
+        >
+          {showDrift && driftReport && driftReport.driftCount > 0
+            ? `Drift ${driftReport.driftCount}/${driftReport.totalParagraphs}`
+            : "Drift"}
+        </button>
 
         {/* Document actions */}
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -950,13 +1065,16 @@ export default function EditorShell() {
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-          {savedAt && !isLayoutLoading && (
+          {savedAt && !isLayoutLoading && layoutStatus === "authoritative" && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>
               saved {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </span>
           )}
           {isLayoutLoading && !state.drag && !inlineEditNodeId && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>↻ layout…</span>
+          )}
+          {!isLayoutLoading && layoutStatus === "optimistic" && !state.drag && !inlineEditNodeId && (
+            <span style={{ fontSize: 10, color: "#9ca3af" }}>preview layout</span>
           )}
           {(["pdf", "docx"] as const).map((fmt) => (
             <button key={fmt} disabled={isExporting} onClick={() => handleExport(fmt)}
@@ -1011,6 +1129,8 @@ export default function EditorShell() {
           onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
           onScaleChange={setScale}
           showTextSegments={showTextSegments}
+          showDrift={showDrift}
+          driftMap={driftReport?.driftMap ?? null}
         />
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>
           {isTemplateMode ? (

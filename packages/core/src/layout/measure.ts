@@ -74,6 +74,7 @@ function createSourceSegments(
   fontSize: number,
   wordBreaker: WordBreaker,
   fieldRanges: FieldRange[] = [],
+  offsetBase: number = 0,
 ): SourceLineSegment[] {
   const segments = wordBreaker.segment(text)
   const sourceSegments: SourceLineSegment[] = []
@@ -94,8 +95,8 @@ function createSourceSegments(
         const graphemeEnd = graphemeStart + grapheme.length
         sourceSegments.push({
           text: grapheme,
-          start: graphemeStart,
-          end: graphemeEnd,
+          start: graphemeStart + offsetBase,
+          end: graphemeEnd + offsetBase,
           width: measureSegmentWidth(grapheme, measurer, fontFamilyKey, fontSize),
           kind: "grapheme",
         })
@@ -104,7 +105,7 @@ function createSourceSegments(
       continue
     }
 
-    sourceSegments.push({ text: segment, start, end, width, kind })
+    sourceSegments.push({ text: segment, start: start + offsetBase, end: end + offsetBase, width, kind })
   }
 
   return sourceSegments
@@ -144,12 +145,13 @@ function wrapLines(
   fontSize: number,
   wordBreaker: WordBreaker,
   fieldRanges: FieldRange[] = [],
+  offsetBase: number = 0,
 ): MeasuredLine[] {
   if (text.length === 0) {
     return [{ text: "", width: 0, height: fontSize }]
   }
 
-  const segments = createSourceSegments(text, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges)
+  const segments = createSourceSegments(text, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, offsetBase)
   const lines: MeasuredLine[] = []
   let currentLine: SourceLineSegment[] = []
   let currentWidth = 0
@@ -210,7 +212,21 @@ export function measureParagraph(
     fieldRanges.push({ start, end: fullText.length })
   }
 
-  const rawLines = wrapLines(fullText, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges)
+  // Split on explicit newlines first, then word-wrap each hard line separately.
+  // Segment start/end offsets are adjusted to reference the full fullText string
+  // so caret hit testing stays correct across hard breaks.
+  const hardLines = fullText.split("\n")
+  const rawLines: MeasuredLine[] = []
+  let globalOffset = 0
+  for (const hardLine of hardLines) {
+    const lineEnd = globalOffset + hardLine.length
+    const lineFieldRanges = fieldRanges
+      .filter((r) => r.end > globalOffset && r.start < lineEnd)
+      .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
+    const wrapped = wrapLines(hardLine, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, lineFieldRanges, globalOffset)
+    rawLines.push(...wrapped)
+    globalOffset += hardLine.length + 1 // +1 for the \n character
+  }
 
   // map rawLines ให้ใช้ lineHeight จริง
   const lines: MeasuredLine[] = rawLines.map((line) => ({
