@@ -281,7 +281,8 @@ function pushStackContents(
       const node = section.nodes[child.nodeId]
       if (node?.type === "paragraph") {
         const measured = measureParagraph(node, child.width, measurer, wordBreaker)
-        lines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore)
+        const rawLines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore)
+        lines = resolvePageNumbers(rawLines, pageIndex + 1)
         renderProps = buildRenderProps(node, measured.lineHeight)
       }
     }
@@ -459,7 +460,8 @@ function pushTableCellContents(
       const node = tableNode.nodes[child.nodeId]
       if (node?.type === "paragraph") {
         const measured = measureParagraph(node, child.width, measurer, wordBreaker)
-        lines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore)
+        const rawLines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore)
+        lines = resolvePageNumbers(rawLines, pageIndex + 1)
         renderProps = buildRenderProps(node, measured.lineHeight)
       }
     }
@@ -486,102 +488,54 @@ interface SplitPoint {
   lineIdx: number   // line index ภายใน child นั้น (0 = ทั้ง child ไปหน้าถัดไป)
 }
 
-function computeSplitPoint(
+// คำนวณ split point โดยเริ่มจาก `from` เพื่อหาว่า content สิ้นสุดที่ไหนเมื่อใส่ใน availH
+// คืน null ถ้า content ที่เหลือทั้งหมดใส่ใน availH ได้พอดี
+function computeSplitPointFrom(
   cellBox: FlowBox,
   tableNode: TableNode,
-  innerAvailH: number,
+  availH: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
-): SplitPoint {
+  from: SplitPoint,
+): SplitPoint | null {
   let heightUsed = 0
 
-  for (let ci = 0; ci < cellBox.children.length; ci++) {
+  for (let ci = from.childIdx; ci < cellBox.children.length; ci++) {
     const child = cellBox.children[ci]
-    if (heightUsed >= innerAvailH) return { childIdx: ci, lineIdx: 0 }
+    if (heightUsed >= availH) return { childIdx: ci, lineIdx: 0 }
 
     if (child.nodeType === "spacer") {
-      if (heightUsed + child.height <= innerAvailH) heightUsed += child.height
+      if (heightUsed + child.height <= availH) heightUsed += child.height
       else return { childIdx: ci, lineIdx: 0 }
-    } else if (child.nodeType === "paragraph") {
-      if (heightUsed + child.height <= innerAvailH) {
-        heightUsed += child.height
-      } else {
-        const node = tableNode.nodes[child.nodeId]
-        if (node?.type !== "paragraph") return { childIdx: ci, lineIdx: 0 }
-        const measured = measureParagraph(node, child.width, measurer, wordBreaker)
-        const availForLines = innerAvailH - heightUsed - measured.spacingBefore
-        if (availForLines <= 0) return { childIdx: ci, lineIdx: 0 }
-        let lineAccum = 0
-        for (let li = 0; li < measured.lines.length; li++) {
-          if (lineAccum + measured.lines[li].height > availForLines) return { childIdx: ci, lineIdx: li }
-          lineAccum += measured.lines[li].height
-        }
-        heightUsed += child.height
-      }
-    }
-  }
-
-  return { childIdx: cellBox.children.length, lineIdx: 0 }
-}
-
-function pushCellFirstSlice(
-  cellBox: FlowBox,
-  tableNode: TableNode,
-  measurer: TextMeasurer,
-  pages: PaginatedPage[],
-  template: PaginatedPage,
-  pageIndex: number,
-  cellPageY: number,
-  split: SplitPoint,
-  wordBreaker: WordBreaker,
-): void {
-  const cellNode = tableNode.nodes[cellBox.nodeId]
-  const padding = cellNode?.type === "table-cell" && cellNode.props.padding
-    ? toAbstractUnit(cellNode.props.padding.value, cellNode.props.padding.unit) : 0
-  let curY = cellPageY + padding
-
-  for (let ci = 0; ci < split.childIdx && ci < cellBox.children.length; ci++) {
-    const child = cellBox.children[ci]
-    if (!child) continue
-    if (child.nodeType === "spacer") {
-      pushFragment(pages, template, {
-        nodeId: child.nodeId, nodeType: "spacer", parentNodeId: cellBox.nodeId,
-        pageIndex, x: child.x, y: curY, width: child.width, height: child.height,
-      })
-      curY += child.height
     } else if (child.nodeType === "paragraph") {
       const node = tableNode.nodes[child.nodeId]
       if (node?.type !== "paragraph") continue
       const measured = measureParagraph(node, child.width, measurer, wordBreaker)
-      const lines = buildPaginatedLines(measured.lines, child.x, curY, measured.spacingBefore)
-      pushFragment(pages, template, {
-        nodeId: child.nodeId, nodeType: "paragraph", parentNodeId: cellBox.nodeId,
-        pageIndex, x: child.x, y: curY, width: child.width, height: child.height,
-        lines, renderProps: buildRenderProps(node, measured.lineHeight),
-      })
-      curY += child.height
+      const lineStart = ci === from.childIdx ? from.lineIdx : 0
+      const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
+      const remainingLines = measured.lines.slice(lineStart)
+      const remainH = spacingBefore + remainingLines.reduce((s, l) => s + l.height, 0)
+
+      if (heightUsed + remainH <= availH) {
+        heightUsed += remainH
+      } else {
+        const availForLines = availH - heightUsed - spacingBefore
+        if (availForLines <= 0) return { childIdx: ci, lineIdx: lineStart }
+        let lineAccum = 0
+        for (let li = lineStart; li < measured.lines.length; li++) {
+          if (lineAccum + measured.lines[li].height > availForLines) return { childIdx: ci, lineIdx: li }
+          lineAccum += measured.lines[li].height
+        }
+        heightUsed += remainH
+      }
     }
   }
 
-  // partial paragraph ที่จุด split (บางบรรทัดอยู่หน้า 1)
-  const splitChild = cellBox.children[split.childIdx]
-  if (splitChild?.nodeType === "paragraph" && split.lineIdx > 0) {
-    const node = tableNode.nodes[splitChild.nodeId]
-    if (node?.type === "paragraph") {
-      const measured = measureParagraph(node, splitChild.width, measurer, wordBreaker)
-      const p1Lines = measured.lines.slice(0, split.lineIdx)
-      const paraH = measured.spacingBefore + p1Lines.reduce((s, l) => s + l.height, 0)
-      pushFragment(pages, template, {
-        nodeId: splitChild.nodeId, nodeType: "paragraph", parentNodeId: cellBox.nodeId,
-        pageIndex, x: splitChild.x, y: curY, width: splitChild.width, height: paraH,
-        lines: buildPaginatedLines(p1Lines, splitChild.x, curY, measured.spacingBefore),
-        renderProps: buildRenderProps(node, measured.lineHeight),
-      })
-    }
-  }
+  return null
 }
 
-function pushCellSecondSlice(
+// วาง content ของ cell จาก split point `from` ถึง `to` (null = ถึงท้าย cell)
+function pushCellSlice(
   cellBox: FlowBox,
   tableNode: TableNode,
   measurer: TextMeasurer,
@@ -589,7 +543,8 @@ function pushCellSecondSlice(
   template: PaginatedPage,
   pageIndex: number,
   cellPageY: number,
-  split: SplitPoint,
+  from: SplitPoint,
+  to: SplitPoint | null,
   wordBreaker: WordBreaker,
 ): void {
   const cellNode = tableNode.nodes[cellBox.nodeId]
@@ -597,50 +552,49 @@ function pushCellSecondSlice(
     ? toAbstractUnit(cellNode.props.padding.value, cellNode.props.padding.unit) : 0
   let curY = cellPageY + padding
 
-  // remaining lines ของ paragraph ที่ถูกตัด
-  const splitChild = cellBox.children[split.childIdx]
-  if (splitChild?.nodeType === "paragraph" && split.lineIdx > 0) {
-    const node = tableNode.nodes[splitChild.nodeId]
-    if (node?.type === "paragraph") {
-      const measured = measureParagraph(node, splitChild.width, measurer, wordBreaker)
-      const p2Lines = measured.lines.slice(split.lineIdx)
-      if (p2Lines.length > 0) {
-        const spacingAfter = toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
-        const paraH = p2Lines.reduce((s, l) => s + l.height, 0) + spacingAfter
+  for (let ci = from.childIdx; ci < cellBox.children.length; ci++) {
+    const child = cellBox.children[ci]
+    if (!child) continue
+
+    const isAtTo = to !== null && ci === to.childIdx
+    if (isAtTo && to!.lineIdx === 0) break
+
+    const lineStart = ci === from.childIdx ? from.lineIdx : 0
+    const lineEnd = isAtTo ? to!.lineIdx : undefined
+
+    if (child.nodeType === "spacer") {
+      if (!isAtTo) {
         pushFragment(pages, template, {
-          nodeId: splitChild.nodeId, nodeType: "paragraph", parentNodeId: cellBox.nodeId,
-          pageIndex, x: splitChild.x, y: curY, width: splitChild.width, height: paraH,
-          lines: buildPaginatedLines(p2Lines, splitChild.x, curY, 0),
+          nodeId: child.nodeId, nodeType: "spacer", parentNodeId: cellBox.nodeId,
+          pageIndex, x: child.x, y: curY, width: child.width, height: child.height,
+        })
+        curY += child.height
+      }
+    } else if (child.nodeType === "paragraph") {
+      const node = tableNode.nodes[child.nodeId]
+      if (node?.type !== "paragraph") { if (isAtTo) break; continue }
+      const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+      const lines = lineEnd !== undefined
+        ? measured.lines.slice(lineStart, lineEnd)
+        : measured.lines.slice(lineStart)
+
+      if (lines.length > 0) {
+        const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
+        const isLastLines = lineEnd === undefined || lineEnd === measured.lines.length
+        const spacingAfter = isLastLines
+          ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit) : 0
+        const paraH = spacingBefore + lines.reduce((s, l) => s + l.height, 0) + spacingAfter
+        pushFragment(pages, template, {
+          nodeId: child.nodeId, nodeType: "paragraph", parentNodeId: cellBox.nodeId,
+          pageIndex, x: child.x, y: curY, width: child.width, height: paraH,
+          lines: resolvePageNumbers(buildPaginatedLines(lines, child.x, curY, spacingBefore), pageIndex + 1),
           renderProps: buildRenderProps(node, measured.lineHeight),
         })
         curY += paraH
       }
     }
-  }
 
-  // children ที่เหลือหลังจุด split
-  const startIdx = split.lineIdx > 0 ? split.childIdx + 1 : split.childIdx
-  for (let ci = startIdx; ci < cellBox.children.length; ci++) {
-    const child = cellBox.children[ci]
-    if (!child) continue
-    if (child.nodeType === "spacer") {
-      pushFragment(pages, template, {
-        nodeId: child.nodeId, nodeType: "spacer", parentNodeId: cellBox.nodeId,
-        pageIndex, x: child.x, y: curY, width: child.width, height: child.height,
-      })
-      curY += child.height
-    } else if (child.nodeType === "paragraph") {
-      const node = tableNode.nodes[child.nodeId]
-      if (node?.type !== "paragraph") continue
-      const measured = measureParagraph(node, child.width, measurer, wordBreaker)
-      pushFragment(pages, template, {
-        nodeId: child.nodeId, nodeType: "paragraph", parentNodeId: cellBox.nodeId,
-        pageIndex, x: child.x, y: curY, width: child.width, height: child.height,
-        lines: buildPaginatedLines(measured.lines, child.x, curY, measured.spacingBefore),
-        renderProps: buildRenderProps(node, measured.lineHeight),
-      })
-      curY += child.height
-    }
+    if (isAtTo) break
   }
 }
 
@@ -668,7 +622,7 @@ function paginateTableRowFull(
       ? buildTableCellRenderProps(tableNode, cellNode) : undefined
 
     pushFragment(pages, template, {
-      nodeId: cellBox.nodeId, nodeType: "stack", parentNodeId: rowBox.nodeId,
+      nodeId: cellBox.nodeId, nodeType: "table-cell", parentNodeId: rowBox.nodeId,
       pageIndex: cursor.pageIndex, x: cellBox.x, y: cursor.cursorY,
       width: cellBox.width, height: cellBox.height, cellRenderProps,
     })
@@ -691,67 +645,72 @@ function paginateTableRowSplit(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
 ): PageFlowCursor {
-  const availH = contentBottom - cursor.cursorY
+  // Track current split position (start of remaining content) for each cell
+  const fromSplits = new Map<string, SplitPoint>()
+  for (const cellBox of rowBox.children) fromSplits.set(cellBox.nodeId, { childIdx: 0, lineIdx: 0 })
 
-  if (availH < MINIMUM_ROW_SPLIT_HEIGHT) {
-    return paginateTableRowFull(rowBox, tableNode, pages, template, advancePage(cursor, contentTop), tableNodeId, measurer, wordBreaker)
-  }
+  let current = cursor
+  let heightPlaced = 0
+  const totalHeight = rowBox.height
 
-  // คำนวณ split point สำหรับแต่ละ cell
-  const splits = new Map<string, SplitPoint>()
-  for (const cellBox of rowBox.children) {
-    const cellNode = tableNode.nodes[cellBox.nodeId]
-    const padding = cellNode?.type === "table-cell" && cellNode.props.padding
-      ? toAbstractUnit(cellNode.props.padding.value, cellNode.props.padding.unit) : 0
-    splits.set(cellBox.nodeId, computeSplitPoint(cellBox, tableNode, Math.max(0, availH - padding * 2), measurer, wordBreaker))
-  }
+  while (heightPlaced < totalHeight) {
+    const availH = contentBottom - current.cursorY
 
-  // ─── หน้า 1: partial row ──────────────────────────────────────────────────
+    if (availH < MINIMUM_ROW_SPLIT_HEIGHT) {
+      current = advancePage(current, contentTop)
+      continue
+    }
 
-  pushFragment(pages, template, {
-    nodeId: rowBox.nodeId, nodeType: "row", parentNodeId: tableNodeId,
-    pageIndex: cursor.pageIndex, x: rowBox.x, y: cursor.cursorY,
-    width: rowBox.width, height: availH,
-  })
+    const sliceH = Math.min(availH, totalHeight - heightPlaced)
+    const isLastSlice = sliceH >= totalHeight - heightPlaced
 
-  for (const cellBox of rowBox.children) {
-    const cellNode = tableNode.nodes[cellBox.nodeId]
-    const baseProps = cellNode?.type === "table-cell" ? buildTableCellRenderProps(tableNode, cellNode) : undefined
+    // Compute per-cell end-split for this page
+    const toSplits = new Map<string, SplitPoint | null>()
+    if (!isLastSlice) {
+      for (const cellBox of rowBox.children) {
+        const from = fromSplits.get(cellBox.nodeId)!
+        const cellNode = tableNode.nodes[cellBox.nodeId]
+        const padding = cellNode?.type === "table-cell" && cellNode.props.padding
+          ? toAbstractUnit(cellNode.props.padding.value, cellNode.props.padding.unit) : 0
+        toSplits.set(cellBox.nodeId, computeSplitPointFrom(cellBox, tableNode, Math.max(0, sliceH - padding * 2), measurer, wordBreaker, from))
+      }
+    }
+
+    // Row fragment for this slice
     pushFragment(pages, template, {
-      nodeId: cellBox.nodeId, nodeType: "stack", parentNodeId: rowBox.nodeId,
-      pageIndex: cursor.pageIndex, x: cellBox.x, y: cursor.cursorY,
-      width: cellBox.width, height: availH,
-      cellRenderProps: baseProps ? { ...baseProps, continuesOnNext: true } : undefined,
+      nodeId: rowBox.nodeId, nodeType: "row", parentNodeId: tableNodeId,
+      pageIndex: current.pageIndex, x: rowBox.x, y: current.cursorY,
+      width: rowBox.width, height: sliceH,
     })
-    const split = splits.get(cellBox.nodeId)
-    if (split) pushCellFirstSlice(cellBox, tableNode, measurer, pages, template, cursor.pageIndex, cursor.cursorY, split, wordBreaker)
+
+    // Cell fragments and content for this slice
+    for (const cellBox of rowBox.children) {
+      const from = fromSplits.get(cellBox.nodeId)!
+      const to = isLastSlice ? null : (toSplits.get(cellBox.nodeId) ?? null)
+      const cellNode = tableNode.nodes[cellBox.nodeId]
+      const baseProps = cellNode?.type === "table-cell" ? buildTableCellRenderProps(tableNode, cellNode) : undefined
+
+      pushFragment(pages, template, {
+        nodeId: cellBox.nodeId, nodeType: "table-cell", parentNodeId: rowBox.nodeId,
+        pageIndex: current.pageIndex, x: cellBox.x, y: current.cursorY,
+        width: cellBox.width, height: sliceH,
+        cellRenderProps: baseProps
+          ? { ...baseProps, continuesOnNext: !isLastSlice, continuedFromPrev: heightPlaced > 0 }
+          : undefined,
+      })
+
+      pushCellSlice(cellBox, tableNode, measurer, pages, template, current.pageIndex, current.cursorY, from, to, wordBreaker)
+
+      if (!isLastSlice && to !== null) fromSplits.set(cellBox.nodeId, to)
+    }
+
+    current = { ...current, cursorY: current.cursorY + sliceH }
+    heightPlaced += sliceH
+
+    if (!isLastSlice) current = advancePage(current, contentTop)
   }
 
-  // ─── หน้า 2: remaining row ───────────────────────────────────────────────
-
-  const nextCursor = advancePage(cursor, contentTop)
-  const remainH = rowBox.height - availH
-
-  pushFragment(pages, template, {
-    nodeId: rowBox.nodeId, nodeType: "row", parentNodeId: tableNodeId,
-    pageIndex: nextCursor.pageIndex, x: rowBox.x, y: nextCursor.cursorY,
-    width: rowBox.width, height: remainH,
-  })
-
-  for (const cellBox of rowBox.children) {
-    const cellNode = tableNode.nodes[cellBox.nodeId]
-    const baseProps = cellNode?.type === "table-cell" ? buildTableCellRenderProps(tableNode, cellNode) : undefined
-    pushFragment(pages, template, {
-      nodeId: cellBox.nodeId, nodeType: "stack", parentNodeId: rowBox.nodeId,
-      pageIndex: nextCursor.pageIndex, x: cellBox.x, y: nextCursor.cursorY,
-      width: cellBox.width, height: remainH,
-      cellRenderProps: baseProps ? { ...baseProps, continuedFromPrev: true } : undefined,
-    })
-    const split = splits.get(cellBox.nodeId)
-    if (split) pushCellSecondSlice(cellBox, tableNode, measurer, pages, template, nextCursor.pageIndex, nextCursor.cursorY, split, wordBreaker)
-  }
-
-  return { ...nextCursor, cursorY: nextCursor.cursorY + remainH }
+  return current
 }
 
 // ─── Rowspan Group Detection ─────────────────────────────────────────────────
@@ -885,7 +844,8 @@ function paginateTable(
       const rowNode = tableNode.nodes[rowBox.nodeId]
       const allowBreak = rowNode?.type === "table-row" ? (rowNode.props.allowBreak ?? false) : false
       const doesntFit = shouldMoveBlockToNextPage(current.cursorY, rowBox.height, contentTop, contentBottom)
-      if (!doesntFit) {
+      const tooTallForOnePage = rowBox.height > contentBottom - contentTop
+      if (!doesntFit && !tooTallForOnePage) {
         current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
       } else if (allowBreak && !isHeaderGroup) {
         current = paginateTableRowSplit(rowBox, tableNode, pages, template, contentTop, contentBottom, current, box.nodeId, measurer, wordBreaker)

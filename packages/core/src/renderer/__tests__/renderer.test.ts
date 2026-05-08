@@ -121,6 +121,82 @@ describe("PdfRenderer smoke tests", () => {
   })
 })
 
+// ─── Renderer input contract — fragment coverage ─────────────────────────────
+// These tests assert on the paginated document structure BEFORE it reaches the
+// renderer. If pagination drops or merges fragment types, these tests catch it
+// before the renderer ever runs.
+
+describe("renderer input contract — fragment coverage", () => {
+  const pdf = new PdfRenderer()
+  const docx = new DocxRenderer()
+
+  it("paginated input contains row, stack, and paragraph fragment kinds", () => {
+    const p1 = makePara("p1", "Left")
+    const p2 = makePara("p2", "Right")
+    const st1: LayoutNode = { id: "st1", type: "stack", props: { widthShare: 50, minHeight: 24 }, childIds: ["p1"] }
+    const st2: LayoutNode = { id: "st2", type: "stack", props: { widthShare: 50, minHeight: 24 }, childIds: ["p2"] }
+    const row: LayoutNode = { id: "r1", type: "row", props: {}, childIds: ["st1", "st2"] }
+    const paginated = paginate(makeDoc(["r1"], { r1: row, st1, st2, p1, p2 }))
+    const allFrags = paginated.sections[0].pages.flatMap((pg) => pg.fragments)
+    const kinds = new Set(allFrags.map((f) => f.nodeType))
+    expect(kinds.has("row")).toBe(true)
+    expect(kinds.has("stack")).toBe(true)
+    expect(kinds.has("paragraph")).toBe(true)
+  })
+
+  it("paginated input contains split fragments for a paragraph that spans 2 pages", () => {
+    // 80 hard-newline lines → overflows one A4 page (≈58 lines per page)
+    const longText = Array.from({ length: 80 }, (_, i) => `Line ${i + 1}`).join("\n")
+    const p = makePara("p-long", longText)
+    const paginated = paginate(makeDoc(["p-long"], { "p-long": p }))
+    const paraFrags = paginated.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "p-long")
+    )
+    expect(paraFrags.length).toBeGreaterThanOrEqual(2)
+    const pageIndices = paraFrags.map((f) => f.pageIndex)
+    expect(new Set(pageIndices).size).toBeGreaterThanOrEqual(2)
+  })
+
+  it("split paragraph fragments are ordered by page in renderer input", () => {
+    const longText = Array.from({ length: 80 }, (_, i) => `Line ${i + 1}`).join("\n")
+    const p = makePara("p-long", longText)
+    const paginated = paginate(makeDoc(["p-long"], { "p-long": p }))
+    const paraFrags = paginated.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "p-long")
+    )
+    for (let i = 1; i < paraFrags.length; i++) {
+      expect(paraFrags[i].pageIndex).toBeGreaterThanOrEqual(paraFrags[i - 1].pageIndex)
+    }
+  })
+
+  it("PDF renderer handles split paragraph fragments without throwing", async () => {
+    const longText = Array.from({ length: 80 }, (_, i) => `Line ${i + 1}`).join("\n")
+    const p = makePara("p-long", longText)
+    const paginated = paginate(makeDoc(["p-long"], { "p-long": p }))
+    const paraFrags = paginated.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "p-long")
+    )
+    expect(paraFrags.length).toBeGreaterThanOrEqual(2)
+    const result = await pdf.render(paginated)
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("DOCX renderer handles split paragraph fragments without throwing", async () => {
+    const longText = Array.from({ length: 80 }, (_, i) => `Line ${i + 1}`).join("\n")
+    const p = makePara("p-long", longText)
+    const paginated = paginate(makeDoc(["p-long"], { "p-long": p }))
+    const paraFrags = paginated.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "p-long")
+    )
+    expect(paraFrags.length).toBeGreaterThanOrEqual(2)
+    const result = await docx.render(paginated)
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(result.buffer[0]).toBe(0x50)
+    expect(result.buffer[1]).toBe(0x4b)
+  })
+})
+
 // ─── DOCX smoke tests ─────────────────────────────────────────────────────────
 
 describe("DocxRenderer smoke tests", () => {

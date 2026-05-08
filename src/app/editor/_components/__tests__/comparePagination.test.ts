@@ -120,7 +120,7 @@ describe("comparePagination", () => {
     expect(report.driftCount).toBe(0)
   })
 
-  it("ignores non-paragraph fragments", () => {
+  it("paragraph driftCount is unaffected by non-paragraph fragments", () => {
     const browser = makeDoc([{ pages: [{ fragments: [{ nodeId: "row1", nodeType: "row", height: 24 }] }] }])
     const server  = makeDoc([{ pages: [{ fragments: [{ nodeId: "row1", nodeType: "row", height: 48 }] }] }])
     const report = comparePagination(browser, server)
@@ -136,5 +136,50 @@ describe("comparePagination", () => {
     ] }] }])
     const report = comparePagination(doc, doc)
     expect(report.totalParagraphs).toBe(2)
+  })
+
+  it("tracks height drift for row fragment", () => {
+    const browser = makeDoc([{ pages: [{ fragments: [{ nodeId: "row1", nodeType: "row", height: 24 }] }] }])
+    const server  = makeDoc([{ pages: [{ fragments: [{ nodeId: "row1", nodeType: "row", height: 48 }] }] }])
+    const report = comparePagination(browser, server)
+    expect(report.geometryDriftMap.size).toBe(1)
+    const gd = report.geometryDriftMap.get("row1")!
+    expect(gd.nodeType).toBe("row")
+    expect(gd.heightDelta).toBe(24)
+    expect(gd.pageMovement).toBe(false)
+  })
+
+  it("tracks page movement for table-row fragment", () => {
+    const browser = makeDoc([{ pages: [
+      { fragments: [{ nodeId: "tr1", nodeType: "table-row", height: 24 }] },
+      { fragments: [] },
+    ] }])
+    const server = makeDoc([{ pages: [
+      { fragments: [] },
+      { fragments: [{ nodeId: "tr1", nodeType: "table-row", height: 24 }] },
+    ] }])
+    const report = comparePagination(browser, server)
+    expect(report.pageBreakChanged).toBe(true)
+    const gd = report.geometryDriftMap.get("tr1")!
+    expect(gd.pageMovement).toBe(true)
+    expect(gd.nodeType).toBe("table-row")
+  })
+
+  it("reports no geometry drift when row matches exactly", () => {
+    const doc = makeDoc([{ pages: [{ fragments: [{ nodeId: "row1", nodeType: "row", height: 24 }] }] }])
+    const report = comparePagination(doc, doc)
+    expect(report.geometryDriftMap.size).toBe(0)
+  })
+
+  it("stack geometry drift is tracked independently from row", () => {
+    const browser = makeDoc([{ pages: [{ fragments: [
+      { nodeId: "st1", nodeType: "stack", height: 24 },
+    ] }] }])
+    const server = makeDoc([{ pages: [{ fragments: [
+      { nodeId: "st1", nodeType: "stack", height: 36 },
+    ] }] }])
+    const report = comparePagination(browser, server)
+    expect(report.geometryDriftMap.has("st1")).toBe(true)
+    expect(report.geometryDriftMap.get("st1")!.heightDelta).toBe(12)
   })
 })

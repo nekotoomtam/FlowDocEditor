@@ -218,7 +218,7 @@ export function measureParagraph(
     }
     if (child.type === "pageNumber") {
       const start = fullText.length
-      fullText += "0"  // single-digit placeholder for layout measurement
+      fullText += "00"  // two-digit placeholder so page 10+ doesn't overflow measured width
       pageNumberRanges.push({ start, end: fullText.length })
       continue
     }

@@ -394,13 +394,12 @@ describe("paginator — table fragment relationships", () => {
     rowFrags.forEach((f) => expect(f.parentNodeId).toBe("tbl"))
   })
 
-  it("table cell fragments (nodeType=stack) have rowId as parentNodeId", () => {
+  it("table cell fragments (nodeType=table-cell) have rowId as parentNodeId", () => {
     const table = makeTable("tbl", 2, 2)
     const frags = getFragments(makeDoc(["tbl"], { tbl: table }))
-    const cellFrags = frags.filter((f) => f.nodeType === "stack" && f.nodeId.startsWith("tbl-cell"))
+    const cellFrags = frags.filter((f) => f.nodeType === "table-cell" && f.nodeId.startsWith("tbl-cell"))
     expect(cellFrags.length).toBe(4)  // 2 rows × 2 cols
     cellFrags.forEach((f) => {
-      // parentNodeId should be one of the table rows
       expect(f.parentNodeId).toMatch(/^tbl-row/)
     })
   })

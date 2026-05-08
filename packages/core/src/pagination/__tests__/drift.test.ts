@@ -173,6 +173,58 @@ describe("layout drift — page-break drift", () => {
   })
 })
 
+describe("layout drift — Thai-specific and near-boundary cases", () => {
+  it("Thai mixed with English drifts when combined width crosses line boundary", () => {
+    // "กขคงจ " (5 Thai + 1 space) + "A"×82
+    // browser: (5×6.2 + 4.8) + 82×4.8 = 35.8 + 393.6 = 429.4pt < 451 → 1 line
+    // server:  (5×6.7 + 5.2) + 82×5.2 = 38.7 + 426.4 = 465.1pt > 451 → 2 lines
+    const text = "กขคงจ " + "A".repeat(82)
+    const p = makePara("p1", text)
+    const doc = makeDoc(["p1"], { p1: p })
+    expect(paraLineCount(doc, "p1", browserMeasurer)).toBe(1)
+    expect(paraLineCount(doc, "p1", serverMeasurer)).toBeGreaterThan(1)
+  })
+
+  it("long unbroken Thai token produces more lines with server measurer (grapheme fallback)", () => {
+    // "ก"×140 — grapheme fallback splits at char boundaries
+    // browser: floor(451/6.2)=72 chars/line → 2 lines (72+68)
+    // server:  floor(451/6.7)=67 chars/line → 3 lines (67+67+6)
+    const text = "ก".repeat(140)
+    const p = makePara("p1", text)
+    const doc = makeDoc(["p1"], { p1: p })
+    const bLines = paraLineCount(doc, "p1", browserMeasurer)
+    const sLines = paraLineCount(doc, "p1", serverMeasurer)
+    expect(bLines).toBe(2)
+    expect(sLines).toBe(3)
+    expect(sLines).toBeGreaterThan(bLines)
+  })
+
+  it("Thai paragraph stays on page 1 with browser measurer but drifts to page 2 with server", () => {
+    // Filler: 57 hard lines of "A"×90
+    // browser: 57 lines (57×12=684pt ≤ 698pt content height) → Thai para still fits on page 0
+    // server:  57 lines each wraps to 2 → 114 lines → filler overflows, Thai para on page 1+
+    const fillerText = Array.from({ length: 57 }, () => "A".repeat(90)).join("\n")
+    const filler = makePara("filler", fillerText)
+    const thai = makePara("thai", "สวัสดีครับ")
+    const doc = makeDoc(["filler", "thai"], { filler, thai })
+    const bPage = paraPageIndex(doc, "thai", browserMeasurer)
+    const sPage = paraPageIndex(doc, "thai", serverMeasurer)
+    expect(bPage).toBe(0)
+    expect(sPage).toBeGreaterThan(0)
+  })
+
+  it("Thai numbers mixture: digit-heavy text drifts near line boundary", () => {
+    // "เลขที่ " (6 Thai + 1 space) + "1234567890"×8 = 6 Thai + 81 ASCII
+    // browser: 6×6.2 + 81×4.8 = 37.2 + 388.8 = 426pt < 451 → 1 line
+    // server:  6×6.7 + 81×5.2 = 40.2 + 421.2 = 461.4pt > 451 → wraps
+    const text = "เลขที่ " + "1234567890".repeat(8) + "1"
+    const p = makePara("p1", text)
+    const doc = makeDoc(["p1"], { p1: p })
+    expect(paraLineCount(doc, "p1", browserMeasurer)).toBe(1)
+    expect(paraLineCount(doc, "p1", serverMeasurer)).toBeGreaterThan(1)
+  })
+})
+
 describe("layout drift — height drift", () => {
   it("fragment height is larger with server measurer when more lines", () => {
     const text = "A".repeat(90)

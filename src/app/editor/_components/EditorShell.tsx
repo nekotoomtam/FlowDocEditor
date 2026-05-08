@@ -510,6 +510,8 @@ export default function EditorShell() {
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
   const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("authoritative")
+  const [fontFallback, setFontFallback] = useState(false)
+  const [layoutError, setLayoutError] = useState(false)
   const [authoritativePaginated, setAuthoritativePaginated] = useState<PaginatedDocument | null>(null)
   const [authoritativeVersion, setAuthoritativeVersion] = useState(0)
   const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -599,17 +601,29 @@ export default function EditorShell() {
       })
         .then(async (res) => {
           if (!res.ok) throw new Error(`paginate failed: ${res.status}`)
+          setFontFallback(res.headers.get("X-FlowDoc-Font") === "fallback")
           return await res.json() as PaginatedDocument
         })
         .then((paginated) => {
           if (layoutVersion !== layoutVersionRef.current) return
+          setLayoutError(false)
           const report = comparePagination(paginatedRef.current, paginated)
           setDriftReport(report)
-          if (showDriftRef.current && report.driftCount > 0) {
+          if (showDriftRef.current && (report.driftCount > 0 || report.geometryDriftMap.size > 0)) {
             console.group(`[FlowDoc drift] ${report.driftCount}/${report.totalParagraphs} paragraphs differ${report.pageBreakChanged ? " · page break changed" : ""}`)
             report.driftMap.forEach((d) => {
               console.log(`  ${d.nodeId}: browser=${d.browserLineCount}L server=${d.serverLineCount}L (${d.lineDelta > 0 ? "+" : ""}${d.lineDelta})`)
             })
+            if (report.geometryDriftMap.size > 0) {
+              console.group(`  layout geometry drift (${report.geometryDriftMap.size} nodes)`)
+              report.geometryDriftMap.forEach((d) => {
+                const parts: string[] = []
+                if (d.pageMovement) parts.push("page moved")
+                if (d.heightDelta !== 0) parts.push(`height ${d.heightDelta > 0 ? "+" : ""}${d.heightDelta.toFixed(1)}pt`)
+                console.log(`    ${d.nodeType} ${d.nodeId}: ${parts.join(", ")}`)
+              })
+              console.groupEnd()
+            }
             console.groupEnd()
           }
           setAuthoritativePaginated(paginated)
@@ -624,6 +638,7 @@ export default function EditorShell() {
           if (layoutVersion !== layoutVersionRef.current) return
           console.error("authoritative pagination failed:", error)
           setLayoutStatus("optimistic")
+          setLayoutError(true)
         })
         .finally(() => {
           if (layoutVersion === layoutVersionRef.current) setIsLayoutLoading(false)
@@ -1068,6 +1083,16 @@ export default function EditorShell() {
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          {fontFallback && (
+            <span title="Server is using Helvetica fallback — Thai text layout may be incorrect" style={{ fontSize: 10, color: "#d97706", cursor: "help" }}>
+              ⚠ fallback font
+            </span>
+          )}
+          {layoutError && (
+            <span title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help" }}>
+              ⚠ layout error
+            </span>
+          )}
           {savedAt && !isLayoutLoading && layoutStatus === "authoritative" && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>
               saved {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}

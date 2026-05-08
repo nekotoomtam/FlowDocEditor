@@ -73,7 +73,7 @@ export interface ParagraphRenderProps {
 
 export interface PageFragment {
   nodeId: string
-  nodeType: "paragraph" | "spacer" | "stack" | "row" | "body" | "table" | "toc"
+  nodeType: "paragraph" | "spacer" | "stack" | "table-cell" | "row" | "body" | "table" | "toc"
   parentNodeId?: string
   pageIndex: number
   x: number

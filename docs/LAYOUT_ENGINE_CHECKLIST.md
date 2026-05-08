@@ -23,29 +23,30 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
 ## Near-Term Checklist
 
 - [x] Add pagination golden fixtures.
-  - 15 tests in `packages/core/src/pagination/__tests__/paginator.test.ts`.
+  - 23 tests in `packages/core/src/pagination/__tests__/paginator.test.ts`.
   - Covers: fragment geometry (x/y/width), paragraph stacking, spacer placement,
-    paragraph/spacer overflow (whole-block move to next page), tall-paragraph
-    overflow at page top, row/stack parentNodeId relationships, two-column width
-    split, paragraph hard-newline line texts, line x positions, line top-to-bottom
-    order.
+    paragraph splits across pages by measured lines, spacer moves whole to next page,
+    tall-paragraph at page top forces progress without crash, row/stack parentNodeId
+    relationships, two-column width split, paragraph hard-newline line texts, line
+    x positions, line top-to-bottom order, table fragment relationships.
 - [x] Add layout drift fixtures for server-authoritative reconciliation.
   - 6 tests in `packages/core/src/pagination/__tests__/drift.test.ts`.
   - Two separate measurers (browser=narrower, server=wider) simulate real metrics gap.
   - Covers: agreement on short text, server wraps more on long ASCII/Thai, drift
     accumulates with near-boundary lines, page-break shift, fragment height drift.
 - [x] Add renderer smoke tests.
-  - 11 tests in `packages/core/src/renderer/__tests__/renderer.test.ts`.
+  - 16 tests in `packages/core/src/renderer/__tests__/renderer.test.ts`.
   - PDF: verifies %PDF header, single/multi-paragraph, spacer, row/columns, multi-page, empty paragraph.
   - DOCX: verifies PK ZIP header, same document shapes as PDF set.
+  - Renderer input contract: 5 tests verifying fragment kinds and split fragments before render.
   - Both renderers use no FontProvider (Helvetica fallback) to stay dependency-free in CI.
 - [x] Verify fragment parent/child relationships.
   - Tests in `paginator.test.ts` (row/stack group, new table group).
   - Row: row.parent=body, stack.parent=row, paragraph-in-stack.parent=stack.
-  - Table: table.parent=body, table-row.parent=table, table-cell.parent=row,
-    paragraph-in-cell.parent=cell.
+  - Table: table.parent=body, table-row.parent=table, table-cell (nodeType="table-cell").parent=table-row,
+    paragraph-in-cell.parent=table-cell.
   - All fragments on a page are ordered top-to-bottom by Y.
-- [ ] Define page-break behavior for each node type.
+- [x] Define page-break behavior for each node type.
   - [x] Spacer: move as a whole block. It should not split across pages.
     Extremely tall spacers may overflow and should be treated as an authored
     edge case.
@@ -80,9 +81,10 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
     split-at-row-boundary logic within a group.
   - Grid invariants: `addTableRow`, `removeTableRow`, `addTableColumn`,
     `removeTableColumn` all pass `assertDocument` and `assertPaginatedDocument`.
-  - 14 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+  - 19 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
     covering: no-rowspan baseline, 2/3-row groups staying on same page, group
-    moving to next page as unit, mixed groups, and operations+grid invariants.
+    moving to next page as unit, mixed groups, operations+grid invariants, and
+    multi-page breakable row split (3-page, line count preserved, fragment order).
 - [x] Add too-tall rowspan group edge-case coverage.
   - Fixed `paginateTable`: multi-row rowspan groups now always advance to the
     next page's `contentTop` when they don't fit, even if the group is taller
@@ -127,6 +129,112 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
     columns, headers, footers) is the target.
 
 
+## Cross-Page Line Splitting Checklist
+
+This section makes paragraph continuation across page boundaries explicit. The
+engine already supports the first paragraph-level version; the remaining work is
+to harden the contract so future selection, annotations, comments, renderer
+debugging, and table/list behavior do not reinterpret the split differently.
+
+### Goal
+
+Long text blocks should continue across page boundaries without moving the
+entire paragraph to the next page, while still preserving the authored paragraph
+as one source node. Pagination owns the split decision; renderers only draw the
+fragments they receive.
+
+### Core Contract
+
+- [x] Paragraph measurement exposes line-level layout data before pagination.
+  - Required data: line text, y/height, width, baseline/vertical position, and
+    segment/range information needed to map the line back to source text.
+- [x] Pagination may split a paragraph at measured line boundaries.
+  - The split point must be chosen from measured lines, not recomputed by the
+    editor, PDF renderer, or DOCX renderer.
+- [x] Split paragraph fragments preserve the same source paragraph identity.
+  - Continuation fragments should remain traceable to the same `nodeId` so drift
+    comparison and later selection/comment features can understand that the
+    fragments came from one authored paragraph.
+- [x] Fragment ordering is deterministic for the same document, measurer, and
+  word breaker.
+  - Fragments for the same source node must appear in ascending page/order.
+  - A refactor that changes split points should be treated as a pagination
+    behavior change and covered by fixtures.
+- [x] First/last fragment spacing is handled by pagination.
+  - `spacingBefore` belongs to the first fragment.
+  - `spacingAfter` belongs to the last fragment.
+  - Continuation fragments should not double-apply paragraph spacing.
+- [x] A too-tall single line cannot create an infinite pagination loop.
+  - If one line cannot fit in the content box, pagination must force progress and
+    document the overflow.
+
+### Metadata To Harden Next
+
+- [ ] Introduce explicit paragraph-fragment metadata for debugging and future
+  editor features.
+  - Suggested fields: `sourceNodeId`, `fragmentIndex`, `pageIndex`, `lineStart`,
+    `lineEnd`, `continuedFrom`, `continuedTo`.
+  - This can be derived from existing fragment order initially, but making it
+    explicit will make selection, annotations, comments, and drift reports safer.
+- [ ] Decide whether fragment identity should stay implicit (`nodeId` + order) or
+  become explicit (`fragmentId`).
+  - If explicit, the id must be deterministic and not depend on runtime object
+    creation order.
+  - Prefer a stable derivation such as `nodeId + pageIndex + fragmentIndex` unless
+    future editing requires line-range based identity.
+- [ ] Extend `comparePagination` so paragraph continuation is reported as a
+  first-class concept.
+  - Current paragraph drift can compare page/geometry/line count, but the report
+    should make continuation boundaries easy to read.
+  - Keep text-line drift paragraph-specific; make page/geometry movement usable
+    across all layout-owned fragment types.
+
+### Policy Stages
+
+- [x] Stage 1: split paragraphs at any measured line boundary.
+  - This gives the engine usable long-paragraph pagination without overfitting
+    typographic rules too early.
+- [ ] Stage 2: add widow/orphan policy.
+  - Avoid leaving a single line at the bottom of a page or a single line at the
+    top of the next page when the paragraph has enough lines to avoid it.
+  - Start with a conservative policy that can be disabled for small content boxes
+    or impossible cases.
+- [x] Stage 3: add keep-together / keep-with-next interactions.
+  - `keepWithNext` implemented: paragraph stays on the same page as its next sibling.
+  - `keepTogether` (whole-block no-split) deferred — bad UX for long paragraphs.
+- [ ] Stage 4: define list-item continuation rules.
+  - Decide whether list marker/bullet rendering belongs only on the first
+    fragment or repeats on continuation fragments.
+  - Ensure continuation indentation is renderer-independent.
+- [x] Stage 5: define table-cell text continuation rules separately from normal
+  paragraph continuation.
+  - Basic cell text continuation implemented: `pushCellSlice` splits cell content
+    at measured line boundaries across pages when the row has `allowBreak=true`.
+  - Rowspan-linked groups remain conservative (whole-group approach B).
+  - Split-at-row-boundary within rowspan groups still deferred.
+
+### Renderer Rules
+
+- [x] Add renderer contract tests for split paragraph fragments.
+  - 5 tests in "renderer input contract" describe block in `renderer.test.ts`.
+  - Verifies fragment kinds present, split fragments on multiple pages, ascending
+    page order, PDF handles split fragments, DOCX handles split fragments.
+- [x] Keep DOCX limitation documented separately.
+  - DOCX limitations documented in "Document DOCX layout limitations" checklist item.
+  - FlowDoc exports intended structure; Word/LibreOffice may reflow after opening.
+
+### Debug / Observability
+
+- [ ] Add a debug view or structured trace for paragraph split decisions.
+  - Useful fields: available height, candidate line count, chosen split line,
+    forced-progress flag, next page index, fragment height.
+- [x] Add golden fixtures for representative continuation cases.
+  - 2-page paragraph: covered in `paginator.test.ts` (split group).
+  - 3+ page paragraph: covered in `paginator.test.ts` ("paragraph spanning 3 pages").
+  - paragraph after a split paragraph: covered in `paginator.test.ts`.
+  - split paragraph with page number inline: covered in `pageNumbers.test.ts` (page 9→10).
+  - split paragraph inside a table cell: covered in `tablePagination.test.ts` (multi-page row split).
+
 ## Recheck Addendum — App/Core Boundary
 
 These items came from reviewing the current app layer together with `packages/core`.
@@ -144,42 +252,74 @@ They are mostly boundary guards and regression targets, not new feature work.
     Helvetica fallback so callers can detect the degraded state.
   - Fallback to `createFontkitMeasurer(null)` is still allowed for dev/CI
     environments where the font is absent, but is now always visible in server logs.
-- [ ] Expand drift comparison beyond paragraph fragments.
-  - Current `comparePagination` intentionally ignores non-paragraph fragments.
-  - Add row, stack, table, table-row, table-cell/header/footer/page-template movement
-    to the drift snapshot so page movement and geometry drift are visible for every
-    layout-owned node type.
-  - Keep line-count drift paragraph-only, but make page/geometry drift universal.
-- [ ] Give table cells a stable renderer/debug fragment identity.
-  - Current cell rendering can be represented as stack-like fragments with cell render
-    props. This works visually, but weakens debugging and drift reporting.
-  - Prefer an explicit `nodeType: "table-cell"` fragment or a clear discriminated
-    subtype before more table features are added.
-- [ ] Harden page-number layout measurement.
-  - Current inline `pageNumber` measurement uses a one-digit placeholder (`"0"`).
-  - Add a two-pass layout or configurable placeholder width before documents commonly
-    exceed 9 pages.
-  - Add regression tests for page 9 → 10 boundary and page number in narrow header/footer columns.
+- [x] Expand drift comparison beyond paragraph fragments.
+  - Added `GeometryDrift` type and `geometryDriftMap: Map<string, GeometryDrift>` to
+    `DriftReport`. Tracks page movement and height delta for `row`, `stack`, and
+    `table-row` fragments.
+  - `pageBreakChanged` now covers all tracked fragment types, not just paragraphs.
+  - `driftCount` and `driftMap` remain paragraph-only — existing editor overlay and
+    toolbar badge are unaffected.
+  - `EditorShell` console log now shows a "layout geometry drift" sub-group when the
+    Drift overlay is active and geometry drift is detected.
+  - Added 4 new tests in `comparePagination.test.ts`: row height drift, table-row page
+    movement, no geometry drift when matching, stack drift tracked independently.
+- [x] Give table cells a stable renderer/debug fragment identity.
+  - Added `"table-cell"` to `PageFragment.nodeType` union in `pagination/types.ts`.
+  - Updated `paginateTableRowFull` and `paginateTableRowSplit` to push cell fragments
+    with `nodeType: "table-cell"` instead of `"stack"`.
+  - Updated PDF renderer: check `nodeType === "table-cell"` instead of `nodeType === "stack" && cellRenderProps`.
+  - Updated DOCX renderer: separated `"table-cell"` branch from `"stack"` branch so
+    regular stacks no longer rely on `parentNodeId` lookup to distinguish themselves from cells.
+  - Added `"table-cell"` to `TRACKED_LAYOUT_TYPES` in `comparePagination.ts` so cell
+    page movement and height drift are now reported.
+  - Updated `DetectTargetInput` and `PlacementTarget` in placement types to accept
+    `"table-cell" | "table-row" | "table"` (placement detection returns null for these, as expected).
+  - Updated `paginator.test.ts`: cell fragment test now asserts `nodeType === "table-cell"`.
+- [x] Harden page-number layout measurement.
+  - Changed placeholder from `"0"` (1-digit) to `"00"` (2-digit) in `measureParagraph`.
+    Covers pages 1–99; layout now reserves enough width so page 10+ never visually overflows.
+  - Fixed `pushStackContents`: paragraphs inside row/stack columns were not calling
+    `resolvePageNumbers`, so page numbers inside columns stayed as `"00"`. Now resolved correctly.
+  - Added 2 regression tests in `pageNumbers.test.ts`: page 9→10 boundary resolves to "10",
+    and narrow column (widthShare=20) passes `assertPaginatedDocument` and resolves to "1".
 - [ ] Define TOC overflow policy.
   - Current TOC is filled post-pagination and does not repaginate when generated lines
     exceed the placeholder.
   - Choose one: fixed-height clipped TOC, auto-grow with repagination, or explicit
     validation error when generated TOC exceeds reserved space.
   - Add a fixture where TOC content is intentionally taller than the placeholder.
-- [ ] Extend table row splitting from two-slice to multi-page loop.
-  - Current row/cell split behavior is good enough for ordinary rows but should be
-    stress-tested with content taller than two pages.
-  - Add tests for a single breakable row with cell text spanning 3+ pages.
-  - Keep rowspan-linked groups conservative until split-at-row-boundary rules are explicit.
-- [ ] Add renderer contract checks around fragment coverage.
-  - For PDF/DOCX smoke tests, verify not only file headers but that renderer input
-    includes expected fragment kinds and split fragments before render.
-  - This catches accidental renderer reflow or dropped fragment types earlier.
-- [ ] Keep checklist status synchronized with implementation status.
-  - When an item moves to `Later Work` and becomes complete, update older `Near-Term`
-    wording that may still describe the pre-implementation behavior.
-  - Paragraph splitting was one such case: old text said whole-block move, later text
-    said measured-line split.
+- [x] Extend table row splitting from two-slice to multi-page loop.
+  - Replaced `pushCellFirstSlice`/`pushCellSecondSlice` with `pushCellSlice(from, to)` — general
+    function that places cell content between any two split points.
+  - Replaced `computeSplitPoint` with `computeSplitPointFrom(from)` — computes the next split
+    from a given offset, enabling iterative page placement.
+  - Rewrote `paginateTableRowSplit` as a loop: each iteration places one page's slice of the row,
+    computes the next split point, and advances until all content is placed.
+  - Fixed `paginateTable` condition: `!doesntFit && !tooTallForOnePage` now triggers split for
+    rows taller than one content page even when starting at contentTop.
+  - Fixed `pushTableCellContents`: table cell paragraphs now call `resolvePageNumbers` (same bug
+    as `pushStackContents` fixed earlier).
+  - Added 5 tests in `tablePagination.test.ts`: 3-page split produces 3+ page fragments, total
+    line count preserved, ascending page order, assertPaginatedDocument passes, 2-page regression.
+  - Rowspan-linked groups remain conservative (whole-group approach B, no intra-group split).
+- [x] Add renderer contract checks around fragment coverage.
+  - Added "renderer input contract" describe block in `renderer.test.ts` (5 tests):
+    - row/stack/paragraph fragment kinds all present in paginated input
+    - split paragraph (80 lines) produces ≥2 fragments on different pages
+    - split fragments are ordered by ascending pageIndex
+    - PDF renderer handles split fragments without throwing
+    - DOCX renderer handles split fragments without throwing
+  - Tests assert on the paginated document structure before the renderer runs,
+    catching dropped or merged fragment types at the pagination layer.
+- [x] Keep checklist status synchronized with implementation status.
+  - Updated "Add pagination golden fixtures" wording: paragraphs now split by lines,
+    not whole-block move; test count updated to 23.
+  - Updated renderer smoke test count from 11 to 16.
+  - Updated table fragment relationship description to use `nodeType="table-cell"`.
+  - Marked Stage 3 (keepWithNext done, keepTogether deferred) and Stage 5 (basic
+    table-cell continuation done) as complete.
+  - Marked renderer contract tests and DOCX limitation items as complete.
+  - Marked golden continuation fixtures as complete.
 
 ## Important Design Rules
 
@@ -239,16 +379,18 @@ They are mostly boundary guards and regression targets, not new feature work.
 - [x] Basic page numbering (inline `pageNumber` node).
   - Added `PageNumberInline` schema in `inline.ts`. Paragraph children can include
     `{ type: "pageNumber" }` nodes.
-  - `measureParagraph` uses `"0"` as a 1-digit placeholder for layout measurement;
+  - `measureParagraph` uses `"00"` as a 2-digit placeholder for layout measurement;
     tracks `pageNumberRanges` to classify segments as `kind: "pageNumber"`.
   - `paginateParagraph` calls `resolvePageNumbers(lines, pageIndex + 1)` after
-    placing each fragment — substitutes `"0"` placeholder with the actual page
-    number string in both line text and segment text.
+    placing each fragment — substitutes placeholder with the actual page number
+    string in both line text and segment text.
   - Works in both fast-path (whole paragraph fits) and split-path (multi-page).
-  - 5 tests in `pageNumbers.test.ts`: resolves to "1" on page 1, resolves to "2"
-    on page 2, multiple pageNumber nodes in one paragraph, prefix text preserved.
-  - Known limitation: layout width measured with "0" (1 digit); pages 10+ may
-    overflow slightly. Acceptable for current use cases (header/footer context).
+  - Also resolved in `pushStackContents` (row/stack columns) and
+    `pushTableCellContents` (table cells) — previously these paths never called
+    `resolvePageNumbers` and left page numbers as the placeholder string.
+  - 7 tests in `pageNumbers.test.ts`: resolves to "1" on page 1, "2" on page 2,
+    multiple nodes, prefix text preserved, standalone node, page 9→10 boundary,
+    narrow column assertPaginatedDocument.
 - [ ] Section-level page numbering and restart rules.
 - [ ] Multi-section export smoke tests.
 - [ ] Visual regression tests for representative document fixtures.

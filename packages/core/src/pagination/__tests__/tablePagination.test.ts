@@ -382,3 +382,83 @@ describe("tablePagination — grid invariants after operations", () => {
     expect(tblFrag.y).toBe(CY)
   })
 })
+
+// ─── Multi-page row split (allowBreak=true) ───────────────────────────────────
+// A4 + 72pt margins: contentHeight=698pt, LH=12pt → ~58 lines per page
+
+describe("tablePagination — multi-page row split", () => {
+  // Helper: table with one breakable row, one cell, N hard-newline lines
+  function makeBreakableTable(id: string, lineCount: number): TableNode {
+    const text = Array.from({ length: lineCount }, (_, i) => `L${i}`).join("\n")
+    const paraId = `${id}-p`
+    const cellId = `${id}-c`
+    const rowId = `${id}-row`
+    return {
+      id,
+      type: "table",
+      props: {},
+      columns: [{ width: pt(451) }],
+      rowIds: [rowId],
+      nodes: {
+        [rowId]: { id: rowId, type: "table-row", props: { allowBreak: true }, cellIds: [cellId] } as TableRowNode,
+        [cellId]: { id: cellId, type: "table-cell", props: { rowspan: 1, colspan: 1 }, childIds: [paraId] } as TableCellNode,
+        [paraId]: makePara(paraId, text),
+      },
+    }
+  }
+
+  it("row spanning 3 pages produces fragments on 3 pages", () => {
+    const LINES_PER_PAGE = 58
+    const tbl = makeBreakableTable("tbl", LINES_PER_PAGE * 3)
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const rowFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-row")
+    )
+    expect(rowFrags.length).toBeGreaterThanOrEqual(3)
+    const pageIndices = [...new Set(rowFrags.map((f) => f.pageIndex))]
+    expect(pageIndices.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it("total paragraph line count is preserved across all fragments", () => {
+    const LINES_PER_PAGE = 58
+    const lineCount = LINES_PER_PAGE * 3
+    const tbl = makeBreakableTable("tbl", lineCount)
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const paraFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-p")
+    )
+    const totalLines = paraFrags.reduce((s, f) => s + (f.lines?.length ?? 0), 0)
+    expect(totalLines).toBe(lineCount)
+  })
+
+  it("split fragments appear in ascending page order", () => {
+    const LINES_PER_PAGE = 58
+    const tbl = makeBreakableTable("tbl", LINES_PER_PAGE * 3)
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const paraFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-p")
+    )
+    for (let i = 1; i < paraFrags.length; i++) {
+      expect(paraFrags[i].pageIndex).toBeGreaterThanOrEqual(paraFrags[i - 1].pageIndex)
+    }
+  })
+
+  it("assertPaginatedDocument passes for a 3-page breakable row", () => {
+    const LINES_PER_PAGE = 58
+    const tbl = makeBreakableTable("tbl", LINES_PER_PAGE * 3)
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+  })
+
+  it("2-page breakable row still works correctly after refactor", () => {
+    const LINES_PER_PAGE = 58
+    const tbl = makeBreakableTable("tbl", Math.floor(LINES_PER_PAGE * 1.5))
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+    const paraFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-p")
+    )
+    const totalLines = paraFrags.reduce((s, f) => s + (f.lines?.length ?? 0), 0)
+    expect(totalLines).toBe(Math.floor(LINES_PER_PAGE * 1.5))
+  })
+})

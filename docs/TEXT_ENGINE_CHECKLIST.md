@@ -69,15 +69,31 @@ editor-only shortcuts.
 
 ## Recheck Addendum — Text Measurement Boundary
 
-- [ ] Make server font loading observable.
-  - The authoritative path should expose whether it used the real project font or
-    fallback metrics. Silent fallback can hide layout drift until export time.
-- [ ] Add drift fixtures for exact Thai/page-boundary cases using the real default font.
-  - Keep browser canvas acceptable as a preview path, but cover known risky cases:
-    Thai mixed with English/numbers, long unbroken tokens, and near-boundary line wraps.
-- [ ] Separate preview drift from authoritative failure.
-  - Browser drift should create an editor warning/overlay.
-  - Server/export `assertPaginatedDocument` failure should fail loudly and block export.
+- [x] Make server font loading observable.
+  - `/api/paginate` logs `console.error` and sets `X-FlowDoc-Font: fallback` header
+    when the default font is missing.
+  - `/api/export` now also sets `X-FlowDoc-Font: fallback` header when font is
+    missing, matching paginate route behavior. Previously export fell back silently
+    with no observable signal to the caller.
+- [x] Add drift fixtures for Thai/page-boundary cases (Level 1 — mock measurers).
+  - Added 4 tests in a new "Thai-specific and near-boundary" describe block in `drift.test.ts`:
+    - Thai + English mixed text crosses line boundary (browser 1 line, server 2 lines).
+    - Long unbroken Thai token (140 chars): browser 2 lines vs server 3 lines via grapheme fallback.
+    - Thai paragraph stays on page 0 with browser but drifts to page 1+ with server.
+    - Thai + digits mixture drifts at line boundary.
+  - Tests use mock measurers (browser=narrower, server=wider) consistent with existing drift tests.
+    No real font needed; all cases are deterministic.
+  - Level 2 (real fontkit + real default font with `it.skipIf`) deferred until font is
+    reliably available in CI or specific Thai layout regressions are observed in production.
+- [x] Separate preview drift from authoritative failure.
+  - Server/export `assertPaginatedDocument` failure returns HTTP 500 and blocks export;
+    already done in `/api/paginate` and `/api/export`.
+  - Added `fontFallback` state in `EditorShell`: set when server responds with
+    `X-FlowDoc-Font: fallback` header. Shows amber "⚠ fallback font" indicator in
+    the toolbar so the user knows Thai layout may be incorrect.
+  - Added `layoutError` state: set when `/api/paginate` returns non-OK status.
+    Shows red "⚠ layout error" indicator in the toolbar. Cleared on next successful
+    server pagination. Editor continues showing browser preview in this state.
 
 ## Important Design Rules
 

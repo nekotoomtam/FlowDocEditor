@@ -71,12 +71,14 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
         rowMap.set(fragment.nodeId, group)
         items.push({ kind: "row", group })
       }
-    } else if (fragment.nodeType === "stack") {
+    } else if (fragment.nodeType === "table-cell") {
       if (fragment.parentNodeId && tableRowMap.has(fragment.parentNodeId)) {
         const cellGroup: TableCellGroup = { cellFragment: fragment, children: [] }
         tableCellMap.set(fragment.nodeId, cellGroup)
         tableRowMap.get(fragment.parentNodeId)!.cells.push(cellGroup)
-      } else if (fragment.parentNodeId && rowMap.has(fragment.parentNodeId)) {
+      }
+    } else if (fragment.nodeType === "stack") {
+      if (fragment.parentNodeId && rowMap.has(fragment.parentNodeId)) {
         const stackGroup: StackGroup = { stackFragment: fragment, children: [] }
         stackMap.set(fragment.nodeId, stackGroup)
         rowMap.get(fragment.parentNodeId)!.stacks.push(stackGroup)

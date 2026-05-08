@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
     throw error
   }
 
+  const usingFallback = loadFontSync(DEFAULT_FONT_KEY) === null
   const paginated = paginateDocument(doc, getMeasurer(), thaiWordBreaker)
 
   try {
@@ -83,6 +84,7 @@ export async function POST(req: NextRequest) {
     headers: {
       "Content-Type": result.mimeType,
       "Content-Disposition": `attachment; filename="document.${result.extension}"`,
+      ...(usingFallback ? { "X-FlowDoc-Font": "fallback" } : {}),
     },
   })
 }

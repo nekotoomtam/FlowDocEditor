@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { paginateDocument } from "../index"
+import { assertPaginatedDocument } from "../assertPaginated"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { pt } from "../../schema"
 import type { DocumentNode, LayoutNode, ParagraphNode } from "../../schema"
@@ -133,6 +134,67 @@ describe("page numbering", () => {
     }
     const result = paginate(makeDoc(["p1"], { p1: p }))
     const frag = result.sections[0].pages[0].fragments.find((f) => f.nodeId === "p1")!
+    expect(frag.lines![0].text).toBe("1")
+  })
+
+  it("pageNumber on page 10 resolves to '10' (page 9→10 boundary)", () => {
+    // A4 portrait + 72pt margins: content height = 698pt, line height = 12pt → 58 lines per page
+    const LINES_PER_PAGE = 58
+    const fillerText = Array.from({ length: LINES_PER_PAGE * 9 }, () => "A").join("\n")
+    const filler: LayoutNode = {
+      id: "filler",
+      type: "paragraph",
+      props: {
+        align: "left", fontSize: pt(10), fontFamilyKey: "default",
+        lineHeight: 1.2, spacingBefore: pt(0), spacingAfter: pt(0),
+        textIndent: pt(0), indentLeft: pt(0), indentRight: pt(0),
+      },
+      children: [{ id: "filler-t", type: "text", text: fillerText }],
+    }
+    const p = paraWithPageNumber("p10")
+    const result = paginate(makeDoc(["filler", "p10"], { filler, p10: p }))
+
+    const page10 = result.sections[0].pages[9]
+    expect(page10).toBeDefined()
+    const frag = page10.fragments.find((f) => f.nodeId === "p10")!
+    expect(frag).toBeDefined()
+    expect(frag.lines![0].text).toBe("หน้า 10")
+  })
+
+  it("pageNumber in narrow column passes assertPaginatedDocument and resolves correctly", () => {
+    const pn: ParagraphNode = {
+      id: "pn",
+      type: "paragraph",
+      props: {
+        align: "left", fontSize: pt(10), fontFamilyKey: "default",
+        lineHeight: 1.2, spacingBefore: pt(0), spacingAfter: pt(0),
+        textIndent: pt(0), indentLeft: pt(0), indentRight: pt(0),
+      },
+      children: [{ id: "pn-node", type: "pageNumber" }],
+    }
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [{
+          id: "sec",
+          type: "section",
+          page: PAGE,
+          bodyRootId: "body",
+          nodes: {
+            body: { id: "body", type: "body", props: {}, childIds: ["row1"] },
+            row1: { id: "row1", type: "row", props: {}, childIds: ["s1", "s2"] },
+            s1: { id: "s1", type: "stack", props: { widthShare: 20 }, childIds: ["pn"] },
+            s2: { id: "s2", type: "stack", props: { widthShare: 80 }, childIds: [] },
+            pn,
+          },
+        }],
+      },
+    }
+    const result = paginate(doc)
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+    const frag = result.sections[0].pages[0].fragments.find((f) => f.nodeId === "pn")!
+    expect(frag).toBeDefined()
     expect(frag.lines![0].text).toBe("1")
   })
 })

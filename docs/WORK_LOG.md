@@ -17,6 +17,253 @@ Each entry should include:
 
 ## 2026-05-08
 
+### Make Server Font Loading Observable
+
+Goal: Ensure both API routes surface font fallback state to callers so silent Helvetica fallback doesn't hide Thai layout drift until export time.
+
+Completed:
+
+- `/api/paginate` already had `console.error` logging and `X-FlowDoc-Font: fallback` response header when the default font is missing.
+- Added `X-FlowDoc-Font: fallback` response header to `/api/export` to match paginate route behavior. Previously export silently fell back to Helvetica with no observable signal — callers had no way to detect degraded Thai layout at export time.
+- Both routes now expose fallback state consistently: server logs for operators, response header for clients.
+
+Files changed:
+
+- `src/app/api/export/route.ts`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+
+---
+
+### Add Thai and Near-Boundary Drift Fixtures (Level 1)
+
+Goal: Cover known risky drift cases — Thai mixed with English/numbers and near-boundary line wraps — using mock measurers so tests are deterministic and CI-safe.
+
+Completed:
+
+- Added 4 tests in a new "layout drift — Thai-specific and near-boundary cases" describe block in `drift.test.ts`:
+  - Thai + English mixed text (5 Thai + 82 ASCII): browser=1 line, server=2 lines.
+  - Long unbroken Thai token (140 chars, grapheme fallback): browser=2 lines, server=3 lines.
+  - Thai paragraph after full-page filler: stays on page 0 with browser, drifts to page 1+ with server.
+  - Thai + digits mixture (6 Thai + 81 ASCII): browser=1 line, server=2 lines.
+- All tests use the existing browser/server mock measurers (Thai chars: 0.62/0.67×fontSize, ASCII: 0.48/0.52×fontSize). No real font required; cases are calculated from first principles.
+- Level 2 (real fontkit + `it.skipIf` when font absent) documented as deferred until CI has reliable font access or production Thai regressions surface.
+
+Files changed:
+
+- `packages/core/src/pagination/__tests__/drift.test.ts`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test` — 168 core + 12 app = 180 tests passed.
+
+---
+
+### Separate Preview Drift From Authoritative Failure
+
+Goal: Surface server-side font fallback and layout errors visibly to the editor user, so degraded layout state is not silent.
+
+Completed:
+
+- Added `fontFallback: boolean` state to `EditorShell`. Set to `true` when `/api/paginate` responds with `X-FlowDoc-Font: fallback` header; cleared when server confirms real font. Shows amber "⚠ fallback font" tooltip indicator in toolbar.
+- Added `layoutError: boolean` state. Set to `true` when `/api/paginate` returns a non-OK status (e.g. 500 from `assertPaginatedDocument` failure); cleared on next successful response. Shows red "⚠ layout error" tooltip indicator in toolbar.
+- Both indicators appear in the toolbar status area alongside the existing "↻ layout…" / "preview layout" indicators.
+- Server-side failures (assertPaginatedDocument 500, font fallback header) were already in place from the API hardening work; this change makes them user-visible on the client.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+
+---
+
+### Sync Checklist Status With Implementation
+
+Goal: Update stale wording and unchecked items in LAYOUT_ENGINE_CHECKLIST.md to match the current implementation state.
+
+Completed:
+
+- "Add pagination golden fixtures": updated description (paragraphs split by lines, not whole-block); test count 15→23.
+- "Add renderer smoke tests": test count 11→16 (renderer contract tests added).
+- "Verify fragment relationships": updated table-cell description to `nodeType="table-cell"`.
+- "Stage 3: keep-together/keepWithNext": marked `[x]` — keepWithNext done, keepTogether deferred.
+- "Stage 5: table-cell text continuation": marked `[x]` — basic continuation done via `pushCellSlice`.
+- "Renderer contract tests for split paragraph fragments": marked `[x]`.
+- "Keep DOCX limitation documented separately": marked `[x]`.
+- "Add golden fixtures for representative continuation cases": marked `[x]` for all 5 items (2-page, 3+-page, after-split, page-number inline, table-cell).
+- "Keep checklist status synchronized": marked `[x]`.
+
+Files changed:
+
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; no code checks required.
+
+---
+
+### Give Table Cells Stable Fragment Identity
+
+Goal: Replace the implicit `nodeType: "stack"` for table cell fragments with an explicit `nodeType: "table-cell"` so renderers, drift reporting, and debug tools can distinguish cells from regular layout stacks without relying on `cellRenderProps` or `parentNodeId` heuristics.
+
+Completed:
+
+- Added `"table-cell"` to `PageFragment.nodeType` union in `pagination/types.ts`.
+- Updated `paginateTableRowFull` and the split loop in `paginateTableRowSplit` to push cell fragments with `nodeType: "table-cell"`.
+- Updated PDF renderer (`renderer/pdf/index.ts`): `nodeType === "table-cell"` replaces `nodeType === "stack" && cellRenderProps`.
+- Updated DOCX renderer (`renderer/docx/index.ts`): split the `"stack"` branch into a `"table-cell"` branch (for table cells) and a clean `"stack"` branch (for layout stacks only, no parentNodeId lookup).
+- Added `"table-cell"` to `TRACKED_LAYOUT_TYPES` in `comparePagination.ts`.
+- Updated `placement/geometry.ts` (`DetectTargetInput.hoveredNodeType`) and `placement/types.ts` (`PlacementTarget`) to accept `"table-cell" | "table-row" | "table"` — placement detection returns null for these, as expected.
+- Updated `paginator.test.ts`: "table cell fragments" test now asserts `nodeType === "table-cell"`.
+
+Files changed:
+
+- `packages/core/src/pagination/types.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/renderer/pdf/index.ts`
+- `packages/core/src/renderer/docx/index.ts`
+- `packages/core/src/placement/geometry.ts`
+- `packages/core/src/placement/types.ts`
+- `src/app/editor/_components/comparePagination.ts`
+- `packages/core/src/pagination/__tests__/paginator.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 164 core + 12 app = 176 tests passed.
+
+---
+
+### Expand Drift Comparison Beyond Paragraph Fragments
+
+Goal: Make drift reports visible for row, stack, and table-row fragments — not only paragraph line-count drift — so layout regressions like rows moving pages are detectable.
+
+Completed:
+
+- Added `GeometryDrift` interface and `buildLayoutSnapshotMap` in `comparePagination.ts`. Tracks `row`, `stack`, and `table-row` fragments for page movement and height delta.
+- Added `geometryDriftMap: Map<string, GeometryDrift>` to `DriftReport`. Existing `driftMap`, `driftCount`, `totalParagraphs` are unchanged — no breaking changes to EditorCanvas overlay.
+- Updated `pageBreakChanged` to also trigger when any tracked layout fragment moves pages (not just paragraphs).
+- Updated `EditorShell` console log: shows "layout geometry drift" sub-group when Drift overlay is active and geometry drift is detected.
+- Added 4 new tests in `comparePagination.test.ts`: row height drift, table-row page movement, no geometry drift when matching, stack drift independent tracking. Updated "ignores non-paragraph" test name to reflect new behavior.
+
+Files changed:
+
+- `src/app/editor/_components/comparePagination.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/comparePagination.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 164 core + 12 app = 176 tests passed.
+
+---
+
+### Add Renderer Contract Checks Around Fragment Coverage
+
+Goal: Verify that the paginated document passed to PDF/DOCX renderers contains the expected fragment kinds and split fragments, catching dropped or merged fragments at the pagination layer rather than only at renderer output.
+
+Completed:
+
+- Added "renderer input contract — fragment coverage" describe block in `renderer.test.ts` with 5 tests:
+  - row/stack/paragraph fragment kinds all present in paginated input for a row document
+  - split paragraph (80 hard-newline lines) produces ≥2 fragments on different pages
+  - split fragments are ordered by ascending pageIndex in renderer input
+  - PDF renderer handles split paragraph fragments without throwing and produces valid %PDF header
+  - DOCX renderer handles split paragraph fragments without throwing and produces valid PK header
+- Tests assert on paginated document structure before the renderer is called, so they catch pagination regressions independently of renderer behavior.
+
+Files changed:
+
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test` — 164 core + 8 app = 172 tests passed.
+
+---
+
+### Extend Table Row Splitting to Multi-Page Loop
+
+Goal: Make breakable table rows (allowBreak=true) split across 3+ pages correctly instead of placing all remaining content on page 2 as a single overflow block.
+
+Completed:
+
+- Replaced `computeSplitPoint` with `computeSplitPointFrom(cellBox, tableNode, availH, measurer, wordBreaker, from)`. Takes a `from: SplitPoint` so split calculation can start from any position, enabling iterative page splitting.
+- Replaced `pushCellFirstSlice` + `pushCellSecondSlice` with `pushCellSlice(from, to)`. General function that places cell content from split point `from` to `to` (null = to end). Handles partial paragraphs at both boundaries and spacers correctly.
+- Rewrote `paginateTableRowSplit` as a `while` loop: each iteration places one slice (`min(availH, remaining)`) of the row, updates per-cell `fromSplits`, and advances the cursor until `heightPlaced === totalHeight`.
+- Fixed `paginateTable` split condition: added `tooTallForOnePage = rowBox.height > contentBottom - contentTop` so rows taller than one content page trigger the split path even when starting at contentTop (previously `shouldMoveBlockToNextPage` returned false at contentTop, skipping split entirely).
+- Fixed `pushTableCellContents`: table cell paragraph lines now call `resolvePageNumbers(rawLines, pageIndex + 1)`, matching the fix applied earlier to `pushStackContents`.
+- Added 5 tests in `tablePagination.test.ts` under "multi-page row split": 3-page split produces 3+ fragments, total line count preserved, ascending page order, assertPaginatedDocument passes, 2-page regression check.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 159 core + 8 app = 167 tests passed.
+
+Notes:
+
+- Rowspan-linked groups remain conservative (approach B: whole-group move, no intra-group split). This is intentional — split-at-row-boundary within rowspan groups deferred until needed.
+- The `tooTallForOnePage` fix is a side effect of the main task but necessary for the feature to work at all.
+
+---
+
+### Harden Page-Number Layout Measurement
+
+Goal: Fix page-number placeholder width so documents with 10+ pages don't overflow the measured layout width, and fix page numbers inside row/stack columns that were never resolved.
+
+Completed:
+
+- Changed `pageNumber` placeholder in `measureParagraph` (`layout/measure.ts`) from `"0"` (1-digit) to `"00"` (2-digit). Covers pages 1–99 without needing a two-pass layout.
+- Fixed `pushStackContents` in `paginator.ts`: paragraph lines inside row/stack columns were built with `buildPaginatedLines` but `resolvePageNumbers` was never called — page numbers inside columns stayed as `"00"` permanently. Added `resolvePageNumbers(rawLines, pageIndex + 1)` call to match `paginateParagraph` behavior.
+- Added 2 regression tests in `pageNumbers.test.ts`:
+  - Page 9→10 boundary: 9 pages of filler push the pageNumber paragraph to page 10 (index 9); text resolves to `"หน้า 10"`.
+  - Narrow column: `widthShare=20` stack with a pageNumber paragraph passes `assertPaginatedDocument` and resolves to `"1"`.
+
+Files changed:
+
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/pageNumbers.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test` — 154 core + 8 app = 162 tests passed.
+
+Notes:
+
+- The `pushStackContents` bug means page numbers inside columns were silently broken before this fix. No other callers are affected — `paginateParagraph` (body-level) and `paginateTable` cell paths were already correct.
+
+---
+
 ### Harden API Routes — Assertion and Font Diagnostics
 
 Goal: Catch layout bugs at API boundaries before they reach renderers, and surface font-loading failures instead of silently degrading Thai layout.

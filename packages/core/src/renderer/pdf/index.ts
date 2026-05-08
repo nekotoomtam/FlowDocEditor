@@ -94,7 +94,7 @@ export class PdfRenderer implements Renderer {
     ]
 
     for (const fragment of allFragments) {
-      if (fragment.nodeType === "stack" && fragment.cellRenderProps) {
+      if (fragment.nodeType === "table-cell") {
         drawCellBorders(pdfPage, fragment, page.height)
         continue
       }

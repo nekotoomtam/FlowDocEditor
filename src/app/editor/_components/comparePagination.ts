@@ -9,12 +9,20 @@ export interface FragmentDrift {
   pageMovement: boolean  // paragraph lands on different pages between browser and server
 }
 
+export interface GeometryDrift {
+  nodeId: string
+  nodeType: string
+  pageMovement: boolean
+  heightDelta: number
+}
+
 export interface DriftReport {
-  driftMap: Map<string, FragmentDrift>
+  driftMap: Map<string, FragmentDrift>        // paragraph line-count + page drift
+  geometryDriftMap: Map<string, GeometryDrift> // row / stack / table-row page + height drift
   driftCount: number
   totalParagraphs: number
   maxLineDelta: number
-  pageBreakChanged: boolean
+  pageBreakChanged: boolean  // true when any layout fragment (any type) moves pages
 }
 
 interface PageLocation {
@@ -28,6 +36,15 @@ interface FragmentSnapshot {
   pages: PageLocation[]  // all pages this paragraph spans, in order
 }
 
+interface LayoutSnapshot {
+  nodeType: string
+  height: number
+  pages: PageLocation[]
+}
+
+// Node types whose page movement and geometry drift should be tracked
+const TRACKED_LAYOUT_TYPES = new Set(["row", "stack", "table-cell", "table-row"])
+
 function buildSnapshotMap(doc: PaginatedDocument): Map<string, FragmentSnapshot> {
   const map = new Map<string, FragmentSnapshot>()
   doc.sections.forEach((section, si) => {
@@ -36,7 +53,6 @@ function buildSnapshotMap(doc: PaginatedDocument): Map<string, FragmentSnapshot>
         if (f.nodeType !== "paragraph") continue
         const existing = map.get(f.nodeId)
         if (existing) {
-          // Aggregate across fragments — paragraph can span multiple pages
           map.set(f.nodeId, {
             lineCount: existing.lineCount + (f.lines?.length ?? 0),
             height: existing.height + f.height,
@@ -45,6 +61,32 @@ function buildSnapshotMap(doc: PaginatedDocument): Map<string, FragmentSnapshot>
         } else {
           map.set(f.nodeId, {
             lineCount: f.lines?.length ?? 0,
+            height: f.height,
+            pages: [{ sectionIndex: si, pageIndex: pi }],
+          })
+        }
+      }
+    })
+  })
+  return map
+}
+
+function buildLayoutSnapshotMap(doc: PaginatedDocument): Map<string, LayoutSnapshot> {
+  const map = new Map<string, LayoutSnapshot>()
+  doc.sections.forEach((section, si) => {
+    section.pages.forEach((page, pi) => {
+      for (const f of page.fragments) {
+        if (!TRACKED_LAYOUT_TYPES.has(f.nodeType)) continue
+        const existing = map.get(f.nodeId)
+        if (existing) {
+          map.set(f.nodeId, {
+            nodeType: existing.nodeType,
+            height: existing.height + f.height,
+            pages: [...existing.pages, { sectionIndex: si, pageIndex: pi }],
+          })
+        } else {
+          map.set(f.nodeId, {
+            nodeType: f.nodeType,
             height: f.height,
             pages: [{ sectionIndex: si, pageIndex: pi }],
           })
@@ -89,8 +131,24 @@ export function comparePagination(browser: PaginatedDocument, server: PaginatedD
     })
   }
 
+  // Geometry drift for row / stack / table-row
+  const browserLayoutMap = buildLayoutSnapshotMap(browser)
+  const serverLayoutMap = buildLayoutSnapshotMap(server)
+  const geometryDriftMap = new Map<string, GeometryDrift>()
+
+  for (const [nodeId, bSnap] of browserLayoutMap) {
+    const sSnap = serverLayoutMap.get(nodeId)
+    if (!sSnap) continue
+    const pageMovement = !pagesMatch(bSnap.pages, sSnap.pages)
+    const heightDelta = sSnap.height - bSnap.height
+    if (!pageMovement && heightDelta === 0) continue
+    if (pageMovement) pageBreakChanged = true
+    geometryDriftMap.set(nodeId, { nodeId, nodeType: bSnap.nodeType, pageMovement, heightDelta })
+  }
+
   return {
     driftMap,
+    geometryDriftMap,
     driftCount: driftMap.size,
     totalParagraphs: browserMap.size,
     maxLineDelta,
