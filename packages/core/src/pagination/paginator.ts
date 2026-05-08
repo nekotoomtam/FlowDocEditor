@@ -664,6 +664,61 @@ function paginateTableRowSplit(
   return { ...nextCursor, cursorY: nextCursor.cursorY + remainH }
 }
 
+// ─── Rowspan Group Detection ─────────────────────────────────────────────────
+
+interface RowspanGroup {
+  rowIndices: number[]
+  totalHeight: number
+}
+
+// Group table rows that share rowspan cells using union-find.
+// Rows in the same group must be paginated together (approach B).
+function buildRowspanGroups(tableNode: TableNode, rowBoxes: FlowBox[]): RowspanGroup[] {
+  const n = tableNode.rowIds.length
+  const parent = Array.from({ length: n }, (_, i) => i)
+
+  function find(x: number): number {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x] }
+    return x
+  }
+  function union(a: number, b: number): void {
+    const ra = find(a), rb = find(b)
+    if (ra !== rb) parent[ra] = rb
+  }
+
+  for (let rowIdx = 0; rowIdx < n; rowIdx++) {
+    const rowId = tableNode.rowIds[rowIdx]
+    const rowNode = tableNode.nodes[rowId]
+    if (rowNode?.type !== "table-row") continue
+    for (const cellId of rowNode.cellIds) {
+      const cellNode = tableNode.nodes[cellId]
+      if (cellNode?.type !== "table-cell") continue
+      const rowspan = cellNode.props.rowspan ?? 1
+      if (rowspan <= 1) continue
+      for (let dr = 1; dr < rowspan && rowIdx + dr < n; dr++) {
+        union(rowIdx, rowIdx + dr)
+      }
+    }
+  }
+
+  const groupMap = new Map<number, number[]>()
+  for (let i = 0; i < n; i++) {
+    const root = find(i)
+    if (!groupMap.has(root)) groupMap.set(root, [])
+    groupMap.get(root)!.push(i)
+  }
+
+  return Array.from(groupMap.values())
+    .map((g) => g.sort((a, b) => a - b))
+    .sort((a, b) => a[0] - b[0])
+    .map((rowIndices) => ({
+      rowIndices,
+      totalHeight: rowIndices.reduce((sum, i) => sum + (rowBoxes[i]?.height ?? 0), 0),
+    }))
+}
+
+// ─── Table Pagination ─────────────────────────────────────────────────────────
+
 function paginateTable(
   box: FlowBox,
   section: DocumentSection,
@@ -692,23 +747,46 @@ function paginateTable(
     height: box.height,
   })
 
-  for (const rowBox of box.children) {
+  const groups = buildRowspanGroups(tableNode, box.children)
+
+  for (const { rowIndices, totalHeight } of groups) {
     if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
       current = advancePage(current, contentTop)
     }
 
-    const rowNode = tableNode.nodes[rowBox.nodeId]
-    const allowBreak = rowNode?.type === "table-row" ? (rowNode.props.allowBreak ?? false) : false
-    const doesntFit = shouldMoveBlockToNextPage(current.cursorY, rowBox.height, contentTop, contentBottom)
-
-    if (!doesntFit) {
-      current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
-    } else if (allowBreak) {
-      current = paginateTableRowSplit(rowBox, tableNode, pages, template, contentTop, contentBottom, current, box.nodeId, measurer, wordBreaker)
+    if (rowIndices.length > 1) {
+      // Multi-row rowspan group: decide page as a unit so all rows land together.
+      if (shouldMoveBlockToNextPage(current.cursorY, totalHeight, contentTop, contentBottom)) {
+        const nextPage = advancePage(current, contentTop)
+        if (nextPage.cursorY + totalHeight <= contentBottom) current = nextPage
+        // else: group is taller than one page — place at current top and let it overflow
+      }
+      for (const rowIdx of rowIndices) {
+        const rowBox = box.children[rowIdx]
+        if (!rowBox) continue
+        // Advance page only when cursor has already passed contentBottom (overflow case)
+        if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
+          current = advancePage(current, contentTop)
+        }
+        current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
+      }
     } else {
-      const nextPage = advancePage(current, contentTop)
-      if (nextPage.cursorY + rowBox.height <= contentBottom) current = nextPage
-      current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
+      // Single-row group: existing behavior preserved
+      const rowIdx = rowIndices[0]
+      const rowBox = box.children[rowIdx]
+      if (!rowBox) continue
+      const rowNode = tableNode.nodes[rowBox.nodeId]
+      const allowBreak = rowNode?.type === "table-row" ? (rowNode.props.allowBreak ?? false) : false
+      const doesntFit = shouldMoveBlockToNextPage(current.cursorY, rowBox.height, contentTop, contentBottom)
+      if (!doesntFit) {
+        current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
+      } else if (allowBreak) {
+        current = paginateTableRowSplit(rowBox, tableNode, pages, template, contentTop, contentBottom, current, box.nodeId, measurer, wordBreaker)
+      } else {
+        const nextPage = advancePage(current, contentTop)
+        if (nextPage.cursorY + rowBox.height <= contentBottom) current = nextPage
+        current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
+      }
     }
   }
 

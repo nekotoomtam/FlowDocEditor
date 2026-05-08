@@ -917,8 +917,11 @@ export default function EditorShell() {
       if (resizeDrag && !resizeDrag.committed) {
         const { leftStackId, rightStackId, pairX, pairWidth, currentDocX, totalShare } = resizeDrag
         const leftWidthPt = currentDocX - pairX
-        const newLeftShare = Math.round((leftWidthPt / pairWidth) * totalShare * 100) / 100
-        const newRightShare = Math.round((totalShare - newLeftShare) * 100) / 100
+        // Clamp to minimum 0.01 to ensure widthShare never becomes zero or negative
+        // (drag clamping already prevents this in practice, but floating-point rounding
+        // near the boundary could theoretically produce 0 after Math.round)
+        const newLeftShare = Math.max(0.01, Math.round((leftWidthPt / pairWidth) * totalShare * 100) / 100)
+        const newRightShare = Math.max(0.01, Math.round((totalShare - newLeftShare) * 100) / 100)
         dispatch({ type: "RESIZE_COLUMNS", leftStackId, leftShare: newLeftShare, rightStackId, rightShare: newRightShare })
         setResizeDrag(null)
         return

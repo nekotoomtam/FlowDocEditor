@@ -15,6 +15,9 @@ packages/*/dist/
 .env.local
 .env*.local
 
+# Claude Code local settings (personal, not for team)
+.claude/settings.local.json
+
 # misc
 .DS_Store
 *.pem

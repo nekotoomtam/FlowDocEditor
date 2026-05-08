@@ -60,28 +60,63 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
   - [ ] Paragraph: currently moves as a whole block and can overflow when taller
     than one page. Add line-level paragraph splitting as the first real layout
     split slice.
-- [ ] Stabilize row and stack pagination rules.
-  - Preserve row min-height semantics across browser/server/export.
-  - Keep stack width shares normalized after operations.
-  - Decide how multi-column rows behave when one stack overflows.
-- [ ] Stabilize table pagination rules.
-  - Validate and test row/col operations against grid invariants.
-  - Cover rowspan/colspan with page breaks before expanding table editing UI.
-  - Decide whether a table row with spans can split or must move whole.
-- [ ] Add layout assertion helpers for paginated output.
-  - No fragment should sit outside the section content box unless explicitly
-    documented.
-  - Fragment heights should be non-negative.
-  - Page fragments should be ordered top-to-bottom within a page.
-  - Split fragments for the same node should preserve document order.
-- [ ] Make editor resize preview converge with authoritative pagination.
-  - Column resize preview should avoid committing invalid stack widths.
-  - Row min-height preview should use the same natural-height rule as
-    pagination.
-  - Page margin resize should settle through server/API pagination.
-- [ ] Document DOCX layout limitations.
-  - DOCX pagination is not pixel-authoritative like PDF/editor preview.
-  - Keep renderer-specific compromises explicit.
+- [x] Stabilize row and stack pagination rules.
+  - Row height = max(minHeight, tallest-stack-natural-height). Verified in tests.
+  - All stacks in a row share the same height as the row fragment.
+  - Stack widths sum to contentBox.width; proportional to widthShare; contiguous x positions.
+  - Multi-column overflow: whole row moves to next page as a unit; both stacks land on same page.
+  - Very tall rows (taller than one page) stay at contentTop without crashing (documented overflow).
+  - 12 tests in `packages/core/src/pagination/__tests__/rowStack.test.ts`.
+  - All tests pass `assertPaginatedDocument` with no violations.
+- [x] Stabilize table pagination rules.
+  - Rowspan group detection: `buildRowspanGroups` in `paginator.ts` uses union-find
+    to group rows sharing rowspan cells. Multi-row groups are paginated as a unit
+    (approach B): page-break decision uses total group height; if the group doesn't
+    fit, the whole group moves to the next page. Single-row groups retain existing
+    behavior (allowBreak, split, move-whole).
+  - Upgrade path to approach A documented: group detection is shared; A adds
+    split-at-row-boundary logic within a group.
+  - Grid invariants: `addTableRow`, `removeTableRow`, `addTableColumn`,
+    `removeTableColumn` all pass `assertDocument` and `assertPaginatedDocument`.
+  - 14 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+    covering: no-rowspan baseline, 2/3-row groups staying on same page, group
+    moving to next page as unit, mixed groups, and operations+grid invariants.
+- [x] Add layout assertion helpers for paginated output.
+  - `checkPaginatedDocument(paginated)` → `PaginationViolation[]` in
+    `packages/core/src/pagination/assertPaginated.ts`.
+  - `assertPaginatedDocument(paginated)` throws with full violation list.
+  - Four rules: negative-height, outside-content-box (x/x+width with 0.5pt epsilon),
+    wrong-y-order (Y non-decreasing within a page), split-fragment-order (same nodeId
+    must appear in ascending page order).
+  - 17 tests covering happy path, each violation type, epsilon tolerance, and
+    assertPaginatedDocument throw behavior.
+- [x] Make editor resize preview converge with authoritative pagination.
+  - Column resize: added `Math.max(0.01, ...)` guard in `EditorShell` commit
+    path so widthShare never reaches 0 from floating-point rounding.
+  - Row min-height: preview uses browser canvas measurer (acceptable drift,
+    documented). After commit, server/API pagination settles the authoritative
+    result.
+  - Page margin: already settles through server/API pagination on commit.
+  - 15 tests in `packages/core/src/pagination/__tests__/resizeConvergence.test.ts`
+    verifying column resize (normal, near-min, minimum-clamp), row min-height
+    (increase, decrease, natural fallback, large), and margin update (symmetric,
+    large, asymmetric, x-position after resize) all pass `assertPaginatedDocument`.
+- [x] Document DOCX layout limitations.
+  - **Pagination**: DOCX export produces correct content structure but cannot
+    guarantee page breaks match the editor preview or PDF. Word/LibreOffice
+    reflows text using their own engine after opening the file.
+  - **Font metrics**: DOCX specifies font names only. Actual line-breaking and
+    glyph widths depend on which fonts are installed on the reader's system.
+    FlowDoc's fontkit metrics (used for PDF and editor preview) will not match.
+  - **Column layout**: Row/stack columns are rendered as invisible-border tables.
+    Visual output is close but not pixel-perfect with the editor preview.
+  - **Text measurement**: Line breaking inside DOCX paragraphs is controlled by
+    the reader application, not FlowDoc's WordBreaker or TextMeasurer.
+  - **Spacing and borders**: spacingBefore/After and border widths are converted
+    to EMU/twips. Rounding may introduce sub-pt differences from PDF output.
+  - **Accepted compromise**: DOCX is an exchange format. Exact visual fidelity
+    is intentionally not a goal; structural correctness (paragraphs, tables,
+    columns, headers, footers) is the target.
 
 ## Important Design Rules
 

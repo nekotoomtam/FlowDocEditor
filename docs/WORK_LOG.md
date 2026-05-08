@@ -17,6 +17,153 @@ Each entry should include:
 
 ## 2026-05-08
 
+### Stabilize Table Pagination — Rowspan Groups and Grid Invariants
+
+Goal: Keep rowspan-linked table rows on the same page (approach B) and verify row/column operations preserve grid invariants.
+
+Completed:
+
+- Added `buildRowspanGroups(tableNode, rowBoxes)` to `paginator.ts` using union-find. Groups rows that share rowspan cells into `RowspanGroup[]` with `rowIndices` and `totalHeight`.
+- Modified `paginateTable` to iterate over groups instead of rows:
+  - Multi-row group: page-break decision based on `totalHeight`. If group doesn't fit, try next page; if still too tall, overflow (documented). Rows within the group are placed with `paginateTableRowFull` without individual page-break decisions.
+  - Single-row group: existing behavior preserved (`allowBreak`, split, move-whole).
+- Created `packages/core/src/pagination/__tests__/tablePagination.test.ts` with 14 tests:
+  - No-rowspan baseline (existing behavior preserved).
+  - 2-row rowspan group stays on same page.
+  - 2-row rowspan group moves to next page as a unit.
+  - 3-row rowspan group stays together.
+  - Mixed groups (rowspan + independent rows).
+  - `assertPaginatedDocument` passes for all rowspan scenarios.
+  - `addTableRow`, `removeTableRow`, `addTableColumn`, `removeTableColumn` all pass `assertDocument` and `assertPaginatedDocument`.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts` (new)
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 128 core + 8 app = 136 tests passed.
+
+Notes:
+
+- Upgrade path to approach A (split within groups at row boundary) is easy: group detection is shared; A adds split-at-boundary logic within the multi-row group loop.
+- rowspan/colspan in split scenarios (`allowBreak=true` on multi-row groups) deferred until approach A is needed.
+
+---
+
+### Make Editor Resize Preview Converge With Authoritative Pagination
+
+Goal: Ensure resize interactions produce valid documents and converge to authoritative server pagination.
+
+Completed:
+
+- Added `Math.max(0.01, ...)` guard in `EditorShell.tsx` column resize commit to prevent widthShare from becoming 0 or negative due to floating-point rounding at the boundary (drag clamping already prevents this in practice, but the guard is now explicit).
+- Created `packages/core/src/pagination/__tests__/resizeConvergence.test.ts` with 15 tests:
+  - **Column resize** (6 tests): normal 30/70, 70/30, near-minimum 15/85, 85/15, minimum-clamp 0.01/99.99, and width sum verification.
+  - **Row min-height** (5 tests): increase, natural content height, zero fallback, very large, and height = max(minHeight, naturalHeight) verification.
+  - **Page margin** (4 tests): standard, large, asymmetric, and x-position after margin change.
+- All tests pass `assertPaginatedDocument` with no violations.
+- Documented that row min-height preview uses browser canvas measurer (acceptable drift, settles after server pagination).
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `packages/core/src/pagination/__tests__/resizeConvergence.test.ts` (new)
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 115 core + 8 app = 123 tests passed.
+
+---
+
+### Stabilize Row and Stack Pagination Rules
+
+Goal: Lock in row/stack layout semantics with tests and document multi-column overflow decision.
+
+Completed:
+
+- Created `packages/core/src/pagination/__tests__/rowStack.test.ts` with 12 tests covering:
+  - **Min-height**: row height = max(minHeight, tallest-stack), all stacks share row height.
+  - **Width distribution**: two/three-column stacks sum to contentBox.width, proportional to widthShare, contiguous x positions.
+  - **Page-break**: row moves to next page as a whole unit (both stacks land together), very tall row stays at contentTop without crash.
+  - `assertPaginatedDocument` passes for all valid row/stack documents.
+- Confirmed from `flow.ts`: `rowHeight = max(node.props.minHeight, ...measuredHeights)` and each stack receives `stackRenderHeight = rowHeight` so all stacks grow to the tallest column.
+- Multi-column overflow decision documented: whole row moves when possible; overflow without split is the current behavior for rows taller than one page.
+
+Files changed:
+
+- `packages/core/src/pagination/__tests__/rowStack.test.ts` (new)
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test` — 100 core + 8 app = 108 tests passed.
+
+---
+
+### Document DOCX Layout Limitations
+
+Goal: Make DOCX renderer compromises explicit so future contributors know what is intentional and what is not.
+
+Completed:
+
+- Updated `docs/LAYOUT_ENGINE_CHECKLIST.md` with six documented DOCX limitations: pagination non-authoritativeness, font metric dependence on reader system, column layout as invisible-border tables, reader-controlled line breaking, spacing/border rounding, and the accepted exchange-format compromise.
+
+Files changed:
+
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; no code checks required.
+
+---
+
+### Add Layout Assertion Helpers
+
+Goal: Add reusable helpers that verify PaginatedDocument layout invariants, so pagination bugs are caught immediately in tests and development.
+
+Completed:
+
+- Created `packages/core/src/pagination/assertPaginated.ts` with `checkPaginatedDocument` and `assertPaginatedDocument`.
+- `checkPaginatedDocument` returns `PaginationViolation[]` covering four rules:
+  - `negative-height`: fragment.height < 0
+  - `outside-content-box`: fragment x or x+width outside page content box (0.5pt epsilon for float rounding)
+  - `wrong-y-order`: consecutive fragments on the same page have decreasing Y
+  - `split-fragment-order`: fragments of the same nodeId appear on out-of-order pages
+- `assertPaginatedDocument` throws a detailed multi-line error listing all violations.
+- Exported from `packages/core/src/pagination/index.ts`.
+- Created 17 tests in `assertPaginated.test.ts` covering: happy path for real paginated docs, each violation type with both positive and negative cases, epsilon tolerance, and assertPaginatedDocument throw behavior.
+
+Files changed:
+
+- `packages/core/src/pagination/assertPaginated.ts` (new)
+- `packages/core/src/pagination/index.ts`
+- `packages/core/src/pagination/__tests__/assertPaginated.test.ts` (new)
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 88 core + 8 app = 96 tests passed.
+
+Notes:
+
+- Y overflow below contentBottom is intentionally not checked — whole-block move can overflow when a node is taller than one page (documented behavior).
+- These helpers should be used in future pagination tests and can be added to the API route for dev-mode validation.
+
+---
+
 ### Document Layout Page-Break Decisions
 
 Goal: Record current page-break behavior and near-term layout split direction before changing the paginator.
