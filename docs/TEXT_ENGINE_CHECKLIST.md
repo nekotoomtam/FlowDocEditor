@@ -66,6 +66,19 @@ editor-only shortcuts.
     - Refs reset to null when inlineEditNodeId becomes null, so re-entering
       the same paragraph starts fresh with no stale line-count state.
 
+
+## Recheck Addendum — Text Measurement Boundary
+
+- [ ] Make server font loading observable.
+  - The authoritative path should expose whether it used the real project font or
+    fallback metrics. Silent fallback can hide layout drift until export time.
+- [ ] Add drift fixtures for exact Thai/page-boundary cases using the real default font.
+  - Keep browser canvas acceptable as a preview path, but cover known risky cases:
+    Thai mixed with English/numbers, long unbroken tokens, and near-boundary line wraps.
+- [ ] Separate preview drift from authoritative failure.
+  - Browser drift should create an editor warning/overlay.
+  - Server/export `assertPaginatedDocument` failure should fail loudly and block export.
+
 ## Important Design Rules
 
 - [ ] Do not store line positions, segment widths, or caret geometry in `DocumentNode`.

@@ -371,7 +371,25 @@ function paginateVerticalContainer(
 ): PageFlowCursor {
   let current = cursor
 
-  box.children.forEach((child) => {
+  box.children.forEach((child, index) => {
+    // keepWithNext: if this paragraph must stay with the next sibling, advance the
+    // page before placing it when the combined height wouldn't fit on the current page.
+    const node = section.nodes[child.nodeId]
+    if (
+      node?.type === "paragraph" &&
+      (node.props.keepWithNext ?? false) &&
+      index + 1 < box.children.length
+    ) {
+      const nextChild = box.children[index + 1]
+      const combinedHeight = child.height + nextChild.height
+      if (
+        current.cursorY > contentTop + 1 &&
+        shouldMoveBlockToNextPage(current.cursorY, combinedHeight, contentTop, contentBottom)
+      ) {
+        current = advancePage(current, contentTop)
+      }
+    }
+
     current = paginateFlowBox(child, section, measurer, pages, template, contentTop, contentBottom, current, box.nodeId, wordBreaker)
   })
 

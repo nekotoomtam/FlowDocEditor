@@ -17,6 +17,57 @@ Each entry should include:
 
 ## 2026-05-08
 
+### Harden API Routes — Assertion and Font Diagnostics
+
+Goal: Catch layout bugs at API boundaries before they reach renderers, and surface font-loading failures instead of silently degrading Thai layout.
+
+Completed:
+
+- Added `assertPaginatedDocument(paginated)` after `paginateDocument(...)` in both `/api/paginate` and `/api/export`. Returns HTTP 500 with violation details on failure; logs to server console. Renderers no longer receive invalid layout output.
+- Replaced silent font-load `catch {}` in both routes with `console.error` logging the full font path and error. Missing font is now visible in server logs instead of silently producing Helvetica output for Thai documents.
+- `/api/paginate` now sets `X-FlowDoc-Font: fallback` response header when the default font is missing, making the degraded state detectable by the client.
+- Fallback to `createFontkitMeasurer(null)` is still allowed for dev/CI environments without the font file, but is now always surfaced.
+
+Files changed:
+
+- `src/app/api/paginate/route.ts`
+- `src/app/api/export/route.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+
+---
+
+### Add keepWithNext Paragraph Option
+
+Goal: Allow a paragraph (typically a heading) to stay on the same page as the following sibling, preventing orphan headings.
+
+Completed:
+
+- Added `keepWithNext?: boolean` to `ParagraphPropsSchema` in `schema/block.ts`.
+- Modified `paginateVerticalContainer` in `paginator.ts`: before placing a paragraph with `keepWithNext=true`, check if `child.height + nextChild.height > remaining page space`. If so and we're not at contentTop, advance page first so both can start on the new page.
+- Safety guard: only advances when `cursorY > contentTop + 1` — prevents infinite loops when combined height exceeds one full page height.
+- `keepTogether` deferred — produces bad UX for long paragraphs that would overflow rather than split.
+- Created 5 tests in `keepWithNext.test.ts`: baseline (no flag), heading moves with next sibling to page 2, heading stays on page 1 when both fit, no-loop guard for oversized combined height, multiple keepWithNext headings in sequence.
+
+Files changed:
+
+- `packages/core/src/schema/block.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/keepWithNext.test.ts` (new)
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 152 core + 8 app = 160 tests passed.
+
+---
+
 ### Add Page Numbering (Inline pageNumber Node)
 
 Goal: Allow paragraph children to include a page number that gets resolved to the actual page number during pagination.
@@ -1083,3 +1134,33 @@ Verification:
 Notes:
 
 - Future implementation sessions should append a new entry after the work is complete.
+
+
+---
+
+### Recheck Addendum — Core/App Boundary Review
+
+Goal: Convert implementation review findings into checklist items.
+
+Added to `LAYOUT_ENGINE_CHECKLIST.md`:
+
+- Assert paginated output at API/export boundaries.
+- Make font asset resolution deterministic and observable.
+- Expand drift comparison beyond paragraph fragments.
+- Give table cells clearer fragment identity.
+- Harden page-number measurement for page 10+ cases.
+- Define TOC overflow policy.
+- Add multi-page table-row split regression tests.
+- Strengthen renderer contract tests.
+- Keep checklist wording synchronized with implementation status.
+
+Added to `TEXT_ENGINE_CHECKLIST.md`:
+
+- Make server font loading observable.
+- Add real-font drift fixtures for Thai and exact-boundary cases.
+- Separate preview drift warnings from authoritative export failures.
+
+Notes:
+
+- The core direction remains aligned with the engineering principles.
+- Most added items are correctness guards at boundaries, not architecture rewrites.

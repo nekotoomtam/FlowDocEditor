@@ -6,6 +6,7 @@ import { thaiWordBreaker } from "@/layout/word-breaker"
 import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { PdfRenderer, DocxRenderer } from "@/renderer"
 import { assertDocument, DocumentAssertionError } from "@/document"
+import { assertPaginatedDocument } from "@/pagination"
 import { DEFAULT_FONT_KEY, resolveFontFileName } from "@/font-registry"
 import type { FontProvider } from "@/renderer"
 
@@ -20,7 +21,11 @@ function loadFontSync(key: string): Uint8Array | null {
     const buf = new Uint8Array(fs.readFileSync(fontPath))
     fontCache.set(key, buf)
     return buf
-  } catch {
+  } catch (err) {
+    console.error(
+      `[FlowDoc] /api/export: font "${key}" not found at "${fontPath}" — export will use Helvetica fallback. ` +
+      `Thai text may render incorrectly. Error: ${err}`,
+    )
     fontCache.set(key, null)
     return null
   }
@@ -63,6 +68,14 @@ export async function POST(req: NextRequest) {
   }
 
   const paginated = paginateDocument(doc, getMeasurer(), thaiWordBreaker)
+
+  try {
+    assertPaginatedDocument(paginated)
+  } catch (err) {
+    console.error("[FlowDoc] /api/export: layout assertion failed:", err)
+    return NextResponse.json({ error: "Layout assertion failed", detail: String(err) }, { status: 500 })
+  }
+
   const renderer = format === "pdf" ? new PdfRenderer(fontProvider) : new DocxRenderer()
   const result = await renderer.render(paginated)
 

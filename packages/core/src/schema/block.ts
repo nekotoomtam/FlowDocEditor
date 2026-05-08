@@ -41,6 +41,7 @@ export const ParagraphPropsSchema = z.object({
   indentLeft: UnitValueSchema,
   indentRight: UnitValueSchema,
   headingLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+  keepWithNext: z.boolean().optional(),  // keep this paragraph on the same page as the next sibling
 })
 
 export const SpacerPropsSchema = z.object({

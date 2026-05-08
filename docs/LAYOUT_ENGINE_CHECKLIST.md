@@ -57,9 +57,9 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
   - [x] TOC placeholder: temporary fixed-height block. Pagination places the
     placeholder first, then TOC lines are filled in post-processing; it does not
     yet repaginate if generated TOC content exceeds the placeholder.
-  - [ ] Paragraph: currently moves as a whole block and can overflow when taller
-    than one page. Add line-level paragraph splitting as the first real layout
-    split slice.
+  - [x] Paragraph: splits across pages by measured lines. Keep the older
+    whole-block overflow behavior only for node types whose split rules are still
+    intentionally deferred.
 - [x] Stabilize row and stack pagination rules.
   - Row height = max(minHeight, tallest-stack-natural-height). Verified in tests.
   - All stacks in a row share the same height as the row fragment.
@@ -126,6 +126,61 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
     is intentionally not a goal; structural correctness (paragraphs, tables,
     columns, headers, footers) is the target.
 
+
+## Recheck Addendum — App/Core Boundary
+
+These items came from reviewing the current app layer together with `packages/core`.
+They are mostly boundary guards and regression targets, not new feature work.
+
+- [x] Call `assertPaginatedDocument(paginated)` at every authoritative pagination boundary.
+  - Added after `paginateDocument(...)` in `/api/paginate` — returns 500 with violation
+    details on failure; logs to server console.
+  - Added after `paginateDocument(...)` in `/api/export` — same behavior before
+    PDF/DOCX render so renderer never receives an invalid layout.
+- [x] Make font asset resolution deterministic.
+  - Both API routes now log `console.error` with the full path and error when the
+    font file is missing, instead of silently falling back.
+  - `/api/paginate` adds `X-FlowDoc-Font: fallback` response header when using
+    Helvetica fallback so callers can detect the degraded state.
+  - Fallback to `createFontkitMeasurer(null)` is still allowed for dev/CI
+    environments where the font is absent, but is now always visible in server logs.
+- [ ] Expand drift comparison beyond paragraph fragments.
+  - Current `comparePagination` intentionally ignores non-paragraph fragments.
+  - Add row, stack, table, table-row, table-cell/header/footer/page-template movement
+    to the drift snapshot so page movement and geometry drift are visible for every
+    layout-owned node type.
+  - Keep line-count drift paragraph-only, but make page/geometry drift universal.
+- [ ] Give table cells a stable renderer/debug fragment identity.
+  - Current cell rendering can be represented as stack-like fragments with cell render
+    props. This works visually, but weakens debugging and drift reporting.
+  - Prefer an explicit `nodeType: "table-cell"` fragment or a clear discriminated
+    subtype before more table features are added.
+- [ ] Harden page-number layout measurement.
+  - Current inline `pageNumber` measurement uses a one-digit placeholder (`"0"`).
+  - Add a two-pass layout or configurable placeholder width before documents commonly
+    exceed 9 pages.
+  - Add regression tests for page 9 → 10 boundary and page number in narrow header/footer columns.
+- [ ] Define TOC overflow policy.
+  - Current TOC is filled post-pagination and does not repaginate when generated lines
+    exceed the placeholder.
+  - Choose one: fixed-height clipped TOC, auto-grow with repagination, or explicit
+    validation error when generated TOC exceeds reserved space.
+  - Add a fixture where TOC content is intentionally taller than the placeholder.
+- [ ] Extend table row splitting from two-slice to multi-page loop.
+  - Current row/cell split behavior is good enough for ordinary rows but should be
+    stress-tested with content taller than two pages.
+  - Add tests for a single breakable row with cell text spanning 3+ pages.
+  - Keep rowspan-linked groups conservative until split-at-row-boundary rules are explicit.
+- [ ] Add renderer contract checks around fragment coverage.
+  - For PDF/DOCX smoke tests, verify not only file headers but that renderer input
+    includes expected fragment kinds and split fragments before render.
+  - This catches accidental renderer reflow or dropped fragment types earlier.
+- [ ] Keep checklist status synchronized with implementation status.
+  - When an item moves to `Later Work` and becomes complete, update older `Near-Term`
+    wording that may still describe the pre-implementation behavior.
+  - Paragraph splitting was one such case: old text said whole-block move, later text
+    said measured-line split.
+
 ## Important Design Rules
 
 - [ ] Layout rules belong in `packages/core`, not React/CSS.
@@ -167,7 +222,18 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
   - Content rows on continuation pages start below the repeated header.
   - 5 tests in `tablePagination.test.ts`: baseline no-header, header repeats on
     every page, header starts at contentTop, content below header, fragment order.
-- [ ] Keep-with-next / keep-lines-together paragraph options.
+- [x] Keep-with-next paragraph option.
+  - Added `keepWithNext?: boolean` to `ParagraphPropsSchema`.
+  - `paginateVerticalContainer` looks ahead to the next sibling before placing a
+    paragraph with `keepWithNext=true`. If `child.height + nextChild.height` doesn't
+    fit on the current page (and we're not already at contentTop), the page is
+    advanced before placing the paragraph.
+  - Safety guard: only advances when `cursorY > contentTop + 1` — prevents infinite
+    loops when the combined height exceeds one full page.
+  - `keepTogether` (whole-block no-split) deferred — produces bad UX for long
+    paragraphs; addressed if a real use case arises.
+  - 5 tests in `keepWithNext.test.ts`: baseline without flag, heading moves with
+    next sibling, stays on page 1 when fits, no-loop guard, multiple headings.
 - [ ] Widow/orphan control.
 - [ ] Page templates with richer header/footer flows.
 - [x] Basic page numbering (inline `pageNumber` node).
