@@ -4,9 +4,13 @@ export interface FragmentDrift {
   nodeId: string
   browserLineCount: number
   serverLineCount: number
-  lineDelta: number   // positive = server has more lines, negative = server has fewer
+  lineDelta: number         // positive = server has more lines, negative = server has fewer
   heightDelta: number
-  pageMovement: boolean  // paragraph lands on different pages between browser and server
+  pageMovement: boolean     // paragraph lands on different pages between browser and server
+  browserFragmentCount: number  // how many fragments browser produced for this paragraph
+  serverFragmentCount: number   // how many fragments server produced
+  continuationChanged: boolean  // true if fragment count differs (split added or removed)
+  splitBoundaryMoved: boolean   // true if same fragment count but split points differ
 }
 
 export interface GeometryDrift {
@@ -22,7 +26,8 @@ export interface DriftReport {
   driftCount: number
   totalParagraphs: number
   maxLineDelta: number
-  pageBreakChanged: boolean  // true when any layout fragment (any type) moves pages
+  pageBreakChanged: boolean         // true when any layout fragment (any type) moves pages
+  continuationChangedCount: number  // how many paragraphs have a different split-fragment count
 }
 
 interface PageLocation {
@@ -33,7 +38,9 @@ interface PageLocation {
 interface FragmentSnapshot {
   lineCount: number
   height: number
-  pages: PageLocation[]  // all pages this paragraph spans, in order
+  pages: PageLocation[]     // all pages this paragraph spans, in order
+  fragmentCount: number     // how many page fragments this paragraph produced
+  splitBoundaries: number[] // lineStart of each continuation fragment (the split points)
 }
 
 interface LayoutSnapshot {
@@ -53,16 +60,22 @@ function buildSnapshotMap(doc: PaginatedDocument): Map<string, FragmentSnapshot>
         if (f.nodeType !== "paragraph") continue
         const existing = map.get(f.nodeId)
         if (existing) {
+          // lineStart of a continuation fragment is the split boundary
+          const boundary = f.lineStart ?? existing.lineCount
           map.set(f.nodeId, {
             lineCount: existing.lineCount + (f.lines?.length ?? 0),
             height: existing.height + f.height,
             pages: [...existing.pages, { sectionIndex: si, pageIndex: pi }],
+            fragmentCount: existing.fragmentCount + 1,
+            splitBoundaries: [...existing.splitBoundaries, boundary],
           })
         } else {
           map.set(f.nodeId, {
             lineCount: f.lines?.length ?? 0,
             height: f.height,
             pages: [{ sectionIndex: si, pageIndex: pi }],
+            fragmentCount: 1,
+            splitBoundaries: [],
           })
         }
       }
@@ -102,6 +115,10 @@ function pagesMatch(a: PageLocation[], b: PageLocation[]): boolean {
   return a.every((loc, i) => loc.sectionIndex === b[i].sectionIndex && loc.pageIndex === b[i].pageIndex)
 }
 
+function arraysEqual(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i])
+}
+
 export function comparePagination(browser: PaginatedDocument, server: PaginatedDocument): DriftReport {
   const browserMap = buildSnapshotMap(browser)
   const serverMap = buildSnapshotMap(server)
@@ -109,6 +126,7 @@ export function comparePagination(browser: PaginatedDocument, server: PaginatedD
   const driftMap = new Map<string, FragmentDrift>()
   let maxLineDelta = 0
   let pageBreakChanged = false
+  let continuationChangedCount = 0
 
   for (const [nodeId, bSnap] of browserMap) {
     const sSnap = serverMap.get(nodeId)
@@ -118,7 +136,14 @@ export function comparePagination(browser: PaginatedDocument, server: PaginatedD
     if (pageMovement) pageBreakChanged = true
 
     const lineDelta = sSnap.lineCount - bSnap.lineCount
-    if (lineDelta === 0 && !pageMovement) continue
+    const continuationChanged = bSnap.fragmentCount !== sSnap.fragmentCount
+    const splitBoundaryMoved = !continuationChanged &&
+      bSnap.fragmentCount > 1 &&
+      !arraysEqual(bSnap.splitBoundaries, sSnap.splitBoundaries)
+
+    if (continuationChanged) continuationChangedCount++
+
+    if (lineDelta === 0 && !pageMovement && !continuationChanged && !splitBoundaryMoved) continue
 
     maxLineDelta = Math.max(maxLineDelta, Math.abs(lineDelta))
     driftMap.set(nodeId, {
@@ -128,6 +153,10 @@ export function comparePagination(browser: PaginatedDocument, server: PaginatedD
       lineDelta,
       heightDelta: sSnap.height - bSnap.height,
       pageMovement,
+      browserFragmentCount: bSnap.fragmentCount,
+      serverFragmentCount: sSnap.fragmentCount,
+      continuationChanged,
+      splitBoundaryMoved,
     })
   }
 
@@ -153,5 +182,6 @@ export function comparePagination(browser: PaginatedDocument, server: PaginatedD
     totalParagraphs: browserMap.size,
     maxLineDelta,
     pageBreakChanged,
+    continuationChangedCount,
   }
 }

@@ -1,5 +1,5 @@
 import type { DocumentNode, DocumentSection, ParagraphNode, TableNode, TableCellNode, CellBorder, BorderSide, TocNode } from "../schema"
-import { flowSection, flowZone, measureParagraph, toAbstractUnit, TOC_ENTRY_FS, TOC_ENTRY_LH } from "../layout"
+import { flowSection, flowZone, measureParagraph, toAbstractUnit, TOC_ENTRY_FS, TOC_ENTRY_LH, TOC_TITLE_FS, TOC_TITLE_LH, TOC_TITLE_AFTER } from "../layout"
 import type { FlowBox, MeasuredLine, TextMeasurer, WordBreaker } from "../layout"
 import { defaultWordBreaker } from "../layout"
 import type {
@@ -10,6 +10,7 @@ import type {
   PaginatedPage,
   PaginatedSection,
   ParagraphRenderProps,
+  ParagraphSplitDecision,
   ResolvedBorderSide,
   ResolvedCellBorder,
   TableCellRenderProps,
@@ -45,7 +46,7 @@ function shouldMoveBlockToNextPage(
 }
 
 function advancePage(cursor: PageFlowCursor, contentTop: number): PageFlowCursor {
-  return { pageIndex: cursor.pageIndex + 1, cursorY: contentTop }
+  return { pageIndex: cursor.pageIndex + 1, cursorY: contentTop, pageNumberOffset: cursor.pageNumberOffset }
 }
 
 // ─── Page Management ──────────────────────────────────────────────────────────
@@ -138,6 +139,7 @@ function paginateParagraph(
   cursor: PageFlowCursor,
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
 ): PageFlowCursor {
   let current = cursor
 
@@ -163,11 +165,20 @@ function paginateParagraph(
   // Fast path: whole paragraph fits on the current page without splitting
   if (current.cursorY + measured.totalHeight <= contentBottom) {
     const rawLines = buildPaginatedLines(measured.lines, box.x, current.cursorY, spacingBefore)
-    const lines = resolvePageNumbers(rawLines, current.pageIndex + 1)
+    const lines = resolvePageNumbers(rawLines, current.pageIndex + 1 + current.pageNumberOffset)
     pushFragment(pages, template, {
       nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
       pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
       width: box.width, height: measured.totalHeight, lines, renderProps,
+      fragmentIndex: 0, lineStart: 0, lineEnd: measured.lines.length,
+      continuesFrom: false, isContinued: false,
+    })
+    onSplitDecision?.({
+      nodeId: box.nodeId, pageIndex: current.pageIndex, fragmentIndex: 0,
+      lineCount: measured.lines.length,
+      availableHeight: contentBottom - current.cursorY,
+      fragmentHeight: measured.totalHeight,
+      isSplit: false, forcedProgress: false, orphanPrevented: false, widowPrevented: false,
     })
     return { ...current, cursorY: current.cursorY + measured.totalHeight }
   }
@@ -176,6 +187,10 @@ function paginateParagraph(
   // spacingBefore goes on the first fragment only; spacingAfter on the last.
   let remainingLines = [...measured.lines]
   let isFirstFragment = true
+  let fragmentIndex = 0
+  let lineOffset = 0
+  let orphanPrevented = false
+  let widowPrevented = false
 
   while (remainingLines.length > 0) {
     if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
@@ -193,6 +208,7 @@ function paginateParagraph(
       count++
     }
 
+    let forcedProgress = false
     if (count === 0) {
       if (current.cursorY > contentTop + 1) {
         // No lines fit in the remaining space — advance to the next page and retry
@@ -202,6 +218,27 @@ function paginateParagraph(
       // At page top and still no room (line is taller than the page) — force one line
       // to prevent an infinite loop. This is the documented overflow case.
       count = 1
+      forcedProgress = true
+    }
+
+    // ── Orphan prevention ────────────────────────────────────────────────────
+    // Avoid placing a single line at the bottom of a page when more lines follow.
+    // Guard: skip when already at contentTop — content box too small to improve,
+    // and advancing would loop forever.
+    if (count === 1 && count < remainingLines.length && current.cursorY > contentTop + 1) {
+      orphanPrevented = true
+      current = advancePage(current, contentTop)
+      continue
+    }
+
+    // ── Widow prevention ─────────────────────────────────────────────────────
+    // Avoid leaving a single line alone at the top of the next page.
+    // Reduce count by 1 so the next page receives at least 2 lines.
+    // Guards: count >= 2 (no orphan side-effect), not at contentTop (nowhere to push).
+    const appliedWidow = remainingLines.length - count === 1 && count >= 2 && current.cursorY > contentTop + 1
+    if (appliedWidow) {
+      widowPrevented = true
+      count -= 1
     }
 
     const isLastFragment = count >= remainingLines.length
@@ -210,16 +247,29 @@ function paginateParagraph(
     const fragHeight = currSpacingBefore + fragLines.reduce((s, l) => s + l.height, 0) + currSpacingAfter
 
     const rawPositioned = buildPaginatedLines(fragLines, box.x, current.cursorY, currSpacingBefore)
-    const positionedLines = resolvePageNumbers(rawPositioned, current.pageIndex + 1)
+    const positionedLines = resolvePageNumbers(rawPositioned, current.pageIndex + 1 + current.pageNumberOffset)
     pushFragment(pages, template, {
       nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
       pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
       width: box.width, height: fragHeight, lines: positionedLines, renderProps,
+      fragmentIndex, lineStart: lineOffset, lineEnd: lineOffset + fragLines.length,
+      continuesFrom: !isFirstFragment, isContinued: !isLastFragment,
+    })
+    onSplitDecision?.({
+      nodeId: box.nodeId, pageIndex: current.pageIndex, fragmentIndex,
+      lineCount: count, availableHeight: availableForLines,
+      fragmentHeight: fragHeight, isSplit: true,
+      forcedProgress, orphanPrevented, widowPrevented: appliedWidow,
     })
 
     current = { ...current, cursorY: current.cursorY + fragHeight }
     remainingLines = remainingLines.slice(count)
+    lineOffset += fragLines.length
+    fragmentIndex += 1
     isFirstFragment = false
+    // Reset per-fragment flags after emitting
+    orphanPrevented = false
+    widowPrevented = false
   }
 
   return current
@@ -270,6 +320,7 @@ function pushStackContents(
   pageIndex: number,
   pageY: number,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  pageNumberOffset: number = 0,
 ): void {
   const offsetY = pageY - stackBox.y
   stackBox.children.forEach((child) => {
@@ -282,7 +333,7 @@ function pushStackContents(
       if (node?.type === "paragraph") {
         const measured = measureParagraph(node, child.width, measurer, wordBreaker)
         const rawLines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore)
-        lines = resolvePageNumbers(rawLines, pageIndex + 1)
+        lines = resolvePageNumbers(rawLines, pageIndex + 1 + pageNumberOffset)
         renderProps = buildRenderProps(node, measured.lineHeight)
       }
     }
@@ -351,7 +402,7 @@ function paginateRow(
       width: stackBox.width,
       height: box.height,
     })
-    pushStackContents(stackBox, section, measurer, pages, template, current.pageIndex, current.cursorY, wordBreaker)
+    pushStackContents(stackBox, section, measurer, pages, template, current.pageIndex, current.cursorY, wordBreaker, current.pageNumberOffset)
   })
 
   return { ...current, cursorY: current.cursorY + box.height }
@@ -369,6 +420,7 @@ function paginateVerticalContainer(
   contentBottom: number,
   cursor: PageFlowCursor,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
 ): PageFlowCursor {
   let current = cursor
 
@@ -391,7 +443,7 @@ function paginateVerticalContainer(
       }
     }
 
-    current = paginateFlowBox(child, section, measurer, pages, template, contentTop, contentBottom, current, box.nodeId, wordBreaker)
+    current = paginateFlowBox(child, section, measurer, pages, template, contentTop, contentBottom, current, box.nodeId, wordBreaker, onSplitDecision)
   })
 
   return current
@@ -449,6 +501,7 @@ function pushTableCellContents(
   pageIndex: number,
   rowPageY: number,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  pageNumberOffset: number = 0,
 ): void {
   const offsetY = rowPageY - cellBox.y
   cellBox.children.forEach((child) => {
@@ -461,7 +514,7 @@ function pushTableCellContents(
       if (node?.type === "paragraph") {
         const measured = measureParagraph(node, child.width, measurer, wordBreaker)
         const rawLines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore)
-        lines = resolvePageNumbers(rawLines, pageIndex + 1)
+        lines = resolvePageNumbers(rawLines, pageIndex + 1 + pageNumberOffset)
         renderProps = buildRenderProps(node, measured.lineHeight)
       }
     }
@@ -546,6 +599,7 @@ function pushCellSlice(
   from: SplitPoint,
   to: SplitPoint | null,
   wordBreaker: WordBreaker,
+  pageNumberOffset: number = 0,
 ): void {
   const cellNode = tableNode.nodes[cellBox.nodeId]
   const padding = cellNode?.type === "table-cell" && cellNode.props.padding
@@ -587,7 +641,7 @@ function pushCellSlice(
         pushFragment(pages, template, {
           nodeId: child.nodeId, nodeType: "paragraph", parentNodeId: cellBox.nodeId,
           pageIndex, x: child.x, y: curY, width: child.width, height: paraH,
-          lines: resolvePageNumbers(buildPaginatedLines(lines, child.x, curY, spacingBefore), pageIndex + 1),
+          lines: resolvePageNumbers(buildPaginatedLines(lines, child.x, curY, spacingBefore), pageIndex + 1 + pageNumberOffset),
           renderProps: buildRenderProps(node, measured.lineHeight),
         })
         curY += paraH
@@ -627,7 +681,7 @@ function paginateTableRowFull(
       width: cellBox.width, height: cellBox.height, cellRenderProps,
     })
 
-    pushTableCellContents(cellBox, tableNode, measurer, pages, template, cursor.pageIndex, cursor.cursorY, wordBreaker)
+    pushTableCellContents(cellBox, tableNode, measurer, pages, template, cursor.pageIndex, cursor.cursorY, wordBreaker, cursor.pageNumberOffset)
   }
 
   return { ...cursor, cursorY: cursor.cursorY + rowBox.height }
@@ -699,7 +753,7 @@ function paginateTableRowSplit(
           : undefined,
       })
 
-      pushCellSlice(cellBox, tableNode, measurer, pages, template, current.pageIndex, current.cursorY, from, to, wordBreaker)
+      pushCellSlice(cellBox, tableNode, measurer, pages, template, current.pageIndex, current.cursorY, from, to, wordBreaker, current.pageNumberOffset)
 
       if (!isLastSlice && to !== null) fromSplits.set(cellBox.nodeId, to)
     }
@@ -908,17 +962,18 @@ function paginateFlowBox(
   cursor: PageFlowCursor,
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
 ): PageFlowCursor {
   switch (box.nodeType) {
     case "paragraph":
-      return paginateParagraph(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
+      return paginateParagraph(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, onSplitDecision)
     case "spacer":
       return paginateSpacer(box, pages, template, contentTop, contentBottom, cursor, parentNodeId)
     case "row":
       return paginateRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
     case "body":
     case "stack":
-      return paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker)
+      return paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision)
     case "table":
       return paginateTable(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
     case "toc":
@@ -981,6 +1036,8 @@ function paginateSection(
   startPageIndex: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  tocHeightOverrides?: Map<string, number>,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
 ): PaginatedSection {
   const metrics = getPageMetrics(section.page)
   const template = createEmptyPage(startPageIndex, metrics)
@@ -991,9 +1048,13 @@ function paginateSection(
   const contentWidth = metrics.contentBox.width
 
   // ─── Body ────────────────────────────────────────────────────────────────────
-  const flowBox = flowSection(section, contentX, contentWidth, measurer, wordBreaker)
-  const cursor: PageFlowCursor = { pageIndex: startPageIndex, cursorY: contentTop }
-  paginateFlowBox(flowBox, section, measurer, pages, template, contentTop, contentBottom, cursor, undefined, wordBreaker)
+  const flowBox = flowSection(section, contentX, contentWidth, measurer, wordBreaker, tocHeightOverrides)
+  // pageNumberOffset: when pageNumberStart is set, display number = globalPageIndex + 1 + offset
+  const pageNumberOffset = section.page.pageNumberStart !== undefined
+    ? section.page.pageNumberStart - startPageIndex - 1
+    : 0
+  const cursor: PageFlowCursor = { pageIndex: startPageIndex, cursorY: contentTop, pageNumberOffset }
+  paginateFlowBox(flowBox, section, measurer, pages, template, contentTop, contentBottom, cursor, undefined, wordBreaker, onSplitDecision)
 
   if (pages.length === 0) pages.push(createEmptyPage(startPageIndex, metrics))
 
@@ -1023,15 +1084,19 @@ function paginateSection(
     ? buildZoneFragments(firstPageFooterBox, section, measurer, wordBreaker)
     : defaultFooterFragments
 
-  pages.forEach((page, idx) => {
-    const isFirst = idx === 0
+  // Densify: pages array uses global pageIndex as array index internally which leaves
+  // sparse holes for non-first sections. Filter to a dense array before returning.
+  const densePages = pages.filter((p): p is PaginatedPage => p != null)
+
+  densePages.forEach((page, idx) => {
+    const isFirst = idx === 0  // local section index — correct first-page header detection
     const hFrags = isFirst ? firstPageHeaderFragments : defaultHeaderFragments
     const fFrags = isFirst ? firstPageFooterFragments : defaultFooterFragments
     page.headerFragments = hFrags.map((f) => ({ ...f, pageIndex: page.index }))
     page.footerFragments = fFrags.map((f) => ({ ...f, pageIndex: page.index }))
   })
 
-  return { sectionId: section.id, pages }
+  return { sectionId: section.id, pages: densePages }
 }
 
 // ─── TOC Post-Processing ──────────────────────────────────────────────────────
@@ -1066,9 +1131,6 @@ function collectTocEntries(sections: PaginatedSection[], doc: DocumentNode): Toc
 }
 
 function fillTocFragments(sections: PaginatedSection[], doc: DocumentNode, tocEntries: TocEntry[]): void {
-  const TOC_TITLE_FS = 14
-  const TOC_TITLE_LH = 1.5
-  const TOC_TITLE_AFTER = 8
   const entryH = TOC_ENTRY_FS * TOC_ENTRY_LH
   const INDENT_PER_LEVEL = 12
 
@@ -1118,20 +1180,76 @@ function fillTocFragments(sections: PaginatedSection[], doc: DocumentNode, tocEn
 
 // ─── Document Entry ───────────────────────────────────────────────────────────
 
-export function paginateDocument(doc: DocumentNode, measurer: TextMeasurer, wordBreaker?: WordBreaker): PaginatedDocument {
-  const wb = wordBreaker ?? defaultWordBreaker
+function computeTocActualHeight(entries: TocEntry[], node: TocNode): number {
+  const maxLevel = node.props.maxLevel ?? 3
+  const filtered = entries.filter((e) => e.level <= maxLevel)
+  const title = node.props.title !== undefined ? node.props.title : "สารบัญ"
+  const titleH = title ? TOC_TITLE_FS * TOC_TITLE_LH + TOC_TITLE_AFTER : 0
+  const entryH = TOC_ENTRY_FS * TOC_ENTRY_LH
+  return titleH + filtered.length * entryH
+}
+
+function computeTocOverrides(
+  sections: PaginatedSection[],
+  doc: DocumentNode,
+  entries: TocEntry[],
+): Map<string, number> {
+  const overrides = new Map<string, number>()
+  sections.forEach((ps, si) => {
+    const section = doc.document.sections[si]
+    if (!section) return
+    ps.pages.forEach((page) => {
+      page.fragments.forEach((frag) => {
+        if (frag.nodeType !== "toc") return
+        const node = section.nodes[frag.nodeId] as unknown as TocNode | undefined
+        if (node?.type !== "toc") return
+        const actual = computeTocActualHeight(entries, node)
+        if (actual > frag.height) overrides.set(node.id, actual)
+      })
+    })
+  })
+  return overrides
+}
+
+function runAllSections(
+  doc: DocumentNode,
+  measurer: TextMeasurer,
+  wb: WordBreaker,
+  tocHeightOverrides?: Map<string, number>,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
+): PaginatedSection[] {
   let pageIndex = 0
   const sections: PaginatedSection[] = []
-
   doc.document.sections.forEach((section, index) => {
     if (index > 0) pageIndex += 1
-    const paginated = paginateSection(section, pageIndex, measurer, wb)
+    const paginated = paginateSection(section, pageIndex, measurer, wb, tocHeightOverrides, onSplitDecision)
     sections.push(paginated)
     pageIndex += paginated.pages.length - 1
   })
+  return sections
+}
 
-  const tocEntries = collectTocEntries(sections, doc)
-  fillTocFragments(sections, doc, tocEntries)
+export function paginateDocument(
+  doc: DocumentNode,
+  measurer: TextMeasurer,
+  wordBreaker?: WordBreaker,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
+): PaginatedDocument {
+  const wb = wordBreaker ?? defaultWordBreaker
 
-  return { sections, tocEntries }
+  // Pass 1: paginate with estimated TOC heights
+  const sections1 = runAllSections(doc, measurer, wb, undefined, onSplitDecision)
+  const entries1 = collectTocEntries(sections1, doc)
+  const overrides = computeTocOverrides(sections1, doc, entries1)
+
+  if (overrides.size > 0) {
+    // Pass 2: repaginate with corrected TOC heights; page numbers may shift
+    const sections2 = runAllSections(doc, measurer, wb, overrides, onSplitDecision)
+    const entries2 = collectTocEntries(sections2, doc)
+    fillTocFragments(sections2, doc, entries2)
+    return { sections: sections2, tocEntries: entries2 }
+  }
+
+  fillTocFragments(sections1, doc, entries1)
+  return { sections: sections1, tocEntries: entries1 }
 }

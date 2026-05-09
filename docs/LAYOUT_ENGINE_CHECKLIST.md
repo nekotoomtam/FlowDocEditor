@@ -170,35 +170,61 @@ fragments they receive.
 
 ### Metadata To Harden Next
 
-- [ ] Introduce explicit paragraph-fragment metadata for debugging and future
+- [x] Introduce explicit paragraph-fragment metadata for debugging and future
   editor features.
-  - Suggested fields: `sourceNodeId`, `fragmentIndex`, `pageIndex`, `lineStart`,
-    `lineEnd`, `continuedFrom`, `continuedTo`.
-  - This can be derived from existing fragment order initially, but making it
-    explicit will make selection, annotations, comments, and drift reports safer.
-- [ ] Decide whether fragment identity should stay implicit (`nodeId` + order) or
+  - Added 5 optional fields to `PageFragment`: `fragmentIndex` (0-based position),
+    `lineStart` (first line index in source paragraph), `lineEnd` (exclusive end),
+    `continuesFrom` (true if a previous fragment exists), `isContinued` (true if
+    a subsequent fragment exists).
+  - Populated in both fast path (whole paragraph fits) and split path. Fast path
+    always produces `fragmentIndex=0, lineStart=0, lineEnd=totalLines,
+    continuesFrom=false, isContinued=false`.
+  - 7 tests in `fragmentMeta.test.ts`: fast-path single fragment, first/last/middle
+    fragment flags for 2-page and 3-page splits, lineStart/lineEnd contiguity (no
+    gaps or overlaps), lineEnd-lineStart equals fragment line count, fragmentIndex
+    strictly increasing, assertPaginatedDocument passes.
+- [x] Decide whether fragment identity should stay implicit (`nodeId` + order) or
   become explicit (`fragmentId`).
-  - If explicit, the id must be deterministic and not depend on runtime object
-    creation order.
-  - Prefer a stable derivation such as `nodeId + pageIndex + fragmentIndex` unless
-    future editing requires line-range based identity.
-- [ ] Extend `comparePagination` so paragraph continuation is reported as a
+  - Decision: stay implicit. `nodeId + pageIndex` is unique per page; `fragmentIndex`
+    is available for ordered access. An explicit `fragmentId` string adds no new
+    capability until selection or annotation features need a stable reference that
+    survives document edits — deferred to that point.
+- [x] Extend `comparePagination` so paragraph continuation is reported as a
   first-class concept.
-  - Current paragraph drift can compare page/geometry/line count, but the report
-    should make continuation boundaries easy to read.
-  - Keep text-line drift paragraph-specific; make page/geometry movement usable
-    across all layout-owned fragment types.
+  - Added `fragmentCount` and `splitBoundaries` (lineStart of each continuation
+    fragment) to `FragmentSnapshot` in `comparePagination.ts`.
+  - Added to `FragmentDrift`: `browserFragmentCount`, `serverFragmentCount`,
+    `continuationChanged` (fragment count differs — split added or removed),
+    `splitBoundaryMoved` (same count but split points differ).
+  - Added `continuationChangedCount` to `DriftReport`.
+  - `driftMap` now includes entries where only continuation changed (lineDelta=0,
+    no pageMovement) so callers can surface split-boundary drift explicitly.
+  - Uses `lineStart` metadata from fragment (added in paragraph-fragment metadata
+    work) for accurate split-boundary tracking; falls back to cumulative line count
+    when `lineStart` is absent.
+  - 4 new tests in `comparePagination.test.ts`: continuationChanged browser→server,
+    splitBoundaryMoved same fragment count, no drift when splits match, multi-paragraph
+    continuationChangedCount.
 
 ### Policy Stages
 
 - [x] Stage 1: split paragraphs at any measured line boundary.
   - This gives the engine usable long-paragraph pagination without overfitting
     typographic rules too early.
-- [ ] Stage 2: add widow/orphan policy.
-  - Avoid leaving a single line at the bottom of a page or a single line at the
-    top of the next page when the paragraph has enough lines to avoid it.
-  - Start with a conservative policy that can be disabled for small content boxes
-    or impossible cases.
+- [x] Stage 2: add widow/orphan policy.
+  - Orphan: if only 1 line fits at the bottom of a page and more lines follow,
+    advance to the next page so at least 2 lines start together.
+  - Widow: if only 1 line would remain on the next page, reduce the current
+    fragment by 1 line so the next page receives at least 2 lines.
+  - Both guards skip when `cursorY <= contentTop + 1` — prevents infinite loops
+    when the content box is too small for 2 lines (impossible case handled
+    gracefully by falling back to normal split).
+  - Widow guard also requires `count >= 2` to avoid creating an orphan as a
+    side effect of the widow adjustment.
+  - 8 tests in `widowOrphan.test.ts`: orphan moves 3-line para to page 2,
+    line count preserved, single-line para unaffected, contentTop guard,
+    widow splits 4 lines 2+2, line count preserved, 2-line remainder unaffected,
+    assertPaginatedDocument passes for all cases.
 - [x] Stage 3: add keep-together / keep-with-next interactions.
   - `keepWithNext` implemented: paragraph stays on the same page as its next sibling.
   - `keepTogether` (whole-block no-split) deferred — bad UX for long paragraphs.
@@ -225,9 +251,21 @@ fragments they receive.
 
 ### Debug / Observability
 
-- [ ] Add a debug view or structured trace for paragraph split decisions.
-  - Useful fields: available height, candidate line count, chosen split line,
-    forced-progress flag, next page index, fragment height.
+- [x] Add a debug view or structured trace for paragraph split decisions.
+  - Added `ParagraphSplitDecision` interface to `pagination/types.ts` with fields:
+    `nodeId`, `pageIndex`, `fragmentIndex`, `lineCount`, `availableHeight`,
+    `fragmentHeight`, `isSplit`, `forcedProgress`, `orphanPrevented`, `widowPrevented`.
+  - Added optional `onSplitDecision?: (d: ParagraphSplitDecision) => void` parameter
+    to `paginateDocument` (and threaded through `runAllSections`, `paginateSection`,
+    `paginateFlowBox`, `paginateVerticalContainer`, `paginateParagraph`). Zero cost
+    when not provided — no allocations in the production path.
+  - Emitted in fast path (whole paragraph fits: `isSplit=false`) and for every
+    fragment placed in the split loop (`isSplit=true`). Orphan/widow flags are set
+    on the fragment that benefited from the policy (not the ones that were skipped).
+  - 9 tests in `splitTrace.test.ts`: fast-path fields, split emits one decision per
+    fragment, fragmentIndex increments, total lineCount preserved, availableHeight/
+    fragmentHeight > 0, orphanPrevented flag, widowPrevented flag + lineCount check,
+    multiple paragraphs.
 - [x] Add golden fixtures for representative continuation cases.
   - 2-page paragraph: covered in `paginator.test.ts` (split group).
   - 3+ page paragraph: covered in `paginator.test.ts` ("paragraph spanning 3 pages").
@@ -282,12 +320,20 @@ They are mostly boundary guards and regression targets, not new feature work.
     `resolvePageNumbers`, so page numbers inside columns stayed as `"00"`. Now resolved correctly.
   - Added 2 regression tests in `pageNumbers.test.ts`: page 9→10 boundary resolves to "10",
     and narrow column (widthShare=20) passes `assertPaginatedDocument` and resolves to "1".
-- [ ] Define TOC overflow policy.
-  - Current TOC is filled post-pagination and does not repaginate when generated lines
-    exceed the placeholder.
-  - Choose one: fixed-height clipped TOC, auto-grow with repagination, or explicit
-    validation error when generated TOC exceeds reserved space.
-  - Add a fixture where TOC content is intentionally taller than the placeholder.
+- [x] Define TOC overflow policy.
+  - Chosen: two-pass repagination. Pass 1 paginates with estimated height; if actual
+    TOC content exceeds the placeholder, Pass 2 repaginates with the corrected height
+    so Y positions below the TOC are correct and no content overlaps.
+  - `computeTocActualHeight` computes height from real entries (title + filtered entries).
+  - `computeTocOverrides` maps nodeId → actual height for all overflowing TOC fragments.
+  - `runAllSections` helper extracted so both passes share the same section-loop logic.
+  - `TOC_TITLE_FS`, `TOC_TITLE_LH`, `TOC_TITLE_AFTER` exported from `layout/flow.ts` and
+    imported in `paginator.ts` (removed duplicate local constants in `fillTocFragments`).
+  - `tocHeightOverrides?: Map<string, number>` threaded through `flowSection`, `flowNode`,
+    `flowVerticalContainer`, `flowRow` so the corrected height reaches `case "toc"`.
+  - 6 tests in `tocOverflow.test.ts`: no-overflow single-section, overflow grows fragment
+    height, lines don't exceed fragment bottom, entries have correct page numbers after
+    pass 2, assertPaginatedDocument passes, exact-match single-entry no-overflow.
 - [x] Extend table row splitting from two-slice to multi-page loop.
   - Replaced `pushCellFirstSlice`/`pushCellSecondSlice` with `pushCellSlice(from, to)` — general
     function that places cell content between any two split points.
@@ -391,8 +437,37 @@ They are mostly boundary guards and regression targets, not new feature work.
   - 7 tests in `pageNumbers.test.ts`: resolves to "1" on page 1, "2" on page 2,
     multiple nodes, prefix text preserved, standalone node, page 9→10 boundary,
     narrow column assertPaginatedDocument.
-- [ ] Section-level page numbering and restart rules.
-- [ ] Multi-section export smoke tests.
+- [x] Section-level page numbering and restart rules.
+  - Added `pageNumberStart?: number` to `PageSettingsSchema` / `PageSettings`. When set,
+    the section's display page numbers restart at that value instead of continuing
+    from the global page index.
+  - `pageNumberOffset = pageNumberStart - startPageIndex - 1` is computed in
+    `paginateSection` and stored on `PageFlowCursor`. All five `resolvePageNumbers`
+    call sites now use `pageIndex + 1 + pageNumberOffset` so inline `pageNumber`
+    nodes resolve to the section-local display number.
+  - `pageNumberOffset` threaded through `advancePage`, `pushStackContents`,
+    `pushTableCellContents`, and `pushCellSlice` (all default to 0 when absent).
+  - **Bug fixed**: `paginateSection` now densifies the section-local `pages` array
+    before returning. Previously, non-first sections (startPageIndex > 0) stored
+    pages at global array indices, leaving sparse holes at the front. This caused
+    crashes when iterating pages and incorrect first-page header detection.
+  - 5 tests in `sectionPageNumbers.test.ts`: global numbering continues across
+    sections (default), restart at 1 on second section, pageNumberStart=5 on first
+    section, explicit pageNumberStart=1 same as default, assertPaginatedDocument
+    passes.
+- [x] Multi-section export smoke tests.
+  - 10 tests in `renderer/__tests__/multiSection.test.ts` covering:
+  - **Pagination structure**: two-section document produces two `PaginatedSection`s,
+    each section's pages array is dense (no sparse holes), page number restart
+    displays correct inline numbers, TOC + content section fills TOC entries,
+    3-section document passes `assertPaginatedDocument`.
+  - **PDF smoke**: two-section, TOC + content section (ASCII title — Helvetica
+    fallback cannot encode Thai), page number restart section — all produce valid
+    `%PDF` header without throwing.
+  - **DOCX smoke**: two-section, TOC + content section — both produce valid PK
+    ZIP header without throwing.
+  - All renderer tests use ASCII text (Helvetica fallback); Thai-text scenarios
+    are covered in pagination-only tests.
 - [ ] Visual regression tests for representative document fixtures.
 
 ## Open Questions

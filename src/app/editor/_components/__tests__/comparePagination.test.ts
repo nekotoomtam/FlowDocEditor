@@ -12,6 +12,7 @@ function makeDoc(
         nodeType: string
         lines?: unknown[]
         height?: number
+        lineStart?: number
       }>
     }>
   }>,
@@ -35,6 +36,7 @@ function makeDoc(
           lines: f.lines as never,
           renderProps: undefined,
           parentNodeId: undefined,
+          lineStart: f.lineStart,
         })),
         headerFragments: [],
         footerFragments: [],
@@ -169,6 +171,78 @@ describe("comparePagination", () => {
     const doc = makeDoc([{ pages: [{ fragments: [{ nodeId: "row1", nodeType: "row", height: 24 }] }] }])
     const report = comparePagination(doc, doc)
     expect(report.geometryDriftMap.size).toBe(0)
+  })
+
+  // ── Continuation metadata ────────────────────────────────────────────────
+
+  it("continuationChanged: browser 1 fragment, server 2 fragments", () => {
+    const browser = makeDoc([{ pages: [
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(2), height: 24, lineStart: 0 }] },
+    ] }])
+    const server = makeDoc([{ pages: [
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(1), height: 12, lineStart: 0 }] },
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(1), height: 12, lineStart: 1 }] },
+    ] }])
+    const report = comparePagination(browser, server)
+    const drift = report.driftMap.get("p1")!
+    expect(drift).toBeDefined()
+    expect(drift.browserFragmentCount).toBe(1)
+    expect(drift.serverFragmentCount).toBe(2)
+    expect(drift.continuationChanged).toBe(true)
+    expect(report.continuationChangedCount).toBe(1)
+  })
+
+  it("splitBoundaryMoved: same fragment count but different split points", () => {
+    // Both browser and server split the paragraph across 2 pages,
+    // but browser splits at line 30 while server splits at line 28.
+    const browser = makeDoc([{ pages: [
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(30), height: 360, lineStart: 0 }] },
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(10), height: 120, lineStart: 30 }] },
+    ] }])
+    const server = makeDoc([{ pages: [
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(28), height: 336, lineStart: 0 }] },
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(12), height: 144, lineStart: 28 }] },
+    ] }])
+    const report = comparePagination(browser, server)
+    const drift = report.driftMap.get("p1")!
+    expect(drift).toBeDefined()
+    expect(drift.continuationChanged).toBe(false)
+    expect(drift.splitBoundaryMoved).toBe(true)
+    expect(drift.browserFragmentCount).toBe(2)
+    expect(drift.serverFragmentCount).toBe(2)
+    expect(report.continuationChangedCount).toBe(0)
+  })
+
+  it("no continuation drift when both sides split at same boundary", () => {
+    const splitDoc = makeDoc([{ pages: [
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(30), height: 360, lineStart: 0 }] },
+      { fragments: [{ nodeId: "p1", nodeType: "paragraph", lines: lines(10), height: 120, lineStart: 30 }] },
+    ] }])
+    const report = comparePagination(splitDoc, splitDoc)
+    expect(report.driftCount).toBe(0)
+    expect(report.continuationChangedCount).toBe(0)
+  })
+
+  it("continuationChangedCount counts multiple paragraphs with changed splits", () => {
+    const browser = makeDoc([{ pages: [
+      { fragments: [
+        { nodeId: "p1", nodeType: "paragraph", lines: lines(2), height: 24, lineStart: 0 },
+        { nodeId: "p2", nodeType: "paragraph", lines: lines(2), height: 24, lineStart: 0 },
+      ] },
+    ] }])
+    const server = makeDoc([{ pages: [
+      { fragments: [
+        { nodeId: "p1", nodeType: "paragraph", lines: lines(1), height: 12, lineStart: 0 },
+        { nodeId: "p2", nodeType: "paragraph", lines: lines(2), height: 24, lineStart: 0 },
+      ] },
+      { fragments: [
+        { nodeId: "p1", nodeType: "paragraph", lines: lines(1), height: 12, lineStart: 1 },
+      ] },
+    ] }])
+    const report = comparePagination(browser, server)
+    // p1: browser=1 frag, server=2 frags → continuationChanged
+    // p2: both 1 frag, same lines → no drift
+    expect(report.continuationChangedCount).toBe(1)
   })
 
   it("stack geometry drift is tracked independently from row", () => {

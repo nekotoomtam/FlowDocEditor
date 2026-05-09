@@ -80,14 +80,15 @@ function flowNode(
   measurer: TextMeasurer,
   stackRenderHeight?: number,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  tocHeightOverrides?: Map<string, number>,
 ): FlowBox {
   switch (node.type) {
     case "body":
-      return flowVerticalContainer(section, node, x, y, width, measurer, undefined, wordBreaker)
+      return flowVerticalContainer(section, node, x, y, width, measurer, undefined, wordBreaker, tocHeightOverrides)
     case "stack":
-      return flowVerticalContainer(section, node, x, y, width, measurer, stackRenderHeight, wordBreaker)
+      return flowVerticalContainer(section, node, x, y, width, measurer, stackRenderHeight, wordBreaker, tocHeightOverrides)
     case "row":
-      return flowRow(section, node, x, y, width, measurer, wordBreaker)
+      return flowRow(section, node, x, y, width, measurer, wordBreaker, tocHeightOverrides)
     case "paragraph": {
       const measured = measureParagraph(node, width, measurer, wordBreaker)
       return {
@@ -118,10 +119,10 @@ function flowNode(
     case "toc": {
       const toc = node as unknown as TocNode
       const maxLevel = toc.props.maxLevel ?? 3
-      const headingCount = countHeadings(section, maxLevel)
       const titleH = TOC_TITLE_FS * TOC_TITLE_LH + TOC_TITLE_AFTER
       const entryH = TOC_ENTRY_FS * TOC_ENTRY_LH
-      const height = titleH + Math.max(headingCount, 1) * entryH
+      const estimatedHeight = titleH + Math.max(countHeadings(section, maxLevel), 1) * entryH
+      const height = tocHeightOverrides?.get(node.id) ?? estimatedHeight
       return { nodeId: node.id, nodeType: "toc", x, y, width, height, children: [] }
     }
   }
@@ -129,9 +130,9 @@ function flowNode(
 
 // ─── TOC Helpers ──────────────────────────────────────────────────────────────
 
-const TOC_TITLE_FS = 14
-const TOC_TITLE_LH = 1.5
-const TOC_TITLE_AFTER = 8
+export const TOC_TITLE_FS = 14
+export const TOC_TITLE_LH = 1.5
+export const TOC_TITLE_AFTER = 8
 export const TOC_ENTRY_FS = 11
 export const TOC_ENTRY_LH = 1.5
 
@@ -154,6 +155,7 @@ function flowVerticalContainer(
   measurer: TextMeasurer,
   stackRenderHeight?: number,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  tocHeightOverrides?: Map<string, number>,
 ): FlowBox {
   const padding = Math.max(0, node.props.padding ?? 0)
   const gap = Math.max(0, node.props.gap ?? 0)
@@ -170,7 +172,7 @@ function flowVerticalContainer(
     .filter((n): n is LayoutNode => n != null)
 
   childNodes.forEach((child, index) => {
-    const childBox = flowNode(section, child, innerX, cursorY, innerWidth, measurer, undefined, wordBreaker)
+    const childBox = flowNode(section, child, innerX, cursorY, innerWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
     children.push(childBox)
     cursorY = childBox.y + childBox.height
     if (gap > 0 && index < childNodes.length - 1) {
@@ -206,6 +208,7 @@ function flowRow(
   width: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  tocHeightOverrides?: Map<string, number>,
 ): FlowBox {
   const gap = Math.max(0, node.props.gap ?? 0)
   const columnWidths = distributeRowWidths(section, node, width)
@@ -216,7 +219,7 @@ function flowRow(
 
   const measuredHeights = childNodes.map((child, index) => {
     const colWidth = columnWidths[index] ?? 0
-    const box = flowNode(section, child, 0, 0, colWidth, measurer, undefined, wordBreaker)
+    const box = flowNode(section, child, 0, 0, colWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
     return box.height
   })
 
@@ -227,7 +230,7 @@ function flowRow(
 
   childNodes.forEach((child, index) => {
     const colWidth = columnWidths[index] ?? 0
-    const childBox = flowNode(section, child, cursorX, y, colWidth, measurer, rowHeight, wordBreaker)
+    const childBox = flowNode(section, child, cursorX, y, colWidth, measurer, rowHeight, wordBreaker, tocHeightOverrides)
     children.push(childBox)
     cursorX += colWidth + gap
   })
@@ -471,11 +474,12 @@ export function flowSection(
   availableWidth: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  tocHeightOverrides?: Map<string, number>,
 ): FlowBox {
   const body = section.nodes[section.bodyRootId]
   if (body?.type !== "body") {
     throw new Error(`Section "${section.id}" has no valid body root`)
   }
 
-  return flowNode(section, body, contentX, 0, availableWidth, measurer, undefined, wordBreaker)
+  return flowNode(section, body, contentX, 0, availableWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
 }

@@ -26,6 +26,7 @@ export interface PageMetrics {
 export interface PageFlowCursor {
   pageIndex: number
   cursorY: number
+  pageNumberOffset: number  // added to (pageIndex + 1) to get display page number; 0 = global numbering
 }
 
 // ─── Table Cell Render Props ──────────────────────────────────────────────────
@@ -83,6 +84,12 @@ export interface PageFragment {
   lines?: PaginatedLine[]
   renderProps?: ParagraphRenderProps
   cellRenderProps?: TableCellRenderProps
+  // Paragraph split metadata — present on every paragraph fragment
+  fragmentIndex?: number   // 0-based position among fragments of the same nodeId
+  lineStart?: number       // index of first line in the source paragraph's measured lines
+  lineEnd?: number         // exclusive end index (lineStart + this fragment's line count)
+  continuesFrom?: boolean  // true if a previous fragment exists for this paragraph
+  isContinued?: boolean    // true if a subsequent fragment exists for this paragraph
 }
 
 export interface PaginatedLine {
@@ -124,4 +131,19 @@ export interface PaginatedSection {
 export interface PaginatedDocument {
   sections: PaginatedSection[]
   tocEntries: TocEntry[]
+}
+
+// ─── Debug / Observability ────────────────────────────────────────────────────
+
+export interface ParagraphSplitDecision {
+  nodeId: string
+  pageIndex: number        // global page index where this fragment is placed
+  fragmentIndex: number    // 0-based position among fragments of the same nodeId
+  lineCount: number        // lines placed in this fragment
+  availableHeight: number  // space available for lines when the decision was made
+  fragmentHeight: number   // actual height of the placed fragment (inc. spacing)
+  isSplit: boolean         // false when whole paragraph fit (fast path)
+  forcedProgress: boolean  // true when 1 line was forced (line taller than the page)
+  orphanPrevented: boolean // true when orphan prevention moved to next page before this fragment
+  widowPrevented: boolean  // true when widow prevention reduced line count by 1
 }
