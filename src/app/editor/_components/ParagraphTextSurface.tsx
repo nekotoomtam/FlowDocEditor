@@ -185,16 +185,30 @@ export function ParagraphTextSurface({
   const spacingBefore = (renderProps?.spacingBefore ?? 0) * scale
   const spacingAfter = (renderProps?.spacingAfter ?? 0) * scale
 
+  // For continuation fragments (page 2+), use only the text belonging to this
+  // fragment so the textarea starts at the right content and the caret is
+  // correctly positioned without relying on scroll (which doesn't work reliably
+  // inside SVG foreignObject with overflow:hidden).
+  const fullText = getEditableParagraphText(doc, fragment.nodeId) ?? ""
+  const continuationCharStart: number | null = fragment.continuesFrom === true
+    ? (fragment.lines?.[0]?.segments?.[0]?.start ?? null)
+    : null
+  const editText = continuationCharStart !== null ? fullText.slice(continuationCharStart) : fullText
+  const preText = continuationCharStart !== null ? fullText.slice(0, continuationCharStart) : ""
+  const adjustedInitialCaret = (continuationCharStart !== null && initialCaretIndex !== null)
+    ? Math.max(0, initialCaretIndex - continuationCharStart)
+    : initialCaretIndex
+
   useEffect(() => {
-    if (!isEditing || initialCaretIndex == null) return
+    if (!isEditing || adjustedInitialCaret == null) return
     const el = textareaRef.current
     if (!el) return
-    const caret = Math.min(Math.max(0, initialCaretIndex), el.value.length)
+    const caret = Math.min(Math.max(0, adjustedInitialCaret), el.value.length)
     requestAnimationFrame(() => {
       el.focus()
       el.setSelectionRange(caret, caret)
     })
-  }, [fragment.nodeId, initialCaretIndex, isEditing])
+  }, [fragment.nodeId, adjustedInitialCaret, isEditing])
 
   if (isEditing) {
     return (
@@ -215,7 +229,7 @@ export function ParagraphTextSurface({
             {...{ xmlns: "http://www.w3.org/1999/xhtml" } as any}
             autoFocus
             spellCheck={false}
-            defaultValue={getEditableParagraphText(doc, fragment.nodeId) ?? ""}
+            defaultValue={editText}
             style={{
               width: "100%",
               height: "100%",
@@ -239,7 +253,7 @@ export function ParagraphTextSurface({
               overflowWrap: "normal",
               wordBreak: "normal",
             }}
-            onInput={(event) => onChange(fragment.nodeId, event.currentTarget.value)}
+            onInput={(event) => onChange(fragment.nodeId, preText + event.currentTarget.value)}
             onBlur={onEndEdit}
             onKeyDown={(event) => {
               event.stopPropagation()
@@ -256,7 +270,10 @@ export function ParagraphTextSurface({
     )
   }
 
-  if (isLayoutLoading && !hasActiveInlineEditor && fragment.nodeType === "paragraph") {
+  // Live text overlay: show typed text when server pagination is loading.
+  // Skip for continuation fragments — their liveText would be the full paragraph
+  // text which doesn't match the continuation content, causing false positives.
+  if (isLayoutLoading && !hasActiveInlineEditor && fragment.nodeType === "paragraph" && !fragment.continuesFrom) {
     const liveText = getEditableParagraphText(doc, fragment.nodeId)
     const paginatedText = fragment.lines?.map((line) => line.text).join("") ?? ""
     const firstLine = fragment.lines?.[0]

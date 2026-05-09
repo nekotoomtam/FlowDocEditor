@@ -139,7 +139,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap,
@@ -151,7 +151,8 @@ function PageView({
   driftMap: Map<string, FragmentDrift> | null
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
-  onInlineEditStart: (nodeId: string, caretIndex?: number | null) => void
+  inlineEditPageIndex: number | null
+  onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string) => void
   onInlineEditEnd: () => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
@@ -273,7 +274,11 @@ function PageView({
         const isSelectable = SELECTABLE.has(f.nodeType)
         const selectNodeId = f.nodeId
         const isSelected = f.nodeId === selectedNodeId
-        const isInlineEditing = f.nodeId === inlineEditNodeId
+        // For split paragraphs: only the fragment on the clicked page enters edit mode.
+        // Without the pageIndex check, ALL fragments of the paragraph get isInlineEditing=true,
+        // disabling pointer events and rendering textareas on every page the paragraph spans.
+        const isInlineEditing = f.nodeId === inlineEditNodeId &&
+          (inlineEditPageIndex == null || f.pageIndex === inlineEditPageIndex)
         if (isInlineEditing) {
           if (
             editFragmentRef.current?.nodeId !== f.nodeId ||
@@ -318,14 +323,14 @@ function PageView({
               ? (e) => {
                 e.stopPropagation()
                 if (f.nodeType === "paragraph" && isSelected) {
-                  onInlineEditStart(f.nodeId, caretIndexFromPointer(f, e, scale))
+                  onInlineEditStart(f.nodeId, caretIndexFromPointer(f, e, scale), f.pageIndex)
                   return
                 }
                 onNodePointerDown({ source: "document", nodeId: selectNodeId }, e)
               }
               : undefined}
             onDoubleClick={f.nodeType === "paragraph" && !drag
-              ? (e) => { e.stopPropagation(); onInlineEditStart(f.nodeId, caretIndexFromPointer(f, e, scale)) }
+              ? (e) => { e.stopPropagation(); onInlineEditStart(f.nodeId, caretIndexFromPointer(f, e, scale), f.pageIndex) }
               : undefined}
             style={{ cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default" }}
           >
@@ -512,7 +517,8 @@ interface Props {
   isLayoutLoading: boolean
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
-  onInlineEditStart: (nodeId: string, caretIndex?: number | null) => void
+  inlineEditPageIndex: number | null
+  onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string) => void
   onInlineEditEnd: () => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
@@ -532,7 +538,7 @@ interface Props {
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   showTextSegments, showDrift, driftMap,
 }: Props) {
@@ -567,6 +573,7 @@ export function EditorCanvas({
                   selectedNodeId={selectedNodeId} isLayoutLoading={isLayoutLoading}
                   inlineEditNodeId={inlineEditNodeId}
                   inlineEditCaretIndex={inlineEditCaretIndex}
+                  inlineEditPageIndex={inlineEditPageIndex}
                   onInlineEditStart={onInlineEditStart}
                   onInlineEditChange={onInlineEditChange}
                   onInlineEditEnd={onInlineEditEnd}

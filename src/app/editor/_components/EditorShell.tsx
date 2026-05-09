@@ -314,11 +314,14 @@ function findParagraphNode(doc: DocumentNode, nodeId: string) {
   return null
 }
 
-function findParagraphFragment(paginated: PaginatedDocument, nodeId: string): PageFragment | null {
+function findParagraphFragment(paginated: PaginatedDocument, nodeId: string, pageIndex?: number | null): PageFragment | null {
   for (const section of paginated.sections) {
     for (const page of section.pages) {
       const f = page.fragments.find((f) => f.nodeId === nodeId && f.nodeType === "paragraph")
-      if (f) return f
+      if (!f) continue
+      // If pageIndex is specified, match only the fragment on that page
+      if (pageIndex != null && f.pageIndex !== pageIndex) continue
+      return f
     }
   }
   return null
@@ -367,6 +370,7 @@ function replaceFragmentLines(
   nodeId: string,
   lines: PaginatedLine[],
   height: number,
+  pageIndex?: number | null,
 ): PaginatedDocument {
   return {
     ...paginated,
@@ -374,11 +378,12 @@ function replaceFragmentLines(
       ...section,
       pages: section.pages.map((page) => ({
         ...page,
-        fragments: page.fragments.map((f) =>
-          f.nodeId === nodeId && f.nodeType === "paragraph"
-            ? { ...f, lines, height }
-            : f,
-        ),
+        fragments: page.fragments.map((f) => {
+          if (f.nodeId !== nodeId || f.nodeType !== "paragraph") return f
+          // Only patch the specific page fragment if pageIndex is specified
+          if (pageIndex != null && f.pageIndex !== pageIndex) return f
+          return { ...f, lines, height }
+        }),
       })),
     })),
   }
@@ -415,6 +420,7 @@ export default function EditorShell() {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
   const [inlineEditCaretIndex, setInlineEditCaretIndex] = useState<number | null>(null)
+  const [inlineEditPageIndex, setInlineEditPageIndex] = useState<number | null>(null)
 
   useEffect(() => {
     if (typeof document === "undefined" || !("fonts" in document)) return
@@ -490,10 +496,11 @@ export default function EditorShell() {
   }, [])
 
   // ─── Inline editing ───────────────────────────────────────────────────────────
-  const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null) => {
+  const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null) => {
     dispatch({ type: "SELECT_NODE", nodeId })
     setInlineEditNodeId(nodeId)
     setInlineEditCaretIndex(caretIndex)
+    setInlineEditPageIndex(pageIndex)
   }, [])
 
   const handleInlineEditChange = useCallback((nodeId: string, text: string) => {
@@ -564,8 +571,22 @@ export default function EditorShell() {
     if (!inlineEditNodeId) return
     const paraNode = findParagraphNode(previewDoc, inlineEditNodeId)
     if (!paraNode) return
-    const fragment = findParagraphFragment(paginatedRef.current, inlineEditNodeId)
+    const fragment = findParagraphFragment(paginatedRef.current, inlineEditNodeId, inlineEditPageIndex)
     if (!fragment) return
+
+    // Skip local reflow for split paragraphs — local reflow builds lines from a
+    // full measureParagraph call and positions them all within one fragment's Y
+    // range, causing visual corruption when the paragraph spans multiple pages.
+    // Split paragraphs rely on the debounced browser pagination for live updates.
+    const isSplitParagraph = paginatedRef.current
+      ? paginatedRef.current.sections
+          .flatMap((s) => s.pages)
+          .flatMap((p) => p.fragments)
+          .filter((f) => f.nodeId === inlineEditNodeId && f.nodeType === "paragraph")
+          .length > 1
+      : false
+    if (isSplitParagraph) return
+
     const align = paraNode.props.align
 
     // Incremental reflow: if caret is past the first line, reuse head lines and
@@ -608,7 +629,7 @@ export default function EditorShell() {
       const newTotalHeight = fragment.height - existingLineHeight + newLineHeight
       dispatch({
         type: "SET_PAGINATED",
-        paginated: replaceFragmentLines(paginatedRef.current, inlineEditNodeId, newLines, newTotalHeight),
+        paginated: replaceFragmentLines(paginatedRef.current, inlineEditNodeId, newLines, newTotalHeight, inlineEditPageIndex),
       })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -619,13 +640,17 @@ export default function EditorShell() {
   useEffect(() => {
     if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current)
 
+    // Use ref for debounce time so edit mode enter/exit doesn't re-trigger pagination.
+    // Entering edit mode changes inlineEditNodeId but not previewDoc — we must not
+    // re-paginate here because browser measurer drift would cause a visible flicker
+    // (paragraph appears to collapse onto one page before server corrects it).
     interactiveDebounceRef.current = setTimeout(() => {
       dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
-    }, inlineEditNodeId ? 200 : 16)
+    }, inlineEditNodeIdRef.current ? 200 : 16)
 
     return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorTextMeasurer, fontReadyVersion, previewDoc, inlineEditNodeId])
+  }, [editorTextMeasurer, fontReadyVersion, previewDoc])
 
   // Authoritative pagination — server/export layout truth. Browser pagination
   // remains the interaction preview, then settles back to this result when idle.
@@ -1188,6 +1213,7 @@ export default function EditorShell() {
           isLayoutLoading={isLayoutLoading}
           inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
           inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
+          inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
           onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
           onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
           onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}

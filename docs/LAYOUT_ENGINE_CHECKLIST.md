@@ -497,3 +497,43 @@ They are mostly boundary guards and regression targets, not new feature work.
   fidelity. Pagination, font metrics, line breaking, and column layout will
   differ from PDF/editor preview when opened in Word/LibreOffice. This is
   intentional and accepted.
+
+## Cross-Page & Table Editing Improvements
+
+These items address UX issues discovered during real document editing.
+
+- [ ] Fix flicker when entering inline edit mode on a split paragraph. [IN PROGRESS]
+  - Root cause: entering edit mode triggers immediate browser re-pagination.
+    Browser measurer may compute fewer lines than fontkit (drift) → paragraph
+    appears to collapse onto one page momentarily, then server pagination
+    corrects it back → visible flicker/blink.
+  - Fix 1 (done): removed `inlineEditNodeId` from full browser pagination effect
+    deps → entering edit mode no longer triggers re-pagination.
+  - Fix 2 (done): `inlineEditPageIndex` stored in EditorShell; passed through
+    EditorCanvas → PageView; `isInlineEditing` checks pageIndex so only the
+    clicked fragment enters edit mode (not all fragments of the split paragraph).
+  - Fix 3 (done): local reflow skips split paragraphs (isSplitParagraph guard).
+  - Fix 4 (done): continuation fragments use `fullText.slice(continuationCharStart)`
+    as textarea value and adjust `initialCaretIndex` to be relative to the slice.
+    Live text overlay disabled for continuation fragments.
+  - Status: improved but NOT fully resolved — caret positioning and edit UX on
+    continuation fragments still needs further testing and refinement.
+
+- [ ] Change default `allowBreak` to `true` for table rows.
+  - Single-row groups (no rowspan) will split at line boundaries by default
+    instead of jumping as a whole block to the next page.
+  - Rowspan groups are unaffected — approach B keeps them together regardless
+    of `allowBreak`.
+  - Update existing tablePagination tests that assume whole-row-move behavior.
+  - Add regression test: single row with multi-line content splits across pages.
+
+- [ ] Live text preview in table cell during inline editing.
+  - Root cause: local reflow in EditorShell patches only body-level paragraph
+    fragments. Paragraphs inside table cells are not patched, so typed text is
+    not visible until server pagination debounce fires (~500ms delay).
+  - Fix: extend local reflow to find and patch table cell paragraph fragments.
+    The fragment is nested under table-cell → table-row → table in the paginated
+    state, but its `nodeType` is still `"paragraph"` so `findParagraphFragment`
+    should locate it.
+  - Accept slight Y-position drift (cell paragraph Y depends on row height) until
+    server pagination settles — same trade-off as body paragraph local reflow.

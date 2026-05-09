@@ -118,6 +118,72 @@ Verification:
 
 ---
 
+---
+
+### Split Paragraph Inline Editing — Partial Fix [IN PROGRESS]
+
+Goal: Fix visual issues when clicking to edit a paragraph that spans multiple pages (flicker, wrong fragment activated, caret at wrong position).
+
+Completed so far:
+
+- Fix 1: Removed `inlineEditNodeId` from full browser pagination `useEffect` deps. Effect now uses `inlineEditNodeIdRef.current` for debounce time only. Entering edit mode no longer triggers browser re-pagination → eliminates the flash caused by browser measurer drift.
+- Fix 2: Added `inlineEditPageIndex` state to `EditorShell`. `EditorCanvas` passes `f.pageIndex` through `onInlineEditStart`. `findParagraphFragment` matches by pageIndex. `replaceFragmentLines` patches only the specific-page fragment. `PageView` receives `inlineEditPageIndex` prop.
+- Fix 3: `isInlineEditing` in `EditorCanvas` now requires `f.pageIndex === inlineEditPageIndex` so only the clicked fragment enters edit mode — other fragments of the same split paragraph remain in display mode and keep pointer events enabled.
+- Fix 4: Local reflow skips split paragraphs (`isSplitParagraph` guard checks if `paginatedRef` has >1 fragment for the nodeId). Prevents all-lines-on-one-page visual corruption.
+- Fix 5: `ParagraphTextSurface` detects continuation fragments via `fragment.continuesFrom`. For continuation fragments, textarea uses `fullText.slice(continuationCharStart)` as value (where `continuationCharStart = fragment.lines[0]?.segments?.[0]?.start`). `initialCaretIndex` is adjusted by subtracting `continuationCharStart`. `onChange` prepends `preText` to reconstruct full text. Live text overlay disabled for continuation fragments.
+
+Still open:
+- Caret positioning and overall edit UX on continuation fragments needs further testing and may need additional refinement.
+- Split/merge paragraph (Enter/Backspace) behavior for continuation fragments not handled.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 244 core + 16 app = 260 tests passed.
+
+---
+
+### Fix Flicker When Editing Split Paragraphs
+
+Goal: Eliminate the visible flicker/blink when clicking to edit a paragraph that spans multiple pages, and ensure the inline editor is positioned over the correct page fragment.
+
+Completed:
+
+- **Root cause**: `inlineEditNodeId` was in the dependency array of the full browser pagination `useEffect`. Entering edit mode changed `inlineEditNodeId`, triggering immediate browser re-pagination. Browser measurer drift caused the split paragraph to briefly appear as one page, then server pagination corrected it → flicker.
+- **Fix 1**: Removed `inlineEditNodeId` from the pagination effect deps. The effect now only fires when `previewDoc`, `editorTextMeasurer`, or `fontReadyVersion` changes (i.e., when text actually changes). The existing `inlineEditNodeIdRef.current` is used for debounce time calculation instead.
+- **Fix 2**: Added `inlineEditPageIndex: number | null` state to `EditorShell`. `EditorCanvas` now passes `f.pageIndex` as the third argument to `onInlineEditStart`. `handleInlineEditStart` stores this as `inlineEditPageIndex`.
+- Updated `findParagraphFragment` to accept optional `pageIndex` — when provided, only returns the fragment on that specific page (not always the first fragment).
+- Updated `replaceFragmentLines` to accept optional `pageIndex` — when provided, only patches the fragment on that page (continuation fragments on other pages are left unchanged).
+- Threaded `inlineEditPageIndex` through the local reflow effect (`findParagraphFragment` and `replaceFragmentLines` calls).
+- Added checklist section "Cross-Page & Table Editing Improvements" to `LAYOUT_ENGINE_CHECKLIST.md` with 3 items. Marked this item as `[x]`.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 244 core + 16 app = 260 tests passed.
+
+Notes:
+
+- The fix correctly handles both the first fragment (page 1) and continuation fragments (page 2+). When a user clicks on page 2, `inlineEditPageIndex=1` is stored, the textarea is positioned over the page 2 fragment, and local reflow patches only that fragment's lines.
+- Authoritative server pagination still runs normally when text changes (previewDoc changes). Only the browser re-pagination on edit mode enter/exit is suppressed.
+
+---
+
 ## 2026-05-09 (continued)
 
 ### Add PDF/DOCX Text Flow Smoke Tests
