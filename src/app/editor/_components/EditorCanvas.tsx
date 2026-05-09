@@ -28,13 +28,8 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-function lineVisualLeft(
-  line: PaginatedLine,
-  fragment: PageFragment,
-  align: ParagraphRenderProps["align"] | undefined,
-): number {
-  if (align === "center") return fragment.x + (fragment.width - line.width) / 2
-  if (align === "right") return fragment.x + fragment.width - line.width
+// line.x now contains the alignment offset (baked in by buildPaginatedLines).
+function lineVisualLeft(line: PaginatedLine): number {
   return line.x
 }
 
@@ -82,7 +77,7 @@ function caretIndexFromPointer(
     }, 0)
 
   const line = lines[lineIndex]
-  const visualLeft = lineVisualLeft(line, fragment, fragment.renderProps?.align)
+  const visualLeft = lineVisualLeft(line)
   const segmentCaretIndex = caretIndexFromSegments(line, docX, visualLeft)
   if (segmentCaretIndex != null) return segmentCaretIndex
 

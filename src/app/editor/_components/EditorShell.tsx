@@ -2,7 +2,7 @@
 
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
 import { paginateDocument } from "@/pagination"
-import { defaultTextMeasurer, measureParagraph } from "@/layout"
+import { defaultTextMeasurer, measureParagraph, measureParagraphFrom } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
 import { bindDocument } from "@/binding"
@@ -11,7 +11,7 @@ import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
 import type { DocumentNode } from "@/schema"
 import type { PaginatedDocument, PaginatedLine, PageFragment } from "@/pagination"
-import type { MeasuredParagraph } from "@/layout"
+import type { MeasuredLine, MeasuredParagraph } from "@/layout"
 import type {
   DragSource,
   PlacementPreview,
@@ -324,20 +324,42 @@ function findParagraphFragment(paginated: PaginatedDocument, nodeId: string): Pa
   return null
 }
 
-function buildLocalLines(measured: MeasuredParagraph, fragment: PageFragment): PaginatedLine[] {
+function buildLocalLines(measured: MeasuredParagraph, fragment: PageFragment, align: string = "left"): PaginatedLine[] {
   let lineY = fragment.y + measured.spacingBefore
   return measured.lines.map((line) => {
-    const result: PaginatedLine = {
-      text: line.text,
-      x: fragment.x,
-      y: lineY,
-      width: line.width,
-      height: line.height,
-      segments: line.segments,
-    }
+    let x = fragment.x
+    if (align === "center") x = fragment.x + (fragment.width - line.width) / 2
+    else if (align === "right") x = fragment.x + fragment.width - line.width
+    const result: PaginatedLine = { text: line.text, x, y: lineY, width: line.width, height: line.height, segments: line.segments }
     lineY += line.height
     return result
   })
+}
+
+// Returns the index of the paginated line containing the given caret offset.
+function findCaretLineIndex(lines: PaginatedLine[], caretIndex: number): number {
+  for (let i = 0; i < lines.length; i++) {
+    const segs = lines[i].segments
+    if (!segs?.length) continue
+    if (caretIndex >= segs[0].start && caretIndex <= segs[segs.length - 1].end) return i
+  }
+  return 0
+}
+
+// Builds paginated lines for the tail measured lines, starting from the Y position
+// immediately after the last head line.
+function buildTailLines(tailMeasured: MeasuredLine[], headLines: PaginatedLine[], fragmentX: number, align: string = "left", fragmentWidth: number = 0): PaginatedLine[] {
+  const lastHead = headLines[headLines.length - 1]
+  let lineY = lastHead ? lastHead.y + lastHead.height : 0
+  const result: PaginatedLine[] = []
+  for (const line of tailMeasured) {
+    let x = fragmentX
+    if (align === "center") x = fragmentX + (fragmentWidth - line.width) / 2
+    else if (align === "right") x = fragmentX + fragmentWidth - line.width
+    result.push({ text: line.text, x, y: lineY, width: line.width, height: line.height, segments: line.segments })
+    lineY += line.height
+  }
+  return result
 }
 
 function replaceFragmentLines(
@@ -544,24 +566,49 @@ export default function EditorShell() {
     if (!paraNode) return
     const fragment = findParagraphFragment(paginatedRef.current, inlineEditNodeId)
     if (!fragment) return
-    const measured = measureParagraph(paraNode, fragment.width, editorTextMeasurer)
-    const newLines = buildLocalLines(measured, fragment)
+    const align = paraNode.props.align
+
+    // Incremental reflow: if caret is past the first line, reuse head lines and
+    // only re-measure from the caret's line forward.
+    const existingLines = fragment.lines ?? []
+    const caretLineIndex = inlineEditCaretIndex !== null && existingLines.length > 0
+      ? findCaretLineIndex(existingLines, inlineEditCaretIndex)
+      : 0
+
+    let newLines: PaginatedLine[]
+    let newLineCount: number
+
+    if (caretLineIndex > 0) {
+      const headLines = existingLines.slice(0, caretLineIndex)
+      const fromOffset = existingLines[caretLineIndex]?.segments?.[0]?.start ?? 0
+      const { tailLines } = measureParagraphFrom(paraNode, fromOffset, fragment.width, editorTextMeasurer)
+      const paginatedTail = buildTailLines(tailLines, headLines, fragment.x, align, fragment.width)
+      newLines = [...headLines, ...paginatedTail]
+      newLineCount = newLines.length
+    } else {
+      const measured = measureParagraph(paraNode, fragment.width, editorTextMeasurer)
+      newLines = buildLocalLines(measured, fragment, align)
+      newLineCount = measured.lines.length
+    }
 
     if (prevEditNodeIdRef.current !== inlineEditNodeId) {
       prevLineCountRef.current = null
       prevEditNodeIdRef.current = inlineEditNodeId
     }
     const prevLineCount = prevLineCountRef.current
-    const newLineCount = measured.lines.length
     prevLineCountRef.current = newLineCount
     const isHardEvent = prevLineCount !== null && newLineCount !== prevLineCount
 
     if (isHardEvent) {
       dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
     } else {
+      // Compute updated height: spacing (non-line portion) + new line heights
+      const existingLineHeight = existingLines.reduce((s, l) => s + l.height, 0)
+      const newLineHeight = newLines.reduce((s, l) => s + l.height, 0)
+      const newTotalHeight = fragment.height - existingLineHeight + newLineHeight
       dispatch({
         type: "SET_PAGINATED",
-        paginated: replaceFragmentLines(paginatedRef.current, inlineEditNodeId, newLines, measured.totalHeight),
+        paginated: replaceFragmentLines(paginatedRef.current, inlineEditNodeId, newLines, newTotalHeight),
       })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { measureParagraph, snapToGraphemeBoundary } from "../measure"
+import { measureParagraph, measureParagraphFrom, snapToGraphemeBoundary } from "../measure"
 import { defaultTextMeasurer, defaultWordBreaker } from "../types"
 import type { ParagraphNode } from "../../schema"
 import type { WordBreaker } from "../types"
@@ -391,5 +391,48 @@ describe("snapToGraphemeBoundary", () => {
     // "ก้": ก(0) + ้(1) = 1 grapheme cluster, length=2
     // index 1 is inside — distance to start(0)=1, distance to end(2)=1 → snap to start (tie → start wins)
     expect(snapToGraphemeBoundary("ก้", 1)).toBe(0)
+  })
+})
+
+// ─── measureParagraphFrom ─────────────────────────────────────────────────────
+
+describe("measureParagraphFrom — incremental reflow", () => {
+  it("fromOffset=0: tail equals full measurement lines", () => {
+    const para = makeParagraph("Alpha\nBeta\nGamma")
+    const full = measureParagraph(para, 200, defaultTextMeasurer, spaceBreaker)
+    const { tailLines } = measureParagraphFrom(para, 0, 200, defaultTextMeasurer, spaceBreaker)
+    expect(tailLines.map((l) => l.text)).toEqual(full.lines.map((l) => l.text))
+  })
+
+  it("fromOffset in second hard line: tail starts from that hard line", () => {
+    // "Alpha\nBeta\nGamma" — "Alpha" is 5 chars + \n, so Beta starts at offset 6
+    const para = makeParagraph("Alpha\nBeta\nGamma")
+    const { tailLines } = measureParagraphFrom(para, 6, 200, defaultTextMeasurer, spaceBreaker)
+    expect(tailLines[0].text).toBe("Beta")
+    expect(tailLines[1].text).toBe("Gamma")
+  })
+
+  it("segment offsets in tail lines reference the original full text", () => {
+    // "Alpha\nBeta" — Beta starts at offset 6
+    const para = makeParagraph("Alpha\nBeta")
+    const { tailLines } = measureParagraphFrom(para, 6, 200, defaultTextMeasurer, spaceBreaker)
+    // Beta line's segment start should be 6 (relative to full text)
+    const betaSeg = tailLines[0]?.segments?.[0]
+    expect(betaSeg?.start).toBe(6)
+    expect(betaSeg?.end).toBe(10)
+  })
+
+  it("lineHeight matches full measureParagraph lineHeight", () => {
+    const para = makeParagraph("Hello\nWorld")
+    const full = measureParagraph(para, 200, defaultTextMeasurer, spaceBreaker)
+    const { lineHeight } = measureParagraphFrom(para, 6, 200, defaultTextMeasurer, spaceBreaker)
+    expect(lineHeight).toBe(full.lineHeight)
+  })
+
+  it("fromOffset past all hard lines: returns empty tail", () => {
+    // "Hi" = 2 chars, fromOffset=10 is past the end
+    const para = makeParagraph("Hi")
+    const { tailLines } = measureParagraphFrom(para, 10, 200, defaultTextMeasurer, spaceBreaker)
+    expect(tailLines).toHaveLength(0)
   })
 })

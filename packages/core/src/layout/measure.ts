@@ -195,6 +195,66 @@ function wrapLines(
   return lines
 }
 
+// ─── Paragraph Text Builder ───────────────────────────────────────────────────
+
+function buildParagraphFullText(node: ParagraphNode): {
+  fullText: string
+  fieldRanges: FieldRange[]
+  pageNumberRanges: FieldRange[]
+} {
+  let fullText = ""
+  const fieldRanges: FieldRange[] = []
+  const pageNumberRanges: FieldRange[] = []
+  for (const child of node.children) {
+    if (child.type === "text") { fullText += child.text; continue }
+    if (child.type === "pageNumber") {
+      const start = fullText.length
+      fullText += "00"
+      pageNumberRanges.push({ start, end: fullText.length })
+      continue
+    }
+    const start = fullText.length
+    fullText += child.label ?? `{${child.key}}`
+    fieldRanges.push({ start, end: fullText.length })
+  }
+  return { fullText, fieldRanges, pageNumberRanges }
+}
+
+function measureHardLines(
+  fullText: string,
+  availableWidth: number,
+  measurer: TextMeasurer,
+  fontFamilyKey: string,
+  fontSize: number,
+  wordBreaker: WordBreaker,
+  fieldRanges: FieldRange[],
+  pageNumberRanges: FieldRange[],
+  fromOffset: number = 0,
+): MeasuredLine[] {
+  const hardLines = fullText.split("\n")
+  const rawLines: MeasuredLine[] = []
+  let globalOffset = 0
+  for (const hardLine of hardLines) {
+    const hardLineEnd = globalOffset + hardLine.length
+    // Skip hard lines that end before fromOffset (optimised tail measurement)
+    if (hardLineEnd < fromOffset) {
+      globalOffset += hardLine.length + 1
+      continue
+    }
+    const lineEnd = hardLineEnd
+    const lineFieldRanges = fieldRanges
+      .filter((r) => r.end > globalOffset && r.start < lineEnd)
+      .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
+    const linePageNumberRanges = pageNumberRanges
+      .filter((r) => r.end > globalOffset && r.start < lineEnd)
+      .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
+    const wrapped = wrapLines(hardLine, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, lineFieldRanges, globalOffset, linePageNumberRanges)
+    rawLines.push(...wrapped)
+    globalOffset += hardLine.length + 1
+  }
+  return rawLines
+}
+
 export function measureParagraph(
   node: ParagraphNode,
   availableWidth: number,
@@ -207,63 +267,31 @@ export function measureParagraph(
   const spacingBefore = toAbstractUnit(node.props.spacingBefore.value, node.props.spacingBefore.unit)
   const spacingAfter = toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
 
-  // รวม text จาก inline children ทั้งหมด พร้อมจำช่วง fieldRef และ pageNumber
-  let fullText = ""
-  const fieldRanges: FieldRange[] = []
-  const pageNumberRanges: FieldRange[] = []
-  for (const child of node.children) {
-    if (child.type === "text") {
-      fullText += child.text
-      continue
-    }
-    if (child.type === "pageNumber") {
-      const start = fullText.length
-      fullText += "00"  // two-digit placeholder so page 10+ doesn't overflow measured width
-      pageNumberRanges.push({ start, end: fullText.length })
-      continue
-    }
-    const start = fullText.length
-    fullText += child.label ?? `{${child.key}}`
-    fieldRanges.push({ start, end: fullText.length })
-  }
-
-  // Split on explicit newlines first, then word-wrap each hard line separately.
-  // Segment start/end offsets are adjusted to reference the full fullText string
-  // so caret hit testing stays correct across hard breaks.
-  const hardLines = fullText.split("\n")
-  const rawLines: MeasuredLine[] = []
-  let globalOffset = 0
-  for (const hardLine of hardLines) {
-    const lineEnd = globalOffset + hardLine.length
-    const lineFieldRanges = fieldRanges
-      .filter((r) => r.end > globalOffset && r.start < lineEnd)
-      .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
-    const linePageNumberRanges = pageNumberRanges
-      .filter((r) => r.end > globalOffset && r.start < lineEnd)
-      .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
-    const wrapped = wrapLines(hardLine, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, lineFieldRanges, globalOffset, linePageNumberRanges)
-    rawLines.push(...wrapped)
-    globalOffset += hardLine.length + 1 // +1 for the \n character
-  }
-
-  // map rawLines ให้ใช้ lineHeight จริง
-  const lines: MeasuredLine[] = rawLines.map((line) => ({
-    ...line,
-    height: lineHeight,
-  }))
-
+  const { fullText, fieldRanges, pageNumberRanges } = buildParagraphFullText(node)
+  const rawLines = measureHardLines(fullText, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, pageNumberRanges)
+  const lines: MeasuredLine[] = rawLines.map((line) => ({ ...line, height: lineHeight }))
   const contentHeight = lines.reduce((sum, line) => sum + line.height, 0)
   const totalHeight = spacingBefore + contentHeight + spacingAfter
 
-  return {
-    nodeId: node.id,
-    lines,
-    lineHeight,
-    spacingBefore,
-    spacingAfter,
-    width: availableWidth,
-    totalHeight,
-  }
+  return { nodeId: node.id, lines, lineHeight, spacingBefore, spacingAfter, width: availableWidth, totalHeight }
+}
+
+// Measures only the lines starting from the hard-line that contains `fromOffset`.
+// Returns the tail lines with correct source offsets — caller combines with head lines.
+export function measureParagraphFrom(
+  node: ParagraphNode,
+  fromOffset: number,
+  availableWidth: number,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker = defaultWordBreaker,
+): { tailLines: MeasuredLine[]; lineHeight: number } {
+  const fontSize = toAbstractUnit(node.props.fontSize.value, node.props.fontSize.unit)
+  const fontFamilyKey = node.props.fontFamilyKey ?? "default"
+  const lineHeight = measurer.measureLineHeight(fontFamilyKey, fontSize, node.props.lineHeight)
+  const { fullText, fieldRanges, pageNumberRanges } = buildParagraphFullText(node)
+  const rawLines = measureHardLines(fullText, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, pageNumberRanges, fromOffset)
+  const tailLines = rawLines.map((line) => ({ ...line, height: lineHeight }))
+  return { tailLines, lineHeight }
 }
 
 // ─── Spacer Measurement ───────────────────────────────────────────────────────

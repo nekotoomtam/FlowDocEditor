@@ -105,14 +105,20 @@ export class PdfRenderer implements Renderer {
       const font = await this.resolveFont(pdfDoc, fontCache, fragment.renderProps.fontFamilyKey)
       const defaultFontSize = fragment.renderProps.fontSize
 
+      const isJustify = fragment.renderProps.align === "justify"
       for (const line of fragment.lines) {
         if (line.text.trim() === "") continue
-        pdfPage.drawText(line.text, {
-          x: line.x,
-          y: flipY(line.y, line.height, page.height),
-          size: line.fontSize ?? defaultFontSize,
-          font,
-        })
+        const lineY = flipY(line.y, line.height, page.height)
+        const fontSize = line.fontSize ?? defaultFontSize
+        if (isJustify && line.segments?.length) {
+          // Draw word segments individually at their adjusted x positions
+          for (const seg of line.segments) {
+            if (seg.kind === "space" || seg.text.trim() === "") continue
+            pdfPage.drawText(seg.text, { x: line.x + seg.x, y: lineY, size: fontSize, font })
+          }
+        } else {
+          pdfPage.drawText(line.text, { x: line.x, y: lineY, size: fontSize, font })
+        }
       }
     }
   }

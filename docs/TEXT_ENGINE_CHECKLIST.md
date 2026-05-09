@@ -29,7 +29,7 @@ editor-only shortcuts.
 - [x] Add focused fixtures for Thai, English, mixed Thai/English, numbers, and long unbroken text.
 - [x] Add golden checks for paragraph wrapping at fixed widths.
 - [x] Add debug visualization for line segments and break points.
-- [ ] Keep server/export pagination authoritative while browser preview catches up.
+- [x] Keep server/export pagination authoritative while browser preview catches up.
   - Server/API pagination is the layout truth for export and final page
     settling.
   - Browser pagination and paragraph-local reflow are temporary interaction
@@ -116,16 +116,57 @@ editor-only shortcuts.
 - [ ] Move browser/editor measurement toward the same font-aware path as server/export.
 - [ ] Consider a Web Worker for browser-side layout.
 - [ ] Consider HarfBuzz/WASM only after the current fontkit + segment contracts become limiting.
-- [ ] Add PDF/DOCX smoke tests that compare expected text flow behavior.
+- [x] Add PDF/DOCX smoke tests that compare expected text flow behavior.
+  - 21 tests in `renderer/__tests__/textFlow.test.ts` across 5 describe blocks:
+  - **Line content**: short text → 1 line preserved, hard newlines → correct text per
+    line, long text wraps (text preserved across lines), empty paragraph → 1 empty line.
+  - **Spacing**: spacingBefore/After add to fragment height, spacingBefore shifts first
+    line y, two-paragraph stacking with spacingAfter is contiguous.
+  - **Alignment**: alignment offset baked into `line.x` by `buildPaginatedLines` — left
+    x = contentX, right x = contentX + width - textWidth, center x = midpoint offset.
+    `lineVisualLeft` / `lineX` in EditorCanvas + ParagraphTextSurface simplified to use
+    `line.x` as base. renderProps still carries alignment for DOCX paragraph style.
+  - **Column layout**: two-column x positions, fragment widths, and line x in left
+    column all correct; assertPaginatedDocument passes.
+  - **Renderer smoke**: PDF (%PDF) and DOCX (PK) for spacing+alignment, wrapped text,
+    two-column, hard-newline documents — all render without throwing.
 - [x] Build paragraph-local reflow for typing, delete, and resize previews.
-- [ ] Add incremental reflow from the edited line forward.
+- [x] Add incremental reflow from the edited line forward.
+  - Added `measureParagraphFrom(node, fromOffset, width, measurer, wb)` to
+    `layout/measure.ts`. Refactored shared text-building logic into
+    `buildParagraphFullText` and `measureHardLines` helpers. `measureHardLines`
+    skips hard lines ending before `fromOffset`, then measures only from the
+    containing hard line onward with correct `offsetBase`.
+  - Updated `EditorShell.tsx` local reflow effect: when `caretLineIndex > 0`,
+    reuses head lines and calls `measureParagraphFrom` for the tail only.
+    `buildTailLines` positions tail paginated lines starting from the Y position
+    after the last head line. Falls back to full `measureParagraph` when caret
+    is on the first line.
+  - Fixed `buildLocalLines` in `EditorShell` to apply alignment offset (center/right)
+    using the same formula as `buildPaginatedLines` in the core paginator.
+  - 5 tests in `measure.test.ts` (`measureParagraphFrom` describe block):
+    fromOffset=0 equals full measurement, fromOffset in second hard line starts
+    from Beta, segment offsets reference original full text, lineHeight matches,
+    fromOffset past all content returns empty tail.
 
 ## Open Questions
 
 - [x] Should text offsets use UTF-16 indices, Unicode code points, or grapheme indices? → UTF-16 (matching textarea); grapheme snapping applied at caret layer.
 - [ ] How should `fieldRef` offsets map when the display value differs from the template placeholder?
+  → Deferred until fieldRef rendering is built. Current assumption: `fieldRef` is
+  a single segment whose measured width uses the placeholder text length. When
+  the resolved value is longer/shorter, the layout will differ — this is a known
+  limitation that will need a two-pass approach or pre-resolved measurement.
 - [x] How much temporary browser preview drift is acceptable during active typing?
   → Measured: zero drift for normal content. Only grapheme fallback and exact
     boundary cases drift. Acceptable for current use cases.
-- [ ] Should resize previews reflow only the active paragraph or also nearby paragraphs?
-- [ ] What is the minimum golden fixture set before changing line breaking behavior again?
+- [x] Should resize previews reflow only the active paragraph or also nearby paragraphs?
+  → Active paragraph only (current behavior). The local reflow effect patches only
+  the active paragraph's lines; surrounding fragments shift after the full browser
+  pagination (0ms for hard events, 200ms debounce for soft). This is acceptable
+  because the active text is always correct and layout settles quickly.
+- [x] What is the minimum golden fixture set before changing line breaking behavior again?
+  → The current suite (27 measure tests + drift tests + paginator split tests) is
+  the minimum. Any change to `measureParagraph` or `wrapLines` must keep all
+  existing measure tests green. High-risk cases (Thai, mixed Thai/English, grapheme
+  fallback, hard newlines, segment offsets) each have dedicated fixtures.

@@ -420,7 +420,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     paragraphs; addressed if a real use case arises.
   - 5 tests in `keepWithNext.test.ts`: baseline without flag, heading moves with
     next sibling, stays on page 1 when fits, no-loop guard, multiple headings.
-- [ ] Widow/orphan control.
+- [x] Widow/orphan control. → done as Stage 2 (Policy Stages section above).
 - [ ] Page templates with richer header/footer flows.
 - [x] Basic page numbering (inline `pageNumber` node).
   - Added `PageNumberInline` schema in `inline.ts`. Paragraph children can include
@@ -472,16 +472,28 @@ They are mostly boundary guards and regression targets, not new feature work.
 
 ## Open Questions
 
-- [ ] Should a row split when one stack overflows, or should the whole row move
-  when possible? Current decision: whole row moves when possible; overflow is
-  documented for rows taller than a page until paragraph splitting is stable.
-- [ ] How should advanced table spans behave at page boundaries beyond the
+- [x] Should a row split when one stack overflows, or should the whole row move
+  when possible? → Whole row moves when possible. Overflow without split is the
+  documented behavior for rows taller than a page. Covered by 12 tests in
+  `rowStack.test.ts`.
+- [x] How should advanced table spans behave at page boundaries beyond the
   current rowspan approach B?
-  - Resolved now: rowspan-linked rows stay together as a unit.
-  - Still open: split-at-row-boundary within a rowspan group, colspan-specific
-    split behavior, and interactions with `allowBreak=true`.
-- [x] Should spacers split across pages or always move whole? -> Move whole.
-- [ ] What is the minimum pagination golden fixture set before changing
+  - Rowspan-linked rows stay together as a unit (approach B). Covered by
+    `tablePagination.test.ts`.
+  - Deferred: split-at-row-boundary within a rowspan group, colspan-specific
+    split behavior, and interactions with `allowBreak=true` — deferred until
+    a concrete use case requires them.
+- [x] Should spacers split across pages or always move whole? → Move whole.
+- [x] What is the minimum pagination golden fixture set before changing
   `paginator.ts` again?
-- [ ] Which layout differences are acceptable for DOCX versus PDF/editor
-  preview?
+  → The current suite (230+ core tests) is the minimum. Any change to
+  `paginator.ts` must keep all existing tests green. High-risk areas (paragraph
+  split, widow/orphan, TOC overflow, table rowspan, page numbers) each have
+  dedicated test files. Adding a regression test for the specific behavior being
+  changed is required before the change lands.
+- [x] Which layout differences are acceptable for DOCX versus PDF/editor preview?
+  → Documented in "Document DOCX layout limitations" checklist item. Summary:
+  DOCX is an exchange format — structural correctness is the goal, not visual
+  fidelity. Pagination, font metrics, line breaking, and column layout will
+  differ from PDF/editor preview when opened in Word/LibreOffice. This is
+  intentional and accepted.

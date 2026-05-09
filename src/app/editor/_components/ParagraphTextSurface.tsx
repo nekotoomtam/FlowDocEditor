@@ -45,15 +45,18 @@ function textAlignForParagraph(align: ParagraphRenderProps["align"] | undefined)
   return "left"
 }
 
-function lineX(line: PaginatedLine, fragment: PageFragment, align: ParagraphRenderProps["align"] | undefined): number {
-  if (align === "center") return fragment.x + fragment.width / 2
-  if (align === "right") return fragment.x + fragment.width
+// line.x now contains the alignment offset (baked in by buildPaginatedLines).
+// lineX computes the SVG anchor point: center/right shift by half/full line width
+// to match SVG textAnchor="middle"/"end" behavior.
+function lineX(line: PaginatedLine, align: ParagraphRenderProps["align"] | undefined): number {
+  if (align === "center") return line.x + line.width / 2
+  if (align === "right") return line.x + line.width
   return line.x
 }
 
-function lineVisualLeft(line: PaginatedLine, fragment: PageFragment, align: ParagraphRenderProps["align"] | undefined): number {
-  if (align === "center") return fragment.x + (fragment.width - line.width) / 2
-  if (align === "right") return fragment.x + fragment.width - line.width
+// Visual left edge of the line — used for caret hit testing. line.x is now the
+// aligned visual left, so no further adjustment needed.
+function lineVisualLeft(line: PaginatedLine): number {
   return line.x
 }
 
@@ -79,18 +82,39 @@ function renderLine(
 ) {
   const align = renderProps?.align
   const fontSize = (line.fontSize ?? renderProps?.fontSize ?? 8) * scale
+  const baseY = lineBaselineY(line) * scale
+  const fontFamily = resolveFontCssFamily(renderProps?.fontFamilyKey)
+  const clip = `url(#cp-${pageKey}-${fragment.nodeId})`
+  const style: React.CSSProperties = { pointerEvents: "none", userSelect: "none" }
+
+  // Justify: draw each non-space word segment at its adjusted x position
+  if (align === "justify" && line.segments?.length) {
+    return (
+      <g key={index} clipPath={clip} opacity={opacity} style={style}>
+        {line.segments
+          .filter((seg) => seg.kind !== "space" && seg.text.trim() !== "")
+          .map((seg, si) => (
+            <text key={si} x={(line.x + seg.x) * scale} y={baseY}
+              fontSize={fontSize} fontFamily={fontFamily} fill="#1e40af">
+              {seg.text}
+            </text>
+          ))}
+      </g>
+    )
+  }
+
   return (
     <text
       key={index}
-      x={lineX(line, fragment, align) * scale}
-      y={lineBaselineY(line) * scale}
+      x={lineX(line, align) * scale}
+      y={baseY}
       fontSize={fontSize}
-      fontFamily={resolveFontCssFamily(renderProps?.fontFamilyKey)}
+      fontFamily={fontFamily}
       textAnchor={textAnchorForAlign(align)}
       fill="#1e40af"
       opacity={opacity}
-      clipPath={`url(#cp-${pageKey}-${fragment.nodeId})`}
-      style={{ pointerEvents: "none", userSelect: "none" }}
+      clipPath={clip}
+      style={style}
     >
       {line.text}
     </text>
@@ -105,7 +129,7 @@ function renderSegmentDebug(
 ) {
   return lines?.flatMap((line, lineIndex) => {
     const segments = line.segments ?? []
-    const visualLeft = lineVisualLeft(line, fragment, renderProps?.align)
+    const visualLeft = lineVisualLeft(line)
     return segments.map((segment, segmentIndex) => {
       const color = segmentColor(segment.kind)
       return (

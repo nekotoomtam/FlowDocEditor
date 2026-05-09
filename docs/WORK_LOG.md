@@ -15,6 +15,142 @@ Each entry should include:
 
 ---
 
+### Add Incremental Reflow From Edited Line + Alignment Fix in Editor
+
+Goal: Make the editor's local reflow re-measure only from the caret's line forward instead of the full paragraph, and fix alignment in editor-side line building.
+
+Completed:
+
+- Added `buildParagraphFullText(node)` helper in `measure.ts` — extracts full text, fieldRanges, pageNumberRanges from a ParagraphNode. Shared between `measureParagraph` and `measureParagraphFrom`.
+- Added `measureHardLines(fullText, ..., fromOffset)` internal helper — skips hard lines ending before `fromOffset`, measures from the containing hard line onward. Fixed skip condition to `hardLineEnd < fromOffset` (no extra conditions needed).
+- Added `export function measureParagraphFrom(node, fromOffset, width, measurer, wb)` — returns `{ tailLines: MeasuredLine[], lineHeight }`. Exported from layout/index.ts via `export * from "./measure"`.
+- Refactored `measureParagraph` to use the shared `buildParagraphFullText` + `measureHardLines` helpers (no behavior change).
+- Updated `EditorShell.tsx`:
+  - Imported `measureParagraphFrom` and `MeasuredLine`.
+  - Fixed `buildLocalLines` to apply alignment offset (center/right) matching `buildPaginatedLines` behavior.
+  - Added `findCaretLineIndex(lines, caretIndex)` — finds which paginated line contains the caret (via segment offsets).
+  - Added `buildTailLines(tailMeasured, headLines, fragmentX, align, fragmentWidth)` — positions tail lines from the Y position after the last head line.
+  - Updated local reflow effect: when `caretLineIndex > 0`, reuses existing head lines and calls `measureParagraphFrom` for the tail; falls back to full `measureParagraph` when caret is on the first line.
+  - Updated height computation in `replaceFragmentLines` call to use `newTotalHeight = fragment.height - existingLineHeight + newLineHeight` (spacing preserved).
+- Cleaned up stale duplicate entry: marked `[ ] Widow/orphan control` in Later Work as `[x]` (done as Stage 2).
+- Added 5 tests for `measureParagraphFrom` in `measure.test.ts`.
+
+Files changed:
+
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/layout/__tests__/measure.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 244 core + 16 app = 260 tests passed.
+
+Notes:
+
+- `measureParagraphFrom` works at the hard-line granularity, not at the individual wrapped-line level. If the caret is within a long hard line that wraps many times, the entire hard line is re-measured. This is correct (wrapping is sequential within a hard line) and still saves measurement time when earlier hard lines are unchanged.
+- The incremental path activates only when `caretLineIndex > 0` (caret is not on the very first line). First-line edits fall back to full measurement — already fast in practice.
+
+---
+
+### Implement Justify Alignment
+
+Goal: Complete the paragraph alignment implementation by supporting `justify` — non-last lines stretch to fill the fragment width by distributing extra space between word segments.
+
+Completed:
+
+- Added `justifySegments(segments, lineWidth, fragmentWidth)` helper in `paginator.ts`. Counts space segments, computes `extra = (fragmentWidth - lineWidth) / spaceCount`, and adjusts each segment's x and width cumulatively. Segments with no spaces (unbreakable lines) are returned unchanged.
+- Added `isLastFragment: boolean = true` parameter to `buildPaginatedLines`. For `align === "justify"`, only non-last lines of the last fragment are justified — the very last line of the paragraph is left-aligned (standard typographic rule).
+- Updated `paginateParagraph`: fast path passes `isLastFragment = true`; split path passes the computed `isLastFragment` from the while loop.
+- Updated PDF renderer (`renderer/pdf/index.ts`): when `align === "justify"` and line has segments, draws each non-space word segment individually at `line.x + seg.x`. Skips space segments (gap comes from x positions).
+- Updated SVG `renderLine` in `ParagraphTextSurface.tsx`: when `align === "justify"` and line has segments, renders each non-space segment as a separate `<text>` element at `(line.x + seg.x) * scale`.
+- Added 3 justify tests to `textFlow.test.ts`: non-last lines have segments stretched to fill fragmentWidth, last line is not stretched, assertPaginatedDocument passes.
+- Imported `LineSegment` type in `paginator.ts` (needed for `justifySegments`).
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/renderer/pdf/index.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `packages/core/src/renderer/__tests__/textFlow.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 239 core + 16 app = 255 tests passed.
+
+Notes:
+
+- Justify works for English (space-separated words). Thai text with no space segments between words will fall back to left-alignment for those lines (correct behavior — Thai spaces are typically between phrases, not words).
+- Lines within a split paragraph (non-last fragments) are all justified since they're mid-paragraph lines, not terminal lines.
+
+---
+
+### Fix Paragraph Alignment in Paginated Output
+
+Goal: Bake text alignment offset into PaginatedLine.x so all renderers (PDF, DOCX, editor SVG) consume the correct visual position without recomputing it independently.
+
+Completed:
+
+- Modified `buildPaginatedLines` in `paginator.ts` to accept `align` and `fragmentWidth` params. For center: `x = fragmentX + (fragmentWidth - line.width) / 2`. For right: `x = fragmentX + fragmentWidth - line.width`. For left/justify: `x = fragmentX` (unchanged). Justify is left-aligned at this layer (word-spacing not yet implemented).
+- Updated all 6 call sites to pass `node.props.align` and the appropriate fragment width: `paginateParagraph` fast path, split path; `measureParagraphFragment`; `pushStackContents`; `pushTableCellContents`; `pushCellSlice`.
+- Simplified `lineVisualLeft` in `EditorCanvas.tsx` to `return line.x` — alignment offset already in line.x.
+- Updated `ParagraphTextSurface.tsx`: `lineX(line, align)` uses `line.x` as base (`line.x + width/2` for center, `line.x + width` for right); `lineVisualLeft(line)` simplified to `return line.x`.
+- Updated `textFlow.test.ts` alignment tests to assert correct x values: right x = contentX + contentWidth - textWidth, center x = midpoint offset. Added 2 new tests (5 alignment tests total). Updated commentary to document fix.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `packages/core/src/renderer/__tests__/textFlow.test.ts`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 236 core + 16 app = 252 tests passed.
+
+---
+
+## 2026-05-09 (continued)
+
+### Add PDF/DOCX Text Flow Smoke Tests
+
+Goal: Verify that text layout properties (line content, spacing, alignment, column positions) are correctly represented in PaginatedDocument, and that PDF/DOCX renderers consume these correctly.
+
+Completed:
+
+- Ticked parent "Keep server/export pagination authoritative" item — all sub-items were already `[x]`.
+- Created `packages/core/src/renderer/__tests__/textFlow.test.ts` with 19 tests:
+  - **Line content** (4): short text → 1 line preserved, hard newlines → correct text per line, 120-char text wraps with text preserved, empty paragraph → 1 empty line.
+  - **Spacing** (4): spacingBefore adds to fragment height, spacingAfter adds to fragment height, spacingBefore shifts first line y, two-paragraph stacking with spacingAfter is contiguous.
+  - **Alignment** (3): left line x = contentX, renderProps.align carries setting to renderer, center/right pass assertPaginatedDocument. Revealed a known limitation: alignment offset is not stored in `line.x` — PDF renderer always renders left-aligned; editor SVG and DOCX apply alignment independently at render time. Documented in checklist. Future fix: bake offset into `buildPaginatedLines`.
+  - **Column layout** (2): two equal columns have correct x/width, left-column line x matches column fragment x, assertPaginatedDocument passes.
+  - **Renderer smoke** (6): PDF and DOCX render without throwing for spacing+alignment, wrapped text, two-column, and hard-newline documents.
+
+Files changed:
+
+- `packages/core/src/renderer/__tests__/textFlow.test.ts` (new)
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd run test` — 234 core + 16 app = 250 tests passed.
+
+Notes:
+
+- Alignment limitation is pre-existing: `line.x` = fragment left edge regardless of align setting. EditorCanvas computes visual x via `lineVisualLeft(line, fragment, renderProps.align)`. PDF uses `line.x` directly (left-aligned output). DOCX sets Word paragraph alignment via `renderProps.align`. Fix deferred — requires updating `buildPaginatedLines` and EditorCanvas.
+
+---
+
 ## 2026-05-09
 
 ### Define and Implement TOC Overflow Policy
