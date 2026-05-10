@@ -116,6 +116,10 @@ function normalizeParagraphProps(input: unknown): ParagraphProps {
     textIndent: normalizeUnitValue(raw["textIndent"], DEFAULT_PARAGRAPH_PROPS.textIndent),
     indentLeft: normalizeUnitValue(raw["indentLeft"], DEFAULT_PARAGRAPH_PROPS.indentLeft),
     indentRight: normalizeUnitValue(raw["indentRight"], DEFAULT_PARAGRAPH_PROPS.indentRight),
+    headingLevel: raw["headingLevel"] === 1 || raw["headingLevel"] === 2 || raw["headingLevel"] === 3
+      ? raw["headingLevel"]
+      : undefined,
+    keepWithNext: typeof raw["keepWithNext"] === "boolean" ? raw["keepWithNext"] : undefined,
   }
 }
 
@@ -228,6 +232,9 @@ function normalizeRowNode(input: LayoutNode & { type: "row" }): RowNode {
     props: {
       gap: props["gap"] != null ? normalizeNonNegativeNumber(props["gap"], 0) : undefined,
       alignY: alignY === "top" || alignY === "middle" || alignY === "bottom" ? alignY : undefined,
+      minHeight: props["minHeight"] != null
+        ? normalizePositiveNumber(props["minHeight"], 0)
+        : undefined,
     },
     childIds: Array.isArray(input.childIds) ? input.childIds.filter((id) => typeof id === "string" && id.length > 0) : [],
   }

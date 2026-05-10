@@ -729,6 +729,7 @@ function paginateTableRowSplit(
   tableNodeId: string,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
+  repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
 ): PageFlowCursor {
   // Track current split position (start of remaining content) for each cell
   const fromSplits = new Map<string, SplitPoint>()
@@ -786,13 +787,18 @@ function paginateTableRowSplit(
 
       pushCellSlice(cellBox, tableNode, measurer, pages, template, current.pageIndex, current.cursorY, from, to, wordBreaker, current.pageNumberOffset)
 
-      if (!isLastSlice && to !== null) fromSplits.set(cellBox.nodeId, to)
+      if (!isLastSlice) {
+        fromSplits.set(cellBox.nodeId, to ?? { childIdx: cellBox.children.length, lineIdx: 0 })
+      }
     }
 
     current = { ...current, cursorY: current.cursorY + sliceH }
     heightPlaced += sliceH
 
-    if (!isLastSlice) current = advancePage(current, contentTop)
+    if (!isLastSlice) {
+      current = advancePage(current, contentTop)
+      current = repeatHeaders ? repeatHeaders(current) : current
+    }
   }
 
   return current
@@ -933,7 +939,10 @@ function paginateTable(
       if (!doesntFit && !tooTallForOnePage) {
         current = paginateTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
       } else if (allowBreak && !isHeaderGroup) {
-        current = paginateTableRowSplit(rowBox, tableNode, pages, template, contentTop, contentBottom, current, box.nodeId, measurer, wordBreaker)
+        current = paginateTableRowSplit(
+          rowBox, tableNode, pages, template, contentTop, contentBottom, current, box.nodeId, measurer, wordBreaker,
+          headerRowCount > 0 ? placeHeaders : undefined,
+        )
       } else {
         const nextPage = advancePage(current, contentTop)
         // Account for headers that will be placed before the row on the new page.
@@ -1060,6 +1069,20 @@ function buildZoneFragments(
   return box ? collectZoneFragments(box, section, measurer, undefined, wordBreaker) : []
 }
 
+function cloneZoneFragmentsForPage(
+  fragments: PageFragment[],
+  pageIndex: number,
+  pageNumberOffset: number,
+): PageFragment[] {
+  return fragments.map((fragment) => ({
+    ...fragment,
+    pageIndex,
+    lines: fragment.lines
+      ? resolvePageNumbers(fragment.lines, pageIndex + 1 + pageNumberOffset)
+      : fragment.lines,
+  }))
+}
+
 // ─── Section Entry ────────────────────────────────────────────────────────────
 
 function paginateSection(
@@ -1123,8 +1146,8 @@ function paginateSection(
     const isFirst = idx === 0  // local section index — correct first-page header detection
     const hFrags = isFirst ? firstPageHeaderFragments : defaultHeaderFragments
     const fFrags = isFirst ? firstPageFooterFragments : defaultFooterFragments
-    page.headerFragments = hFrags.map((f) => ({ ...f, pageIndex: page.index }))
-    page.footerFragments = fFrags.map((f) => ({ ...f, pageIndex: page.index }))
+    page.headerFragments = cloneZoneFragmentsForPage(hFrags, page.index, pageNumberOffset)
+    page.footerFragments = cloneZoneFragmentsForPage(fFrags, page.index, pageNumberOffset)
   })
 
   return { sectionId: section.id, pages: densePages }
@@ -1144,6 +1167,10 @@ function collectTocEntries(sections: PaginatedSection[], doc: DocumentNode): Toc
   sections.forEach((ps, si) => {
     const section = doc.document.sections[si]
     if (!section) return
+    const sectionStartPageIndex = ps.pages[0]?.index ?? 0
+    const pageNumberOffset = section.page.pageNumberStart !== undefined
+      ? section.page.pageNumberStart - sectionStartPageIndex - 1
+      : 0
     ps.pages.forEach((page) => {
       page.fragments.forEach((frag) => {
         if (frag.nodeType !== "paragraph") return
@@ -1153,7 +1180,7 @@ function collectTocEntries(sections: PaginatedSection[], doc: DocumentNode): Toc
           nodeId: frag.nodeId,
           text: getParagraphText(node),
           level: node.props.headingLevel as 1 | 2 | 3,
-          pageNumber: frag.pageIndex + 1,
+          pageNumber: frag.pageIndex + 1 + pageNumberOffset,
         })
       })
     })

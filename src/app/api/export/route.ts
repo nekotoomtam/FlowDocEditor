@@ -52,7 +52,14 @@ const fontProvider: FontProvider = {
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  const { doc, format } = await req.json() as { doc: unknown; format: unknown }
+  let body: { doc?: unknown; format?: unknown }
+  try {
+    body = await req.json() as { doc?: unknown; format?: unknown }
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
+  }
+
+  const { doc, format } = body
 
   if (format !== "pdf" && format !== "docx") {
     return NextResponse.json({ error: "Invalid export format" }, { status: 400 })
@@ -68,7 +75,13 @@ export async function POST(req: NextRequest) {
   }
 
   const usingFallback = loadFontSync(DEFAULT_FONT_KEY) === null
-  const paginated = paginateDocument(doc, getMeasurer(), thaiWordBreaker)
+  let paginated
+  try {
+    paginated = paginateDocument(doc, getMeasurer(), thaiWordBreaker)
+  } catch (err) {
+    console.error("[FlowDoc] /api/export: pagination failed:", err)
+    return NextResponse.json({ error: "Pagination failed", detail: String(err) }, { status: 500 })
+  }
 
   try {
     assertPaginatedDocument(paginated)

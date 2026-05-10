@@ -129,6 +129,41 @@ describe("section-level page numbering", () => {
     expect(getLineText(result, 0, "p1")).toBe("หน้า 5")
   })
 
+  it("header page-number fields use the section page-number offset", () => {
+    const section = makeSection("s1", "p1", "Body ", 5)
+    const header = makePageNumberPara("h1", "Header ")
+    section.headerRootId = "h1"
+    section.nodes.h1 = header
+    const doc: DocumentNode = {
+      version: 1,
+      document: { id: "doc", sections: [section] },
+    }
+
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+    expect(result.sections[0].pages[0].headerFragments[0].lines?.[0]?.text).toBe("Header 5")
+  })
+
+  it("TOC entries use restarted section page numbers", () => {
+    const first = makeSection("s1", "p1", "First ")
+    const second = makeSection("s2", "p2", "Second ", 1)
+    const firstPara = first.nodes.p1
+    const secondPara = second.nodes.p2
+    if (firstPara.type === "paragraph") firstPara.props = { ...firstPara.props, headingLevel: 1 }
+    if (secondPara.type === "paragraph") secondPara.props = { ...secondPara.props, headingLevel: 1 }
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [first, second],
+      },
+    }
+
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+    expect(result.tocEntries.find((entry) => entry.nodeId === "p2")?.pageNumber).toBe(1)
+  })
+
   it("pageNumberStart=1 in first section (explicit): same as default global numbering", () => {
     const doc: DocumentNode = {
       version: 1,

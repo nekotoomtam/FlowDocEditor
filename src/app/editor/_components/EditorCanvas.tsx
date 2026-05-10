@@ -23,6 +23,14 @@ const NODE_COLORS: Record<string, string> = {
 }
 
 const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "table", "toc"])
+const PARAGRAPH_CHROME_Y = 3
+
+type PendingClickAction = {
+  type: "inline-edit"
+  nodeId: string
+  caretIndex: number | null
+  pageIndex: number | null
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -139,7 +147,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap,
@@ -153,12 +161,13 @@ function PageView({
   inlineEditCaretIndex: number | null
   inlineEditPageIndex: number | null
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
-  onInlineEditChange: (nodeId: string, text: string) => void
+  onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
+  onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
   onInlineEditEnd: () => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
   pageKey: string; setPageRef: (key: string, el: SVGSVGElement | null) => void
-  onNodePointerDown: (source: DragSource, e: React.PointerEvent) => void
+  onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   resizeDrag: ResizeDrag | null
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, startClientX: number, pageKey: string) => void
@@ -286,13 +295,7 @@ function PageView({
           ) {
             editFragmentRef.current = { nodeId: f.nodeId, pageKey, fragment: { ...f } }
           } else {
-            editFragmentRef.current = {
-              ...editFragmentRef.current,
-              fragment: {
-                ...f,
-                height: Math.max(editFragmentRef.current.fragment.height, f.height),
-              },
-            }
+            editFragmentRef.current = { ...editFragmentRef.current, fragment: { ...f } }
           }
         }
         const displayFragment = isInlineEditing
@@ -315,6 +318,10 @@ function PageView({
             fragHeight = Math.max(fragHeight, minHeightDrag.currentMinHeight)
           }
         }
+        const chromeTop = f.nodeType === "paragraph" ? PARAGRAPH_CHROME_Y : 0
+        const chromeBottom = f.nodeType === "paragraph" ? PARAGRAPH_CHROME_Y : 0
+        const chromeY = displayFragment.y * scale - chromeTop
+        const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
 
         return (
           <g
@@ -322,11 +329,15 @@ function PageView({
             onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
-                if (f.nodeType === "paragraph" && isSelected) {
-                  onInlineEditStart(f.nodeId, caretIndexFromPointer(f, e, scale), f.pageIndex)
-                  return
-                }
-                onNodePointerDown({ source: "document", nodeId: selectNodeId }, e)
+                const clickAction = f.nodeType === "paragraph"
+                  ? {
+                      type: "inline-edit" as const,
+                      nodeId: f.nodeId,
+                      caretIndex: caretIndexFromPointer(f, e, scale),
+                      pageIndex: f.pageIndex,
+                    }
+                  : undefined
+                onNodePointerDown({ source: "document", nodeId: selectNodeId }, e, clickAction)
               }
               : undefined}
             onDoubleClick={f.nodeType === "paragraph" && !drag
@@ -335,8 +346,8 @@ function PageView({
             style={{ cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default" }}
           >
             <rect
-              x={fragX * scale} y={displayFragment.y * scale}
-              width={Math.max(fragWidth * scale, 2)} height={Math.max(fragHeight * scale, 2)}
+              x={fragX * scale} y={chromeY}
+              width={Math.max(fragWidth * scale, 2)} height={chromeHeight}
               fill={isInlineEditing ? "#dbeafe" : color}
               stroke={isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"}
               strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
@@ -344,8 +355,8 @@ function PageView({
             />
             {isSelected && !isInlineEditing && (
               <rect
-                x={displayFragment.x * scale - 1} y={displayFragment.y * scale - 1}
-                width={displayFragment.width * scale + 2} height={Math.max(fragHeight * scale, 2) + 2}
+                x={displayFragment.x * scale - 1} y={chromeY - 1}
+                width={displayFragment.width * scale + 2} height={chromeHeight + 2}
                 fill="none" stroke="#2563eb" strokeWidth={1.5}
                 style={{ pointerEvents: "none" }}
               />
@@ -408,6 +419,7 @@ function PageView({
                 showTextSegments={showTextSegments}
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
+                onHeightChange={onInlineEditHeightChange}
                 onEndEdit={onInlineEditEnd}
                 onSplitParagraph={onSplitParagraph}
                 onMergeParagraph={onMergeParagraph}
@@ -519,18 +531,20 @@ interface Props {
   inlineEditCaretIndex: number | null
   inlineEditPageIndex: number | null
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
-  onInlineEditChange: (nodeId: string, text: string) => void
+  onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
+  onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
   onInlineEditEnd: () => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
   setPageRef: (key: string, el: SVGSVGElement | null) => void
-  onNodePointerDown: (source: DragSource, e: React.PointerEvent) => void
+  onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, startClientX: number, pageKey: string) => void
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   marginDrag: MarginDrag | null
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
   onScaleChange: (scale: number) => void
+  autoFitScale: boolean
   showTextSegments: boolean
   showDrift: boolean
   driftMap: Map<string, FragmentDrift> | null
@@ -538,33 +552,38 @@ interface Props {
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
-  showTextSegments, showDrift, driftMap,
+  autoFitScale, showTextSegments, showDrift, driftMap,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
+  const pageWidth = sections[0]?.pages[0]?.width ?? 595
+  const scaledPageWidth = pageWidth * scale
 
   useEffect(() => {
+    if (!autoFitScale) return
     const el = containerRef.current
     if (!el) return
-    const pageWidth = sections[0]?.pages[0]?.width ?? 595
-    const observer = new ResizeObserver(() => {
-      const available = el.clientWidth - 48
+    const fitToContainer = () => {
+      const available = el.clientWidth - 96
       onScaleChange(Math.max(0.3, Math.min(2, available / pageWidth)))
-    })
+    }
+    fitToContainer()
+    const observer = new ResizeObserver(fitToContainer)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [sections, onScaleChange])
+  }, [autoFitScale, onScaleChange, pageWidth])
 
   return (
-    <div ref={containerRef} style={{ flex: 1, overflow: "auto", padding: 24 }}>
-      {sections.map((section, si) => (
-        <div key={si} style={{ marginBottom: 32 }}>
+    <div ref={containerRef} style={{ flex: 1, overflow: "auto", padding: 24, background: "#f3f4f6" }}>
+      <div style={{ minWidth: scaledPageWidth + 96 }}>
+        {sections.map((section, si) => (
+          <div key={si} style={{ margin: "0 auto 32px", width: scaledPageWidth }}>
           <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 10 }}>
             Section {si + 1} · {section.pages.length} page{section.pages.length !== 1 ? "s" : ""}
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start", justifyContent: "center" }}>
             {section.pages.map((page, pi) => (
               <div key={pi}>
                 <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>Page {page.index + 1}</div>
@@ -576,6 +595,7 @@ export function EditorCanvas({
                   inlineEditPageIndex={inlineEditPageIndex}
                   onInlineEditStart={onInlineEditStart}
                   onInlineEditChange={onInlineEditChange}
+                  onInlineEditHeightChange={onInlineEditHeightChange}
                   onInlineEditEnd={onInlineEditEnd}
                   onSplitParagraph={onSplitParagraph}
                   onMergeParagraph={onMergeParagraph}
@@ -598,7 +618,8 @@ export function EditorCanvas({
             ))}
           </div>
         </div>
-      ))}
+        ))}
+      </div>
     </div>
   )
 }

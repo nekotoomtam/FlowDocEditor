@@ -1,4 +1,4 @@
-import type { DocumentNode, LayoutNode } from "../schema"
+import type { DocumentNode, LayoutNode, TableNode } from "../schema"
 import type {
   DragSource,
   PaletteBlockType,
@@ -32,7 +32,16 @@ interface NodeLocation {
 function findLocation(document: DocumentNode, nodeId: string): NodeLocation | null {
   for (const section of document.document.sections) {
     const node = section.nodes[nodeId]
-    if (node == null) continue
+    if (node == null) {
+      for (const candidate of Object.values(section.nodes)) {
+        if (candidate.type !== "table") continue
+        const inner = (candidate as unknown as TableNode).nodes[nodeId]
+        if (inner?.type === "paragraph") {
+          return { section, node: inner, parent: null, index: 0 }
+        }
+      }
+      continue
+    }
 
     // หา parent
     for (const [, candidate] of Object.entries(section.nodes)) {
@@ -164,7 +173,10 @@ function getSourceNodeId(source?: DragSource | null): string | null {
 function getSourceBlockType(document: DocumentNode, source?: DragSource | null): LayoutNode["type"] | null {
   if (source == null) return null
   if (source.source === "field") return null
-  if (source.source === "palette") return source.blockType === "paragraph" ? "paragraph" : "row"
+  if (source.source === "palette") {
+    if (source.blockType === "columns") return "row"
+    return source.blockType
+  }
   const location = findLocation(document, source.nodeId)
   return location?.node.type ?? null
 }

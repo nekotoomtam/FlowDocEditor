@@ -2,16 +2,15 @@
 
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
 import { paginateDocument } from "@/pagination"
-import { defaultTextMeasurer, measureParagraph, measureParagraphFrom } from "@/layout"
-import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
+import { defaultTextMeasurer, measureParagraph } from "@/layout"
+import { assertDocument, createDefaultDocument, DEFAULT_STACK_MIN_HEIGHT, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
 import { bindDocument } from "@/binding"
 import type { FieldData, FieldValue } from "@/binding"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
-import type { DocumentNode } from "@/schema"
-import type { PaginatedDocument, PaginatedLine, PageFragment } from "@/pagination"
-import type { MeasuredLine, MeasuredParagraph } from "@/layout"
+import type { DocumentNode, TableNode } from "@/schema"
+import type { PaginatedDocument, PageFragment } from "@/pagination"
 import type {
   DragSource,
   PlacementPreview,
@@ -36,6 +35,20 @@ export interface DragState {
   clientX: number
   clientY: number
   preview: PlacementPreview | null
+}
+
+interface PendingClickAction {
+  type: "inline-edit"
+  nodeId: string
+  caretIndex: number | null
+  pageIndex: number | null
+}
+
+interface PendingDrag {
+  source: DragSource
+  clientX: number
+  clientY: number
+  clickAction?: PendingClickAction
 }
 
 export interface ResizeDrag {
@@ -86,6 +99,15 @@ interface EditorState {
 }
 
 type LayoutStatus = "authoritative" | "optimistic" | "reconciling"
+type ZoomMode = "fit" | "manual"
+
+const MIN_SCALE = 0.3
+const MAX_SCALE = 4
+const ZOOM_STEP = 0.25
+
+function clampScale(value: number): number {
+  return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
+}
 
 type EditorAction =
   | { type: "DRAG_START"; source: DragSource; clientX: number; clientY: number }
@@ -97,6 +119,7 @@ type EditorAction =
   | { type: "UPDATE_TEXT"; nodeId: string; text: string }
   | { type: "DELETE_NODE"; nodeId: string }
   | { type: "SET_PAGINATED"; paginated: PaginatedDocument }
+  | { type: "SET_INLINE_EDIT_HEIGHT"; nodeId: string; pageIndex: number | null; height: number }
   | { type: "UNDO" }
   | { type: "REDO" }
   | { type: "TABLE_ADD_ROW"; tableId: string; afterIndex?: number }
@@ -200,6 +223,11 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return { ...pushDoc(state, deleteNode(state.doc, action.nodeId)), selectedNodeId: null }
     case "SET_PAGINATED":
       return { ...state, paginated: action.paginated }
+    case "SET_INLINE_EDIT_HEIGHT":
+      return {
+        ...state,
+        paginated: resizeFragmentHeightAndShift(state.paginated, state.doc, action.nodeId, action.height, action.pageIndex),
+      }
     case "UNDO": {
       if (state.past.length === 0) return state
       const prev = state.past[state.past.length - 1]
@@ -310,6 +338,11 @@ function findParagraphNode(doc: DocumentNode, nodeId: string) {
   for (const section of doc.document.sections) {
     const node = section.nodes[nodeId]
     if (node?.type === "paragraph") return node
+    for (const candidate of Object.values(section.nodes)) {
+      if (candidate.type !== "table") continue
+      const inner = (candidate as unknown as TableNode).nodes[nodeId]
+      if (inner?.type === "paragraph") return inner
+    }
   }
   return null
 }
@@ -327,64 +360,145 @@ function findParagraphFragment(paginated: PaginatedDocument, nodeId: string, pag
   return null
 }
 
-function buildLocalLines(measured: MeasuredParagraph, fragment: PageFragment, align: string = "left"): PaginatedLine[] {
-  let lineY = fragment.y + measured.spacingBefore
-  return measured.lines.map((line) => {
-    let x = fragment.x
-    if (align === "center") x = fragment.x + (fragment.width - line.width) / 2
-    else if (align === "right") x = fragment.x + fragment.width - line.width
-    const result: PaginatedLine = { text: line.text, x, y: lineY, width: line.width, height: line.height, segments: line.segments }
-    lineY += line.height
-    return result
-  })
-}
-
-// Returns the index of the paginated line containing the given caret offset.
-function findCaretLineIndex(lines: PaginatedLine[], caretIndex: number): number {
-  for (let i = 0; i < lines.length; i++) {
-    const segs = lines[i].segments
-    if (!segs?.length) continue
-    if (caretIndex >= segs[0].start && caretIndex <= segs[segs.length - 1].end) return i
-  }
-  return 0
-}
-
-// Builds paginated lines for the tail measured lines, starting from the Y position
-// immediately after the last head line.
-function buildTailLines(tailMeasured: MeasuredLine[], headLines: PaginatedLine[], fragmentX: number, align: string = "left", fragmentWidth: number = 0): PaginatedLine[] {
-  const lastHead = headLines[headLines.length - 1]
-  let lineY = lastHead ? lastHead.y + lastHead.height : 0
-  const result: PaginatedLine[] = []
-  for (const line of tailMeasured) {
-    let x = fragmentX
-    if (align === "center") x = fragmentX + (fragmentWidth - line.width) / 2
-    else if (align === "right") x = fragmentX + fragmentWidth - line.width
-    result.push({ text: line.text, x, y: lineY, width: line.width, height: line.height, segments: line.segments })
-    lineY += line.height
-  }
-  return result
-}
-
-function replaceFragmentLines(
+function resizeFragmentHeightAndShift(
   paginated: PaginatedDocument,
+  doc: DocumentNode,
   nodeId: string,
-  lines: PaginatedLine[],
   height: number,
   pageIndex?: number | null,
 ): PaginatedDocument {
+  let targetPageIndex: number | null = null
+  let targetY: number | null = null
+  let delta = 0
+
+  for (const section of paginated.sections) {
+    for (const page of section.pages) {
+      const fragment = page.fragments.find((f) =>
+        f.nodeId === nodeId &&
+        f.nodeType === "paragraph" &&
+        (pageIndex == null || f.pageIndex === pageIndex)
+      )
+      if (!fragment) continue
+      targetPageIndex = page.index
+      targetY = fragment.y
+      delta = height - fragment.height
+      break
+    }
+    if (targetY !== null) break
+  }
+
+  if (targetPageIndex === null || targetY === null || Math.abs(delta) < 0.5) return paginated
+
   return {
     ...paginated,
     sections: paginated.sections.map((section) => ({
       ...section,
-      pages: section.pages.map((page) => ({
-        ...page,
-        fragments: page.fragments.map((f) => {
-          if (f.nodeId !== nodeId || f.nodeType !== "paragraph") return f
-          // Only patch the specific page fragment if pageIndex is specified
-          if (pageIndex != null && f.pageIndex !== pageIndex) return f
-          return { ...f, lines, height }
-        }),
-      })),
+      pages: section.pages.map((page) => {
+        if (page.index !== targetPageIndex) return page
+
+        const target = page.fragments.find((f) =>
+          f.nodeId === nodeId &&
+          f.nodeType === "paragraph" &&
+          (pageIndex == null || f.pageIndex === pageIndex)
+        )
+        const byId = new Map(page.fragments.map((fragment) => [fragment.nodeId, fragment]))
+
+        const isDescendantOf = (fragment: PageFragment, ancestorId: string): boolean => {
+          let parentId = fragment.parentNodeId
+          while (parentId) {
+            if (parentId === ancestorId) return true
+            parentId = byId.get(parentId)?.parentNodeId
+          }
+          return false
+        }
+
+        const stackAncestor = target?.parentNodeId ? byId.get(target.parentNodeId) : null
+        const rowAncestor = stackAncestor?.parentNodeId ? byId.get(stackAncestor.parentNodeId) : null
+
+        if (target && stackAncestor?.nodeType === "stack" && rowAncestor?.nodeType === "row") {
+          const isLaterInEditedStack = (fragment: PageFragment): boolean => (
+            fragment.nodeId !== target.nodeId &&
+            fragment.y > target.y &&
+            isDescendantOf(fragment, stackAncestor.nodeId)
+          )
+          const adjustedY = (fragment: PageFragment): number => (
+            isLaterInEditedStack(fragment) ? fragment.y + delta : fragment.y
+          )
+          const rowNode = doc.document.sections
+            .map((docSection) => docSection.nodes[rowAncestor.nodeId])
+            .find((node) => node?.type === "row")
+          const rowMinHeight = rowNode?.type === "row" ? Math.max(0, rowNode.props.minHeight ?? 0) : 0
+          const stackFragments = page.fragments.filter((fragment) =>
+            fragment.parentNodeId === rowAncestor.nodeId &&
+            fragment.nodeType === "stack"
+          )
+
+          const stackHeight = (stack: PageFragment): number => {
+            const stackNode = doc.document.sections
+              .map((docSection) => docSection.nodes[stack.nodeId])
+              .find((node) => node?.type === "stack")
+            const stackMinHeight = stackNode?.type === "stack"
+              ? Math.max(DEFAULT_STACK_MIN_HEIGHT, stackNode.props.minHeight ?? 0)
+              : DEFAULT_STACK_MIN_HEIGHT
+            const contentBottom = page.fragments.reduce((bottom, fragment) => {
+              if (!isDescendantOf(fragment, stack.nodeId)) return bottom
+              const fragmentHeight = fragment.nodeId === nodeId ? height : fragment.height
+              return Math.max(bottom, adjustedY(fragment) + fragmentHeight)
+            }, stack.y)
+            return Math.max(stackMinHeight, contentBottom - stack.y)
+          }
+
+          const nextRowHeight = Math.max(rowMinHeight, ...stackFragments.map(stackHeight))
+          const rowDelta = nextRowHeight - rowAncestor.height
+          const rowBottom = rowAncestor.y + rowAncestor.height
+
+          return {
+            ...page,
+            fragments: page.fragments.map((fragment) => {
+              const isTarget = fragment.nodeId === nodeId &&
+                fragment.nodeType === "paragraph" &&
+                (pageIndex == null || fragment.pageIndex === pageIndex)
+              const isRow = fragment.nodeId === rowAncestor.nodeId && fragment.nodeType === "row"
+              const isRowStack = fragment.parentNodeId === rowAncestor.nodeId && fragment.nodeType === "stack"
+              const isInsideRow = isDescendantOf(fragment, rowAncestor.nodeId)
+              const shouldShiftBelowRow = !isRow && !isInsideRow && fragment.y >= rowBottom - 0.5
+              const shouldShiftInsideStack = isLaterInEditedStack(fragment)
+
+              if (isTarget) return { ...fragment, height }
+              if (isRow || isRowStack) return { ...fragment, height: nextRowHeight }
+              if (shouldShiftInsideStack && Math.abs(delta) >= 0.5) {
+                return {
+                  ...fragment,
+                  y: fragment.y + delta,
+                  lines: fragment.lines?.map((line) => ({ ...line, y: line.y + delta })),
+                }
+              }
+              if (!shouldShiftBelowRow || Math.abs(rowDelta) < 0.5) return fragment
+              return {
+                ...fragment,
+                y: fragment.y + rowDelta,
+                lines: fragment.lines?.map((line) => ({ ...line, y: line.y + rowDelta })),
+              }
+            }),
+          }
+        }
+
+        return {
+          ...page,
+          fragments: page.fragments.map((fragment) => {
+            const isTarget = fragment.nodeId === nodeId &&
+              fragment.nodeType === "paragraph" &&
+              (pageIndex == null || fragment.pageIndex === pageIndex)
+            if (isTarget) return { ...fragment, height }
+            if (fragment.y <= targetY) return fragment
+            return {
+              ...fragment,
+              y: fragment.y + delta,
+              lines: fragment.lines?.map((line) => ({ ...line, y: line.y + delta })),
+            }
+          }),
+        }
+      }),
     })),
   }
 }
@@ -393,6 +507,7 @@ function replaceFragmentLines(
 
 export default function EditorShell() {
   const [scale, setScale] = useState(0.6)
+  const [zoomMode, setZoomMode] = useState<ZoomMode>("fit")
   const [state, dispatch] = useReducer(reducer, undefined, createInitialEditorState)
   const editorTextMeasurer = useMemo(() => createBrowserTextMeasurer(), [])
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
@@ -405,8 +520,9 @@ export default function EditorShell() {
       : bindDocument(state.doc, { registry: { fields: [] }, data: fieldData })
   ), [fieldData, isTemplateMode, state.doc])
 
+  const editorRootRef = useRef<HTMLDivElement | null>(null)
   const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
-  const pendingDragRef = useRef<{ source: DragSource; clientX: number; clientY: number } | null>(null)
+  const pendingDragRef = useRef<PendingDrag | null>(null)
   const [resizeDrag, setResizeDrag] = useState<ResizeDrag | null>(null)
   const [minHeightDrag, setMinHeightDrag] = useState<MinHeightDrag | null>(null)
   const [marginDrag, setMarginDrag] = useState<MarginDrag | null>(null)
@@ -421,6 +537,7 @@ export default function EditorShell() {
   const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
   const [inlineEditCaretIndex, setInlineEditCaretIndex] = useState<number | null>(null)
   const [inlineEditPageIndex, setInlineEditPageIndex] = useState<number | null>(null)
+  const wasInlineEditingRef = useRef(false)
 
   useEffect(() => {
     if (typeof document === "undefined" || !("fonts" in document)) return
@@ -446,6 +563,10 @@ export default function EditorShell() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ doc: previewDoc, format }),
       })
+      if (!res.ok) {
+        const message = await res.text()
+        throw new Error(`export failed: ${res.status} ${message}`)
+      }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -503,13 +624,77 @@ export default function EditorShell() {
     setInlineEditPageIndex(pageIndex)
   }, [])
 
-  const handleInlineEditChange = useCallback((nodeId: string, text: string) => {
+  const handleInlineEditChange = useCallback((nodeId: string, text: string, caretIndex: number | null) => {
+    setInlineEditCaretIndex(caretIndex)
     dispatch({ type: "UPDATE_TEXT", nodeId, text })
   }, [])
+
+  const handleInlineEditHeightChange = useCallback((nodeId: string, height: number, pageIndex: number | null) => {
+    dispatch({ type: "SET_INLINE_EDIT_HEIGHT", nodeId, height, pageIndex })
+  }, [])
+
+  const handleCanvasScaleChange = useCallback((nextScale: number) => {
+    setScale(clampScale(nextScale))
+  }, [])
+
+  const setManualScale = useCallback((nextScale: number) => {
+    setZoomMode("manual")
+    setScale(clampScale(nextScale))
+  }, [])
+
+  const zoomIn = useCallback(() => {
+    setZoomMode("manual")
+    setScale((current) => clampScale(Math.round((current + ZOOM_STEP) * 100) / 100))
+  }, [])
+
+  const zoomOut = useCallback(() => {
+    setZoomMode("manual")
+    setScale((current) => clampScale(Math.round((current - ZOOM_STEP) * 100) / 100))
+  }, [])
+
+  const zoomByWheel = useCallback((deltaY: number) => {
+    setZoomMode("manual")
+    const direction = deltaY < 0 ? 1 : -1
+    setScale((current) => clampScale(Math.round((current + direction * ZOOM_STEP) * 100) / 100))
+  }, [])
+
+  const resetZoom = useCallback(() => {
+    setManualScale(1)
+  }, [setManualScale])
+
+  const fitZoom = useCallback(() => {
+    setZoomMode("fit")
+  }, [])
+
+  useEffect(() => {
+    const root = editorRootRef.current
+    if (!root) return
+    const handleWheel = (event: WheelEvent) => {
+      if (event.defaultPrevented) return
+      if (!event.ctrlKey && !event.metaKey) return
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return
+      event.preventDefault()
+      zoomByWheel(event.deltaY)
+    }
+    root.addEventListener("wheel", handleWheel, { passive: false })
+    return () => root.removeEventListener("wheel", handleWheel)
+  }, [zoomByWheel])
+
+  const handleWheelCapture = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey && !event.metaKey) return
+    const target = event.target as HTMLElement | null
+    const tag = target?.tagName
+    if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return
+    event.preventDefault()
+    zoomByWheel(event.deltaY)
+  }, [zoomByWheel])
 
   const handleInlineEditEnd = useCallback(() => {
     setInlineEditNodeId(null)
     setInlineEditCaretIndex(null)
+    setInlineEditPageIndex(null)
   }, [])
 
   const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number) => {
@@ -525,6 +710,7 @@ export default function EditorShell() {
     if (!state.lastSplitNodeId) return
     setInlineEditNodeId(state.lastSplitNodeId)
     setInlineEditCaretIndex(0)
+    setInlineEditPageIndex(null)
     dispatch({ type: "CLEAR_SPLIT_NODE_ID" })
   }, [state.lastSplitNodeId])
 
@@ -533,6 +719,7 @@ export default function EditorShell() {
     if (!state.mergeResult) return
     setInlineEditNodeId(state.mergeResult.prevNodeId)
     setInlineEditCaretIndex(state.mergeResult.caretIndex)
+    setInlineEditPageIndex(null)
     dispatch({ type: "CLEAR_MERGE_RESULT" })
   }, [state.mergeResult])
 
@@ -552,21 +739,37 @@ export default function EditorShell() {
   const prevEditNodeIdRef = useRef<string | null>(null)
   useEffect(() => { paginatedRef.current = state.paginated })
   useEffect(() => { inlineEditNodeIdRef.current = inlineEditNodeId }, [inlineEditNodeId])
-  // Reset line-count tracking when leaving edit mode so re-entering the same
-  // paragraph starts fresh and does not fire a spurious hard event.
+
+  // Inline edit contract:
+  // - While editing, the textarea owns active-paragraph text/caret wrapping.
+  // - The editor may apply geometry-only height shifts so neighboring fragments
+  //   do not overlap the growing textarea.
+  // - After edit mode exits, settle preview pagination from the latest rendered
+  //   document snapshot. This avoids reconciling from a stale onBlur closure.
+  useEffect(() => {
+    const wasInlineEditing = wasInlineEditingRef.current
+    wasInlineEditingRef.current = inlineEditNodeId !== null
+    if (!wasInlineEditing || inlineEditNodeId !== null) return
+    dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
+  }, [editorTextMeasurer, inlineEditNodeId, previewDoc])
+
+  // Track the current line count when edit mode starts. This avoids reflowing on
+  // edit enter, but still lets the first typed/deleted character fire a hard
+  // event when it changes the paragraph's line count.
   useEffect(() => {
     if (inlineEditNodeId === null) {
       prevLineCountRef.current = null
       prevEditNodeIdRef.current = null
+      return
     }
-  }, [inlineEditNodeId])
+    const fragment = findParagraphFragment(paginatedRef.current, inlineEditNodeId, inlineEditPageIndex)
+    prevLineCountRef.current = fragment?.lines?.length ?? null
+    prevEditNodeIdRef.current = inlineEditNodeId
+  }, [inlineEditNodeId, inlineEditPageIndex])
 
-  // Local reflow — re-measure only the active paragraph immediately on each
-  // text change so line wrapping feels live while the full paginator catches up.
-  //
-  // Soft event (line count unchanged): patch only the active paragraph's lines.
-  // Hard event (line count changed): run full browser pagination immediately so
-  // surrounding fragments shift without waiting for the debounce timer.
+  // While inline editing, the textarea is the interaction truth for the active
+  // paragraph. Do not patch its fragment with core/browser-measured lines on
+  // every input; that creates a second line-breaking pass under the caret.
   useEffect(() => {
     if (!inlineEditNodeId) return
     const paraNode = findParagraphNode(previewDoc, inlineEditNodeId)
@@ -587,53 +790,16 @@ export default function EditorShell() {
       : false
     if (isSplitParagraph) return
 
-    const align = paraNode.props.align
-
-    // Incremental reflow: if caret is past the first line, reuse head lines and
-    // only re-measure from the caret's line forward.
-    const existingLines = fragment.lines ?? []
-    const caretLineIndex = inlineEditCaretIndex !== null && existingLines.length > 0
-      ? findCaretLineIndex(existingLines, inlineEditCaretIndex)
-      : 0
-
-    let newLines: PaginatedLine[]
-    let newLineCount: number
-
-    if (caretLineIndex > 0) {
-      const headLines = existingLines.slice(0, caretLineIndex)
-      const fromOffset = existingLines[caretLineIndex]?.segments?.[0]?.start ?? 0
-      const { tailLines } = measureParagraphFrom(paraNode, fromOffset, fragment.width, editorTextMeasurer)
-      const paginatedTail = buildTailLines(tailLines, headLines, fragment.x, align, fragment.width)
-      newLines = [...headLines, ...paginatedTail]
-      newLineCount = newLines.length
-    } else {
-      const measured = measureParagraph(paraNode, fragment.width, editorTextMeasurer)
-      newLines = buildLocalLines(measured, fragment, align)
-      newLineCount = measured.lines.length
-    }
+    const measured = measureParagraph(paraNode, fragment.width, editorTextMeasurer)
+    const newLineCount = measured.lines.length
 
     if (prevEditNodeIdRef.current !== inlineEditNodeId) {
       prevLineCountRef.current = null
       prevEditNodeIdRef.current = inlineEditNodeId
     }
-    const prevLineCount = prevLineCountRef.current
     prevLineCountRef.current = newLineCount
-    const isHardEvent = prevLineCount !== null && newLineCount !== prevLineCount
-
-    if (isHardEvent) {
-      dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
-    } else {
-      // Compute updated height: spacing (non-line portion) + new line heights
-      const existingLineHeight = existingLines.reduce((s, l) => s + l.height, 0)
-      const newLineHeight = newLines.reduce((s, l) => s + l.height, 0)
-      const newTotalHeight = fragment.height - existingLineHeight + newLineHeight
-      dispatch({
-        type: "SET_PAGINATED",
-        paginated: replaceFragmentLines(paginatedRef.current, inlineEditNodeId, newLines, newTotalHeight, inlineEditPageIndex),
-      })
-    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewDoc, inlineEditNodeId])
+  }, [previewDoc])
 
   // Full pagination — corrects page breaks and surrounding layout.
   // Debounce is longer during inline editing so local reflow has time to show first.
@@ -645,8 +811,9 @@ export default function EditorShell() {
     // re-paginate here because browser measurer drift would cause a visible flicker
     // (paragraph appears to collapse onto one page before server corrects it).
     interactiveDebounceRef.current = setTimeout(() => {
+      if (inlineEditNodeIdRef.current) return
       dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
-    }, inlineEditNodeIdRef.current ? 200 : 16)
+    }, 16)
 
     return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -672,7 +839,10 @@ export default function EditorShell() {
         signal: controller.signal,
       })
         .then(async (res) => {
-          if (!res.ok) throw new Error(`paginate failed: ${res.status}`)
+          if (!res.ok) {
+            const message = await res.text()
+            throw new Error(`paginate failed: ${res.status} ${message}`)
+          }
           setFontFallback(res.headers.get("X-FlowDoc-Font") === "fallback")
           return await res.json() as PaginatedDocument
         })
@@ -721,7 +891,7 @@ export default function EditorShell() {
       if (authoritativeDebounceRef.current) clearTimeout(authoritativeDebounceRef.current)
       controller?.abort()
     }
-  }, [previewDoc, inlineEditNodeId])
+  }, [previewDoc])
 
   useEffect(() => {
     if (inlineEditNodeId) return
@@ -756,6 +926,7 @@ export default function EditorShell() {
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setInlineEditNodeId(null)
     setInlineEditCaretIndex(null)
+    setInlineEditPageIndex(null)
     const svgEl = pageRefs.current.get(pageKey)
     if (!svgEl) return
     const svgLeft = svgEl.getBoundingClientRect().left
@@ -789,6 +960,7 @@ export default function EditorShell() {
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setInlineEditNodeId(null)
     setInlineEditCaretIndex(null)
+    setInlineEditPageIndex(null)
     const svgEl = pageRefs.current.get(pageKey)
     if (!svgEl) return
     const svgTop = svgEl.getBoundingClientRect().top
@@ -821,6 +993,7 @@ export default function EditorShell() {
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setInlineEditNodeId(null)
     setInlineEditCaretIndex(null)
+    setInlineEditPageIndex(null)
     setMarginDrag({ sectionIndex, side, pageWidthPt, pageHeightPt, currentMargins, pageKey, altKey })
   }, [])
 
@@ -831,9 +1004,9 @@ export default function EditorShell() {
   }, [])
 
   // Canvas fragment pointerDown: wait for movement before committing to drag
-  const startNodePointerDown = useCallback((source: DragSource, e: React.PointerEvent) => {
+  const startNodePointerDown = useCallback((source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => {
     e.preventDefault()
-    pendingDragRef.current = { source, clientX: e.clientX, clientY: e.clientY }
+    pendingDragRef.current = { source, clientX: e.clientX, clientY: e.clientY, clickAction }
   }, [])
 
   const computePreview = useCallback(
@@ -1013,10 +1186,14 @@ export default function EditorShell() {
         setResizeDrag(null)
         return
       }
-      // PendingDrag released without moving → treat as click → select node
+      // PendingDrag released without moving → treat as click.
       if (pendingDragRef.current) {
-        const { source } = pendingDragRef.current
+        const { source, clickAction } = pendingDragRef.current
         pendingDragRef.current = null
+        if (clickAction?.type === "inline-edit") {
+          handleInlineEditStart(clickAction.nodeId, clickAction.caretIndex, clickAction.pageIndex)
+          return
+        }
         if (source.source === "document") {
           dispatch({ type: "SELECT_NODE", nodeId: source.nodeId })
         }
@@ -1040,42 +1217,65 @@ export default function EditorShell() {
       }
       dispatch({ type: "DRAG_CANCEL" })
     },
-    [marginDrag, minHeightDrag, resizeDrag, state.drag, state.doc, computePreview],
+    [marginDrag, minHeightDrag, resizeDrag, state.drag, state.doc, computePreview, handleInlineEditStart],
   )
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const tag = (e.target as HTMLElement).tagName
+    const isTextInput = tag === "INPUT" || tag === "TEXTAREA"
+    if ((e.ctrlKey || e.metaKey) && !isTextInput) {
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault()
+        zoomIn()
+        return
+      }
+      if (e.key === "-") {
+        e.preventDefault()
+        zoomOut()
+        return
+      }
+      if (e.key === "0") {
+        e.preventDefault()
+        resetZoom()
+        return
+      }
+    }
     if (e.key === "Escape") {
-      if (inlineEditNodeId) { setInlineEditNodeId(null); setInlineEditCaretIndex(null); return }
+      if (inlineEditNodeId) {
+        setInlineEditNodeId(null)
+        setInlineEditCaretIndex(null)
+        setInlineEditPageIndex(null)
+        return
+      }
       if (state.drag) dispatch({ type: "DRAG_CANCEL" })
       else if (pendingDragRef.current) pendingDragRef.current = null
       else dispatch({ type: "SELECT_NODE", nodeId: null })
     }
     if (e.key === "Delete" && state.selectedNodeId && !state.drag) {
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === "INPUT" || tag === "TEXTAREA") return
+      if (isTextInput) return
       e.preventDefault()
       dispatch({ type: "DELETE_NODE", nodeId: state.selectedNodeId })
     }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === "z") {
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === "INPUT" || tag === "TEXTAREA") return
+      if (isTextInput) return
       e.preventDefault()
       dispatch({ type: "UNDO" })
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.shiftKey && e.key === "z"))) {
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === "INPUT" || tag === "TEXTAREA") return
+      if (isTextInput) return
       e.preventDefault()
       dispatch({ type: "REDO" })
     }
-  }, [state.drag, state.selectedNodeId])
+  }, [inlineEditNodeId, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
 
   return (
     <div
+      ref={editorRootRef}
       style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onKeyDown={handleKeyDown}
+      onWheelCapture={handleWheelCapture}
       tabIndex={-1}
     >
       {/* Toolbar */}
@@ -1101,6 +1301,42 @@ export default function EditorShell() {
         <div style={{ width: 1, height: 16, background: "#e5e7eb" }} />
 
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <button
+            onClick={zoomOut}
+            title="Zoom out (Ctrl+-)"
+            disabled={scale <= MIN_SCALE + 0.001}
+            style={{ width: 26, height: 24, fontSize: 13, cursor: scale <= MIN_SCALE + 0.001 ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: scale <= MIN_SCALE + 0.001 ? "#d1d5db" : "#374151" }}
+          >
+            -
+          </button>
+          <button
+            onClick={resetZoom}
+            title="Reset zoom to 100% (Ctrl+0)"
+            style={{ minWidth: 46, height: 24, padding: "0 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: zoomMode === "manual" ? "#f3f4f6" : "white", color: "#374151" }}
+          >
+            {Math.round(scale * 100)}%
+          </button>
+          <button
+            onClick={zoomIn}
+            title="Zoom in (Ctrl++)"
+            disabled={scale >= MAX_SCALE - 0.001}
+            style={{ width: 26, height: 24, fontSize: 13, cursor: scale >= MAX_SCALE - 0.001 ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: scale >= MAX_SCALE - 0.001 ? "#d1d5db" : "#374151" }}
+          >
+            +
+          </button>
+          <button
+            onClick={fitZoom}
+            title="Fit page width"
+            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: zoomMode === "fit" ? "#dbeafe" : "white", color: zoomMode === "fit" ? "#1d4ed8" : "#374151", fontWeight: zoomMode === "fit" ? "bold" : "normal" }}
+          >
+            Fit
+          </button>
+        </div>
+
+        {/* Separator */}
+        <div style={{ width: 1, height: 16, background: "#e5e7eb" }} />
+
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {(["template", "fill"] as const).map((m) => (
             <button key={m}
               onClick={() => {
@@ -1109,6 +1345,7 @@ export default function EditorShell() {
                     dispatch({ type: "DRAG_CANCEL" })
                     setInlineEditNodeId(null)
                     setInlineEditCaretIndex(null)
+                    setInlineEditPageIndex(null)
                     setResizeDrag(null)
                   setMinHeightDrag(null)
                   setMarginDrag(null)
@@ -1216,6 +1453,7 @@ export default function EditorShell() {
           inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
           onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
           onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
+          onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightChange : () => undefined}
           onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
           onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
           onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
@@ -1228,7 +1466,8 @@ export default function EditorShell() {
           onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
           marginDrag={isTemplateMode ? marginDrag : null}
           onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
-          onScaleChange={setScale}
+          onScaleChange={handleCanvasScaleChange}
+          autoFitScale={zoomMode === "fit"}
           showTextSegments={showTextSegments}
           showDrift={showDrift}
           driftMap={driftReport?.driftMap ?? null}

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react"
-import type { DocumentNode } from "@/schema"
+import { useCallback, useEffect, useRef, useState } from "react"
+import type { DocumentNode, ParagraphNode, TableNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily } from "@/font-registry"
 
@@ -13,23 +13,38 @@ interface Props {
   hasActiveInlineEditor: boolean
   showTextSegments: boolean
   initialCaretIndex: number | null
-  onChange: (nodeId: string, text: string) => void
+  onChange: (nodeId: string, text: string, caretIndex: number | null) => void
+  onHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
   onEndEdit: () => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
 }
 
-function getEditableParagraphText(doc: DocumentNode, nodeId: string): string | null {
+const EDIT_CHROME_X = 3
+const EDIT_CHROME_Y = 3
+
+function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
   for (const section of doc.document.sections) {
     const node = section.nodes[nodeId]
     if (node?.type === "paragraph") {
-      return node.children
-        .filter((child) => child.type === "text")
-        .map((child) => (child as { text: string }).text)
-        .join("")
+      return node
+    }
+    for (const candidate of Object.values(section.nodes)) {
+      if (candidate.type !== "table") continue
+      const inner = (candidate as unknown as TableNode).nodes[nodeId]
+      if (inner?.type === "paragraph") return inner as ParagraphNode
     }
   }
   return null
+}
+
+function getEditableParagraphText(doc: DocumentNode, nodeId: string): string | null {
+  const node = findParagraphNode(doc, nodeId)
+  if (!node) return null
+  return node.children
+    .filter((child) => child.type === "text")
+    .map((child) => (child as { text: string }).text)
+    .join("")
 }
 
 function textAnchorForAlign(align: ParagraphRenderProps["align"] | undefined): "start" | "middle" | "end" {
@@ -173,17 +188,21 @@ export function ParagraphTextSurface({
   showTextSegments,
   initialCaretIndex,
   onChange,
+  onHeightChange,
   onEndEdit,
   onSplitParagraph,
   onMergeParagraph,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const textareaHeightRef = useRef<number | null>(null)
+  const [textareaHeight, setTextareaHeight] = useState<number | null>(null)
   const renderProps = fragment.renderProps
   const editHeight = Math.max(fragment.height * scale, 1)
   const fontSize = (renderProps?.fontSize ?? 12) * scale
   const lineHeight = (renderProps?.lineHeight ?? (renderProps?.fontSize ?? 12) * 1.5) * scale
   const spacingBefore = (renderProps?.spacingBefore ?? 0) * scale
   const spacingAfter = (renderProps?.spacingAfter ?? 0) * scale
+  const minimumEditHeight = Math.max(lineHeight + spacingBefore + spacingAfter, 1)
 
   // For continuation fragments (page 2+), use only the text belonging to this
   // fragment so the textarea starts at the right content and the caret is
@@ -198,6 +217,20 @@ export function ParagraphTextSurface({
   const adjustedInitialCaret = (continuationCharStart !== null && initialCaretIndex !== null)
     ? Math.max(0, initialCaretIndex - continuationCharStart)
     : initialCaretIndex
+  const activeEditHeight = Math.max(textareaHeight ?? editHeight, minimumEditHeight)
+
+  const syncTextareaHeight = useCallback((el: HTMLTextAreaElement) => {
+    el.scrollTop = 0
+    const previousHeight = el.style.height
+    el.style.height = "auto"
+    const nextHeight = Math.max(minimumEditHeight, el.scrollHeight - EDIT_CHROME_Y * 2)
+    el.style.height = previousHeight
+    const currentHeight = textareaHeightRef.current
+    if (currentHeight !== null && Math.abs(currentHeight - nextHeight) < 0.5) return
+    textareaHeightRef.current = nextHeight
+    setTextareaHeight(nextHeight)
+    onHeightChange(fragment.nodeId, nextHeight / scale, fragment.pageIndex)
+  }, [fragment.nodeId, fragment.pageIndex, minimumEditHeight, onHeightChange, scale])
 
   useEffect(() => {
     if (!isEditing || adjustedInitialCaret == null) return
@@ -207,21 +240,31 @@ export function ParagraphTextSurface({
     requestAnimationFrame(() => {
       el.focus()
       el.setSelectionRange(caret, caret)
+      el.scrollTop = 0
     })
   }, [fragment.nodeId, adjustedInitialCaret, isEditing])
+
+  useEffect(() => {
+    if (!isEditing) {
+      textareaHeightRef.current = null
+      setTextareaHeight(null)
+      return
+    }
+    if (textareaHeight === null) return
+    const el = textareaRef.current
+    if (!el) return
+    requestAnimationFrame(() => syncTextareaHeight(el))
+  }, [editHeight, isEditing, syncTextareaHeight, textareaHeight])
 
   if (isEditing) {
     return (
       <>
-        {fragment.lines?.map((line, index) =>
-          renderLine(line, index, fragment, renderProps, pageKey, scale),
-        )}
         {showTextSegments && renderSegmentDebug(fragment.lines, fragment, renderProps, scale)}
         <foreignObject
-          x={fragment.x * scale}
-          y={fragment.y * scale}
-          width={fragment.width * scale}
-          height={editHeight}
+          x={fragment.x * scale - EDIT_CHROME_X}
+          y={fragment.y * scale - EDIT_CHROME_Y}
+          width={fragment.width * scale + EDIT_CHROME_X * 2}
+          height={activeEditHeight + EDIT_CHROME_Y * 2}
         >
           <textarea
             ref={textareaRef}
@@ -229,6 +272,7 @@ export function ParagraphTextSurface({
             {...{ xmlns: "http://www.w3.org/1999/xhtml" } as any}
             autoFocus
             spellCheck={false}
+            rows={1}
             defaultValue={editText}
             style={{
               width: "100%",
@@ -238,22 +282,31 @@ export function ParagraphTextSurface({
               outline: "2px solid #2563eb",
               outlineOffset: -2,
               borderRadius: 2,
+              display: "block",
               fontFamily: resolveFontCssFamily(renderProps?.fontFamilyKey),
               fontSize,
               lineHeight: `${lineHeight}px`,
               textAlign: textAlignForParagraph(renderProps?.align),
-              color: "transparent",
+              color: "#1e40af",
               caretColor: "#1e40af",
               resize: "none",
               overflow: "hidden",
-              padding: `${spacingBefore}px 0 ${spacingAfter}px`,
+              padding: `${spacingBefore + EDIT_CHROME_Y}px ${EDIT_CHROME_X}px ${spacingAfter + EDIT_CHROME_Y}px`,
               margin: 0,
               boxSizing: "border-box",
               whiteSpace: "pre-wrap",
-              overflowWrap: "normal",
+              overflowWrap: "break-word",
               wordBreak: "normal",
             }}
-            onInput={(event) => onChange(fragment.nodeId, preText + event.currentTarget.value)}
+            onInput={(event) => {
+              const el = event.currentTarget
+              const caretIndex = preText.length + (el.selectionStart ?? el.value.length)
+              syncTextareaHeight(el)
+              onChange(fragment.nodeId, preText + el.value, caretIndex)
+            }}
+            onSelect={(event) => {
+              event.currentTarget.scrollTop = 0
+            }}
             onBlur={onEndEdit}
             onKeyDown={(event) => {
               event.stopPropagation()

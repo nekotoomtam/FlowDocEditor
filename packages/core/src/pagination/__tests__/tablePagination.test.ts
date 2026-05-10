@@ -461,4 +461,42 @@ describe("tablePagination — multi-page row split", () => {
     const totalLines = paraFrags.reduce((s, f) => s + (f.lines?.length ?? 0), 0)
     expect(totalLines).toBe(Math.floor(LINES_PER_PAGE * 1.5))
   })
+
+  it("does not duplicate shorter cell content across split-row continuation pages", () => {
+    const longText = Array.from({ length: 120 }, (_, i) => `Long ${i}`).join("\n")
+    const tbl = makeTable("tbl", [220, 220], [
+      [{ text: "Short" }, { text: longText }],
+    ])
+    const row = tbl.nodes["tbl-row0"]
+    if (row?.type === "table-row") row.props = { ...row.props, allowBreak: true }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const shortCellParagraphs = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-p0-0"),
+    )
+    expect(shortCellParagraphs).toHaveLength(1)
+    expect(shortCellParagraphs[0].lines?.map((line) => line.text).join("")).toBe("Short")
+  })
+
+  it("repeats table headers during breakable row continuation", () => {
+    const longText = Array.from({ length: 120 }, (_, i) => `Body ${i}`).join("\n")
+    const tbl = makeTable("tbl", [451], [
+      [{ text: "Header" }],
+      [{ text: longText }],
+    ])
+    tbl.props = { ...tbl.props, headerRowCount: 1 }
+    const bodyRow = tbl.nodes["tbl-row1"]
+    if (bodyRow?.type === "table-row") bodyRow.props = { ...bodyRow.props, allowBreak: true }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const bodyPages = new Set(
+      result.sections[0].pages
+        .filter((pg) => pg.fragments.some((f) => f.nodeId === "tbl-row1"))
+        .map((pg) => pg.index),
+    )
+    expect(bodyPages.size).toBeGreaterThan(1)
+    for (const page of result.sections[0].pages.filter((pg) => bodyPages.has(pg.index) && pg.index > 0)) {
+      expect(page.fragments.some((f) => f.nodeId === "tbl-row0")).toBe(true)
+    }
+  })
 })

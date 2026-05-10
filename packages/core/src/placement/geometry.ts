@@ -140,10 +140,14 @@ export function getRowGeometry(
   const innerHeight = Math.max(0, height - topBandHeight - bottomBandHeight)
 
   const columns = getRowColumnWidths(document, rowId, width)
+  const row = document.document.sections
+    .map((section) => section.nodes[rowId])
+    .find((node) => node?.type === "row")
+  const gap = row?.type === "row" ? Math.max(0, row.props.gap ?? 0) : 0
   let x = 0
   const stackRects: RowStackRect[] = columns.map(({ stackId, width: colWidth }) => {
     const rect = { stackId, left: x, top: innerTop, width: colWidth, height: innerHeight }
-    x += colWidth
+    x += colWidth + gap
     return rect
   })
 

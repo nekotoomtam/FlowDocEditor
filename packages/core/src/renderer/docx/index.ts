@@ -12,6 +12,7 @@ import {
   BorderStyle,
   WidthType,
   PageOrientation,
+  SectionType,
 } from "docx"
 import type { PaginatedDocument, PageFragment, ResolvedBorderSide, ResolvedCellBorder } from "../../pagination"
 import type { ParagraphRenderProps } from "../../pagination"
@@ -55,6 +56,11 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
   const tableCellMap = new Map<string, TableCellGroup>()
   const rowMap = new Map<string, RowGroup>()
   const stackMap = new Map<string, StackGroup>()
+  const tableRowIds = new Set(
+    fragments
+      .filter((fragment) => fragment.nodeType === "table-cell" && fragment.parentNodeId)
+      .map((fragment) => fragment.parentNodeId!),
+  )
 
   for (const fragment of fragments) {
     if (fragment.nodeType === "table") {
@@ -62,7 +68,15 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
       tableMap.set(fragment.nodeId, group)
       items.push({ kind: "table", group })
     } else if (fragment.nodeType === "row") {
-      if (fragment.parentNodeId && tableMap.has(fragment.parentNodeId)) {
+      if (fragment.parentNodeId && tableRowIds.has(fragment.nodeId)) {
+        if (!tableMap.has(fragment.parentNodeId)) {
+          const group: TableGroup = {
+            tableFragment: { ...fragment, nodeId: fragment.parentNodeId, nodeType: "table", parentNodeId: undefined },
+            rows: [],
+          }
+          tableMap.set(fragment.parentNodeId, group)
+          items.push({ kind: "table", group })
+        }
         const rowGroup: TableRowGroup = { rowFragment: fragment, cells: [] }
         tableRowMap.set(fragment.nodeId, rowGroup)
         tableMap.get(fragment.parentNodeId)!.rows.push(rowGroup)
@@ -257,68 +271,56 @@ function sameFragmentList(a: PageFragment[], b: PageFragment[]): boolean {
   return a.length === b.length && a.every((f, i) => f.nodeId === b[i].nodeId)
 }
 
+function buildHeaders(fragments: PageFragment[]) {
+  const content = buildZoneContent(fragments)
+  return content.length > 0 ? { default: new Header({ children: content }) } : undefined
+}
+
+function buildFooters(fragments: PageFragment[]) {
+  const content = buildZoneContent(fragments)
+  return content.length > 0 ? { default: new Footer({ children: content }) } : undefined
+}
+
+function buildPageProperties(page: { width: number; height: number; contentBox: { x: number; y: number; width: number; height: number } }, isFirst: boolean) {
+  return {
+    ...(isFirst ? {} : { type: SectionType.NEXT_PAGE }),
+    page: {
+      size: {
+        width: ptToTwips(page.width),
+        height: ptToTwips(page.height),
+        orientation: page.width > page.height
+          ? PageOrientation.LANDSCAPE
+          : PageOrientation.PORTRAIT,
+      },
+      margin: {
+        top: ptToTwips(page.contentBox.y),
+        right: ptToTwips(page.width - page.contentBox.x - page.contentBox.width),
+        bottom: ptToTwips(page.height - page.contentBox.y - page.contentBox.height),
+        left: ptToTwips(page.contentBox.x),
+      },
+    },
+  }
+}
+
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 
 export class DocxRenderer implements Renderer {
   async render(doc: PaginatedDocument): Promise<RenderResult> {
-    const allPages = doc.sections.flatMap((s) => s.pages)
-    const firstPage = allPages[0]
-    const secondPage = allPages[1]
-
-    const allFragments = doc.sections.flatMap((s) => s.pages.flatMap((p) => p.fragments))
-    const items = groupPageFragments(allFragments)
-    const children = buildItems(items)
-
-    // header/footer: default = หน้า 2+ (หรือหน้าแรกถ้ามีหน้าเดียว)
-    const defaultHeaderFrags = (secondPage ?? firstPage)?.headerFragments ?? []
-    const defaultFooterFrags = (secondPage ?? firstPage)?.footerFragments ?? []
-    const firstPageHeaderFrags = firstPage?.headerFragments ?? []
-    const firstPageFooterFrags = firstPage?.footerFragments ?? []
-
-    const hasDifferentFirstPage =
-      secondPage != null &&
-      (!sameFragmentList(firstPageHeaderFrags, defaultHeaderFrags) ||
-        !sameFragmentList(firstPageFooterFrags, defaultFooterFrags))
-
-    const defaultHeaderContent = buildZoneContent(defaultHeaderFrags)
-    const defaultFooterContent = buildZoneContent(defaultFooterFrags)
-    const firstHeaderContent = buildZoneContent(firstPageHeaderFrags)
-    const firstFooterContent = buildZoneContent(firstPageFooterFrags)
+    const pages = doc.sections.flatMap((section) => section.pages)
+    const sections = pages.map((page, index) => {
+      const children = buildItems(groupPageFragments(page.fragments))
+      return {
+        headers: buildHeaders(page.headerFragments),
+        footers: buildFooters(page.footerFragments),
+        properties: buildPageProperties(page, index === 0),
+        children: children.length > 0 ? children : [new Paragraph({ children: [] })],
+      }
+    })
 
     const wordDoc = new Document({
-      sections: [{
-        headers: {
-          ...(defaultHeaderContent.length > 0 ? { default: new Header({ children: defaultHeaderContent }) } : {}),
-          ...(hasDifferentFirstPage && firstHeaderContent.length > 0
-            ? { first: new Header({ children: firstHeaderContent }) }
-            : {}),
-        },
-        footers: {
-          ...(defaultFooterContent.length > 0 ? { default: new Footer({ children: defaultFooterContent }) } : {}),
-          ...(hasDifferentFirstPage && firstFooterContent.length > 0
-            ? { first: new Footer({ children: firstFooterContent }) }
-            : {}),
-        },
-        properties: firstPage ? {
-          ...(hasDifferentFirstPage ? { titlePage: true } : {}),
-          page: {
-            size: {
-              width: ptToTwips(firstPage.width),
-              height: ptToTwips(firstPage.height),
-              orientation: firstPage.width > firstPage.height
-                ? PageOrientation.LANDSCAPE
-                : PageOrientation.PORTRAIT,
-            },
-            margin: {
-              top: ptToTwips(firstPage.contentBox.y),
-              right: ptToTwips(firstPage.width - firstPage.contentBox.x - firstPage.contentBox.width),
-              bottom: ptToTwips(firstPage.height - firstPage.contentBox.y - firstPage.contentBox.height),
-              left: ptToTwips(firstPage.contentBox.x),
-            },
-          },
-        } : undefined,
-        children,
-      }],
+      sections: sections.length > 0
+        ? sections
+        : [{ children: [new Paragraph({ children: [] })] }],
     })
 
     const buffer = await Packer.toBuffer(wordDoc)

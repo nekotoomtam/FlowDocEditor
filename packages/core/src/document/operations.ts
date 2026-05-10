@@ -1,4 +1,4 @@
-import type { DocumentNode, LayoutNode, TableNode, TableRowNode, TableCellNode } from "../schema"
+import type { DocumentNode, LayoutNode, ParagraphNode, TableNode, TableRowNode, TableCellNode } from "../schema"
 import { pt } from "../schema"
 import type { DragSource, PlacementOperation } from "../placement/types"
 import {
@@ -48,6 +48,20 @@ function setChildIds(nodes: Nodes, parentId: string, childIds: string[]): Nodes 
   const node = nodes[parentId]
   if (!node || !("childIds" in node)) return nodes
   return { ...nodes, [parentId]: { ...node, childIds } as LayoutNode }
+}
+
+function isPlainTextParagraph(node: ParagraphNode): boolean {
+  return node.children.length > 0 && node.children.every((child) => child.type === "text")
+}
+
+function getPlainText(node: ParagraphNode): string {
+  return node.children.map((child) => child.type === "text" ? child.text : "").join("")
+}
+
+function replaceWithSingleTextRun(node: ParagraphNode, text: string): ParagraphNode {
+  const firstRun = node.children.find((child) => child.type === "text")
+  if (!firstRun) return node
+  return { ...node, children: [{ ...firstRun, text }] }
 }
 
 // ─── Width Share Helpers ───────────────────────────────────────────────────────
@@ -345,21 +359,38 @@ function insertInlineField(
   index: number,
   field: { key: string; label?: string; fallback?: string },
 ): DocumentNode {
+  const fieldRef = createFieldRefInline(field.key, field.label, field.fallback)
   for (let si = 0; si < doc.document.sections.length; si++) {
     const section = doc.document.sections[si]
     const node = section.nodes[paragraphId]
-    if (node?.type !== "paragraph") continue
-
-    const insertAt = Math.min(Math.max(0, index), node.children.length)
-    const fieldRef = createFieldRefInline(field.key, field.label, field.fallback)
-    const updated: LayoutNode = {
-      ...node,
-      children: [...node.children.slice(0, insertAt), fieldRef, ...node.children.slice(insertAt)],
+    if (node?.type === "paragraph") {
+      const insertAt = Math.min(Math.max(0, index), node.children.length)
+      const updated: LayoutNode = {
+        ...node,
+        children: [...node.children.slice(0, insertAt), fieldRef, ...node.children.slice(insertAt)],
+      }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [paragraphId]: updated } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
     }
-    const newSections = doc.document.sections.map((s, i) =>
-      i === si ? { ...s, nodes: { ...s.nodes, [paragraphId]: updated } } : s,
-    )
-    return { ...doc, document: { ...doc.document, sections: newSections } }
+    for (const [tableId, candidate] of Object.entries(section.nodes)) {
+      if (candidate.type !== "table") continue
+      const table = candidate as unknown as TableNode
+      const inner = table.nodes[paragraphId]
+      if (inner?.type !== "paragraph") continue
+      const insertAt = Math.min(Math.max(0, index), inner.children.length)
+      const updated = {
+        ...inner,
+        children: [...inner.children.slice(0, insertAt), fieldRef, ...inner.children.slice(insertAt)],
+      }
+      const newTable = { ...table, nodes: { ...table.nodes, [paragraphId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
   }
   return doc
 }
@@ -410,9 +441,8 @@ export function updateParagraphText(
     const section = doc.document.sections[si]
     const node = section.nodes[nodeId]
     if (node?.type === "paragraph") {
-      const firstRun = node.children[0]
-      if (!firstRun || firstRun.type !== "text") continue
-      const updated: LayoutNode = { ...node, children: [{ ...firstRun, text }, ...node.children.slice(1)] }
+      if (!isPlainTextParagraph(node)) continue
+      const updated: LayoutNode = replaceWithSingleTextRun(node, text)
       const newSections = doc.document.sections.map((s, i) =>
         i === si ? { ...s, nodes: { ...s.nodes, [nodeId]: updated } } : s,
       )
@@ -424,9 +454,8 @@ export function updateParagraphText(
       const table = n as unknown as TableNode
       const inner = table.nodes[nodeId]
       if (inner?.type !== "paragraph") continue
-      const firstRun = inner.children[0]
-      if (!firstRun || firstRun.type !== "text") continue
-      const updated = { ...inner, children: [{ ...firstRun, text }, ...inner.children.slice(1)] }
+      if (!isPlainTextParagraph(inner)) continue
+      const updated = replaceWithSingleTextRun(inner, text)
       const newTable = { ...table, nodes: { ...table.nodes, [nodeId]: updated } }
       const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
       const newSections = doc.document.sections.map((s, i) =>
@@ -449,16 +478,18 @@ export function splitParagraphAtIndex(
     const section = doc.document.sections[si]
     const node = section.nodes[nodeId]
     if (node?.type !== "paragraph") continue
+    if (!isPlainTextParagraph(node)) continue
 
     const firstRun = node.children[0]
     if (!firstRun || firstRun.type !== "text") continue
+    const fullText = getPlainText(node)
 
-    const textBefore = firstRun.text.slice(0, splitIndex)
-    const textAfter = firstRun.text.slice(splitIndex)
+    const textBefore = fullText.slice(0, splitIndex)
+    const textAfter = fullText.slice(splitIndex)
 
     const updatedNode: LayoutNode = {
       ...node,
-      children: [{ ...firstRun, text: textBefore }, ...node.children.slice(1)],
+      children: [{ ...firstRun, text: textBefore }],
     }
     const newPara = createParagraphNode(textAfter, node.props)
 
@@ -496,6 +527,7 @@ export function mergeParagraphWithPrevious(
     const section = doc.document.sections[si]
     const node = section.nodes[nodeId]
     if (node?.type !== "paragraph") continue
+    if (!isPlainTextParagraph(node)) continue
 
     const parentInfo = findParentInfo(section.nodes, nodeId)
     if (!parentInfo || parentInfo.index === 0) return null
@@ -506,17 +538,20 @@ export function mergeParagraphWithPrevious(
 
     const prevNode = section.nodes[prevId]
     if (prevNode?.type !== "paragraph") return null
+    if (!isPlainTextParagraph(prevNode)) return null
 
     const prevFirstRun = prevNode.children[0]
     const curFirstRun = node.children[0]
     if (!prevFirstRun || prevFirstRun.type !== "text") return null
     if (!curFirstRun || curFirstRun.type !== "text") return null
 
-    const caretIndex = prevFirstRun.text.length
-    const mergedText = prevFirstRun.text + curFirstRun.text
+    const prevText = getPlainText(prevNode)
+    const curText = getPlainText(node)
+    const caretIndex = prevText.length
+    const mergedText = prevText + curText
     const updatedPrev: LayoutNode = {
       ...prevNode,
-      children: [{ ...prevFirstRun, text: mergedText }, ...prevNode.children.slice(1)],
+      children: [{ ...prevFirstRun, text: mergedText }],
     }
     const newChildIds = childIds.filter((id) => id !== nodeId)
     let newNodes: Nodes = { ...section.nodes, [prevId]: updatedPrev }

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest"
+import JSZip from "jszip"
 import { PdfRenderer } from "../pdf"
 import { DocxRenderer } from "../docx"
 import { paginateDocument } from "../../pagination"
@@ -93,6 +94,17 @@ function makeTocSection(title = "Contents"): DocumentNode["document"]["sections"
 
 function paginate(doc: DocumentNode) {
   return paginateDocument(doc, defaultTextMeasurer, defaultWordBreaker)
+}
+
+async function readDocxXml(buffer: Uint8Array, path: string): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer)
+  const file = zip.file(path)
+  if (!file) throw new Error(`Missing DOCX part: ${path}`)
+  return file.async("string")
+}
+
+function countXmlTag(xml: string, tag: string): number {
+  return xml.match(new RegExp(`<${tag}(\\s|>|/)`, "g"))?.length ?? 0
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -293,6 +305,51 @@ describe("multi-section export smoke tests", () => {
     expect(result.buffer[0]).toBe(0x50)   // PK zip header
     expect(result.buffer[1]).toBe(0x4b)
     expect(result.buffer.length).toBeGreaterThan(0)
+  })
+
+  it("DOCX: two-section document emits two Word sections", async () => {
+    const p1 = makePara("p1", "Section one")
+    const p2 = makePara("p2", "Section two")
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [
+          makeSection("s1", ["p1"], { p1 }),
+          makeSection("s2", ["p2"], { p2 }, { pageNumberStart: 1 }),
+        ],
+      },
+    }
+    const paginated = paginate(doc)
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+    expect(countXmlTag(xml, "w:sectPr")).toBe(2)
+    expect(xml).toContain("Section one")
+    expect(xml).toContain("Section two")
+  })
+
+  it("DOCX: multi-page document emits a Word section per paginated page", async () => {
+    const nodes: Record<string, LayoutNode> = {}
+    const ids: string[] = []
+    for (let i = 0; i < 80; i++) {
+      const id = `p${i}`
+      nodes[id] = makePara(id, `Paragraph ${i + 1}`)
+      ids.push(id)
+    }
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [makeSection("s1", ids, nodes)],
+      },
+    }
+    const paginated = paginate(doc)
+    const pageCount = paginated.sections.reduce((sum, section) => sum + section.pages.length, 0)
+    expect(pageCount).toBeGreaterThan(1)
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+    expect(countXmlTag(xml, "w:sectPr")).toBe(pageCount)
   })
 
   it("DOCX: TOC + content section renders without throwing", async () => {

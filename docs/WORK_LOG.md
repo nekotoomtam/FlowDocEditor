@@ -15,6 +15,577 @@ Each entry should include:
 
 ---
 
+## 2026-05-10
+
+### Make Inline Shrink Move Column Siblings
+
+Goal: Fix two inline-edit regressions: normal/edit wrapping drift after the overflow fix, and row/column preview height not shrinking when text is deleted.
+
+Completed:
+
+- Adjusted inline textarea wrapping from `overflow-wrap: anywhere` to `break-word`.
+  - This still prevents long unbroken runs from escaping the edit box.
+  - It is less aggressive than `anywhere`, so it stays closer to the core measured display wrapping.
+- Fixed textarea height shrinking.
+  - The height sync previously used the current fragment height as the minimum, so once a paragraph grew, deleting text could not reduce the reported height.
+  - The minimum is now derived from one rendered line plus paragraph spacing.
+- Fixed row/stack preview shrink inside columns.
+  - When the edited paragraph changes height inside a stack, later sibling fragments in the same stack now shift by the paragraph height delta.
+  - Row/stack height recomputation uses those adjusted sibling positions, so deleting lines can reduce the column preview instead of keeping the old content bottom.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Browser-checked the active column paragraph in `http://localhost:4000/editor`.
+
+Notes:
+
+- The current browser document appears to have a large authored row/stack minimum height after prior probing, so a reload can still show a tall empty column even when the paragraph itself is short. That is separate from the live delete/shrink preview path and should be handled as a row min-height UX/reset issue if it persists in normal use.
+
+---
+
+### Prevent Inline Text From Escaping Column Width
+
+Goal: Stop long typed text from visually running outside the paragraph/column frame during inline editing.
+
+Completed:
+
+- Reproduced the active browser state where a long Thai run inside a column textarea could continue past the visible paragraph frame.
+- Updated the inline edit textarea wrapping rule from normal overflow wrapping to `overflow-wrap: anywhere`.
+  - This keeps long unbroken Thai/Latin runs inside the edit frame.
+  - The setting better matches the core layout fallback that breaks overwide words into grapheme segments.
+- Ran a multi-line probe in the browser and undid the temporary text afterward.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Browser-checked `http://localhost:4000/editor` at 206% zoom with the active column paragraph.
+
+Notes:
+
+- This fixes the horizontal escape while editing. Extremely tall row/column content is still governed by the current row/stack pagination policy, where rows are atomic and do not split independently yet.
+
+---
+
+### Keep Row/Stack Preview Height In Sync During Inline Edit
+
+Goal: Fix the observed editor state where a paragraph inside a column grew taller than its parent row/stack preview until the page was reloaded.
+
+Completed:
+
+- Browser-inspected the live editor state and reproduced the visual mismatch:
+  - The selected paragraph in column 1 had grown downward.
+  - Its parent row/stack still displayed at the old shallow height.
+- Confirmed a page reload recalculated the row correctly, which points to stale interactive preview geometry rather than core row pagination.
+- Updated `resizeFragmentHeightAndShift` so inline edit height changes inside row/stack columns:
+  - recompute the natural preview height for every stack in the row,
+  - update the row height and all row stack heights together,
+  - shift fragments below the row by the row height delta,
+  - support both growth and shrink while respecting row `minHeight` and stack minimum height.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- rowStack`
+- `npm.cmd test`
+- Browser-checked `http://localhost:4000/editor`:
+  - Reloaded the saved document and confirmed core pagination renders the row/stack at the tall paragraph height.
+  - Typed additional long text into the column paragraph and confirmed the row/stack preview stayed aligned with the paragraph height.
+
+Notes:
+
+- This is still an editor preview guardrail. The long-term direction remains moving interactive layout behavior out of `EditorShell` into a clearer shared contract.
+
+---
+
+### Clarify Inline Edit Pagination Contract
+
+Goal: Make inline edit exit reconcile from the latest document state instead of relying on a potentially stale blur-handler snapshot.
+
+Completed:
+
+- Documented the inline edit contract directly in `EditorShell`:
+  - While editing, the textarea owns active paragraph text/caret wrapping.
+  - The editor may apply geometry-only height shifts to prevent neighboring fragments from overlapping.
+  - After edit mode exits, preview pagination settles from the latest rendered document snapshot.
+- Changed `handleInlineEditEnd` to only leave edit mode and clear caret/page edit state.
+- Added an effect that detects the transition from editing to not editing, then runs browser preview pagination from the current `previewDoc`.
+- Cleared `inlineEditPageIndex` on edit end, Escape, split/merge focus transitions, mode switch, and resize/margin interactions so page-scoped edit state does not leak into later interactions.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Browser-tested inline edit exit:
+  - Opened paragraph edit.
+  - Added a temporary `settleprobe` marker.
+  - Pressed Escape.
+  - Confirmed the textarea closed and the marker remained after layout settle.
+  - Reopened the paragraph and removed the marker.
+
+Notes:
+
+- This reduces one source of snap-back risk: blur/end edit no longer paginates from a callback closure that may predate the final input event.
+- The broader long-term target remains extracting a dedicated interactive-layout contract/module out of the React shell.
+
+---
+
+### Add Pagination API Diagnostics
+
+Goal: Make `/api/paginate` and export pagination failures actionable before continuing deeper core fixes.
+
+Completed:
+
+- Wrapped `paginateDocument(...)` in `/api/paginate` with explicit error handling.
+  - Unexpected core pagination throws now return `{ error: "Pagination failed", detail }` instead of an opaque 500.
+- Applied the same pagination error handling to `/api/export`.
+- Updated the editor's authoritative pagination fetch to include the response body in the thrown error.
+  - Console errors now include API detail instead of only `paginate failed: 500`.
+
+Files changed:
+
+- `src/app/api/paginate/route.ts`
+- `src/app/api/export/route.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Posted a minimal valid document to `http://localhost:4000/api/paginate`; route returned `200`.
+
+Notes:
+
+- The current browser document no longer showed the earlier `layout error` badge during this pass, so the original failing document was not available to reproduce directly.
+- Browser-use blocks `javascript:` URLs, so localStorage extraction from the page was intentionally not pursued further.
+- If the badge appears again, the browser console should now include the exact API error body needed to build a focused core regression.
+
+---
+
+### Add Editor Zoom Controls
+
+Goal: Add usable zoom controls to the editor canvas without fighting the existing auto-fit behavior.
+
+Completed:
+
+- Added toolbar zoom controls:
+  - `-` zoom out
+  - percent button resets to 100%
+  - `+` zoom in
+  - `Fit` returns to auto-fit page width
+- Added keyboard shortcuts outside text inputs:
+  - `Ctrl/Cmd + +` zoom in
+  - `Ctrl/Cmd + -` zoom out
+  - `Ctrl/Cmd + 0` reset to 100%
+- Hooked `Ctrl/Cmd + wheel` to document zoom.
+  - The editor prevents the browser's default page zoom while the pointer is inside the editor.
+  - Text inputs and textareas keep their native wheel behavior.
+  - A non-passive native wheel listener is used so `preventDefault()` is honored reliably.
+- Split zoom behavior into `fit` and `manual` modes.
+  - Auto-fit now only runs while `Fit` mode is active.
+  - Manual zoom is not overwritten by `ResizeObserver`.
+- Adjusted zoom to feel like document zoom:
+  - Increased zoom step for clearer visual feedback.
+  - Raised max zoom to 400%.
+  - Made the canvas stage size track the scaled page width so larger zoom levels create real canvas scrolling.
+  - Kept pages centered while they still fit within the viewport.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Browser-tested zoom on `http://localhost:4000/editor`:
+  - Fit scale showed `56%` with page width `334`.
+  - First `+` changed page width to `481.95` (`81%`).
+  - Second `+` changed page width to `630.7` (`106%`) and made canvas scrolling visible.
+  - Percent reset changed page width to `595` (`100%`).
+- Added Ctrl/Cmd-wheel hook after the browser test. Automated wheel-modifier simulation did not trigger in the in-app browser tool, so this path is covered by type-check/test plus implementation review.
+
+Notes:
+
+- Zoom range is currently clamped to 30%-400%.
+- The controls are intentionally compact to fit the current dense editor toolbar.
+
+---
+
+### Tune Paragraph Edit Chrome Spacing
+
+Goal: Make inline paragraph edit mode feel visually closer to normal paragraph rendering while giving the edit outline a little breathing room.
+
+Completed:
+
+- Anchored edit text to the core fragment text origin.
+  - The textarea `foreignObject` now expands 3px left and right.
+  - The textarea receives matching 3px horizontal padding, so the text origin remains aligned with the normal paragraph render.
+- Added `display: block` to the textarea to avoid inline element baseline quirks inside `foreignObject`.
+- Kept paragraph `spacingBefore` and `spacingAfter` as the vertical padding source.
+- Prevented edit-mode height from growing on click/focus alone.
+  - Focus and selection now only reset textarea scroll.
+  - Textarea height sync runs only after input has established an explicit edit height.
+  - This avoids the first click into a paragraph adding a blank extra line because native textarea `scrollHeight` is slightly larger than the core fragment height.
+- Set the inline edit textarea to `rows={1}`.
+  - Native textarea defaults to two rows, which made a one-line paragraph jump to a two-line `scrollHeight` on the first input event.
+  - This was the cause of a one-line paragraph gaining a confusing extra line while typing.
+- Stopped core/browser pagination from reflowing the active paragraph while inline editing.
+  - The active paragraph now treats the textarea as the UX truth until edit ends.
+  - The editor no longer patches active paragraph lines/heights with core-measured lines on every input.
+  - The debounced full browser pagination now skips while an inline editor is active.
+  - On blur/end edit, the document is paginated once to reconcile back to core layout.
+- Added vertical editor chrome for paragraph blocks without changing document layout.
+  - Normal paragraph background/selection chrome now extends 3px above and below the core fragment.
+  - Edit `foreignObject` extends 3px above and below the core fragment with matching textarea vertical padding.
+  - Text origin remains anchored to the core layout position; only the editor chrome gets breathing room.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd test` passed — 260 core tests + 16 app tests.
+- Browser-use verification on `http://localhost:4000/editor`:
+  - Single-clicked a visible Thai paragraph and confirmed inline edit opened.
+  - Confirmed textarea style includes `padding: 0px 3px 5.32437px`.
+  - Confirmed the edit `foreignObject` width expands beyond the original fragment while the text remains the same active paragraph.
+  - Single-clicked a long wrapped paragraph and confirmed initial edit height stayed at the core fragment height (`77.20`) on entry instead of growing immediately.
+  - Confirmed edit chrome now reports vertical breathing room (`padding: 3px 3px 8.32437px`) and a taller `foreignObject` while preserving the active paragraph text.
+  - Confirmed a one-line Thai paragraph stays at height `23.30` after typing one character and returns to the same height after Backspace.
+  - Confirmed typing a long marker in a one-line paragraph grows the textarea from `23.30` to `47`, remains stable after waiting beyond the old 200ms pagination debounce, and returns to `23.30` after Backspace cleanup.
+
+Notes:
+
+- The chosen anchor is the core fragment text origin. The edit outline is allowed to be slightly wider than the render fragment, but the editable text should not shift horizontally.
+
+---
+
+### Single-Click Paragraph Editing
+
+Goal: Make paragraph editing feel more document-like by entering inline edit on a single click, while preserving drag behavior through the existing movement threshold.
+
+Completed:
+
+- Added a pending click action to document-fragment pointer handling.
+  - Paragraph pointer down now records the clicked caret position and page index.
+  - If the pointer is released without exceeding the drag threshold, the paragraph enters inline edit immediately.
+  - If the pointer moves more than the existing 5px threshold, the same pending interaction becomes a drag as before.
+- Kept non-paragraph nodes on the existing click-to-select behavior.
+- Left double-click edit support in place as a harmless fallback.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd test` passed — 260 core tests + 16 app tests.
+- Browser-use verification on `http://localhost:4000/editor`:
+  - Single-clicked the visible Thai paragraph `ดกดกดกด`.
+  - Confirmed one active `foreignObject textarea` opened immediately with text `ดกดกดกด`.
+  - Pressed Escape and confirmed the inline editor closed.
+
+Notes:
+
+- Drag still depends on the existing pointer movement threshold. A later UX pass could add explicit drag handles if single-click editing makes direct paragraph dragging feel too easy to trigger accidentally.
+
+---
+
+### Stabilize Inline Edit Reflow While Typing And Deleting
+
+Goal: Fix inline editing drift where multi-line paragraphs could show duplicated/misplaced lines and deletion did not always reflow immediately when a visual line disappeared.
+
+Completed:
+
+- Removed the editor's partial head/tail paragraph reflow path during inline editing.
+  - The previous path reused head lines but called `measureParagraphFrom`, which re-measures from the containing hard line rather than the exact visual line.
+  - For wrapped multi-line paragraphs, that could append already-rendered content again and make typed text placement drift.
+- Kept immediate local reflow, but now it re-measures the active paragraph as a whole on every text change.
+  - This is simpler and matches the current core measurement contract.
+  - Hard events still trigger immediate full browser pagination when line count changes, so deleting enough text to remove a line should shift surrounding fragments without waiting for the debounce.
+- Preserved the caret tracking and edit-start line-count baseline added for the flicker regression.
+- Allowed the active edit fragment height to shrink as well as grow.
+  - The editor previously kept the maximum height seen during the edit session, which left empty visual lines after deleting text.
+- Reset textarea internal scroll after focus/input/selection.
+  - The textarea text is transparent while SVG text is visible; stale textarea scroll can make the caret appear on the wrong visual line even when the stored text/caret index is correct.
+- Changed active inline editing to render visible text from the textarea instead of from the SVG line overlay.
+  - The previous design mixed two wrapping engines: SVG/core lines for visible text and browser textarea wrapping for caret/selection.
+  - Thai word wrapping can differ between those layers, causing the caret to look like it is on the right column but wrong line, and causing typed text to appear to jump between lines.
+  - During edit mode, textarea is now the visual source so caret, selection, and text rendering stay in the same browser layout model.
+- Let the editing foreignObject grow to the textarea's `scrollHeight` while typing.
+  - This prevents the native caret/text layer from clipping when browser wrapping temporarily needs more height than the core preview fragment.
+- Fixed textarea content-height measurement so Backspace can shrink the editor again.
+  - `syncTextareaHeight` now temporarily sets the textarea height to `auto` before reading `scrollHeight`.
+  - Without this, a `height: 100%` textarea could report the old stretched height, leaving empty lines after deletion.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd test` passed — 260 core tests + 16 app tests.
+- Browser-use verification on `http://localhost:4000/editor`:
+  - Opened the user's current local document and reproduced the editor state with a long Thai paragraph.
+  - Confirmed the active editor is now a single `foreignObject textarea` with visible text color instead of transparent text.
+  - Typed into the active paragraph and confirmed text stayed in the textarea/editor path; removed the temporary typed text after verification.
+  - Ran a Backspace shrink probe:
+    - Added a long temporary marker to the active paragraph and confirmed `foreignObject` height grew from `65.22` to `280.86`.
+    - Pressed Backspace for the full marker length and confirmed the marker was removed, text returned exactly, and height shrank back to `65.22`.
+
+Notes:
+
+- This is a correctness-first fix. If paragraph-level reflow later needs to be optimized again, it should use a core API that returns a true visual-line tail, not a hard-line tail.
+- The user's current local document still reports `/api/paginate` layout assertion failure (`layout error` badge). The browser preview remains usable, but server/authoritative pagination should be investigated separately.
+- Follow-up browser observation: editing now keeps caret/text together, but there can still be a perceptible snap between textarea wrapping during edit mode and SVG/core wrapping after blur. That is a remaining layout-model mismatch, not the previous caret-layer corruption.
+
+---
+
+### Prevent Inline Edit Enter From Triggering Reflow
+
+Goal: Reduce flicker when clicking into an existing paragraph for inline editing without changing text.
+
+Completed:
+
+- Updated the editor local reflow effect so it runs on `previewDoc` changes only.
+  - Entering edit mode by changing `inlineEditNodeId` no longer re-measures and patches paragraph lines immediately.
+  - Text changes still update `previewDoc`, so local reflow still runs while typing.
+- Updated the authoritative pagination effect so it also runs on `previewDoc` changes only.
+  - Clicking into or out of edit mode no longer schedules a server pagination request by itself.
+  - Existing refs still let scheduled pagination see the current edit state when text changes.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd test` passed — 260 core tests + 16 app tests.
+
+Notes:
+
+- This specifically targets the "click paragraph, it flashes/re-renders, then returns" behavior caused by edit-mode state changes triggering layout work without document changes.
+- Browser/local reflow remains an approximation while typing; the next larger cleanup is still to extract an explicit interactive layout contract.
+
+---
+
+### Guard Plain-Text Paragraph Operations
+
+Goal: Prevent plain textarea-style operations from corrupting paragraphs that contain structured inline nodes such as `fieldRef` or `pageNumber`.
+
+Completed:
+
+- Added plain-text paragraph safety helpers in `operations.ts`.
+  - A paragraph is editable by these operations only when every child is a text run.
+  - Plain text updates collapse multiple text runs into a single text run.
+  - Mixed inline paragraphs are left unchanged by `updateParagraphText`.
+- Guarded `splitParagraphAtIndex`.
+  - Splits only plain-text paragraphs.
+  - Uses the full concatenated text across text runs.
+  - Produces single-text-run paragraph fragments.
+  - Mixed inline paragraphs no-op and return `newNodeId: ""`.
+- Guarded `mergeParagraphWithPrevious`.
+  - Merges only when both current and previous paragraphs are plain text.
+  - Uses the full concatenated text of both paragraphs.
+  - Produces one text run in the merged paragraph.
+  - Mixed inline paragraphs return `null`.
+- Preserved table plain-text editing.
+  - Plain text paragraphs inside `table.nodes` can still be updated.
+  - Mixed inline table paragraphs are protected by the same guard.
+- Added operation unit tests covering plain text, multiple text runs, `fieldRef`, `pageNumber`, split, merge, and table paragraph updates.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd test` passed — 260 core tests + 16 app tests.
+
+Notes:
+
+- This is a temporary safety policy, not the final segmented inline editor model.
+- Plain textarea editing remains disabled by behavior for mixed inline paragraphs because the underlying operation no-ops. A later UI pass should make that policy visible before edit mode starts.
+- Split/merge for table-internal paragraphs still needs a path-aware operation model; this patch only prevents corrupting mixed inline body paragraphs and keeps table plain-text updates safe.
+
+---
+
+### Rewrite Product Scenarios As Fixture-Oriented Specs
+
+Goal: Make `PRODUCT_SCENARIOS.md` sharper and more useful as a product/testing guide, so scenarios can drive fixtures, acceptance checks, and renderer decisions.
+
+Completed:
+
+- Rewrote `PRODUCT_SCENARIOS.md` from broad narrative into fixture-oriented scenario specs.
+- Added a scenario quality bar explaining what each product scenario should answer.
+- Expanded `ใบขน (Customs Declaration Form)` with:
+  - user goal and primary users
+  - template shape
+  - representative data
+  - required engine capabilities
+  - pagination expectations
+  - export expectations
+  - acceptance checks
+  - known acceptable limitations
+- Expanded `รายงานราชการ (Government Report)` with the same structure, including cover/TOC/body sections, `pageNumberStart=1`, TOC expectations, PDF/DOCX expectations, and DOCX structural checks.
+- Added a cross-scenario comparison table.
+- Added a fixture roadmap for future regression fixtures.
+- Added a decision rule for resolving product/engine trade-offs against the two scenarios.
+
+Files changed:
+
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Reviewed the rewritten markdown for structure and consistency.
+- No code changed; test suite not run for this documentation-only update.
+
+Notes:
+
+- The fixture roadmap intentionally names future test targets but does not create the fixtures yet.
+- This document can now guide the next docs pass, especially `ARCHITECTURE.md`, `RENDERER_CONTRACT.md`, and a future fixture catalog.
+
+---
+
+### Preserve DOCX Multi-Section And Page Boundaries
+
+Goal: Make DOCX export preserve structural section/page boundaries from `PaginatedDocument` instead of flattening all pages into one Word section.
+
+Completed:
+
+- Updated `DocxRenderer` to build one DOCX section per paginated page.
+  - Each generated section receives that page's width, height, orientation, and margins.
+  - Non-first generated sections use `SectionType.NEXT_PAGE`, preserving page boundaries in Word.
+  - Headers and footers are built from each page's resolved header/footer fragments.
+  - Empty pages receive a blank paragraph so the generated DOCX section is valid.
+- Hardened DOCX grouping for continuation table fragments:
+  - When a page contains table-row/table-cell continuation fragments without a table root fragment, the renderer creates a page-local table group from the parent table id.
+  - This prevents continuation table rows from being mistaken for layout rows.
+- Added DOCX structural tests that inspect `word/document.xml`:
+  - Two document sections now emit two Word `<w:sectPr>` entries.
+  - A multi-page document emits one Word section per paginated page.
+
+Files changed:
+
+- `packages/core/src/renderer/docx/index.ts`
+- `packages/core/src/renderer/__tests__/multiSection.test.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd test` passed — 252 core tests + 16 app tests.
+
+Notes:
+
+- DOCX remains a structural/exchange renderer, not a pixel-perfect renderer. Word/LibreOffice can still reflow text and tables differently from PDF/editor preview.
+- The renderer now preserves explicit section/page boundaries structurally; more advanced DOCX fidelity such as native repeated table headers, hard-newline preservation, and empty paragraph semantics can be handled in later focused passes.
+
+---
+
+### Recheck Docs Against Implementation And Fix Integration Bugs
+
+Goal: Recheck the implementation against the layout/text engine docs and fix concrete mismatches that were likely causing editor and pagination bugs.
+
+Completed:
+
+- Fixed table-cell paragraph inline editing:
+  - `ParagraphTextSurface` now finds paragraphs inside `table.nodes`, so opening a table-cell editor no longer starts from an empty textarea.
+  - `EditorShell` local reflow now finds table-cell paragraphs, so typing in table cells can update the preview without waiting only for server pagination.
+- Fixed `normalizeDocument` dropping authored props:
+  - Preserves paragraph `headingLevel`.
+  - Preserves paragraph `keepWithNext`.
+  - Preserves row `minHeight`.
+- Fixed breakable table row pagination:
+  - Shorter cells that finish on an early slice are advanced to the end, preventing duplicated cell content on continuation pages.
+  - Repeating table headers are inserted on continuation pages created inside `allowBreak` row splitting.
+- Fixed page-number consistency:
+  - Header/footer page-number fields are resolved per page and respect `pageNumberStart`.
+  - TOC entries now use section-restarted page numbers instead of raw global page indices.
+- Fixed placement integration:
+  - Palette `table` sources are no longer treated as row-like by placement law.
+  - Row hit geometry now advances stack rects by `gap`, matching layout geometry.
+  - Field insertion can resolve table-internal paragraph fragments and insert field refs into them.
+- Hardened API/export UX:
+  - `/api/paginate` and `/api/export` return `400` for malformed JSON bodies.
+  - Export UI checks `res.ok` before downloading, so JSON error responses are no longer saved as `.pdf`/`.docx` files.
+- Updated checklist status for table-cell live preview.
+
+Files changed:
+
+- `packages/core/src/document/normalize.ts`
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/normalize.test.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `packages/core/src/pagination/__tests__/sectionPageNumbers.test.ts`
+- `packages/core/src/placement/law.ts`
+- `packages/core/src/placement/geometry.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/api/paginate/route.ts`
+- `src/app/api/export/route.ts`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check` passed.
+- `npm.cmd test` passed — 250 core tests + 16 app tests.
+
+Notes:
+
+- Vitest still needs to run outside the sandbox in this environment; inside the sandbox it fails during Vite config loading with `spawn EPERM`.
+- DOCX still has known structural limitations: it flattens paginated output more than the docs ultimately want. That was left for a separate, focused pass.
+- Split paragraph continuation editing is improved from previous work but still needs manual UX testing around caret/Enter/Backspace behavior.
+
+---
+
 ### Add Incremental Reflow From Edited Line + Alignment Fix in Editor
 
 Goal: Make the editor's local reflow re-measure only from the caret's line forward instead of the full paragraph, and fix alignment in editor-side line building.
@@ -1829,3 +2400,35 @@ Notes:
 
 - The core direction remains aligned with the engineering principles.
 - Most added items are correctness guards at boundaries, not architecture rewrites.
+
+---
+
+### Stabilize Long Inline Edit Height
+
+Goal: Keep paragraph inline editing stable when a textarea grows past roughly 4-6 visual lines.
+
+Completed:
+
+- Added a temporary editor-preview geometry path for active inline edits.
+- `ParagraphTextSurface` now reports the live textarea content height while typing.
+- `EditorShell` applies that height to the active paragraph fragment and shifts later fragments on the same page by the height delta.
+- Kept the active paragraph's text layout owned by the textarea during editing; full pagination still reconciles on edit end.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Browser-tested a paragraph by replacing it with a 5-6+ line probe, confirming lower fragments moved down during editing, then restored the original text.
+
+Notes:
+
+- The current saved browser document still triggers `/api/paginate` 500 and shows the layout-error badge; this appears separate from the inline edit height preview because the API receives only the document model, not the temporary edit geometry.
+- Follow-up fix: converted the reported textarea height from screen pixels back into document units before updating the preview fragment. Without this, canvas scales above/below 1 could create a feedback loop where the paragraph grew downward while typing.
+- Follow-up browser verification: a short Thai probe stayed at `20.07` before/after waiting, and a longer wrapped probe grew to `49` and stayed stable instead of continuing to expand.

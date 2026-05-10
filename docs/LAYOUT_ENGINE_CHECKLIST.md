@@ -455,8 +455,8 @@ They are mostly boundary guards and regression targets, not new feature work.
     sections (default), restart at 1 on second section, pageNumberStart=5 on first
     section, explicit pageNumberStart=1 same as default, assertPaginatedDocument
     passes.
-- [x] Multi-section export smoke tests.
-  - 10 tests in `renderer/__tests__/multiSection.test.ts` covering:
+- [x] Multi-section export smoke and DOCX structure tests.
+  - 12 tests in `renderer/__tests__/multiSection.test.ts` covering:
   - **Pagination structure**: two-section document produces two `PaginatedSection`s,
     each section's pages array is dense (no sparse holes), page number restart
     displays correct inline numbers, TOC + content section fills TOC entries,
@@ -464,8 +464,10 @@ They are mostly boundary guards and regression targets, not new feature work.
   - **PDF smoke**: two-section, TOC + content section (ASCII title — Helvetica
     fallback cannot encode Thai), page number restart section — all produce valid
     `%PDF` header without throwing.
-  - **DOCX smoke**: two-section, TOC + content section — both produce valid PK
-    ZIP header without throwing.
+  - **DOCX smoke + structure**: two-section, TOC + content section — both
+    produce valid PK ZIP header without throwing. DOCX XML structure tests also
+    assert that two FlowDoc sections emit two Word section properties and a
+    multi-page FlowDoc document emits one Word section per paginated page.
   - All renderer tests use ASCII text (Helvetica fallback); Thai-text scenarios
     are covered in pagination-only tests.
 - [ ] Visual regression tests for representative document fixtures.
@@ -527,13 +529,12 @@ These items address UX issues discovered during real document editing.
   - Update existing tablePagination tests that assume whole-row-move behavior.
   - Add regression test: single row with multi-line content splits across pages.
 
-- [ ] Live text preview in table cell during inline editing.
-  - Root cause: local reflow in EditorShell patches only body-level paragraph
-    fragments. Paragraphs inside table cells are not patched, so typed text is
-    not visible until server pagination debounce fires (~500ms delay).
-  - Fix: extend local reflow to find and patch table cell paragraph fragments.
-    The fragment is nested under table-cell → table-row → table in the paginated
-    state, but its `nodeType` is still `"paragraph"` so `findParagraphFragment`
-    should locate it.
-  - Accept slight Y-position drift (cell paragraph Y depends on row height) until
-    server pagination settles — same trade-off as body paragraph local reflow.
+- [x] Live text preview in table cell during inline editing.
+  - Fixed by making editor paragraph lookup search both section-level nodes and
+    table-internal `table.nodes`.
+  - `ParagraphTextSurface` now opens table-cell paragraph editors with the
+    existing text instead of an empty textarea.
+  - `EditorShell` local reflow now finds table-cell paragraph nodes, while
+    `findParagraphFragment` already locates their paginated paragraph fragments.
+  - Slight Y-position drift remains acceptable until server pagination settles —
+    same trade-off as body paragraph local reflow.
