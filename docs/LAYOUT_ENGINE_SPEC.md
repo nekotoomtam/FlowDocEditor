@@ -354,6 +354,11 @@ There are currently three distinct code paths for placing paragraph fragments:
 All three paths must call `resolvePageNumbers` after building lines so that
 inline page-number nodes are resolved to the actual page number.
 
+Table-cell flow identity note: flow measurement currently represents table
+cells with stack-like `FlowBox.nodeType="stack"` container semantics. This is an
+internal measurement detail. Pagination emits `PageFragment.nodeType="table-cell"`
+for renderers, drift/debug, and editor selection.
+
 ### 4.3 Paragraph Line Splitting
 
 Paragraphs may continue across pages by splitting at measured line boundaries.

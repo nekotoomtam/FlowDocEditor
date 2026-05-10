@@ -415,6 +415,10 @@ function flowTable(
         childCursorY = childBox.y + childBox.height
       })
 
+      // Flow measurement treats table cells as stack-like containers: cells own
+      // child flow boxes and participate in row height math. Pagination later
+      // emits these boxes as PageFragment nodeType="table-cell" so renderer,
+      // drift/debug, and editor selection use table-cell identity.
       cellBoxes.push({
         nodeId: cellId,
         nodeType: "stack",

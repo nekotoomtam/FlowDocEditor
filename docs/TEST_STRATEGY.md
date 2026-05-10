@@ -158,9 +158,12 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  19 core test files / 279 core tests, plus 2 app test files / 21 app tests.
+  20 core test files / 285 core tests, plus 2 app test files / 21 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
+- Binding has focused scalar `fieldRef` contract coverage for missing values,
+  fallbacks, table-cell paragraphs, non-mutation, and non-strict registry
+  behavior.
 - Table row split accounting has focused coverage for uneven cells, empty cells,
   spacer-containing cells, padded cells, tall repeated headers, and continuation
   line ranges.

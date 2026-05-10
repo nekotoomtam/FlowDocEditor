@@ -20,6 +20,67 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Add Binding Scalar Contract Tests
+
+Goal: Lock the current binding layer contract before expanding table/editor
+workflow work.
+
+Completed:
+
+- Added focused binding tests for scalar `fieldRef` replacement in normal
+  paragraphs.
+- Covered missing-field fallback, missing-field empty text, and fieldRef
+  replacement inside table-cell paragraphs.
+- Added a non-mutation test so binding keeps templates intact while producing a
+  resolved temporary document.
+- Locked the current registry behavior as descriptive rather than strict
+  validation, matching the deferred repeat/nested binding contract.
+- Updated coverage snapshots and fixture catalog ownership after adding the new
+  core test file.
+
+Files changed:
+
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/binding/index.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- binding/index.test.ts` passed: 6 binding
+  tests.
+- `npm.cmd test` passed: 20 core test files / 285 core tests, plus 2 app test
+  files / 21 app tests.
+- `npm.cmd run type-check`
+
+### Clarify Table Cell Flow Semantics
+
+Goal: Reduce confusion around table-cell identity between flow measurement and
+pagination output before further table/cross-page work.
+
+Completed:
+
+- Added a code comment in `packages/core/src/layout/flow.ts` explaining that
+  table cells use stack-like `FlowBox` semantics during measurement.
+- Documented that pagination emits those cells as
+  `PageFragment.nodeType="table-cell"` for renderer/debug/editor identity.
+- Linked the distinction from table/layout docs so future agents do not treat
+  the internal flow node type as public table identity.
+
+Files changed:
+
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/layout/flow.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `git diff --check`
+- Doc reference check: all explicit docs markdown references resolve to
+  existing files.
+
 ### Add Table Split Accounting Tests
 
 Goal: Add narrow regression coverage for table row split accounting before

@@ -11,7 +11,7 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 19 core test files / 279 core tests
+- 20 core test files / 285 core tests
 - 2 app test files / 21 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
@@ -36,11 +36,14 @@ Product fixture names should stay visible in test descriptions, such as
 
 ### Document Model And Operations
 
+- `packages/core/src/binding/index.test.ts`
 - `packages/core/src/document/normalize.test.ts`
 - `packages/core/src/document/operations.test.ts`
 
-Protects authored document validity, normalization defaults, table grid
-operations, and operation-level invariants.
+Protects scalar field binding, authored document validity, normalization
+defaults, table grid operations, and operation-level invariants. Current binding
+coverage intentionally locks scalar `fieldRef` replacement only; repeat and
+nested binding remain deferred.
 
 ### Text Measurement
 

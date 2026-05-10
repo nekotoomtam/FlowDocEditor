@@ -30,6 +30,16 @@ Tables are authored data, not computed layout output.
 Computed values such as page index, rendered cell x/y, split line boundaries,
 and repeated-header placement belong to `PaginatedDocument`, not the table model.
 
+Flow measurement note:
+
+- During layout measurement, table cells currently use stack-like
+  `FlowBox.nodeType="stack"` container semantics.
+- Pagination converts those cell flow boxes to
+  `PageFragment.nodeType="table-cell"` for renderer/debug/placement identity.
+- Code that needs rendered or user-visible table identity should use authored
+  `table-cell` nodes or paginated fragments, not infer it from the internal
+  flow-box container detail.
+
 ## Editor Selection Rules
 
 The canvas should make the table structure directly editable.
