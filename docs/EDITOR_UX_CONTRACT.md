@@ -47,6 +47,9 @@ Users should be able to:
   causes visible collapse/flicker.
 - Active paragraph text may be owned visually by the textarea during editing,
   but the authored text remains in `DocumentNode`.
+- During inline paragraph editing, browser pagination may run against
+  `previewDoc` with the active draft and update the canvas as optimistic visual
+  layout so long paragraphs can show continuation fragments before blur.
 - Full browser/server pagination should reconcile after edit settles or exits.
 - Continuation fragments need extra care: only the clicked fragment should enter
   edit mode, and continuation text/caret offsets must remain slice-aware.
@@ -142,6 +145,8 @@ The browser check does not replace core tests. It protects human-facing feel.
 - DOCX may reflow after opening and is not an exact editor/PDF visual match.
 - Split-fragment inline editing still needs focused hardening before it should
   be considered complete.
+- The first live inline pagination slice improves visual continuity before blur,
+  but textarea/caret following across pages is still deferred.
 
 Accepted limitations should be documented and should not become invisible
 regressions.

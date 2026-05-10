@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { DocumentNode, ParagraphNode, TableNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
-import { defaultWordBreaker, measureParagraph } from "@/layout"
-import type { MeasuredLine } from "@/layout"
 import { resolveFontCssFamily } from "@/font-registry"
-import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 
 interface Props {
   fragment: PageFragment
@@ -102,39 +99,6 @@ function lineVisualLeft(line: PaginatedLine): number {
 
 function lineBaselineY(line: PaginatedLine): number {
   return line.y + line.height * 0.78
-}
-
-function positionMeasuredLines(
-  lines: MeasuredLine[],
-  fragment: PageFragment,
-  spacingBefore: number,
-  align: ParagraphRenderProps["align"] | undefined,
-  isLastFragment: boolean,
-): PaginatedLine[] {
-  let lineY = fragment.y + spacingBefore
-  return lines.map((line, lineIndex) => {
-    const isLastLine = isLastFragment && lineIndex === lines.length - 1
-    let x = fragment.x
-    let segments = line.segments
-    if (align === "center") x = fragment.x + (fragment.width - line.width) / 2
-    else if (align === "right") x = fragment.x + fragment.width - line.width
-    else if (align === "justify" && !isLastLine && segments?.length) {
-      const spaceCount = segments.filter((segment) => segment.kind === "space").length
-      const extra = spaceCount > 0 ? (fragment.width - line.width) / spaceCount : 0
-      if (extra > 0.01) {
-        let cumulativeExtra = 0
-        segments = segments.map((segment) => {
-          const adjusted = { ...segment, x: segment.x + cumulativeExtra }
-          if (segment.kind !== "space") return adjusted
-          cumulativeExtra += extra
-          return { ...adjusted, width: segment.width + extra }
-        })
-      }
-    }
-    const result: PaginatedLine = { text: line.text, x, y: lineY, width: line.width, height: line.height, segments }
-    lineY += line.height
-    return result
-  })
 }
 
 function segmentColor(kind: NonNullable<PaginatedLine["segments"]>[number]["kind"]): string {
@@ -252,9 +216,6 @@ export function ParagraphTextSurface({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const textareaHeightRef = useRef<number | null>(null)
   const [textareaHeight, setTextareaHeight] = useState<number | null>(null)
-  const [localEditText, setLocalEditText] = useState<string | null>(null)
-  const [hasEditedText, setHasEditedText] = useState(false)
-  const editorTextMeasurer = useMemo(() => createBrowserTextMeasurer(), [])
   const renderProps = fragment.renderProps
   const editHeight = Math.max(fragment.height * scale, 1)
   const fontSize = (renderProps?.fontSize ?? 12) * scale
@@ -269,47 +230,13 @@ export function ParagraphTextSurface({
   // fragment so the textarea starts at the right content and the caret is
   // correctly positioned without relying on scroll (which doesn't work reliably
   // inside SVG foreignObject with overflow:hidden).
-  const paragraphNode = findParagraphNode(doc, fragment.nodeId)
   const fullText = getEditableParagraphText(doc, fragment.nodeId) ?? ""
   const { editText, preText, adjustedInitialCaret } = getContinuationEditState(fullText, fragment, initialCaretIndex)
-  const visibleEditText = localEditText ?? editText
-
-  useEffect(() => {
-    if (!isEditing) {
-      setLocalEditText(null)
-      setHasEditedText(false)
-      return
-    }
-    setLocalEditText(editText)
-    setHasEditedText(false)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fragment.nodeId, fragment.pageIndex, isEditing])
 
   const editPreview = useMemo(() => {
-    if (!isEditing || !paragraphNode) return null
-    if (!hasEditedText && fragment.lines?.length) {
-      return { lines: fragment.lines, height: fragment.height }
-    }
-    const previewNode: ParagraphNode = {
-      ...paragraphNode,
-      children: [{ id: `${paragraphNode.id}-edit-preview`, type: "text", text: visibleEditText }],
-    }
-    const measured = measureParagraph(previewNode, fragment.width, editorTextMeasurer, defaultWordBreaker)
-    const isLastFragment = fragment.isContinued !== true
-    const lines = positionMeasuredLines(measured.lines, fragment, spacingBeforeDoc, paragraphNode.props.align, isLastFragment)
-    const height = spacingBeforeDoc + measured.lines.reduce((sum, line) => sum + line.height, 0) + spacingAfterDoc
-    return { lines, height }
-  }, [
-    editorTextMeasurer,
-    editText,
-    fragment,
-    hasEditedText,
-    isEditing,
-    paragraphNode,
-    spacingAfterDoc,
-    spacingBeforeDoc,
-    visibleEditText,
-  ])
+    if (!isEditing) return null
+    return { lines: fragment.lines ?? [], height: fragment.height }
+  }, [fragment.height, fragment.lines, isEditing])
   const editPreviewHeight = (editPreview?.height ?? 0) * scale
   const activeEditHeight = Math.max(textareaHeight ?? editHeight, minimumEditHeight, editPreviewHeight)
 
@@ -392,13 +319,11 @@ export function ParagraphTextSurface({
               margin: 0,
               boxSizing: "border-box",
               whiteSpace: "pre-wrap",
-              overflowWrap: "break-word",
+              overflowWrap: "anywhere",
               wordBreak: "normal",
             }}
             onInput={(event) => {
               const el = event.currentTarget
-              setHasEditedText(true)
-              setLocalEditText(el.value)
               const caretIndex = preText.length + (el.selectionStart ?? el.value.length)
               syncTextareaHeight(el)
               onChange(fragment.nodeId, preText + el.value, caretIndex)

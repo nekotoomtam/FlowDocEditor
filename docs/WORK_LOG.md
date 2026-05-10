@@ -18,7 +18,95 @@ Each entry should include:
 
 ---
 
+## 2026-05-11
+
+### Add Live Inline Pagination Preview Phase 1
+
+Goal: Let long inline paragraph edits use browser pagination for optimistic
+page continuation before blur, without turning the text surface into a second
+paginator.
+
+Completed:
+
+- Allowed the browser `paginateDocument(previewDoc, editorTextMeasurer)` path to
+  run during inline editing with a conservative debounce.
+- Added a browser pagination generation guard so stale optimistic pagination
+  results cannot overwrite newer draft layouts during fast typing.
+- Kept server `/api/paginate` as authoritative status/drift/export truth.
+- Stopped inline edit height callbacks from shifting page layout while live
+  inline pagination is active, avoiding double movement when the paginator
+  settles the same draft.
+- Changed the active paragraph edit surface to render visual text from
+  `PaginatedDocument` fragment lines instead of measuring and drawing all draft
+  lines inside the current fragment.
+- Stabilized editor canvas keys for sections, pages, and active inline fragments
+  so frequent paginated snapshot updates are less likely to remount the textarea.
+- Updated editor/browser smoke docs to describe live inline pagination as
+  optimistic visual layout and keep caret-following across pages deferred.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser check on `http://localhost:4000/editor`:
+  - confirmed the editor loaded with no console warnings/errors;
+  - opened the existing multi-page paragraph inline editor;
+  - confirmed the restored text matched the pre-smoke value before committing;
+  - committed the inline session and confirmed no textarea/focus residue or
+    console warnings/errors remained.
+
+Notes:
+
+- Browser automation could not complete the full shrink/restore smoke because
+  the current Browser Use text replacement path required a virtual clipboard
+  that was unavailable in this session. The attempted keystroke change was
+  repaired and verified against the pre-smoke text before committing.
+- Phase 1 intentionally improves visual continuity only. Caret-following across
+  pages and full continuation-fragment editing remain deferred.
+
 ## 2026-05-10
+
+### Restore Inline Long-Run Wrapping
+
+Goal: Keep the inline paragraph caret/input surface aligned with visible text
+when typing long unbroken text runs.
+
+Completed:
+
+- Reproduced the active editor state with a long unbroken Thai probe while a
+  paragraph inline editor was open.
+- Confirmed the inline canvas textarea was using `overflow-wrap: break-word`
+  even though the earlier documented fix expected `overflow-wrap: anywhere`.
+- Restored the inline textarea wrapping rule to `overflowWrap: "anywhere"` so
+  native textarea wrapping better matches the core grapheme fallback used for
+  over-wide segments.
+- Removed the temporary probe text after browser verification.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- Browser check on `http://localhost:4000/editor`:
+  - inspected the active inline textarea style and confirmed
+    `overflow-wrap: anywhere`;
+  - typed a long Thai probe into the active inline editor;
+  - confirmed the property-panel text length increased by the probe length;
+  - restored the paragraph text to its pre-probe value;
+  - confirmed no browser console warnings/errors were reported.
 
 ### Show Export Failure Feedback
 

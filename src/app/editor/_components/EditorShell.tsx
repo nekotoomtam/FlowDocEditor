@@ -116,6 +116,7 @@ type ZoomMode = "fit" | "manual"
 const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
+const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 100
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
@@ -738,7 +739,14 @@ export default function EditorShell() {
   }, [])
 
   const handleInlineEditHeightChange = useCallback((nodeId: string, height: number, pageIndex: number | null) => {
-    dispatch({ type: "SET_INLINE_EDIT_HEIGHT", nodeId, height, pageIndex })
+    // While live inline pagination is active, browser pagination owns visual
+    // page/fragment geometry. The textarea still tracks its own local height,
+    // but dispatching the old same-page shift here would double-apply movement.
+    // Ignore late height callbacks too: after edit end, the final commit already
+    // paginates from the latest document snapshot.
+    if (inlineEditNodeIdRef.current !== nodeId) return
+    void height
+    void pageIndex
   }, [])
 
   const handleCanvasScaleChange = useCallback((nextScale: number) => {
@@ -847,17 +855,20 @@ export default function EditorShell() {
   const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const authoritativeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutVersionRef = useRef(0)
+  const browserPaginationGenerationRef = useRef(0)
   const inlineEditNodeIdRef = useRef(inlineEditNodeId)
   const paginatedRef = useRef(state.paginated)
   const prevLineCountRef = useRef<number | null>(null)
   const prevEditNodeIdRef = useRef<string | null>(null)
   useEffect(() => { paginatedRef.current = state.paginated })
   useEffect(() => { inlineEditNodeIdRef.current = inlineEditNodeId }, [inlineEditNodeId])
+  useEffect(() => {
+    browserPaginationGenerationRef.current += 1
+  }, [inlineEditNodeId])
 
   // Inline edit contract:
   // - While editing, the textarea owns active-paragraph text/caret wrapping.
-  // - The editor may apply geometry-only height shifts so neighboring fragments
-  //   do not overlap the growing textarea.
+  // - Browser pagination owns optimistic page/fragment geometry from previewDoc.
   // - After edit mode exits, settle preview pagination from the latest rendered
   //   document snapshot. This avoids reconciling from a stale onBlur closure.
   useEffect(() => {
@@ -915,19 +926,24 @@ export default function EditorShell() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewDoc])
 
-  // Full pagination — corrects page breaks and surrounding layout.
-  // Debounce is longer during inline editing so local reflow has time to show first.
+  // Full browser pagination — optimistic visual layout. During inline editing
+  // this runs against previewDoc so draft text can split across pages before
+  // blur; server/API pagination below remains authoritative for final status.
   useEffect(() => {
     if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current)
 
     // Use ref for debounce time so edit mode enter/exit doesn't re-trigger pagination.
-    // Entering edit mode changes inlineEditNodeId but not previewDoc — we must not
-    // re-paginate here because browser measurer drift would cause a visible flicker
-    // (paragraph appears to collapse onto one page before server corrects it).
+    // Entering edit mode changes inlineEditNodeId but not previewDoc, so this
+    // effect only reruns when the draft document or measurement inputs change.
+    const generation = ++browserPaginationGenerationRef.current
+    const inlineEditNodeIdAtSchedule = inlineEditNodeIdRef.current
+    const debounceMs = inlineEditNodeIdAtSchedule ? INLINE_EDIT_PREVIEW_DEBOUNCE_MS : 16
     interactiveDebounceRef.current = setTimeout(() => {
-      if (inlineEditNodeIdRef.current) return
-      dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
-    }, 16)
+      const paginated = paginateDocument(previewDoc, editorTextMeasurer)
+      if (generation !== browserPaginationGenerationRef.current) return
+      if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
+      dispatch({ type: "SET_PAGINATED", paginated })
+    }, debounceMs)
 
     return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps

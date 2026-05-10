@@ -350,10 +350,13 @@ function PageView({
         const chromeBottom = f.nodeType === "paragraph" ? PARAGRAPH_CHROME_Y : 0
         const chromeY = displayFragment.y * scale - chromeTop
         const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
+        const fragmentKey = isInlineEditing
+          ? `inline-edit-${f.nodeId}`
+          : `${f.nodeType}-${f.nodeId}-${f.pageIndex}-${f.lineStart ?? "x"}-${f.lineEnd ?? "x"}-${f.parentNodeId ?? "root"}-${i}`
 
         return (
           <g
-            key={i}
+            key={fragmentKey}
             onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
@@ -611,13 +614,13 @@ export function EditorCanvas({
     <div ref={containerRef} style={{ flex: 1, overflow: "auto", padding: 24, background: "#f3f4f6" }}>
       <div style={{ minWidth: scaledPageWidth + 96 }}>
         {sections.map((section, si) => (
-          <div key={si} style={{ margin: "0 auto 32px", width: scaledPageWidth }}>
+          <div key={section.sectionId ?? si} style={{ margin: "0 auto 32px", width: scaledPageWidth }}>
           <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 10 }}>
             Section {si + 1} · {section.pages.length} page{section.pages.length !== 1 ? "s" : ""}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start", justifyContent: "center" }}>
             {section.pages.map((page, pi) => (
-              <div key={pi}>
+              <div key={`${section.sectionId}-${page.index}-${pi}`}>
                 <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>Page {page.index + 1}</div>
                 <PageView
                   page={page} doc={doc} drag={drag} scale={scale}

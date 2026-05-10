@@ -55,6 +55,9 @@ changes.
 - Enter inline edit.
 - Type enough text to wrap into 3-4 visual lines.
 - Confirm typed text remains visible while editing.
+- For page-boundary checks, use a paragraph near the bottom of a page and type
+  enough text to overflow; confirm continuation content appears before blur,
+  then delete back below the overflow and confirm the continuation disappears.
 - Exit edit.
 - Run undo, then redo.
 - Confirm the paragraph returns to the same visible layout after redo.
