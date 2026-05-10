@@ -17,6 +17,78 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Make Inline Edit Undo Transactional
+
+Goal: Make undo/redo treat one inline paragraph edit session as a single history
+step instead of one step per text update.
+
+Completed:
+
+- Added an inline edit transaction snapshot that captures the document and text
+  before edit mode starts.
+- Changed inline text typing to update the live document as a draft without
+  pushing every keystroke or typed chunk into undo history.
+- Committed the transaction when inline edit ends, pushing one history entry only
+  if the paragraph text changed.
+- Routed root-level Escape through the same inline edit end path so it cannot
+  bypass transaction commit.
+- Stored the current pagination snapshot with undo/redo history entries so redo
+  restores the same canvas layout that was previously visible instead of
+  measuring a new transient layout.
+- Committed a final after-edit browser-pagination snapshot when inline edit
+  ends, including no-text-change exits, so redo restores the normal display
+  layout rather than a temporary inline-edit geometry snapshot.
+- Kept the editor canvas on browser-preview pagination after authoritative
+  `/api/paginate` succeeds; server pagination now feeds status/drift/export
+  truth without overwriting the visual layout used by inline editing.
+- Reused the currently displayed paragraph fragment lines when entering inline
+  edit without text changes, so the first edit frame starts from the exact same
+  glyph layout as normal paragraph display.
+- Added an explicit "text was edited in this session" flag for inline editing.
+  After the first input, edit preview measures from the live textarea value even
+  when the document draft has already caught up, preventing newly typed text
+  from appearing invisible behind stale fragment lines.
+- Removed the old layout-loading live-text overlay that could draw the full
+  paragraph on the first displayed line while authoritative pagination was
+  reconciling.
+- Hydrated preview pagination with the editor's browser measurer on document
+  load/new-document actions so the canvas does not briefly render a new document
+  through the previous layout.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- Browser verification on `http://localhost:4000/editor`:
+  - Reset to a clean document with `New`.
+  - Typed a paragraph in three separate chunks during one inline edit session.
+  - Confirmed `Undo` stayed disabled during the uncommitted edit.
+  - Ended edit with Escape, then confirmed one `Undo` cleared the full paragraph
+    and one `Redo` restored the full paragraph.
+  - Repeated the redo check with keypress-driven input and confirmed the DOM had
+    the full redone paragraph immediately after the redo click and after settle.
+  - Re-ran the focused canvas edit path after storing pagination snapshots in
+    history, then confirmed the paragraph returned after redo and entering edit
+    again did not change the text line layout.
+  - Re-ran a soft-wrapped paragraph case after removing the loading overlay and
+    confirmed the normal/edit inner text crops kept the same line layout; the
+    remaining screenshot byte difference was from edit border/chrome.
+  - Typed into the scoped inline textarea while edit mode stayed active and
+    confirmed the DOM contained the new text and the canvas showed the typed
+    glyphs immediately.
+  - Restarted the local dev server after it had stopped, reloaded the browser,
+    and confirmed the final DOM had no `layout error`, `preview layout`, or
+    `layout...` indicator during the redo check.
+  - Earlier browser logs still contained `Failed to fetch` entries from the
+    period when the dev server was down; no final visual error badge remained
+    after restart.
+
 ### Align Inline Edit Visual Text With Core Layout
 
 Goal: Reduce the snap between inline edit mode and normal paragraph display when

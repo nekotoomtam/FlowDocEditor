@@ -51,6 +51,18 @@ interface PendingDrag {
   clickAction?: PendingClickAction
 }
 
+interface InlineEditTransaction {
+  nodeId: string
+  beforeDoc: DocumentNode
+  beforePaginated: PaginatedDocument
+  beforeText: string
+}
+
+interface HistoryEntry {
+  doc: DocumentNode
+  paginated: PaginatedDocument
+}
+
 export interface ResizeDrag {
   rowId: string
   leftStackId: string
@@ -88,9 +100,9 @@ export interface MarginDrag {
 }
 
 interface EditorState {
-  past: DocumentNode[]
+  past: HistoryEntry[]
   doc: DocumentNode
-  future: DocumentNode[]
+  future: HistoryEntry[]
   paginated: PaginatedDocument
   drag: DragState | null
   selectedNodeId: string | null
@@ -117,6 +129,8 @@ type EditorAction =
   | { type: "SELECT_NODE"; nodeId: string | null }
   | { type: "UPDATE_PROPS"; nodeId: string; changes: Record<string, unknown> }
   | { type: "UPDATE_TEXT"; nodeId: string; text: string }
+  | { type: "UPDATE_INLINE_TEXT_DRAFT"; nodeId: string; text: string }
+  | { type: "COMMIT_INLINE_TEXT_EDIT"; nodeId: string; beforeDoc: DocumentNode; beforePaginated: PaginatedDocument; beforeText: string; afterPaginated: PaginatedDocument }
   | { type: "DELETE_NODE"; nodeId: string }
   | { type: "SET_PAGINATED"; paginated: PaginatedDocument }
   | { type: "SET_INLINE_EDIT_HEIGHT"; nodeId: string; pageIndex: number | null; height: number }
@@ -126,7 +140,7 @@ type EditorAction =
   | { type: "TABLE_REMOVE_ROW"; tableId: string; rowIndex: number }
   | { type: "TABLE_ADD_COL"; tableId: string }
   | { type: "TABLE_REMOVE_COL"; tableId: string; colIndex: number }
-  | { type: "LOAD_DOCUMENT"; doc: DocumentNode }
+  | { type: "LOAD_DOCUMENT"; doc: DocumentNode; paginated?: PaginatedDocument }
   | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
   | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
@@ -179,10 +193,21 @@ function pushDoc(state: EditorState, newDoc: DocumentNode): EditorState {
   }
   return {
     ...state,
-    past: [...state.past.slice(-(MAX_HISTORY - 1)), state.doc],
+    past: [...state.past.slice(-(MAX_HISTORY - 1)), { doc: state.doc, paginated: state.paginated }],
     doc: normalizedDoc,
     future: [],
   }
+}
+
+function setDocWithoutHistory(state: EditorState, newDoc: DocumentNode): EditorState {
+  const normalizedDoc = normalizeDocument(newDoc)
+  try {
+    assertDocument(normalizedDoc)
+  } catch (error) {
+    console.error("document operation produced invalid document:", error)
+    return { ...state, drag: null }
+  }
+  return { ...state, doc: normalizedDoc }
 }
 
 function createInitialEditorState(): EditorState {
@@ -219,6 +244,21 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, updateNodeProps(state.doc, action.nodeId, action.changes))
     case "UPDATE_TEXT":
       return pushDoc(state, updateParagraphText(state.doc, action.nodeId, action.text))
+    case "UPDATE_INLINE_TEXT_DRAFT":
+      return setDocWithoutHistory(state, updateParagraphText(state.doc, action.nodeId, action.text))
+    case "COMMIT_INLINE_TEXT_EDIT": {
+      const currentText = getParagraphTextFromDoc(state.doc, action.nodeId)
+      if (currentText == null || currentText === action.beforeText) return {
+        ...state,
+        paginated: action.afterPaginated,
+      }
+      return {
+        ...state,
+        paginated: action.afterPaginated,
+        past: [...state.past.slice(-(MAX_HISTORY - 1)), { doc: action.beforeDoc, paginated: action.beforePaginated }],
+        future: [],
+      }
+    }
     case "DELETE_NODE":
       return { ...pushDoc(state, deleteNode(state.doc, action.nodeId)), selectedNodeId: null }
     case "SET_PAGINATED":
@@ -234,8 +274,9 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return {
         ...state,
         past: state.past.slice(0, -1),
-        doc: prev,
-        future: [state.doc, ...state.future],
+        doc: prev.doc,
+        paginated: prev.paginated,
+        future: [{ doc: state.doc, paginated: state.paginated }, ...state.future],
       }
     }
     case "REDO": {
@@ -243,14 +284,15 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       const next = state.future[0]
       return {
         ...state,
-        past: [...state.past, state.doc],
-        doc: next,
+        past: [...state.past, { doc: state.doc, paginated: state.paginated }],
+        doc: next.doc,
+        paginated: next.paginated,
         future: state.future.slice(1),
       }
     }
     case "LOAD_DOCUMENT":
       const normalizedDoc = normalizeDocument(action.doc)
-      return { ...state, past: [], doc: normalizedDoc, future: [], selectedNodeId: null, drag: null }
+      return { ...state, past: [], doc: normalizedDoc, future: [], paginated: action.paginated ?? paginate(normalizedDoc), selectedNodeId: null, drag: null }
     case "TABLE_ADD_ROW":
       return pushDoc(state, addTableRow(state.doc, action.tableId, action.afterIndex))
     case "TABLE_REMOVE_ROW":
@@ -345,6 +387,15 @@ function findParagraphNode(doc: DocumentNode, nodeId: string) {
     }
   }
   return null
+}
+
+function getParagraphTextFromDoc(doc: DocumentNode, nodeId: string): string | null {
+  const node = findParagraphNode(doc, nodeId)
+  if (!node) return null
+  return node.children
+    .filter((child) => child.type === "text")
+    .map((child) => child.text)
+    .join("")
 }
 
 function findParagraphFragment(paginated: PaginatedDocument, nodeId: string, pageIndex?: number | null): PageFragment | null {
@@ -519,6 +570,14 @@ export default function EditorShell() {
       ? state.doc
       : bindDocument(state.doc, { registry: { fields: [] }, data: fieldData })
   ), [fieldData, isTemplateMode, state.doc])
+  const paginatePreviewDoc = useCallback((doc: DocumentNode) => (
+    paginateDocument(
+      isTemplateMode
+        ? doc
+        : bindDocument(doc, { registry: { fields: [] }, data: fieldData }),
+      editorTextMeasurer,
+    )
+  ), [editorTextMeasurer, fieldData, isTemplateMode])
 
   const editorRootRef = useRef<HTMLDivElement | null>(null)
   const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
@@ -537,7 +596,11 @@ export default function EditorShell() {
   const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
   const [inlineEditCaretIndex, setInlineEditCaretIndex] = useState<number | null>(null)
   const [inlineEditPageIndex, setInlineEditPageIndex] = useState<number | null>(null)
+  const docRef = useRef(state.doc)
+  const inlineEditTransactionRef = useRef<InlineEditTransaction | null>(null)
   const wasInlineEditingRef = useRef(false)
+
+  useEffect(() => { docRef.current = state.doc }, [state.doc])
 
   useEffect(() => {
     if (typeof document === "undefined" || !("fonts" in document)) return
@@ -603,21 +666,30 @@ export default function EditorShell() {
       try {
         const parsed = JSON.parse(ev.target?.result as string)
         if (parsed?.version === 1 && Array.isArray(parsed?.document?.sections)) {
-          dispatch({ type: "LOAD_DOCUMENT", doc: parsed as DocumentNode })
+          const doc = parsed as DocumentNode
+          dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
         }
       } catch { /* invalid JSON */ }
     }
     reader.readAsText(file)
     e.target.value = ""
-  }, [])
+  }, [paginatePreviewDoc])
 
   const handleNewDocument = useCallback(() => {
     if (!confirm("สร้างเอกสารใหม่? history จะถูกล้าง")) return
-    dispatch({ type: "LOAD_DOCUMENT", doc: createDefaultDocument("Untitled") })
-  }, [])
+    const doc = createDefaultDocument("Untitled")
+    dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
+  }, [paginatePreviewDoc])
 
   // ─── Inline editing ───────────────────────────────────────────────────────────
   const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null) => {
+    const beforeDoc = docRef.current
+    inlineEditTransactionRef.current = {
+      nodeId,
+      beforeDoc,
+      beforePaginated: paginatedRef.current,
+      beforeText: getParagraphTextFromDoc(beforeDoc, nodeId) ?? "",
+    }
     dispatch({ type: "SELECT_NODE", nodeId })
     setInlineEditNodeId(nodeId)
     setInlineEditCaretIndex(caretIndex)
@@ -626,7 +698,7 @@ export default function EditorShell() {
 
   const handleInlineEditChange = useCallback((nodeId: string, text: string, caretIndex: number | null) => {
     setInlineEditCaretIndex(caretIndex)
-    dispatch({ type: "UPDATE_TEXT", nodeId, text })
+    dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
   }, [])
 
   const handleInlineEditHeightChange = useCallback((nodeId: string, height: number, pageIndex: number | null) => {
@@ -636,6 +708,16 @@ export default function EditorShell() {
   const handleCanvasScaleChange = useCallback((nextScale: number) => {
     setScale(clampScale(nextScale))
   }, [])
+
+  const handleUndo = useCallback(() => {
+    if (state.past.length === 0) return
+    dispatch({ type: "UNDO" })
+  }, [state.past])
+
+  const handleRedo = useCallback(() => {
+    if (state.future.length === 0) return
+    dispatch({ type: "REDO" })
+  }, [state.future])
 
   const setManualScale = useCallback((nextScale: number) => {
     setZoomMode("manual")
@@ -692,10 +774,23 @@ export default function EditorShell() {
   }, [zoomByWheel])
 
   const handleInlineEditEnd = useCallback(() => {
+    const transaction = inlineEditTransactionRef.current
+    if (transaction) {
+      const afterDoc = docRef.current
+      dispatch({
+        type: "COMMIT_INLINE_TEXT_EDIT",
+        nodeId: transaction.nodeId,
+        beforeDoc: transaction.beforeDoc,
+        beforePaginated: transaction.beforePaginated,
+        beforeText: transaction.beforeText,
+        afterPaginated: paginatePreviewDoc(afterDoc),
+      })
+      inlineEditTransactionRef.current = null
+    }
     setInlineEditNodeId(null)
     setInlineEditCaretIndex(null)
     setInlineEditPageIndex(null)
-  }, [])
+  }, [paginatePreviewDoc])
 
   const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number) => {
     dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex })
@@ -728,8 +823,6 @@ export default function EditorShell() {
   const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("authoritative")
   const [fontFallback, setFontFallback] = useState(false)
   const [layoutError, setLayoutError] = useState(false)
-  const [authoritativePaginated, setAuthoritativePaginated] = useState<PaginatedDocument | null>(null)
-  const [authoritativeVersion, setAuthoritativeVersion] = useState(0)
   const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const authoritativeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutVersionRef = useRef(0)
@@ -819,8 +912,9 @@ export default function EditorShell() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorTextMeasurer, fontReadyVersion, previewDoc])
 
-  // Authoritative pagination — server/export layout truth. Browser pagination
-  // remains the interaction preview, then settles back to this result when idle.
+  // Authoritative pagination — server/export layout truth. The editor canvas
+  // keeps the browser preview so normal display and inline editing share the
+  // same visual line layout; server output is kept for status/drift/export.
   useEffect(() => {
     const layoutVersion = ++layoutVersionRef.current
     let controller: AbortController | null = null
@@ -868,12 +962,7 @@ export default function EditorShell() {
             }
             console.groupEnd()
           }
-          setAuthoritativePaginated(paginated)
-          setAuthoritativeVersion(layoutVersion)
           setLayoutStatus("authoritative")
-          if (!inlineEditNodeIdRef.current) {
-            dispatch({ type: "SET_PAGINATED", paginated })
-          }
         })
         .catch((error) => {
           if (error instanceof DOMException && error.name === "AbortError") return
@@ -892,13 +981,6 @@ export default function EditorShell() {
       controller?.abort()
     }
   }, [previewDoc])
-
-  useEffect(() => {
-    if (inlineEditNodeId) return
-    if (!authoritativePaginated) return
-    if (authoritativeVersion !== layoutVersionRef.current) return
-    dispatch({ type: "SET_PAGINATED", paginated: authoritativePaginated })
-  }, [authoritativePaginated, authoritativeVersion, inlineEditNodeId])
 
   useEffect(() => {
     if (!isLayoutLoading) {
@@ -1242,9 +1324,7 @@ export default function EditorShell() {
     }
     if (e.key === "Escape") {
       if (inlineEditNodeId) {
-        setInlineEditNodeId(null)
-        setInlineEditCaretIndex(null)
-        setInlineEditPageIndex(null)
+        handleInlineEditEnd()
         return
       }
       if (state.drag) dispatch({ type: "DRAG_CANCEL" })
@@ -1259,14 +1339,14 @@ export default function EditorShell() {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === "z") {
       if (isTextInput) return
       e.preventDefault()
-      dispatch({ type: "UNDO" })
+      handleUndo()
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.shiftKey && e.key === "z"))) {
       if (isTextInput) return
       e.preventDefault()
-      dispatch({ type: "REDO" })
+      handleRedo()
     }
-  }, [inlineEditNodeId, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
+  }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
 
   return (
     <div
@@ -1288,7 +1368,7 @@ export default function EditorShell() {
             const disabled = isUndo ? state.past.length === 0 : state.future.length === 0
             return (
               <button key={label} disabled={disabled}
-                onClick={() => dispatch({ type: isUndo ? "UNDO" : "REDO" })}
+                onClick={isUndo ? handleUndo : handleRedo}
                 title={`${label} (${isUndo ? "Ctrl+Z" : "Ctrl+Y"})`}
                 style={{ padding: "4px 8px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: disabled ? "#d1d5db" : "#374151" }}>
                 {label}

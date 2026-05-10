@@ -12,8 +12,6 @@ interface Props {
   pageKey: string
   scale: number
   isEditing: boolean
-  isLayoutLoading: boolean
-  hasActiveInlineEditor: boolean
   showTextSegments: boolean
   initialCaretIndex: number | null
   onChange: (nodeId: string, text: string, caretIndex: number | null) => void
@@ -243,8 +241,6 @@ export function ParagraphTextSurface({
   pageKey,
   scale,
   isEditing,
-  isLayoutLoading,
-  hasActiveInlineEditor,
   showTextSegments,
   initialCaretIndex,
   onChange,
@@ -257,6 +253,7 @@ export function ParagraphTextSurface({
   const textareaHeightRef = useRef<number | null>(null)
   const [textareaHeight, setTextareaHeight] = useState<number | null>(null)
   const [localEditText, setLocalEditText] = useState<string | null>(null)
+  const [hasEditedText, setHasEditedText] = useState(false)
   const editorTextMeasurer = useMemo(() => createBrowserTextMeasurer(), [])
   const renderProps = fragment.renderProps
   const editHeight = Math.max(fragment.height * scale, 1)
@@ -280,13 +277,19 @@ export function ParagraphTextSurface({
   useEffect(() => {
     if (!isEditing) {
       setLocalEditText(null)
+      setHasEditedText(false)
       return
     }
     setLocalEditText(editText)
-  }, [editText, fragment.nodeId, fragment.pageIndex, isEditing])
+    setHasEditedText(false)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fragment.nodeId, fragment.pageIndex, isEditing])
 
   const editPreview = useMemo(() => {
     if (!isEditing || !paragraphNode) return null
+    if (!hasEditedText && fragment.lines?.length) {
+      return { lines: fragment.lines, height: fragment.height }
+    }
     const previewNode: ParagraphNode = {
       ...paragraphNode,
       children: [{ id: `${paragraphNode.id}-edit-preview`, type: "text", text: visibleEditText }],
@@ -298,7 +301,9 @@ export function ParagraphTextSurface({
     return { lines, height }
   }, [
     editorTextMeasurer,
+    editText,
     fragment,
+    hasEditedText,
     isEditing,
     paragraphNode,
     spacingAfterDoc,
@@ -392,6 +397,7 @@ export function ParagraphTextSurface({
             }}
             onInput={(event) => {
               const el = event.currentTarget
+              setHasEditedText(true)
               setLocalEditText(el.value)
               const caretIndex = preText.length + (el.selectionStart ?? el.value.length)
               syncTextareaHeight(el)
@@ -414,18 +420,6 @@ export function ParagraphTextSurface({
         </foreignObject>
       </>
     )
-  }
-
-  // Live text overlay: show typed text when server pagination is loading.
-  // Skip for continuation fragments — their liveText would be the full paragraph
-  // text which doesn't match the continuation content, causing false positives.
-  if (isLayoutLoading && !hasActiveInlineEditor && fragment.nodeType === "paragraph" && !fragment.continuesFrom) {
-    const liveText = getEditableParagraphText(doc, fragment.nodeId)
-    const paginatedText = fragment.lines?.map((line) => line.text).join("") ?? ""
-    const firstLine = fragment.lines?.[0]
-    if (liveText !== null && liveText.replace(/\n/g, "") !== paginatedText && firstLine) {
-      return renderLine({ ...firstLine, text: liveText }, 0, fragment, renderProps, pageKey, scale, 0.75)
-    }
   }
 
   return fragment.lines?.map((line, index) =>

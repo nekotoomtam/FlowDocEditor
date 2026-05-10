@@ -414,8 +414,6 @@ function PageView({
                 pageKey={pageKey}
                 scale={scale}
                 isEditing={isInlineEditing}
-                isLayoutLoading={isLayoutLoading}
-                hasActiveInlineEditor={!!inlineEditNodeId}
                 showTextSegments={showTextSegments}
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
