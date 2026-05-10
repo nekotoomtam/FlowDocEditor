@@ -243,6 +243,22 @@ describe("row — page-break behavior", () => {
     expect(rowFrag.y).toBe(CY)  // placed at content top
   })
 
+  it("paragraph inside a stack does not split independently from its row", () => {
+    const p1 = makePara("p1", Array.from({ length: 70 }, () => "A").join("\n"))
+    const nodes = {
+      ...makeRow("r1", [{ id: "st1", widthShare: 100, childIds: ["p1"] }]),
+      p1,
+    }
+    const result = paginateDocument(makeDoc(["r1"], nodes), defaultTextMeasurer, defaultWordBreaker)
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+
+    const paraFrags = result.sections[0].pages
+      .flatMap((pg) => pg.fragments)
+      .filter((f) => f.nodeId === "p1")
+    expect(paraFrags).toHaveLength(1)
+    expect(paraFrags[0].pageIndex).toBe(0)
+  })
+
   it("row moves as a whole unit — both stacks land on the same page", () => {
     const fillerText = Array.from({ length: 55 }, () => "A").join("\n")
     const filler = makePara("filler", fillerText)

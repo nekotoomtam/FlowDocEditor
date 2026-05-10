@@ -11,6 +11,9 @@ changes, and refactors do not quietly create a second layout engine.
 Use this document for rules, contracts, policies, and definitions. Use checklist
 documents for execution status and implementation tasks.
 
+For the current page-boundary support matrix, overflow fallbacks, and deferred
+cross-page behavior, see `docs/CROSS_PAGE_BEHAVIOR.md`.
+
 ## 1. Engine Invariants
 
 Engine invariants are rules that should remain true across editor preview,
@@ -657,6 +660,7 @@ These are intentionally not fully locked yet.
 
 ## 10. Related Documents
 
+- `docs/CROSS_PAGE_BEHAVIOR.md`
 - `docs/ENGINEERING_PRINCIPLES.md`
 - `docs/LAYOUT_ENGINE_CHECKLIST.md`
 - `docs/TEXT_ENGINE_CHECKLIST.md`

@@ -17,6 +17,124 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Add Full Table-Cell Paragraph Metadata
+
+Goal: Keep table-cell paragraph metadata consistent between normal row placement
+and breakable row continuation.
+
+Completed:
+
+- Updated `pushTableCellContents` so full table-cell paragraph fragments expose
+  `lineStart`, `lineEnd`, `continuesFrom=false`, and `isContinued=false`.
+- Added a regression test for full table-cell paragraph line metadata.
+- Updated the cross-page behavior contract and checklist counts.
+
+Files changed:
+
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd test`
+- Browser sanity: reloaded `http://localhost:4000/editor`; console warning/error
+  logs were empty.
+
+### Add Table-Cell Continuation Metadata
+
+Goal: Make table-cell paragraph splits easier to inspect and align them with the
+cross-page behavior contract.
+
+Completed:
+
+- Updated `pushCellSlice` so paragraph fragments created inside breakable table
+  rows expose `lineStart`, `lineEnd`, `continuesFrom`, and `isContinued`.
+- Added a table pagination regression test that verifies table-cell paragraph
+  continuation metadata is contiguous and reaches the original line count.
+- Updated cross-page behavior docs, product coverage notes, and checklist counts.
+
+Files changed:
+
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd test`
+- Browser sanity: reloaded `http://localhost:4000/editor`; console warning/error
+  logs were empty.
+
+### Define Cross-Page Behavior Contract
+
+Goal: Make current page-boundary support explicit before expanding paragraph,
+row/column, and table cross-page behavior.
+
+Completed:
+
+- Added `docs/CROSS_PAGE_BEHAVIOR.md` as the shared contract for current
+  cross-page behavior, overflow fallbacks, fragment metadata, and deferred work.
+- Linked the contract from `LAYOUT_ENGINE_SPEC.md`.
+- Updated `LAYOUT_ENGINE_CHECKLIST.md` with the completed contract item and the
+  new row/stack coverage count.
+- Updated `PRODUCT_SCENARIOS.md` coverage matrix with the current row/column
+  atomic behavior.
+- Added a row/stack regression test proving that paragraph content inside a
+  stack does not split independently from its row.
+
+Files changed:
+
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/__tests__/rowStack.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/rowStack.test.ts`
+- `npm.cmd test`
+- Browser sanity: reloaded `http://localhost:4000/editor`; console warning/error
+  logs were empty.
+
+### Align Product Scenario Coverage Notes
+
+Goal: Make docs/test coverage read as one picture after completing the product
+fixture roadmap.
+
+Completed:
+
+- Updated `PRODUCT_SCENARIOS.md` acceptance sections with current automated
+  coverage notes.
+- Added a scenario coverage matrix that separates structural pagination, DOCX XML
+  structure, smoke coverage, and missing visual/semantic coverage.
+- Clarified that product fixtures cover pagination/structure behavior, while
+  PDF visual/page-count golden tests remain future visual regression work.
+- Clarified that DOCX fixture coverage checks section/page boundaries and
+  editable text presence, not semantic Word heading styles.
+- Updated `LAYOUT_ENGINE_CHECKLIST.md` multi-section test count and product
+  fixture coverage wording.
+- Updated current checklist counts for table pagination and keep-with-next tests.
+
+Files changed:
+
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test`
+
 ### Add Report DOCX Structure Fixture
 
 Goal: Cover the report scenario where DOCX output should preserve useful

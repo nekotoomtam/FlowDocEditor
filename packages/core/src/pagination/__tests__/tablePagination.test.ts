@@ -511,6 +511,19 @@ describe("tablePagination — grid invariants after operations", () => {
     const tblFrag = result.sections[0].pages[0].fragments.find((f) => f.nodeId === "tbl")!
     expect(tblFrag.y).toBe(CY)
   })
+
+  it("full table-cell paragraph exposes line metadata", () => {
+    const tbl = makeTable("tbl", [451], [
+      [{ text: "A\nB\nC" }],
+    ])
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const paraFrag = result.sections[0].pages[0].fragments.find((f) => f.nodeId === "tbl-p0-0")!
+
+    expect(paraFrag.lineStart).toBe(0)
+    expect(paraFrag.lineEnd).toBe(3)
+    expect(paraFrag.continuesFrom).toBe(false)
+    expect(paraFrag.isContinued).toBe(false)
+  })
 })
 
 // ─── Multi-page row split (allowBreak=true) ───────────────────────────────────
@@ -571,6 +584,30 @@ describe("tablePagination — multi-page row split", () => {
     for (let i = 1; i < paraFrags.length; i++) {
       expect(paraFrags[i].pageIndex).toBeGreaterThanOrEqual(paraFrags[i - 1].pageIndex)
     }
+  })
+
+  it("table-cell paragraph split fragments expose line continuation metadata", () => {
+    const LINES_PER_PAGE = 58
+    const lineCount = LINES_PER_PAGE * 2
+    const tbl = makeBreakableTable("tbl", lineCount)
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const paraFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-p")
+    )
+
+    expect(paraFrags.length).toBeGreaterThan(1)
+    expect(paraFrags[0].lineStart).toBe(0)
+    expect(paraFrags[0].continuesFrom).toBe(false)
+    expect(paraFrags[0].isContinued).toBe(true)
+
+    for (let i = 0; i < paraFrags.length - 1; i++) {
+      expect(paraFrags[i].lineEnd).toBe(paraFrags[i + 1]!.lineStart)
+    }
+
+    const last = paraFrags[paraFrags.length - 1]!
+    expect(last.lineEnd).toBe(lineCount)
+    expect(last.continuesFrom).toBe(true)
+    expect(last.isContinued).toBe(false)
   })
 
   it("assertPaginatedDocument passes for a 3-page breakable row", () => {

@@ -539,6 +539,10 @@ function pushTableCellContents(
     const childPageY = child.y + offsetY
     let lines: PaginatedLine[] | undefined
     let renderProps: ParagraphRenderProps | undefined
+    let lineStart: number | undefined
+    let lineEnd: number | undefined
+    let continuesFrom: boolean | undefined
+    let isContinued: boolean | undefined
 
     if (child.nodeType === "paragraph") {
       const node = tableNode.nodes[child.nodeId]
@@ -547,6 +551,10 @@ function pushTableCellContents(
         const rawLines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore, node.props.align, child.width)
         lines = resolvePageNumbers(rawLines, pageIndex + 1 + pageNumberOffset)
         renderProps = buildRenderProps(node, measured.lineHeight)
+        lineStart = 0
+        lineEnd = measured.lines.length
+        continuesFrom = false
+        isContinued = false
       }
     }
 
@@ -561,6 +569,10 @@ function pushTableCellContents(
       height: child.height,
       lines,
       renderProps,
+      lineStart,
+      lineEnd,
+      continuesFrom,
+      isContinued,
     })
   })
 }
@@ -665,6 +677,7 @@ function pushCellSlice(
 
       if (lines.length > 0) {
         const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
+        const resolvedLineEnd = lineStart + lines.length
         const isLastLines = lineEnd === undefined || lineEnd === measured.lines.length
         const spacingAfter = isLastLines
           ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit) : 0
@@ -674,6 +687,10 @@ function pushCellSlice(
           pageIndex, x: child.x, y: curY, width: child.width, height: paraH,
           lines: resolvePageNumbers(buildPaginatedLines(lines, child.x, curY, spacingBefore, node.props.align, child.width), pageIndex + 1 + pageNumberOffset),
           renderProps: buildRenderProps(node, measured.lineHeight),
+          lineStart,
+          lineEnd: resolvedLineEnd,
+          continuesFrom: lineStart > 0,
+          isContinued: resolvedLineEnd < measured.lines.length,
         })
         curY += paraH
       }

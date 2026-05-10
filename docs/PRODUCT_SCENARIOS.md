@@ -121,6 +121,14 @@ Minimum useful fixture data:
   pagination.
 - Header/footer page-number fields show the correct page number on every page.
 
+Current automated coverage:
+
+- Pagination and structural behavior are covered by the product fixtures in the
+  roadmap below.
+- PDF export is currently covered by renderer smoke tests, not by customs-specific
+  visual/page-count golden tests.
+- Pixel-level PDF/editor visual comparison remains future visual regression work.
+
 ### Known Acceptable Limitations
 
 - DOCX visual fidelity is not required.
@@ -237,6 +245,15 @@ Minimum useful fixture data:
 - DOCX export is a valid ZIP and `word/document.xml` contains section
   properties matching the expected section/page boundaries.
 
+Current automated coverage:
+
+- Pagination, TOC, long Thai paragraph, keep-with-next, and DOCX XML structure
+  are covered by the product fixtures in the roadmap below.
+- PDF export is currently covered by multi-section renderer smoke tests, not by
+  report-specific PDF visual/page-count golden tests.
+- DOCX semantic heading styles are not asserted yet; current DOCX coverage checks
+  document order, section/page boundaries, and editable text presence.
+
 ### Known Acceptable Limitations
 
 - DOCX may reflow text, table widths, and page breaks after opening in
@@ -291,6 +308,22 @@ the executable test suite.
 - [x] `report-docx-structure`: DOCX XML section boundary assertion.
   - Covered by `product fixture — report-docx-structure` in
     `packages/core/src/renderer/__tests__/multiSection.test.ts`.
+
+## Coverage Matrix
+
+| Requirement | Fixture/Test | Coverage Level |
+|---|---|---|
+| Customs multi-page table, repeated header, footer page number | `customs-basic-table` / `tablePagination.test.ts` | Structural pagination |
+| Customs rowspan group near page boundary | `customs-rowspan-boundary` / `tablePagination.test.ts` | Structural pagination |
+| Customs breakable uneven row without duplicated short cells and with line-slice metadata | `customs-breakable-row-uneven-cells` + table-cell metadata tests / `tablePagination.test.ts` | Structural pagination |
+| Report cover + TOC + body restart numbering | `report-cover-toc-body` / `multiSection.test.ts` | Structural pagination |
+| Report long Thai paragraph split | `report-long-thai-paragraph` / `paginator.test.ts` | Structural pagination |
+| Report heading stays with next paragraph | `report-keep-with-next` / `keepWithNext.test.ts` | Structural pagination |
+| Row/column paragraph currently remains atomic with the row | `rowStack.test.ts` | Structural pagination |
+| Report DOCX section boundaries and editable text | `report-docx-structure` / `multiSection.test.ts` | DOCX XML structural |
+| PDF export does not throw for representative multi-section documents | renderer smoke tests | Smoke |
+| PDF/editor pixel or page-count parity for product fixtures | future visual regression tests | Missing |
+| DOCX semantic Word heading styles | future DOCX structure tests | Missing |
 
 ## Decision Rule
 

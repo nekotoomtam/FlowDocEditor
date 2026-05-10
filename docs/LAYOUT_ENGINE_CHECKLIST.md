@@ -67,7 +67,7 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
   - Stack widths sum to contentBox.width; proportional to widthShare; contiguous x positions.
   - Multi-column overflow: whole row moves to next page as a unit; both stacks land on same page.
   - Very tall rows (taller than one page) stay at contentTop without crashing (documented overflow).
-  - 12 tests in `packages/core/src/pagination/__tests__/rowStack.test.ts`.
+  - 13 tests in `packages/core/src/pagination/__tests__/rowStack.test.ts`.
   - All tests pass `assertPaginatedDocument` with no violations.
 - [x] Stabilize table pagination rules.
   - Rowspan group detection: `buildRowspanGroups` in `paginator.ts` uses union-find
@@ -81,10 +81,12 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
     split-at-row-boundary logic within a group.
   - Grid invariants: `addTableRow`, `removeTableRow`, `addTableColumn`,
     `removeTableColumn` all pass `assertDocument` and `assertPaginatedDocument`.
-  - 19 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+  - 31 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
     covering: no-rowspan baseline, 2/3-row groups staying on same page, group
     moving to next page as unit, mixed groups, operations+grid invariants, and
-    multi-page breakable row split (3-page, line count preserved, fragment order).
+    multi-page breakable row split (3-page, line count preserved, fragment order),
+    plus product fixtures for customs basic table, rowspan boundary, and
+    breakable uneven cells.
 - [x] Add too-tall rowspan group edge-case coverage.
   - Fixed `paginateTable`: multi-row rowspan groups now always advance to the
     next page's `contentTop` when they don't fit, even if the group is taller
@@ -127,6 +129,17 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
   - **Accepted compromise**: DOCX is an exchange format. Exact visual fidelity
     is intentionally not a goal; structural correctness (paragraphs, tables,
     columns, headers, footers) is the target.
+
+- [x] Add cross-page behavior contract.
+  - Added `docs/CROSS_PAGE_BEHAVIOR.md` as the source of truth for page-boundary
+    behavior across body paragraphs, row/stack columns, atomic rows, breakable
+    table rows, rowspan-linked groups, repeated table headers, page numbers, and
+    TOC repagination.
+  - Documents current supported behavior, explicit overflow fallbacks, fragment
+    metadata expectations, and deferred work.
+  - Added row/stack regression coverage that locks the current rule: paragraph
+    content inside a stack does not split independently; the row remains the
+    page-break unit.
 
 
 ## Cross-Page Line Splitting Checklist
@@ -345,8 +358,9 @@ They are mostly boundary guards and regression targets, not new feature work.
     rows taller than one content page even when starting at contentTop.
   - Fixed `pushTableCellContents`: table cell paragraphs now call `resolvePageNumbers` (same bug
     as `pushStackContents` fixed earlier).
-  - Added 5 tests in `tablePagination.test.ts`: 3-page split produces 3+ page fragments, total
-    line count preserved, ascending page order, assertPaginatedDocument passes, 2-page regression.
+  - Covered in `tablePagination.test.ts`: 3-page split produces 3+ page fragments, total
+    line count preserved, ascending page order, full and continuation line
+    metadata, assertPaginatedDocument passes, 2-page regression.
   - Rowspan-linked groups remain conservative (whole-group approach B, no intra-group split).
 - [x] Add renderer contract checks around fragment coverage.
   - Added "renderer input contract" describe block in `renderer.test.ts` (5 tests):
@@ -406,8 +420,9 @@ They are mostly boundary guards and regression targets, not new feature work.
     page advance for non-header content groups.
   - Header fragments appear in ascending page order, passing `assertPaginatedDocument`.
   - Content rows on continuation pages start below the repeated header.
-  - 5 tests in `tablePagination.test.ts`: baseline no-header, header repeats on
-    every page, header starts at contentTop, content below header, fragment order.
+  - Covered in `tablePagination.test.ts`: baseline no-header, header repeats on
+    every page, header starts at contentTop, content below header, fragment order,
+    and product fixtures exercise repeated headers in customs-style tables.
 - [x] Keep-with-next paragraph option.
   - Added `keepWithNext?: boolean` to `ParagraphPropsSchema`.
   - `paginateVerticalContainer` looks ahead to the next sibling before placing a
@@ -418,8 +433,9 @@ They are mostly boundary guards and regression targets, not new feature work.
     loops when the combined height exceeds one full page.
   - `keepTogether` (whole-block no-split) deferred — produces bad UX for long
     paragraphs; addressed if a real use case arises.
-  - 5 tests in `keepWithNext.test.ts`: baseline without flag, heading moves with
-    next sibling, stays on page 1 when fits, no-loop guard, multiple headings.
+  - 6 tests in `keepWithNext.test.ts`: baseline without flag, heading moves with
+    next sibling, stays on page 1 when fits, no-loop guard, multiple headings,
+    and the report-keep-with-next product fixture.
 - [x] Widow/orphan control. → done as Stage 2 (Policy Stages section above).
 - [ ] Page templates with richer header/footer flows.
 - [x] Basic page numbering (inline `pageNumber` node).
@@ -456,7 +472,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     section, explicit pageNumberStart=1 same as default, assertPaginatedDocument
     passes.
 - [x] Multi-section export smoke and DOCX structure tests.
-  - 12 tests in `renderer/__tests__/multiSection.test.ts` covering:
+  - 14 tests in `renderer/__tests__/multiSection.test.ts` covering:
   - **Pagination structure**: two-section document produces two `PaginatedSection`s,
     each section's pages array is dense (no sparse holes), page number restart
     displays correct inline numbers, TOC + content section fills TOC entries,
@@ -464,6 +480,9 @@ They are mostly boundary guards and regression targets, not new feature work.
   - **PDF smoke**: two-section, TOC + content section (ASCII title — Helvetica
     fallback cannot encode Thai), page number restart section — all produce valid
     `%PDF` header without throwing.
+  - **Product fixtures**: report cover/TOC/body pagination and report DOCX
+    structure fixture covering cover, TOC, body section boundaries, and editable
+    body text in `word/document.xml`.
   - **DOCX smoke + structure**: two-section, TOC + content section — both
     produce valid PK ZIP header without throwing. DOCX XML structure tests also
     assert that two FlowDoc sections emit two Word section properties and a
@@ -488,7 +507,7 @@ They are mostly boundary guards and regression targets, not new feature work.
 - [x] Should spacers split across pages or always move whole? → Move whole.
 - [x] What is the minimum pagination golden fixture set before changing
   `paginator.ts` again?
-  → The current suite (230+ core tests) is the minimum. Any change to
+  → The current suite (270 core tests) is the minimum. Any change to
   `paginator.ts` must keep all existing tests green. High-risk areas (paragraph
   split, widow/orphan, TOC overflow, table rowspan, page numbers) each have
   dedicated test files. Adding a regression test for the specific behavior being
