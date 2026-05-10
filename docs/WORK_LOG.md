@@ -20,6 +20,45 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Add Inline Edit Caret Page Tracking Phase 2
+
+Goal: Move the active inline edit surface to the paginated fragment containing
+the caret once live inline pagination splits a paragraph across pages.
+
+Completed:
+
+- Added `findInlineEditPageIndexForCaret()` to derive the active edit page from
+  paginated paragraph fragment segment ranges.
+- Updated `EditorShell` to update `inlineEditPageIndex` when the caret crosses
+  a live continuation boundary, while leaving the caret index as transient
+  editor state rather than document geometry.
+- Added app tests for first-page caret placement, continuation-page placement,
+  exact split boundaries, moving back before the boundary, and missing segment
+  offset fallback.
+- Updated editor UX and browser smoke docs to reflect active textarea page
+  tracking while keeping cross-fragment selection and fully caret-perfect
+  editing deferred.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/inlineEditCaret.ts`
+- `src/app/editor/_components/__tests__/inlineEditCaret.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+
+Notes:
+
+- This phase intentionally uses paginated segment offsets instead of page
+  geometry in authored nodes. Editing from later continuation fragments and
+  Enter/Backspace hardening remain Phase 3 work.
+
 ### Add Live Inline Pagination Preview Phase 1
 
 Goal: Let long inline paragraph edits use browser pagination for optimistic

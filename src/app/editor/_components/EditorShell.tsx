@@ -27,6 +27,7 @@ import { FillingPanel } from "./FillingPanel"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import { comparePagination } from "./comparePagination"
 import type { DriftReport } from "./comparePagination"
+import { findInlineEditPageIndexForCaret } from "./inlineEditCaret"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -865,6 +866,13 @@ export default function EditorShell() {
   useEffect(() => {
     browserPaginationGenerationRef.current += 1
   }, [inlineEditNodeId])
+
+  useEffect(() => {
+    if (!inlineEditNodeId || inlineEditCaretIndex === null) return
+    const nextPageIndex = findInlineEditPageIndexForCaret(state.paginated, inlineEditNodeId, inlineEditCaretIndex)
+    if (nextPageIndex === null || nextPageIndex === inlineEditPageIndex) return
+    setInlineEditPageIndex(nextPageIndex)
+  }, [inlineEditCaretIndex, inlineEditNodeId, inlineEditPageIndex, state.paginated])
 
   // Inline edit contract:
   // - While editing, the textarea owns active-paragraph text/caret wrapping.

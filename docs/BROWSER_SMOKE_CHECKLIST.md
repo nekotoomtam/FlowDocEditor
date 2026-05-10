@@ -58,6 +58,8 @@ changes.
 - For page-boundary checks, use a paragraph near the bottom of a page and type
   enough text to overflow; confirm continuation content appears before blur,
   then delete back below the overflow and confirm the continuation disappears.
+- If the change touches caret page tracking, keep typing until the caret crosses
+  into a continuation fragment and confirm focus remains in the inline textarea.
 - Exit edit.
 - Run undo, then redo.
 - Confirm the paragraph returns to the same visible layout after redo.
@@ -97,6 +99,9 @@ metadata.
 - Enter edit on the intended fragment.
 - Confirm only the clicked fragment enters edit mode.
 - Confirm continuation text and caret offsets remain slice-aware.
+- For caret-following changes, type across a fragment boundary and backspace
+  back across it; confirm the active textarea follows the caret page when
+  segment offsets are available.
 - Exit edit and confirm the document settles without duplicate or missing text.
 
 This is a targeted hardening check, not required for every ordinary paragraph

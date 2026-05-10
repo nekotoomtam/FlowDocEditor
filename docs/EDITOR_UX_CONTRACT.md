@@ -53,6 +53,10 @@ Users should be able to:
 - Full browser/server pagination should reconcile after edit settles or exits.
 - Continuation fragments need extra care: only the clicked fragment should enter
   edit mode, and continuation text/caret offsets must remain slice-aware.
+- When segment offsets are available, the active inline textarea may move to the
+  paginated fragment/page containing the current caret. The caret index remains
+  UTF-16 text-offset based and must not become page geometry stored in
+  `DocumentNode`.
 
 ## Undo/Redo Rules
 
@@ -146,7 +150,9 @@ The browser check does not replace core tests. It protects human-facing feel.
 - Split-fragment inline editing still needs focused hardening before it should
   be considered complete.
 - The first live inline pagination slice improves visual continuity before blur,
-  but textarea/caret following across pages is still deferred.
+  and active textarea page tracking now follows segment offsets when available.
+  Cross-fragment text selection and fully caret-perfect WYSIWYG editing remain
+  deferred.
 
 Accepted limitations should be documented and should not become invisible
 regressions.
