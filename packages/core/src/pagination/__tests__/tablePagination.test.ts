@@ -164,6 +164,13 @@ function expectContiguousLineAccounting(
 
   expect(fragments.length).toBeGreaterThan(0)
   expect(fragments[0].lineStart).toBe(0)
+  expect(fragments[0].continuesFrom).toBe(false)
+
+  for (const fragment of fragments) {
+    expect(fragment.lineStart).toBeDefined()
+    expect(fragment.lineEnd).toBeDefined()
+    expect((fragment.lineEnd ?? 0) - (fragment.lineStart ?? 0)).toBe(fragment.lines?.length ?? 0)
+  }
 
   for (let i = 0; i < fragments.length - 1; i++) {
     expect(fragments[i].lineEnd).toBe(fragments[i + 1]!.lineStart)

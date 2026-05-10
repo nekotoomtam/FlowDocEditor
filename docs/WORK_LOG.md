@@ -20,6 +20,34 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Tighten Table Split Metadata Assertions
+
+Goal: Add the final small table split accounting assertion suggested by review
+without changing pagination behavior.
+
+Completed:
+
+- Tightened `expectContiguousLineAccounting` in
+  `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
+- The helper now asserts the first split fragment is not marked as continuing
+  from a previous fragment.
+- The helper now checks each fragment's `lineStart` / `lineEnd` span matches the
+  actual number of rendered lines on that fragment.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+  passed: 40 table pagination tests.
+- `npm.cmd run type-check`
+- `git diff --check`
+- Doc reference check: all explicit docs markdown references resolve to
+  existing files.
+
 ### Tighten Export Renderer Dependency Guard
 
 Goal: Keep export/renderers from becoming a second layout engine while reviewing
