@@ -292,8 +292,9 @@ Current policy direction:
 - spacer: atomic whole-block move
 - row / stack: atomic for now; paragraphs inside stacks are bounded by the row
   height and do not split independently
-- table row: may split only when `allowBreak=true`; rowspan-linked groups move as
-  a unit until split-at-row-boundary rules are explicit
+- table row: single-row groups split by default; `allowBreak=false` keeps a row
+  together when possible; rowspan-linked groups move as a unit until
+  split-at-row-boundary rules are explicit
 - table cell content: splits by the same measured line boundaries as body
   paragraphs, but only within a row that permits splitting; see 4.3
 - TOC placeholder: estimated-height placeholder in pass 1; if generated TOC
@@ -312,7 +313,7 @@ There are currently three distinct code paths for placing paragraph fragments:
    the row height bounds the content.
 3. **Table cell paragraph** — `pushCellSlice` places lines from a given split
    point to a given end point. The row split loop calls this once per page slice,
-   so the paragraph may continue across pages when the row has `allowBreak=true`.
+   so the paragraph may continue across pages when the row is breakable.
 
 All three paths must call `resolvePageNumbers` after building lines so that
 inline page-number nodes are resolved to the actual page number.
@@ -334,9 +335,9 @@ Rules:
 
 Table cell paragraphs follow the same line-boundary split rules as body
 paragraphs, but the split is driven by the row split loop rather than by the
-paragraph paginator directly. The constraint is the row's `allowBreak` flag:
-cell content only splits when the containing row is permitted to split.
-Rowspan-linked rows are still kept together as a unit at this stage.
+paragraph paginator directly. Single-row table groups are breakable by default;
+`allowBreak=false` keeps a row together when possible. Rowspan-linked rows are
+still kept together as a unit at this stage.
 
 Future hardening:
 

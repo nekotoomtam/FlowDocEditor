@@ -17,6 +17,42 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Default Table Rows To Breakable
+
+Goal: Make normal single-row table groups split across page boundaries by default
+while preserving explicit keep-together behavior.
+
+Completed:
+
+- Changed `paginateTable` so omitted `allowBreak` is treated as `true` for
+  single-row groups.
+- Fixed the split-row path so advancing because the remaining page space is below
+  the minimum split height still repeats table headers before placing the row on
+  the continuation page.
+- Updated the table row schema comment to document `allowBreak` defaulting to
+  breakable behavior.
+- Added regression coverage for the new default split behavior and for explicit
+  `allowBreak=false` whole-row movement.
+- Updated cross-page behavior docs, product scenarios, and checklist status.
+
+Files changed:
+
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/schema/table.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd test`
+- Browser sanity: reloaded `http://localhost:4000/editor`; console warning/error
+  logs were empty.
+
 ### Add Full Table-Cell Paragraph Metadata
 
 Goal: Keep table-cell paragraph metadata consistent between normal row placement

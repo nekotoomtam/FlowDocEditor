@@ -36,7 +36,7 @@ export const TablePropsSchema = z.object({
 
 export const TableRowPropsSchema = z.object({
   height: UnitValueSchema.optional(),   // fixed height (ถ้าไม่กำหนด = auto จาก content)
-  allowBreak: z.boolean().optional(),   // default false — keep-together
+  allowBreak: z.boolean().optional(),   // default true — split at page boundary when needed
 })
 
 export const TableCellPropsSchema = z.object({

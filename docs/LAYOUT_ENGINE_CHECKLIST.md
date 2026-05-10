@@ -53,8 +53,8 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
   - [x] Row/stack: row is atomic for now. Stacks do not split independently.
     If a row fits on the next page, move the whole row; if it is taller than one
     content page, allow documented overflow for now.
-  - [x] Table row: `allowBreak=false` moves the row as a whole; `allowBreak=true`
-    may split the row across pages.
+  - [x] Table row: `allowBreak=true` is the default for single-row groups and may
+    split the row across pages; `allowBreak=false` moves the row as a whole.
   - [x] TOC placeholder: estimated-height block in pass 1. Pagination fills TOC
     lines in post-processing; if generated TOC content exceeds the placeholder,
     pass 2 repaginates with the corrected height before rendering lines.
@@ -81,7 +81,7 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
     split-at-row-boundary logic within a group.
   - Grid invariants: `addTableRow`, `removeTableRow`, `addTableColumn`,
     `removeTableColumn` all pass `assertDocument` and `assertPaginatedDocument`.
-  - 31 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+  - 33 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
     covering: no-rowspan baseline, 2/3-row groups staying on same page, group
     moving to next page as unit, mixed groups, operations+grid invariants, and
     multi-page breakable row split (3-page, line count preserved, fragment order),
@@ -507,7 +507,7 @@ They are mostly boundary guards and regression targets, not new feature work.
 - [x] Should spacers split across pages or always move whole? → Move whole.
 - [x] What is the minimum pagination golden fixture set before changing
   `paginator.ts` again?
-  → The current suite (270 core tests) is the minimum. Any change to
+  → The current suite (272 core tests) is the minimum. Any change to
   `paginator.ts` must keep all existing tests green. High-risk areas (paragraph
   split, widow/orphan, TOC overflow, table rowspan, page numbers) each have
   dedicated test files. Adding a regression test for the specific behavior being
@@ -540,13 +540,14 @@ These items address UX issues discovered during real document editing.
   - Status: improved but NOT fully resolved — caret positioning and edit UX on
     continuation fragments still needs further testing and refinement.
 
-- [ ] Change default `allowBreak` to `true` for table rows.
+- [x] Change default `allowBreak` to `true` for table rows.
   - Single-row groups (no rowspan) will split at line boundaries by default
     instead of jumping as a whole block to the next page.
   - Rowspan groups are unaffected — approach B keeps them together regardless
     of `allowBreak`.
-  - Update existing tablePagination tests that assume whole-row-move behavior.
-  - Add regression test: single row with multi-line content splits across pages.
+  - Explicit `allowBreak=false` remains available for authored keep-together rows.
+  - Added regression tests: default single-row group splits across pages; explicit
+    `allowBreak=false` still moves whole when it fits on the next page.
 
 - [x] Live text preview in table cell during inline editing.
   - Fixed by making editor paragraph lookup search both section-level nodes and

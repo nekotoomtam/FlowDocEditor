@@ -761,6 +761,7 @@ function paginateTableRowSplit(
 
     if (availH < MINIMUM_ROW_SPLIT_HEIGHT) {
       current = advancePage(current, contentTop)
+      current = repeatHeaders ? repeatHeaders(current) : current
       continue
     }
 
@@ -950,7 +951,7 @@ function paginateTable(
       const rowBox = box.children[rowIdx]
       if (!rowBox) continue
       const rowNode = tableNode.nodes[rowBox.nodeId]
-      const allowBreak = rowNode?.type === "table-row" ? (rowNode.props.allowBreak ?? false) : false
+      const allowBreak = rowNode?.type === "table-row" ? (rowNode.props.allowBreak ?? true) : true
       const doesntFit = shouldMoveBlockToNextPage(current.cursorY, rowBox.height, contentTop, contentBottom)
       const tooTallForOnePage = rowBox.height > contentBottom - contentTop
       if (!doesntFit && !tooTallForOnePage) {

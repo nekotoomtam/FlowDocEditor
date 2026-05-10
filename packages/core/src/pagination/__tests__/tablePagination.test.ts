@@ -166,6 +166,53 @@ describe("tablePagination — no rowspan (single-row groups)", () => {
     // Result may have rows on different pages (current behavior for no-rowspan)
     expect(result.sections[0].pages.length).toBeGreaterThanOrEqual(1)
   })
+
+  it("single-row group defaults to breakable at a page boundary", () => {
+    const fillerText = Array.from({ length: 55 }, () => "A").join("\n")
+    const filler: LayoutNode = makePara("filler", fillerText)
+    const tbl = makeTable("tbl", [451], [
+      [{ text: "R1\nR2\nR3\nR4\nR5" }],
+    ])
+
+    const result = paginate(makeDoc(["filler", "tbl"], { filler, tbl }))
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+
+    const rowFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-row0"),
+    )
+    const paraFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-p0-0"),
+    )
+
+    expect(rowFrags.length).toBeGreaterThan(1)
+    expect(new Set(rowFrags.map((f) => f.pageIndex)).size).toBeGreaterThan(1)
+    expect(paraFrags.reduce((sum, f) => sum + (f.lines?.length ?? 0), 0)).toBe(5)
+  })
+
+  it("explicit allowBreak=false keeps a single-row group whole when it fits on the next page", () => {
+    const fillerText = Array.from({ length: 55 }, () => "A").join("\n")
+    const filler: LayoutNode = makePara("filler", fillerText)
+    const tbl = makeTable("tbl", [451], [
+      [{ text: "R1\nR2\nR3\nR4\nR5" }],
+    ])
+    const row = tbl.nodes["tbl-row0"]
+    if (row?.type === "table-row") row.props = { ...row.props, allowBreak: false }
+
+    const result = paginate(makeDoc(["filler", "tbl"], { filler, tbl }))
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+
+    const rowFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-row0"),
+    )
+    const paraFrags = result.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "tbl-p0-0"),
+    )
+
+    expect(rowFrags).toHaveLength(1)
+    expect(rowFrags[0].pageIndex).toBeGreaterThan(0)
+    expect(paraFrags).toHaveLength(1)
+    expect(paraFrags[0].lines).toHaveLength(5)
+  })
 })
 
 // ─── Rowspan groups: rows must land on the same page ─────────────────────────

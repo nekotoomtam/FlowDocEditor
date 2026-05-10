@@ -84,7 +84,8 @@ Minimum useful fixture data:
 - Table grid invariants must hold after edit operations.
 - `rowspan` groups must stay together across page boundaries.
 - Repeating table headers must appear on continuation pages.
-- Breakable rows must split without duplicating shorter cell content.
+- Breakable rows must split without duplicating shorter cell content. Single-row
+  item rows are breakable by default unless explicitly marked `allowBreak=false`.
 - Table-cell paragraph fragments must preserve text and page-number fields.
 - Header/footer fragments must use resolved page numbers.
 - PDF output must consume authoritative pagination, not browser/CSS flow.
@@ -93,8 +94,9 @@ Minimum useful fixture data:
 
 - Table starts at the authored position inside the content box.
 - Header rows repeat on every page where table body rows continue.
+- Rows with omitted `allowBreak` or `allowBreak=true` may split by cell paragraph
+  line boundaries.
 - Rows with `allowBreak=false` move as a unit to the next page.
-- Rows with `allowBreak=true` may split by cell paragraph line boundaries.
 - Short cells in a split row appear only once; they do not repeat on every
   continuation slice unless they are header cells.
 - Rowspan groups are atomic even if a single logical row would otherwise split.
