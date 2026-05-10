@@ -20,6 +20,47 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Show Export Failure Feedback
+
+Goal: Make export failures visible to users instead of console-only.
+
+Completed:
+
+- Added `exportError` editor UI state separate from layout/reconciliation status.
+- Clear export errors when a PDF/DOCX export starts and after a successful
+  export.
+- Set a short format-specific message when export fails, such as
+  `PDF export failed. Please try again.`
+- Display the message near the export controls while keeping `console.error` for
+  debugging.
+- Kept `/api/export`, PDF/DOCX renderers, core pagination, document model, and
+  export gating/reconciling policy unchanged.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorShell.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `git diff --check`
+- Doc reference check: all explicit `docs/*.md` references resolve.
+- Browser/code-path smoke on `http://localhost:4000/editor`:
+  - initial editor load shows no stale export failure message.
+  - export controls remain visible/stable near the new error slot.
+  - normal PDF export click does not leave a visible failure message; the Codex
+    in-app browser does not support download capture, so file download completion
+    was not verified there.
+  - failure behavior was confirmed from the `handleExport` code path: start and
+    success clear `exportError`; catch sets the format-specific UI message.
+
+Notes:
+
+- Export while reconciling / export gating remains deferred to a separate policy
+  slice.
+
 ### Disable Template Undo/Redo While Filling
 
 Goal: Make Fill mode undo/redo match the current binding/history contract.

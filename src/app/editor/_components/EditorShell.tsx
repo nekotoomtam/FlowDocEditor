@@ -582,6 +582,7 @@ export default function EditorShell() {
   const [minHeightDrag, setMinHeightDrag] = useState<MinHeightDrag | null>(null)
   const [marginDrag, setMarginDrag] = useState<MarginDrag | null>(null)
   const [isExporting, setIsExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
   const [showTextSegments, setShowTextSegments] = useState(false)
   const [showDrift, setShowDrift] = useState(false)
@@ -646,6 +647,8 @@ export default function EditorShell() {
   const handleExport = useCallback(async (format: "pdf" | "docx") => {
     finalizeInlineEditBeforeAction()
     const exportDoc = resolvePreviewDoc(docRef.current)
+    const formatLabel = format.toUpperCase()
+    setExportError(null)
     setIsExporting(true)
     try {
       const res = await fetch("/api/export", {
@@ -666,7 +669,9 @@ export default function EditorShell() {
       a.click()
       document.body.removeChild(a)
       setTimeout(() => URL.revokeObjectURL(url), 100)
+      setExportError(null)
     } catch (err) {
+      setExportError(`${formatLabel} export failed. Please try again.`)
       console.error("export error:", err)
     } finally {
       setIsExporting(false)
@@ -1508,6 +1513,11 @@ export default function EditorShell() {
           )}
           {!isLayoutLoading && layoutStatus === "optimistic" && !state.drag && !inlineEditNodeId && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>preview layout</span>
+          )}
+          {exportError && (
+            <span title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {exportError}
+            </span>
           )}
           {(["pdf", "docx"] as const).map((fmt) => (
             <button key={fmt} disabled={isExporting} onClick={() => handleExport(fmt)}
