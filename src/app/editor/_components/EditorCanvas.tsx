@@ -174,7 +174,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap,
@@ -189,8 +189,9 @@ function PageView({
   inlineEditPageIndex: number | null
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
+  onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
-  onInlineEditEnd: () => void
+  onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
   pageKey: string; setPageRef: (key: string, el: SVGSVGElement | null) => void
@@ -454,6 +455,7 @@ function PageView({
                 showTextSegments={showTextSegments}
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
+                onCaretChange={onInlineEditCaretChange}
                 onHeightChange={onInlineEditHeightChange}
                 onEndEdit={onInlineEditEnd}
                 onSplitParagraph={onSplitParagraph}
@@ -567,8 +569,9 @@ interface Props {
   inlineEditPageIndex: number | null
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
+  onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
-  onInlineEditEnd: () => void
+  onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
   setPageRef: (key: string, el: SVGSVGElement | null) => void
@@ -587,7 +590,7 @@ interface Props {
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
 }: Props) {
@@ -630,6 +633,7 @@ export function EditorCanvas({
                   inlineEditPageIndex={inlineEditPageIndex}
                   onInlineEditStart={onInlineEditStart}
                   onInlineEditChange={onInlineEditChange}
+                  onInlineEditCaretChange={onInlineEditCaretChange}
                   onInlineEditHeightChange={onInlineEditHeightChange}
                   onInlineEditEnd={onInlineEditEnd}
                   onSplitParagraph={onSplitParagraph}

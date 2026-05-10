@@ -12,8 +12,9 @@ interface Props {
   showTextSegments: boolean
   initialCaretIndex: number | null
   onChange: (nodeId: string, text: string, caretIndex: number | null) => void
+  onCaretChange: (nodeId: string, caretIndex: number | null) => void
   onHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
-  onEndEdit: () => void
+  onEndEdit: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
 }
@@ -262,6 +263,7 @@ export function ParagraphTextSurface({
   showTextSegments,
   initialCaretIndex,
   onChange,
+  onCaretChange,
   onHeightChange,
   onEndEdit,
   onSplitParagraph,
@@ -286,6 +288,9 @@ export function ParagraphTextSurface({
   // inside SVG foreignObject with overflow:hidden).
   const fullText = getEditableParagraphText(doc, fragment.nodeId) ?? ""
   const { editText, preText, adjustedInitialCaret } = getContinuationEditState(fullText, fragment, initialCaretIndex)
+  const updateCaret = useCallback((el: HTMLTextAreaElement) => {
+    onCaretChange(fragment.nodeId, absoluteInlineEditIndex(preText, el.selectionStart, el.value.length))
+  }, [fragment.nodeId, onCaretChange, preText])
 
   const editPreview = useMemo(() => {
     if (!isEditing) return null
@@ -383,15 +388,17 @@ export function ParagraphTextSurface({
               onChange(fragment.nodeId, preText + el.value, caretIndex)
             }}
             onSelect={(event) => {
-              event.currentTarget.scrollTop = 0
+              const el = event.currentTarget
+              el.scrollTop = 0
+              updateCaret(el)
             }}
-            onBlur={onEndEdit}
+            onBlur={() => onEndEdit(fragment.nodeId, "blur")}
             onKeyDown={(event) => {
               event.stopPropagation()
               if (event.nativeEvent.isComposing) return
               if (event.key === "Escape") {
                 event.preventDefault()
-                onEndEdit()
+                onEndEdit(fragment.nodeId, "keyboard")
                 return
               }
 
@@ -423,8 +430,13 @@ export function ParagraphTextSurface({
                 onMergeParagraph(fragment.nodeId)
               }
             }}
+            onKeyUp={(event) => {
+              if (event.nativeEvent.isComposing) return
+              updateCaret(event.currentTarget)
+            }}
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
+            data-inline-edit-node-id={fragment.nodeId}
           />
         </foreignObject>
       </>

@@ -60,6 +60,10 @@ changes.
   then delete back below the overflow and confirm the continuation disappears.
 - If the change touches caret page tracking, keep typing until the caret crosses
   into a continuation fragment and confirm focus remains in the inline textarea.
+- Move the caret with arrow keys or mouse selection without typing and confirm
+  caret/page tracking updates without committing or changing the paragraph text.
+- If the active textarea moves between pages, confirm the old textarea blur does
+  not end the inline edit session.
 - Exit edit.
 - Run undo, then redo.
 - Confirm the paragraph returns to the same visible layout after redo.

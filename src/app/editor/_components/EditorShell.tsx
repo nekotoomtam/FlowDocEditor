@@ -28,6 +28,7 @@ import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import { comparePagination } from "./comparePagination"
 import type { DriftReport } from "./comparePagination"
 import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
+import { shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -598,6 +599,7 @@ export default function EditorShell() {
   const docRef = useRef(state.doc)
   const inlineEditTransactionRef = useRef<InlineEditTransaction | null>(null)
   const wasInlineEditingRef = useRef(false)
+  const inlineEditEndFrameRef = useRef<number | null>(null)
 
   useEffect(() => { docRef.current = state.doc }, [state.doc])
 
@@ -606,7 +608,14 @@ export default function EditorShell() {
     void document.fonts.ready.then(() => setFontReadyVersion((version) => version + 1))
   }, [])
 
+  const cancelPendingInlineEditEnd = useCallback(() => {
+    if (inlineEditEndFrameRef.current === null || typeof cancelAnimationFrame === "undefined") return
+    cancelAnimationFrame(inlineEditEndFrameRef.current)
+    inlineEditEndFrameRef.current = null
+  }, [])
+
   const finalizeInlineEditBeforeAction = useCallback((): boolean => {
+    cancelPendingInlineEditEnd()
     const transaction = inlineEditTransactionRef.current
     if (transaction) {
       const afterDoc = docRef.current
@@ -624,16 +633,43 @@ export default function EditorShell() {
     setInlineEditCaretIndex(null)
     setInlineEditPageIndex(null)
     return transaction !== null
-  }, [paginatePreviewDoc])
+  }, [cancelPendingInlineEditEnd, paginatePreviewDoc])
 
   const resetInlineEditStateForDocumentReplace = useCallback(() => {
+    cancelPendingInlineEditEnd()
     inlineEditTransactionRef.current = null
     setInlineEditNodeId(null)
     setInlineEditCaretIndex(null)
     setInlineEditPageIndex(null)
-  }, [])
+  }, [cancelPendingInlineEditEnd])
 
-  const handleInlineEditEnd = finalizeInlineEditBeforeAction
+  useEffect(() => cancelPendingInlineEditEnd, [cancelPendingInlineEditEnd])
+
+  const handleInlineEditEnd = useCallback((nodeId?: string, reason: "blur" | "keyboard" = "keyboard") => {
+    if (reason !== "blur") {
+      finalizeInlineEditBeforeAction()
+      return
+    }
+
+    const blurredNodeId = nodeId ?? inlineEditNodeIdRef.current
+    if (!blurredNodeId || typeof document === "undefined" || typeof requestAnimationFrame === "undefined") {
+      finalizeInlineEditBeforeAction()
+      return
+    }
+
+    cancelPendingInlineEditEnd()
+    inlineEditEndFrameRef.current = requestAnimationFrame(() => {
+      inlineEditEndFrameRef.current = requestAnimationFrame(() => {
+        inlineEditEndFrameRef.current = null
+        const active = document.activeElement
+        const focusedNodeId = active instanceof HTMLTextAreaElement
+          ? active.dataset.inlineEditNodeId ?? null
+          : null
+        if (!shouldFinalizeInlineEditBlur(blurredNodeId, inlineEditNodeIdRef.current, focusedNodeId)) return
+        finalizeInlineEditBeforeAction()
+      })
+    })
+  }, [cancelPendingInlineEditEnd, finalizeInlineEditBeforeAction])
 
   const consumeInlineEditHistory = useCallback((nodeId: string): HistoryEntry | undefined => {
     const transaction = inlineEditTransactionRef.current
@@ -747,6 +783,11 @@ export default function EditorShell() {
   const handleInlineEditChange = useCallback((nodeId: string, text: string, caretIndex: number | null) => {
     setInlineEditCaretIndex(caretIndex)
     dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
+  }, [])
+
+  const handleInlineEditCaretChange = useCallback((nodeId: string, caretIndex: number | null) => {
+    if (inlineEditNodeIdRef.current !== nodeId) return
+    setInlineEditCaretIndex(caretIndex)
   }, [])
 
   const handleInlineEditHeightChange = useCallback((nodeId: string, height: number, pageIndex: number | null) => {
@@ -1619,6 +1660,7 @@ export default function EditorShell() {
           inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
           onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
           onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
+          onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
           onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightChange : () => undefined}
           onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
           onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}

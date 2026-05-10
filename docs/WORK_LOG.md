@@ -20,6 +20,56 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Harden Inline Edit Relocation Blur And Caret Movement
+
+Goal: Close the main UX risks after adding caret-following across live
+pagination: accidental edit finalization during textarea relocation and stale
+caret state when the user moves the caret without typing.
+
+Completed:
+
+- Added a delayed blur guard for inline edit textareas. Blur from an old
+  remounted textarea waits briefly and is ignored when focus lands on another
+  inline textarea for the same paragraph.
+- Added a focused `shouldFinalizeInlineEditBlur()` helper with tests for same
+  node relocation, outside blur, changed active node, and unknown-node fallback.
+- Added `onInlineEditCaretChange` through `ParagraphTextSurface` and
+  `EditorCanvas` so selection/arrow-key caret movement updates
+  `inlineEditCaretIndex` without dispatching `UPDATE_INLINE_TEXT_DRAFT`.
+- Marked active inline textareas with `data-inline-edit-node-id` for relocation
+  focus checks.
+- Updated editor UX and browser smoke docs with the blur/caret hardening
+  contract.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/inlineEditBlur.ts`
+- `src/app/editor/_components/__tests__/inlineEditBlur.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser smoke on `http://localhost:4000/editor` confirmed the editor route,
+  toolbar, pages, and outline rendered; the current local document still showed
+  `Server pagination failed — editor is showing browser preview only`, with no
+  console warnings/errors captured.
+
+Notes:
+
+- This keeps the architecture unchanged: no schema/export/server/pagination
+  engine changes, and `ParagraphTextSurface` still does not implement page
+  fragmentation.
+- The server pagination badge should be investigated separately if it persists
+  outside the current localStorage document/dev-server state.
+
 ### Polish Live Inline Pagination Performance Phase 4
 
 Goal: Keep live inline pagination responsive as documents grow without changing

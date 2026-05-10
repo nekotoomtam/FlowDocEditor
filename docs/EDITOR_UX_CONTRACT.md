@@ -57,6 +57,11 @@ Users should be able to:
   paginated fragment/page containing the current caret. The caret index remains
   UTF-16 text-offset based and must not become page geometry stored in
   `DocumentNode`.
+- Caret movement without text changes should update editor caret state without
+  dispatching a document draft update.
+- Blur from remounting/repositioning the active inline textarea should not
+  finalize the edit session if focus lands on the replacement textarea for the
+  same paragraph.
 - Enter and Backspace inside inline edit should operate on full paragraph text
   offsets even when the active textarea is rendering only a continuation slice.
   Backspace at the start of a continuation slice should edit across the
