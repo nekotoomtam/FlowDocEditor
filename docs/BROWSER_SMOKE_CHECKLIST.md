@@ -55,6 +55,8 @@ changes.
 - Enter inline edit.
 - Type enough text to wrap into 3-4 visual lines.
 - Confirm typed text remains visible while editing.
+- Confirm the active inline textarea does not grow into a giant hit area that
+  extends far past the active fragment/page.
 - For page-boundary checks, use a paragraph near the bottom of a page and type
   enough text to overflow; confirm continuation content appears before blur,
   then delete back below the overflow and confirm the continuation disappears.

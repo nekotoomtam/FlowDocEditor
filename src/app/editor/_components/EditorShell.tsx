@@ -118,7 +118,7 @@ type ZoomMode = "fit" | "manual"
 const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
-const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 100
+const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 16
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))

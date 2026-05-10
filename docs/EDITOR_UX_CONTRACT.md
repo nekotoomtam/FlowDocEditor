@@ -50,6 +50,10 @@ Users should be able to:
 - During inline paragraph editing, browser pagination may run against
   `previewDoc` with the active draft and update the canvas as optimistic visual
   layout so long paragraphs can show continuation fragments before blur.
+- The active fragment textarea may render its own visible text so caret and
+  immediate typing feedback stay in the same browser layout layer. Page
+  splitting and non-active continuation fragments still come from
+  `PaginatedDocument`.
 - Full browser/server pagination should reconcile after edit settles or exits.
 - Continuation fragments need extra care: only the clicked fragment should enter
   edit mode, and continuation text/caret offsets must remain slice-aware.

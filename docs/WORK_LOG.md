@@ -20,6 +20,53 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Restore Visible Active Inline Text Feedback
+
+Goal: Fix the live inline pagination UX regression where the native textarea
+caret/input layer was transparent while SVG lines waited for debounced browser
+pagination, making typed text invisible and line-click caret placement feel
+wrong.
+
+Completed:
+
+- Made the active paragraph textarea render visible text again so immediate
+  typing feedback and the native caret live in the same browser layout layer.
+- Stopped rendering the active fragment SVG text lines while the textarea is
+  active, avoiding duplicate text. Continuation fragments still render from the
+  paginated snapshot.
+- Clamped the active textarea overlay height to the active paginated fragment
+  height instead of autosizing to full `scrollHeight`, preventing a long
+  transparent hit area from growing past the page while pagination catches up.
+- Reduced inline browser pagination cadence from 100ms to 16ms so page splits
+  update during sustained typing instead of mostly after typing stops.
+- Updated editor UX and smoke docs to describe the hybrid contract: active
+  fragment visual feedback belongs to the textarea, page continuation belongs
+  to the paginator.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser inspection on `http://localhost:4000/editor` confirmed the active
+  inline textarea now uses visible text color instead of `transparent`; the
+  existing local document still shows the separate server pagination failed
+  badge noted in the previous entry.
+
+Notes:
+
+- This does not add a mini paginator in `ParagraphTextSurface`. The textarea
+  only owns immediate active-fragment feedback; cross-page layout still comes
+  from browser/server pagination.
+
 ### Harden Inline Edit Relocation Blur And Caret Movement
 
 Goal: Close the main UX risks after adding caret-following across live

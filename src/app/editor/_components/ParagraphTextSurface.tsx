@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef } from "react"
 import type { DocumentNode, ParagraphNode, TableNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily } from "@/font-registry"
@@ -270,8 +270,6 @@ export function ParagraphTextSurface({
   onMergeParagraph,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const textareaHeightRef = useRef<number | null>(null)
-  const [textareaHeight, setTextareaHeight] = useState<number | null>(null)
   const renderProps = fragment.renderProps
   const editHeight = Math.max(fragment.height * scale, 1)
   const fontSize = (renderProps?.fontSize ?? 12) * scale
@@ -297,20 +295,12 @@ export function ParagraphTextSurface({
     return { lines: fragment.lines ?? [], height: fragment.height }
   }, [fragment.height, fragment.lines, isEditing])
   const editPreviewHeight = (editPreview?.height ?? 0) * scale
-  const activeEditHeight = Math.max(textareaHeight ?? editHeight, minimumEditHeight, editPreviewHeight)
+  const activeEditHeight = Math.max(editHeight, minimumEditHeight, editPreviewHeight)
 
   const syncTextareaHeight = useCallback((el: HTMLTextAreaElement) => {
     el.scrollTop = 0
-    const previousHeight = el.style.height
-    el.style.height = "auto"
-    const nextHeight = Math.max(minimumEditHeight, editPreviewHeight, el.scrollHeight - EDIT_CHROME_Y * 2)
-    el.style.height = previousHeight
-    const currentHeight = textareaHeightRef.current
-    if (currentHeight !== null && Math.abs(currentHeight - nextHeight) < 0.5) return
-    textareaHeightRef.current = nextHeight
-    setTextareaHeight(nextHeight)
-    onHeightChange(fragment.nodeId, nextHeight / scale, fragment.pageIndex)
-  }, [editPreviewHeight, fragment.nodeId, fragment.pageIndex, minimumEditHeight, onHeightChange, scale])
+    onHeightChange(fragment.nodeId, activeEditHeight / scale, fragment.pageIndex)
+  }, [activeEditHeight, fragment.nodeId, fragment.pageIndex, onHeightChange, scale])
 
   useEffect(() => {
     if (!isEditing || adjustedInitialCaret == null) return
@@ -325,24 +315,16 @@ export function ParagraphTextSurface({
   }, [fragment.nodeId, adjustedInitialCaret, isEditing])
 
   useEffect(() => {
-    if (!isEditing) {
-      textareaHeightRef.current = null
-      setTextareaHeight(null)
-      return
-    }
-    if (textareaHeight === null) return
+    if (!isEditing) return
     const el = textareaRef.current
     if (!el) return
     requestAnimationFrame(() => syncTextareaHeight(el))
-  }, [editHeight, isEditing, syncTextareaHeight, textareaHeight])
+  }, [editHeight, isEditing, syncTextareaHeight])
 
   if (isEditing) {
     return (
       <>
         {showTextSegments && renderSegmentDebug(fragment.lines, fragment, renderProps, scale)}
-        {editPreview?.lines.map((line, index) =>
-          renderLine(line, index, fragment, renderProps, pageKey, scale),
-        )}
         <foreignObject
           x={fragment.x * scale - EDIT_CHROME_X}
           y={fragment.y * scale - EDIT_CHROME_Y}
@@ -370,7 +352,7 @@ export function ParagraphTextSurface({
               fontSize,
               lineHeight: `${lineHeight}px`,
               textAlign: textAlignForParagraph(renderProps?.align),
-              color: "transparent",
+              color: "#1e40af",
               caretColor: "#1e40af",
               resize: "none",
               overflow: "hidden",
