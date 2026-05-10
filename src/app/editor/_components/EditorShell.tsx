@@ -565,19 +565,15 @@ export default function EditorShell() {
   const [mode, setMode] = useState<"template" | "fill">("template")
   const [fieldData, setFieldData] = useState<FieldData>({})
   const isTemplateMode = mode === "template"
-  const previewDoc = useMemo(() => (
+  const resolvePreviewDoc = useCallback((doc: DocumentNode) => (
     isTemplateMode
-      ? state.doc
-      : bindDocument(state.doc, { registry: { fields: [] }, data: fieldData })
-  ), [fieldData, isTemplateMode, state.doc])
+      ? doc
+      : bindDocument(doc, { registry: { fields: [] }, data: fieldData })
+  ), [fieldData, isTemplateMode])
+  const previewDoc = useMemo(() => resolvePreviewDoc(state.doc), [resolvePreviewDoc, state.doc])
   const paginatePreviewDoc = useCallback((doc: DocumentNode) => (
-    paginateDocument(
-      isTemplateMode
-        ? doc
-        : bindDocument(doc, { registry: { fields: [] }, data: fieldData }),
-      editorTextMeasurer,
-    )
-  ), [editorTextMeasurer, fieldData, isTemplateMode])
+    paginateDocument(resolvePreviewDoc(doc), editorTextMeasurer)
+  ), [editorTextMeasurer, resolvePreviewDoc])
 
   const editorRootRef = useRef<HTMLDivElement | null>(null)
   const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
@@ -607,6 +603,35 @@ export default function EditorShell() {
     void document.fonts.ready.then(() => setFontReadyVersion((version) => version + 1))
   }, [])
 
+  const finalizeInlineEditBeforeAction = useCallback((): boolean => {
+    const transaction = inlineEditTransactionRef.current
+    if (transaction) {
+      const afterDoc = docRef.current
+      dispatch({
+        type: "COMMIT_INLINE_TEXT_EDIT",
+        nodeId: transaction.nodeId,
+        beforeDoc: transaction.beforeDoc,
+        beforePaginated: transaction.beforePaginated,
+        beforeText: transaction.beforeText,
+        afterPaginated: paginatePreviewDoc(afterDoc),
+      })
+      inlineEditTransactionRef.current = null
+    }
+    setInlineEditNodeId(null)
+    setInlineEditCaretIndex(null)
+    setInlineEditPageIndex(null)
+    return transaction !== null
+  }, [paginatePreviewDoc])
+
+  const resetInlineEditStateForDocumentReplace = useCallback(() => {
+    inlineEditTransactionRef.current = null
+    setInlineEditNodeId(null)
+    setInlineEditCaretIndex(null)
+    setInlineEditPageIndex(null)
+  }, [])
+
+  const handleInlineEditEnd = finalizeInlineEditBeforeAction
+
   // ─── Auto-save ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
@@ -619,12 +644,14 @@ export default function EditorShell() {
   }, [state.doc])
 
   const handleExport = useCallback(async (format: "pdf" | "docx") => {
+    finalizeInlineEditBeforeAction()
+    const exportDoc = resolvePreviewDoc(docRef.current)
     setIsExporting(true)
     try {
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc: previewDoc, format }),
+        body: JSON.stringify({ doc: exportDoc, format }),
       })
       if (!res.ok) {
         const message = await res.text()
@@ -644,19 +671,21 @@ export default function EditorShell() {
     } finally {
       setIsExporting(false)
     }
-  }, [previewDoc])
+  }, [finalizeInlineEditBeforeAction, resolvePreviewDoc])
 
   const importRef = useRef<HTMLInputElement>(null)
 
   const handleExportJson = useCallback(() => {
-    const title = state.doc.document.meta?.title ?? "document"
-    const blob = new Blob([JSON.stringify(state.doc, null, 2)], { type: "application/json" })
+    finalizeInlineEditBeforeAction()
+    const doc = docRef.current
+    const title = doc.document.meta?.title ?? "document"
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url; a.download = `${title}.json`
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 100)
-  }, [state.doc])
+  }, [finalizeInlineEditBeforeAction])
 
   const handleImportJson = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -667,19 +696,21 @@ export default function EditorShell() {
         const parsed = JSON.parse(ev.target?.result as string)
         if (parsed?.version === 1 && Array.isArray(parsed?.document?.sections)) {
           const doc = parsed as DocumentNode
+          resetInlineEditStateForDocumentReplace()
           dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
         }
       } catch { /* invalid JSON */ }
     }
     reader.readAsText(file)
     e.target.value = ""
-  }, [paginatePreviewDoc])
+  }, [paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
 
   const handleNewDocument = useCallback(() => {
     if (!confirm("สร้างเอกสารใหม่? history จะถูกล้าง")) return
     const doc = createDefaultDocument("Untitled")
+    resetInlineEditStateForDocumentReplace()
     dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
-  }, [paginatePreviewDoc])
+  }, [paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
 
   // ─── Inline editing ───────────────────────────────────────────────────────────
   const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null) => {
@@ -710,14 +741,16 @@ export default function EditorShell() {
   }, [])
 
   const handleUndo = useCallback(() => {
-    if (state.past.length === 0) return
+    const hadInlineEdit = finalizeInlineEditBeforeAction()
+    if (state.past.length === 0 && !hadInlineEdit) return
     dispatch({ type: "UNDO" })
-  }, [state.past])
+  }, [finalizeInlineEditBeforeAction, state.past])
 
   const handleRedo = useCallback(() => {
-    if (state.future.length === 0) return
+    const hadInlineEdit = finalizeInlineEditBeforeAction()
+    if (state.future.length === 0 && !hadInlineEdit) return
     dispatch({ type: "REDO" })
-  }, [state.future])
+  }, [finalizeInlineEditBeforeAction, state.future])
 
   const setManualScale = useCallback((nextScale: number) => {
     setZoomMode("manual")
@@ -772,25 +805,6 @@ export default function EditorShell() {
     event.preventDefault()
     zoomByWheel(event.deltaY)
   }, [zoomByWheel])
-
-  const handleInlineEditEnd = useCallback(() => {
-    const transaction = inlineEditTransactionRef.current
-    if (transaction) {
-      const afterDoc = docRef.current
-      dispatch({
-        type: "COMMIT_INLINE_TEXT_EDIT",
-        nodeId: transaction.nodeId,
-        beforeDoc: transaction.beforeDoc,
-        beforePaginated: transaction.beforePaginated,
-        beforeText: transaction.beforeText,
-        afterPaginated: paginatePreviewDoc(afterDoc),
-      })
-      inlineEditTransactionRef.current = null
-    }
-    setInlineEditNodeId(null)
-    setInlineEditCaretIndex(null)
-    setInlineEditPageIndex(null)
-  }, [paginatePreviewDoc])
 
   const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number) => {
     dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex })
@@ -996,19 +1010,21 @@ export default function EditorShell() {
   }, [])
 
   const handleBackgroundPointerDown = useCallback(() => {
-    if (inlineEditNodeId) return
+    if (inlineEditNodeId) {
+      finalizeInlineEditBeforeAction()
+      dispatch({ type: "SELECT_NODE", nodeId: null })
+      return
+    }
     dispatch({ type: "SELECT_NODE", nodeId: null })
-  }, [inlineEditNodeId])
+  }, [finalizeInlineEditBeforeAction, inlineEditNodeId])
 
   const handleResizeStart = useCallback((
     rowId: string, leftStackId: string, rightStackId: string,
     pairX: number, pairWidth: number,
     startClientX: number, pageKey: string,
   ) => {
+    finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
-    setInlineEditNodeId(null)
-    setInlineEditCaretIndex(null)
-    setInlineEditPageIndex(null)
     const svgEl = pageRefs.current.get(pageKey)
     if (!svgEl) return
     const svgLeft = svgEl.getBoundingClientRect().left
@@ -1034,15 +1050,13 @@ export default function EditorShell() {
       totalShare: leftShare + rightShare,
       minWidthPt,
     })
-  }, [scale, state.doc, state.paginated])
+  }, [finalizeInlineEditBeforeAction, scale, state.doc, state.paginated])
 
   const handleMinHeightResizeStart = useCallback((
     rowId: string, rowFragY: number, pageKey: string,
   ) => {
+    finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
-    setInlineEditNodeId(null)
-    setInlineEditCaretIndex(null)
-    setInlineEditPageIndex(null)
     const svgEl = pageRefs.current.get(pageKey)
     if (!svgEl) return
     const svgTop = svgEl.getBoundingClientRect().top
@@ -1061,7 +1075,7 @@ export default function EditorShell() {
       currentMinHeight,
       pageKey,
     })
-  }, [editorTextMeasurer, state.doc, state.paginated])
+  }, [editorTextMeasurer, finalizeInlineEditBeforeAction, state.doc, state.paginated])
 
   const handleMarginResizeStart = useCallback((
     sectionIndex: number,
@@ -1072,24 +1086,24 @@ export default function EditorShell() {
     pageKey: string,
     altKey: boolean,
   ) => {
+    finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
-    setInlineEditNodeId(null)
-    setInlineEditCaretIndex(null)
-    setInlineEditPageIndex(null)
     setMarginDrag({ sectionIndex, side, pageWidthPt, pageHeightPt, currentMargins, pageKey, altKey })
-  }, [])
+  }, [finalizeInlineEditBeforeAction])
 
   // Palette drag: starts immediately
   const startPaletteDrag = useCallback((source: DragSource, e: React.PointerEvent) => {
     e.preventDefault()
+    finalizeInlineEditBeforeAction()
     dispatch({ type: "DRAG_START", source, clientX: e.clientX, clientY: e.clientY })
-  }, [])
+  }, [finalizeInlineEditBeforeAction])
 
   // Canvas fragment pointerDown: wait for movement before committing to drag
   const startNodePointerDown = useCallback((source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => {
     e.preventDefault()
+    finalizeInlineEditBeforeAction()
     pendingDragRef.current = { source, clientX: e.clientX, clientY: e.clientY, clickAction }
-  }, [])
+  }, [finalizeInlineEditBeforeAction])
 
   const computePreview = useCallback(
     (clientX: number, clientY: number, sourceOverride?: DragSource | null): { preview: PlacementPreview | null; sectionId: string | null } => {
@@ -1420,13 +1434,11 @@ export default function EditorShell() {
           {(["template", "fill"] as const).map((m) => (
             <button key={m}
               onClick={() => {
-                  setMode(m)
-                  if (m === "fill") {
-                    dispatch({ type: "DRAG_CANCEL" })
-                    setInlineEditNodeId(null)
-                    setInlineEditCaretIndex(null)
-                    setInlineEditPageIndex(null)
-                    setResizeDrag(null)
+                finalizeInlineEditBeforeAction()
+                setMode(m)
+                if (m === "fill") {
+                  dispatch({ type: "DRAG_CANCEL" })
+                  setResizeDrag(null)
                   setMinHeightDrag(null)
                   setMarginDrag(null)
                 }

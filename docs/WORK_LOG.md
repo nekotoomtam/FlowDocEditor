@@ -20,6 +20,43 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Fix Inline Edit Lifecycle Finalization
+
+Goal: Prevent inline edit drafts from entering `state.doc` without a matching
+undo transaction when another same-document action closes edit mode.
+
+Completed:
+
+- Added `finalizeInlineEditBeforeAction()` for same-document actions. It reuses
+  the existing inline edit commit path, clears inline edit UI state, and clears
+  the transaction ref.
+- Added `resetInlineEditStateForDocumentReplace()` for New/Open document
+  replacement. It discards inline edit UI state and transaction refs without
+  committing stale edits across documents.
+- Routed same-document actions through finalization, including export, Save JSON,
+  undo/redo, background click, resize starts, palette/node pointer starts, and
+  template/fill mode switching.
+- Routed New/Open document replacement through reset/discard behavior.
+- Kept reducer architecture, core pagination, fill-mode undo/redo policy, and
+  export error UI unchanged.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorShell.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `git diff --check`
+- Doc reference check: all explicit `docs/*.md` references resolve.
+- Browser smoke on `http://localhost:4000/editor`:
+  - edit 3-4 lines -> margin resize start -> undo/redo restores expected text.
+  - edit -> row/min-height resize start -> undo/redo restores expected text.
+  - edit -> switch Fill/Template -> inline textarea closes with no stale editor.
+  - edit -> New -> inline session resets and draft text is discarded.
+
 ### Add Page Fragmentation Model Contract
 
 Goal: Create a shared language for current page-boundary behavior before
