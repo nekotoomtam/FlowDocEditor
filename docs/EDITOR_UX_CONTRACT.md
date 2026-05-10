@@ -79,6 +79,30 @@ Table-specific interaction rules are defined in
   predictably.
 - Layout assertion failures and font fallback should be visible to the user.
 
+## State Race Invariants
+
+The editor may hold multiple derived views of the same document while the user
+is typing, undoing, or waiting for server pagination. These views must stay
+classified:
+
+- `state.doc` is the authored template document.
+- `previewDoc` is the current authored/resolved document used for preview,
+  filling, pagination requests, and export requests.
+- `state.paginated` is a visual layout snapshot. It may be optimistic or
+  restored from history, but it must not become authored document truth.
+- Stale `/api/paginate` responses must not overwrite newer document or layout
+  state.
+- Inline edit drafts may update authored text without pushing history while the
+  edit is active. Ending one intentional edit session should create at most one
+  undo entry.
+- Undo/redo should restore document data and its matching paginated snapshot
+  together so redo does not briefly show a different layout.
+- Export may be triggered while the editor is optimistic or reconciling, but it
+  must call `/api/export` with the current `previewDoc` and let the API paginate
+  and assert output. It must not serialize the current canvas snapshot.
+- Selection, caret, drag, resize, and inline-edit transaction snapshots are
+  ephemeral interaction state only.
+
 ## Status And Feedback
 
 The editor should surface important degraded states:

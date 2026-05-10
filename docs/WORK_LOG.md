@@ -20,6 +20,62 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Tighten Export Renderer Dependency Guard
+
+Goal: Keep export/renderers from becoming a second layout engine while reviewing
+the renderer/API boundary.
+
+Completed:
+
+- Rechecked `/api/export`, PDF renderer, and DOCX renderer boundaries: export
+  still paginates and asserts before rendering, while production renderers accept
+  `PaginatedDocument`.
+- Added a renderer dependency guard to `docs/EXPORT_RENDERER_CONTRACT.md`:
+  production renderer code should not import document schema, document
+  operations, `paginateDocument`, text measurers, or word breakers.
+- Clarified that DOCX may serialize paginated line text into editable Word
+  paragraphs, but this must not become a new FlowDoc line/page breaking policy.
+- Added verification guidance for future renderer dependency changes.
+
+Files changed:
+
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `git diff --check`
+- Doc reference check: all explicit docs markdown references resolve to
+  existing files.
+
+### Add Editor State Race Smoke Contract
+
+Goal: Make editor state/reconciliation race checks explicit before changing more
+inline edit, undo/redo, export, or renderer-facing editor behavior.
+
+Completed:
+
+- Added editor state race invariants to `docs/EDITOR_UX_CONTRACT.md` covering
+  `state.doc`, `previewDoc`, `state.paginated`, stale server responses, inline
+  edit history, undo/redo snapshots, export, and ephemeral interaction state.
+- Added a focused browser smoke set for editor state race and reconciliation
+  checks in `docs/BROWSER_SMOKE_CHECKLIST.md`.
+- Updated `docs/TEST_STRATEGY.md` so editor state race/reconciliation changes
+  have an explicit verification row.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `git diff --check`
+- Doc reference check: all explicit docs markdown references resolve to
+  existing files.
+
 ### Add Binding Scalar Contract Tests
 
 Goal: Lock the current binding layer contract before expanding table/editor

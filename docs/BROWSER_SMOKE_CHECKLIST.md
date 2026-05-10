@@ -60,6 +60,31 @@ changes.
 - Confirm the paragraph returns to the same visible layout after redo.
 - Watch for flicker, jump, unwanted scroll, or text disappearing.
 
+### Editor State Race And Reconciliation
+
+Use when changes touch `EditorShell` document state, `previewDoc`,
+`state.paginated`, inline edit transactions, undo/redo history, server
+reconciliation, or export while layout status is not settled.
+
+- Start from a clean or known document state and note which one was used.
+- Enter inline edit on a body paragraph and type enough text to wrap into 3-4
+  visual lines.
+- While still in edit mode, confirm typed text remains visible and the canvas
+  does not collapse, blink, or show duplicate text.
+- Exit edit and wait for the layout status to settle.
+- Run undo, then redo. Confirm both the text and visible wrapping return to the
+  same state without a transient wrong layout.
+- Repeat the edit with a quick blur after typing, then confirm stale server
+  pagination does not overwrite the latest text.
+- If the change touches fill mode, switch template/fill mode around the edit and
+  confirm the resolved preview does not mutate the template.
+- If the change touches export/status wiring, trigger export while the layout is
+  optimistic or reconciling and confirm export goes through the API path without
+  making the canvas snapshot the source of truth.
+
+Record any remaining flicker, stale preview, layout status mismatch, or
+undo/redo mismatch as a specific follow-up.
+
 ### Split Paragraph Or Continuation Edit
 
 Use only for changes that touch cross-page paragraph editing or continuation

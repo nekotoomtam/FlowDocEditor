@@ -65,6 +65,12 @@ If a renderer needs information that is missing from `PaginatedDocument`, the
 fix should usually be to enrich pagination output or shared renderer metadata,
 not to recompute layout inside the renderer.
 
+Renderer implementation modules should not import document schema, document
+operations, `paginateDocument`, text measurers, or word breakers. Those
+dependencies are a sign that layout policy is leaking into the renderer. Tests
+may build authored fixtures and paginate them before rendering, but renderer
+production code should remain `PaginatedDocument`-only.
+
 ## PDF Contract
 
 PDF is the authoritative final output target.
@@ -96,6 +102,9 @@ DOCX should:
 
 DOCX may differ from PDF/editor preview because the reader application owns
 final text reflow, font metrics, and page layout after the file is opened.
+The DOCX renderer may serialize paginated line text back into editable Word
+paragraphs where useful, but it must not treat that serialization step as a new
+FlowDoc line-breaking or page-breaking policy.
 
 DOCX correctness is structural usefulness. PDF correctness is final visual
 authority.
@@ -149,6 +158,10 @@ Choose the smallest verification that protects the changed layer.
   - update `docs/PRODUCT_SCENARIOS.md`
   - update `docs/FIXTURE_CATALOG.md`
   - add or adjust focused fixtures
+- Renderer dependency change:
+  - confirm production renderer code still accepts only `PaginatedDocument`
+  - move any layout measurement, pagination, or schema interpretation back to
+    core pagination/API before merging
 
 Current automated coverage includes PDF/DOCX smoke and multi-section DOCX
 structure tests. Missing coverage includes pixel-level PDF/editor parity and

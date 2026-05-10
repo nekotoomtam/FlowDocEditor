@@ -134,6 +134,7 @@ pass.
 | Docs only | `git diff --check` |
 | UI copy or minor panel wiring | type-check; browser check if interaction changed |
 | Editor interaction behavior | type-check; focused app tests if available; browser smoke |
+| Editor state race or reconciliation | type-check; focused app tests if available; browser smoke using the editor state race set |
 | Core document operation | focused core test; full test command for meaningful behavior risk |
 | Text measurement or line breaking | focused text/layout tests; full test command; update text docs |
 | Pagination/page-break behavior | focused pagination test; full test command; update cross-page/checklist docs |
