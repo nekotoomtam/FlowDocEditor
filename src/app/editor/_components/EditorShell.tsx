@@ -27,7 +27,7 @@ import { FillingPanel } from "./FillingPanel"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import { comparePagination } from "./comparePagination"
 import type { DriftReport } from "./comparePagination"
-import { findInlineEditPageIndexForCaret } from "./inlineEditCaret"
+import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -895,12 +895,18 @@ export default function EditorShell() {
     browserPaginationGenerationRef.current += 1
   }, [inlineEditNodeId])
 
+  const inlineEditFragmentRanges = useMemo(() => (
+    inlineEditNodeId
+      ? getInlineEditFragmentRanges(state.paginated, inlineEditNodeId)
+      : []
+  ), [inlineEditNodeId, state.paginated])
+
   useEffect(() => {
     if (!inlineEditNodeId || inlineEditCaretIndex === null) return
-    const nextPageIndex = findInlineEditPageIndexForCaret(state.paginated, inlineEditNodeId, inlineEditCaretIndex)
+    const nextPageIndex = findInlineEditPageIndexInRanges(inlineEditFragmentRanges, inlineEditCaretIndex)
     if (nextPageIndex === null || nextPageIndex === inlineEditPageIndex) return
     setInlineEditPageIndex(nextPageIndex)
-  }, [inlineEditCaretIndex, inlineEditNodeId, inlineEditPageIndex, state.paginated])
+  }, [inlineEditCaretIndex, inlineEditFragmentRanges, inlineEditNodeId, inlineEditPageIndex])
 
   // Inline edit contract:
   // - While editing, the textarea owns active-paragraph text/caret wrapping.
@@ -975,6 +981,8 @@ export default function EditorShell() {
     const inlineEditNodeIdAtSchedule = inlineEditNodeIdRef.current
     const debounceMs = inlineEditNodeIdAtSchedule ? INLINE_EDIT_PREVIEW_DEBOUNCE_MS : 16
     interactiveDebounceRef.current = setTimeout(() => {
+      if (generation !== browserPaginationGenerationRef.current) return
+      if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
       const paginated = paginateDocument(previewDoc, editorTextMeasurer)
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return

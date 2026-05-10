@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { findInlineEditPageIndexForCaret } from "../inlineEditCaret"
+import {
+  findInlineEditPageIndexForCaret,
+  findInlineEditPageIndexInRanges,
+  getInlineEditFragmentRanges,
+} from "../inlineEditCaret"
 import type { PaginatedDocument, PageFragment, PaginatedLine } from "@/pagination"
 
 function line(start: number, end: number): PaginatedLine {
@@ -89,5 +93,20 @@ describe("findInlineEditPageIndexForCaret", () => {
     ])
 
     expect(findInlineEditPageIndexForCaret(paginated, "p1", 3)).toBeNull()
+  })
+
+  it("can reuse precomputed fragment ranges across caret moves", () => {
+    const paginated = doc([
+      fragment({ pageIndex: 0, fragmentIndex: 0, lines: [line(0, 10)] }),
+      fragment({ pageIndex: 1, fragmentIndex: 1, lines: [line(10, 20)] }),
+    ])
+    const ranges = getInlineEditFragmentRanges(paginated, "p1")
+
+    expect(ranges).toEqual([
+      { pageIndex: 0, fragmentIndex: 0, start: 0, end: 10 },
+      { pageIndex: 1, fragmentIndex: 1, start: 10, end: 20 },
+    ])
+    expect(findInlineEditPageIndexInRanges(ranges, 5)).toBe(0)
+    expect(findInlineEditPageIndexInRanges(ranges, 15)).toBe(1)
   })
 })

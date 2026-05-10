@@ -1,7 +1,8 @@
 import type { PageFragment, PaginatedDocument } from "@/pagination"
 
-type FragmentWithRange = {
-  fragment: PageFragment
+export type InlineEditFragmentRange = {
+  pageIndex: number
+  fragmentIndex?: number
   start: number
   end: number
 }
@@ -21,11 +22,11 @@ function fragmentTextRange(fragment: PageFragment): { start: number; end: number
   return { start, end }
 }
 
-function paragraphFragmentsWithRanges(
+export function getInlineEditFragmentRanges(
   paginated: PaginatedDocument,
   nodeId: string,
-): FragmentWithRange[] {
-  const fragments: FragmentWithRange[] = []
+): InlineEditFragmentRange[] {
+  const ranges: InlineEditFragmentRange[] = []
 
   for (const section of paginated.sections) {
     for (const page of section.pages) {
@@ -33,17 +34,38 @@ function paragraphFragmentsWithRanges(
         if (fragment.nodeId !== nodeId || fragment.nodeType !== "paragraph") continue
         const range = fragmentTextRange(fragment)
         if (!range) continue
-        fragments.push({ fragment, ...range })
+        ranges.push({
+          pageIndex: fragment.pageIndex,
+          fragmentIndex: fragment.fragmentIndex,
+          ...range,
+        })
       }
     }
   }
 
-  return fragments.sort((a, b) => {
+  return ranges.sort((a, b) => {
     const byStart = a.start - b.start
     if (byStart !== 0) return byStart
-    return (a.fragment.fragmentIndex ?? a.fragment.pageIndex) -
-      (b.fragment.fragmentIndex ?? b.fragment.pageIndex)
+    return (a.fragmentIndex ?? a.pageIndex) - (b.fragmentIndex ?? b.pageIndex)
   })
+}
+
+export function findInlineEditPageIndexInRanges(
+  ranges: InlineEditFragmentRange[],
+  caretIndex: number | null,
+): number | null {
+  if (caretIndex === null) return null
+
+  if (ranges.length === 0) return null
+
+  let candidate = ranges[0]
+  for (const range of ranges) {
+    if (caretIndex < range.start) break
+    candidate = range
+    if (caretIndex < range.end) break
+  }
+
+  return candidate.pageIndex
 }
 
 export function findInlineEditPageIndexForCaret(
@@ -51,17 +73,8 @@ export function findInlineEditPageIndexForCaret(
   nodeId: string,
   caretIndex: number | null,
 ): number | null {
-  if (caretIndex === null) return null
-
-  const fragments = paragraphFragmentsWithRanges(paginated, nodeId)
-  if (fragments.length === 0) return null
-
-  let candidate = fragments[0]
-  for (const fragment of fragments) {
-    if (caretIndex < fragment.start) break
-    candidate = fragment
-    if (caretIndex < fragment.end) break
-  }
-
-  return candidate.fragment.pageIndex
+  return findInlineEditPageIndexInRanges(
+    getInlineEditFragmentRanges(paginated, nodeId),
+    caretIndex,
+  )
 }

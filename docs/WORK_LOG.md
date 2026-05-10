@@ -20,6 +20,42 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Polish Live Inline Pagination Performance Phase 4
+
+Goal: Keep live inline pagination responsive as documents grow without changing
+the pagination contract or schema.
+
+Completed:
+
+- Split inline edit caret lookup into reusable precomputed fragment ranges.
+- Updated `EditorShell` to memoize active paragraph fragment ranges per
+  paginated snapshot, so ordinary caret movement does not rescan the full
+  document until pagination actually changes.
+- Kept the one-shot `findInlineEditPageIndexForCaret()` helper for direct tests
+  and callers that do not need cached ranges.
+- Added an early generation/edit-node guard before browser pagination computes a
+  new optimistic snapshot, avoiding work for callbacks that are already stale.
+- Added app tests for precomputed range reuse across caret moves.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/inlineEditCaret.ts`
+- `src/app/editor/_components/__tests__/inlineEditCaret.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+
+Notes:
+
+- This phase keeps browser pagination whole-document and debounced. More
+  invasive affected-section or measurement-cache work remains a future engine
+  optimization, not part of the inline edit UX slice.
+
 ### Harden Continuation Fragment Inline Editing Phase 3
 
 Goal: Make Enter/Backspace inside split paragraph inline editing use the full
