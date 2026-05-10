@@ -139,4 +139,25 @@ describe("keepWithNext", () => {
     expect(pageOf(result, "h1")).toBe(pageOf(result, "b1"))
     expect(pageOf(result, "h2")).toBe(pageOf(result, "b2"))
   })
+
+  it("product fixture — report-keep-with-next", () => {
+    const filler = makePara("report-filler", Array.from({ length: 55 }, () => "เนื้อหาก่อนหน้า").join("\n"))
+    const heading = makePara("report-heading", "บทที่ 2 ผลการดำเนินงาน", {
+      headingLevel: 1,
+      keepWithNext: true,
+    })
+    const following = makePara("report-body", Array.from({ length: 5 }, () => "ย่อหน้าแรกของบทนี้").join("\n"))
+
+    const result = paginate(makeDoc(["report-filler", "report-heading", "report-body"], {
+      "report-filler": filler,
+      "report-heading": heading,
+      "report-body": following,
+    }))
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+
+    const headingPage = pageOf(result, "report-heading")
+    const bodyPage = pageOf(result, "report-body")
+    expect(headingPage).toBeGreaterThan(0)
+    expect(headingPage).toBe(bodyPage)
+  })
 })

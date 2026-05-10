@@ -17,6 +17,221 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Add Report DOCX Structure Fixture
+
+Goal: Cover the report scenario where DOCX output should preserve useful
+editable structure across cover, TOC, and body sections.
+
+Completed:
+
+- Added `product fixture — report-docx-structure` to `multiSection.test.ts`.
+- The fixture builds a cover section, TOC section, and body section with
+  `pageNumberStart=1`, renders DOCX, and inspects `word/document.xml`.
+- Verifies the DOCX has a ZIP header, emits the expected number of Word section
+  properties, and includes cover title, TOC title, body heading, and editable
+  body paragraph text.
+- Updated `PRODUCT_SCENARIOS.md` to mark the fixture covered.
+
+Files changed:
+
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/renderer/__tests__/multiSection.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- renderer/__tests__/multiSection.test.ts`
+- `npm.cmd test`
+
+### Add Report Keep-With-Next Fixture
+
+Goal: Cover the report scenario where a heading near the bottom of a page must
+move with its following paragraph.
+
+Completed:
+
+- Added `product fixture — report-keep-with-next` to `keepWithNext.test.ts`.
+- The fixture fills most of a page, then places a Thai heading with
+  `headingLevel=1` and `keepWithNext=true` before a following body paragraph.
+- Verifies the heading moves to the next page instead of being stranded at the
+  bottom of the previous page, stays on the same page as the following paragraph,
+  and `assertPaginatedDocument` passes.
+- Updated `PRODUCT_SCENARIOS.md` to mark the fixture covered.
+
+Files changed:
+
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/__tests__/keepWithNext.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/keepWithNext.test.ts`
+- `npm.cmd test`
+
+### Add Customs Breakable Uneven Row Fixture
+
+Goal: Cover customs rows where one description cell is much taller than short
+numeric cells and the row is allowed to break across pages.
+
+Completed:
+
+- Added `product fixture — customs-breakable-row-uneven-cells` to
+  `tablePagination.test.ts`.
+- The fixture creates a repeated-header table with one `allowBreak=true` body row:
+  short number cell, long Thai description cell, and short amount cell.
+- Verifies the body row spans multiple pages, description text is preserved
+  across split fragments, short number/amount cells render only once, repeated
+  headers appear on continuation pages, and `assertPaginatedDocument` passes.
+- Updated `PRODUCT_SCENARIOS.md` to mark the fixture covered.
+
+Files changed:
+
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd test`
+
+### Add Customs Rowspan Boundary Fixture
+
+Goal: Cover the customs scenario where a rowspan-linked group lands near the
+bottom of a page.
+
+Completed:
+
+- Added `product fixture — customs-rowspan-boundary` to `tablePagination.test.ts`.
+- The fixture fills most of the first page, then places a table with a repeated
+  header and a two-row rowspan group.
+- Verifies the rowspan group moves to the next page as a unit, both linked rows
+  remain on the same page, row order/geometry is contiguous, and
+  `assertPaginatedDocument` passes.
+- Updated `PRODUCT_SCENARIOS.md` to mark the fixture covered.
+
+Files changed:
+
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd test`
+
+### Add Customs Basic Table Fixture
+
+Goal: Turn the first customs product scenario fixture into an executable table
+pagination regression test.
+
+Completed:
+
+- Added `product fixture — customs-basic-table` to `tablePagination.test.ts`.
+- The fixture builds a multi-page customs-style table with `headerRowCount=1`
+  and a footer paragraph containing an inline page number.
+- Verifies table pagination spans at least two pages, the table header repeats
+  on every table page, footer page numbers resolve on every table page, and
+  `assertPaginatedDocument` passes.
+- Converted `PRODUCT_SCENARIOS.md` fixture roadmap into a checked status list
+  and linked covered fixtures to concrete tests.
+
+Files changed:
+
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd test`
+
+### Add Report Cover TOC Body Fixture
+
+Goal: Turn the report cover/TOC/body product scenario into an executable
+multi-section regression test.
+
+Completed:
+
+- Added `product fixture — report-cover-toc-body` to `multiSection.test.ts`.
+- The fixture builds a cover section, TOC section, and body section with
+  `pageNumberStart=1`.
+- Verifies three `PaginatedSection`s, body inline page number text (`หน้า 1`),
+  TOC entries using restarted body page numbers, filled TOC lines, and
+  `assertPaginatedDocument`.
+- Updated `PRODUCT_SCENARIOS.md` so the fixture roadmap points to the concrete
+  test coverage.
+
+Files changed:
+
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/renderer/__tests__/multiSection.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- renderer/__tests__/multiSection.test.ts`
+- `npm.cmd test`
+
+### Add Report Long Thai Paragraph Fixture
+
+Goal: Turn the first product scenario fixture into an executable regression test.
+
+Completed:
+
+- Added `product fixture — report-long-thai-paragraph` to `paginator.test.ts`.
+- The fixture uses a deterministic long Thai grapheme run, verifies it splits
+  across multiple pages/fragments, joins all paginated line text back to the
+  original source text, and passes `assertPaginatedDocument`.
+- Updated `PRODUCT_SCENARIOS.md` so the fixture roadmap points to the concrete
+  test coverage.
+
+Files changed:
+
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/__tests__/paginator.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/paginator.test.ts`
+- `npm.cmd test`
+
+### Sync Docs With Current Engine Contracts
+
+Goal: Remove stale doc claims found during a quick docs-vs-implementation recheck.
+
+Completed:
+
+- Updated TOC docs to describe the current two-pass overflow repagination policy.
+- Updated text editing docs to reflect the current textarea-owned inline edit path
+  with live height/geometry tracking, instead of the older measured-line patch path.
+- Added `pageNumber` to the documented `LineSegment.kind` contract.
+- Clarified API/export boundary wording so it matches current route behavior.
+- Updated stale page-number placeholder comments from `"0"` to `"00"`.
+- Relaxed the paragraph fragment metadata type comment so it does not overclaim
+  coverage for every paragraph placement path.
+
+Files changed:
+
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/TEXT_REFLOW_PLAN.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/types.ts`
+- `packages/core/src/schema/inline.ts`
+
+Verification:
+
+- `rg` stale-claim scan for old TOC/reflow/page-number wording.
+- `npm.cmd test`
+
 ### Make Inline Shrink Move Column Siblings
 
 Goal: Fix two inline-edit regressions: normal/edit wrapping drift after the overflow fix, and row/column preview height not shrinking when text is deleted.

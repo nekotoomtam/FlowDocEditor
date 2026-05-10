@@ -280,7 +280,9 @@ Checklist:
 - `DocumentNode` remains free of computed layout data.
 - Editor-only state stays in the editor.
 - Template data and filling data stay separate.
-- API/export uses assert/normalize/bind/paginate in the intended order.
+- API/export boundaries are explicit: callers send a valid document, editor
+  preview performs binding before route calls, and routes assert before
+  paginating/exporting.
 - Table changes preserve table invariants.
 - Text/layout changes do not introduce a second source of truth.
 - `npm run type-check` passes, unless there is a documented reason it cannot run.

@@ -22,7 +22,7 @@ export const FieldRefInlineSchema = z.object({
 export type FieldRefInline = z.infer<typeof FieldRefInlineSchema>
 
 // PageNumberInline — resolved to the current page number at pagination time.
-// Layout uses "0" as a single-digit placeholder for width measurement; the
+// Layout uses "00" as a two-digit placeholder for width measurement; the
 // actual number is substituted by the paginator after the page is known.
 export const PageNumberInlineSchema = z.object({
   id: z.string().min(1),

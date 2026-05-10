@@ -339,6 +339,28 @@ describe("paginator — paragraph split across pages", () => {
   })
 })
 
+// ─── Product fixture scenarios ───────────────────────────────────────────────
+
+describe("product fixture — report-long-thai-paragraph", () => {
+  it("splits a long Thai paragraph across pages without losing text", () => {
+    // Deterministic Thai fixture: an unbroken Thai run exercises grapheme
+    // fallback and page splitting without depending on ICU word dictionary data.
+    const text = "ก".repeat(5000)
+    const p = makePara("report-long-thai-paragraph", text)
+    const doc = makeDoc(["report-long-thai-paragraph"], { "report-long-thai-paragraph": p })
+    const result = paginateDocument(doc, defaultTextMeasurer, defaultWordBreaker)
+    const pages = result.sections[0].pages
+    const fragments = pages.flatMap((pg) => pg.fragments)
+      .filter((f) => f.nodeId === "report-long-thai-paragraph")
+
+    expect(pages.length).toBeGreaterThanOrEqual(2)
+    expect(fragments.length).toBeGreaterThanOrEqual(2)
+    expect(new Set(fragments.map((f) => f.pageIndex)).size).toBeGreaterThanOrEqual(2)
+    expect(fragments.flatMap((f) => f.lines ?? []).map((line) => line.text).join("")).toBe(text)
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+  })
+})
+
 // ─── Table Fragment Relationships ────────────────────────────────────────────
 
 function makeTable(id: string, rowCount: number, colCount: number, cellText = ""): TableNode {

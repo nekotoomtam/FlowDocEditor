@@ -50,7 +50,7 @@ interface LineSegment {
   end: number
   x: number // relative to the start of the visual line
   width: number
-  kind: "word" | "space" | "field" | "grapheme"
+  kind: "word" | "space" | "field" | "grapheme" | "pageNumber"
   breakableAfter: boolean
 }
 ```
@@ -69,7 +69,9 @@ Expected future uses:
 2. Populate segments from the existing word breaker and text measurer. Done.
 3. Add grapheme fallback for over-wide segments so long unbroken text can wrap. Done.
 4. Use segment offsets for caret hit testing instead of line-width ratios. Done.
-5. Reflow the active paragraph locally before server pagination returns.
+5. Use the inline textarea as the active edit surface while tracking local
+   height/geometry, then reconcile measured lines through browser/server
+   pagination after edit settle/exit. Current behavior.
 6. Move browser measurement toward the same font-aware path as server/export.
 
 ## Open Questions

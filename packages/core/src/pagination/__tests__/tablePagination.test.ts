@@ -46,6 +46,16 @@ function makePara(id: string, text: string): ParagraphNode {
   }
 }
 
+function makePageNumberPara(id: string, prefix = "หน้า "): ParagraphNode {
+  return {
+    ...makePara(id, ""),
+    children: [
+      { id: `${id}-t`, type: "text", text: prefix },
+      { id: `${id}-pn`, type: "pageNumber" },
+    ],
+  }
+}
+
 // Build a table with explicit rowspan control.
 // rowDefs: array of rows, each row has cells with optional rowspan/colspan.
 function makeTable(
@@ -327,6 +337,126 @@ describe("tablePagination — repeating headers", () => {
     const result = paginate(makeDoc(["tbl"], { tbl }))
     // assertPaginatedDocument's split-fragment-order rule verifies ascending pages
     expect(() => assertPaginatedDocument(result)).not.toThrow()
+  })
+})
+
+describe("product fixture — customs-basic-table", () => {
+  it("paginates a 2+ page customs table with repeated header and page footer", () => {
+    const tbl = makeTable("customs-table", [150, 220, 80], [
+      [{ text: "Item" }, { text: "Description" }, { text: "Amount" }],
+      ...Array.from({ length: 70 }, (_, i) => [
+        { text: String(i + 1) },
+        { text: `รายการสินค้า ${i + 1}` },
+        { text: `${(i + 1) * 100}` },
+      ]),
+    ])
+    tbl.props = { ...tbl.props, headerRowCount: 1 }
+    const footer = makePageNumberPara("customs-footer")
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "customs-basic-table",
+        sections: [{
+          id: "customs",
+          type: "section",
+          page: PAGE,
+          bodyRootId: "body",
+          footerRootId: "customs-footer",
+          nodes: {
+            "body": { id: "body", type: "body", props: {}, childIds: ["customs-table"] },
+            "customs-footer": footer,
+            "customs-table": tbl,
+          },
+        }],
+      },
+    }
+
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+    const pages = result.sections[0].pages
+    const tablePages = pages.filter((page) =>
+      page.fragments.some((f) => f.nodeId === "customs-table" || f.parentNodeId === "customs-table"),
+    )
+
+    expect(tablePages.length).toBeGreaterThanOrEqual(2)
+    for (const page of tablePages) {
+      expect(page.fragments.some((f) => f.nodeId === "customs-table-row0")).toBe(true)
+      expect(page.footerFragments.some((f) =>
+        f.nodeId === "customs-footer" && f.lines?.[0]?.text === `หน้า ${page.index + 1}`,
+      )).toBe(true)
+    }
+  })
+})
+
+describe("product fixture — customs-rowspan-boundary", () => {
+  it("moves a near-boundary rowspan group as a unit to the next page", () => {
+    const filler = makePara("customs-filler", Array.from({ length: 51 }, () => "Filler").join("\n"))
+    const groupText = Array.from({ length: 8 }, (_, i) => `สินค้า ${i + 1}`).join("\n")
+    const tbl = makeTable("customs-rowspan", [150, 220, 80], [
+      [{ text: "Item" }, { text: "Description" }, { text: "Amount" }],
+      [{ text: "1", rowspan: 2 }, { text: groupText }, { text: "1000" }],
+      [{ text: groupText }, { text: "2000" }],
+      [{ text: "2" }, { text: "รายการถัดไป" }, { text: "3000" }],
+    ])
+    tbl.props = { ...tbl.props, headerRowCount: 1 }
+
+    const result = paginate(makeDoc(["customs-filler", "customs-rowspan"], { "customs-filler": filler, "customs-rowspan": tbl }))
+    assertPaginatedDocument(result)
+
+    const row1Page = getPageOfFragment(result, "customs-rowspan-row1")
+    const row2Page = getPageOfFragment(result, "customs-rowspan-row2")
+    const row1Frag = result.sections[0].pages
+      .flatMap((pg) => pg.fragments)
+      .find((f) => f.nodeId === "customs-rowspan-row1")
+    const row2Frag = result.sections[0].pages
+      .flatMap((pg) => pg.fragments)
+      .find((f) => f.nodeId === "customs-rowspan-row2")
+
+    expect(row1Page).toBeGreaterThan(0)
+    expect(row1Page).toBe(row2Page)
+    expect(row1Frag?.y).toBeGreaterThan(CY)
+    expect(row2Frag?.y).toBeCloseTo((row1Frag?.y ?? 0) + (row1Frag?.height ?? 0), 0)
+  })
+})
+
+describe("product fixture — customs-breakable-row-uneven-cells", () => {
+  it("splits a long description cell without duplicating short numeric cells", () => {
+    const longDescription = Array.from({ length: 130 }, (_, i) => `รายละเอียดสินค้า ${i + 1}`).join("\n")
+    const tbl = makeTable("customs-breakable", [80, 290, 80], [
+      [{ text: "No." }, { text: "Description" }, { text: "Amount" }],
+      [{ text: "1" }, { text: longDescription }, { text: "12000" }],
+    ])
+    tbl.props = { ...tbl.props, headerRowCount: 1 }
+    const bodyRow = tbl.nodes["customs-breakable-row1"]
+    if (bodyRow?.type === "table-row") bodyRow.props = { ...bodyRow.props, allowBreak: true }
+
+    const result = paginate(makeDoc(["customs-breakable"], { "customs-breakable": tbl }))
+    assertPaginatedDocument(result)
+
+    const bodyRowPages = new Set(result.sections[0].pages
+      .filter((page) => page.fragments.some((f) => f.nodeId === "customs-breakable-row1"))
+      .map((page) => page.index))
+    const descriptionFragments = result.sections[0].pages.flatMap((page) =>
+      page.fragments.filter((f) => f.nodeId === "customs-breakable-p1-1"),
+    )
+    const shortNumberFragments = result.sections[0].pages.flatMap((page) =>
+      page.fragments.filter((f) => f.nodeId === "customs-breakable-p1-0"),
+    )
+    const amountFragments = result.sections[0].pages.flatMap((page) =>
+      page.fragments.filter((f) => f.nodeId === "customs-breakable-p1-2"),
+    )
+
+    expect(bodyRowPages.size).toBeGreaterThanOrEqual(2)
+    expect(descriptionFragments.length).toBeGreaterThanOrEqual(2)
+    expect(descriptionFragments.flatMap((f) => f.lines ?? []).map((line) => line.text).join("").replace(/\s+/g, ""))
+      .toBe(longDescription.replace(/\s+/g, ""))
+    expect(shortNumberFragments).toHaveLength(1)
+    expect(shortNumberFragments[0].lines?.map((line) => line.text).join("")).toBe("1")
+    expect(amountFragments).toHaveLength(1)
+    expect(amountFragments[0].lines?.map((line) => line.text).join("")).toBe("12000")
+    for (const page of result.sections[0].pages.filter((page) => bodyRowPages.has(page.index) && page.index > 0)) {
+      expect(page.fragments.some((f) => f.nodeId === "customs-breakable-row0")).toBe(true)
+    }
   })
 })
 

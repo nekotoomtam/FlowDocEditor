@@ -262,7 +262,9 @@ Omitting this call in any path is a bug: the page-number placeholder string will
 appear in the rendered output instead of the resolved number.
 
 Generated content that can change page count, such as a full TOC, must have a
-clear repagination policy before it is treated as complete.
+clear repagination policy before it is treated as complete. The current TOC
+policy is two-pass pagination: pass 1 collects entries and detects overflow;
+pass 2 runs only when the generated TOC needs more height.
 
 ## 4. Pagination Rules
 
@@ -291,7 +293,9 @@ Current policy direction:
   a unit until split-at-row-boundary rules are explicit
 - table cell content: splits by the same measured line boundaries as body
   paragraphs, but only within a row that permits splitting; see 4.3
-- TOC placeholder: fixed-height placeholder until repagination policy exists
+- TOC placeholder: estimated-height placeholder in pass 1; if generated TOC
+  content is taller than the placeholder, pass 2 repaginates with the corrected
+  height before rendering TOC lines
 
 A node type without a defined split policy should move as a whole block or use a
 documented overflow fallback.
@@ -645,7 +649,9 @@ These are intentionally not fully locked yet.
 - What exact widow/orphan policy should be used?
 - How should list markers behave across continuation fragments?
 - How should table-cell text split inside row-splitting policy?
-- Should TOC generation trigger repagination, reserve space, or remain fixed-height?
+- Should TOC generation ever need more than the current two-pass overflow
+  correction, or should very rare second-order TOC growth stay documented as a
+  limitation?
 - Which debug traces should be persisted in test snapshots versus emitted only on demand?
 - When should browser preview become authoritative enough to remove server-settling UX?
 

@@ -144,7 +144,7 @@ function measureParagraphFragment(
 
 // ─── Page Number Resolution ───────────────────────────────────────────────────
 
-// Replace page-number placeholder segments ("0") with the actual page number.
+// Replace page-number placeholder segments ("00") with the actual page number.
 // Called after a fragment's pageIndex is known.
 function resolvePageNumbers(lines: PaginatedLine[], pageNumber: number): PaginatedLine[] {
   const pageStr = String(pageNumber)

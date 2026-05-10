@@ -22,7 +22,7 @@ editor-only shortcuts.
 
 - [x] Populate `LineSegment` data in `measureParagraph`.
 - [x] Preserve source offsets for each line and segment.
-- [x] Classify segments as `word`, `space`, `field`, or `grapheme`.
+- [x] Classify segments as `word`, `space`, `field`, `grapheme`, or `pageNumber`.
 - [x] Add grapheme fallback for over-wide segments so long unbroken text wraps.
 - [x] Use segment data for paragraph caret hit testing instead of line-width ratios.
 - [x] Make inline editing spacing and displayed line spacing continue to converge.
@@ -57,11 +57,14 @@ editor-only shortcuts.
   - [x] Add focused tests for `comparePagination`.
     - 8 tests: no-drift, +/- line delta, page movement, split-page aggregation,
       non-paragraph ignored, totalParagraphs count. Root vitest.config.ts added.
-  - [x] Add soft/hard reflow rules for wrap and page-break risk during typing.
-    - Soft event (line count unchanged): patch only active paragraph lines,
-      no surrounding layout change.
-    - Hard event (line count changes): run full browser pagination immediately
-      (0ms) so fragments below shift without waiting for 200ms debounce.
+  - [x] Add soft/hard reflow risk tracking during typing.
+    - Current editor interaction truth is the native textarea while inline edit
+      is active.
+    - The editor measures line-count risk and shifts fragment geometry for live
+      height changes; it does not patch measured paragraph lines during active
+      inline editing.
+    - Full browser/server pagination is deferred until the inline edit settles
+      or exits, then reconciles back to authoritative layout.
   - [x] Reset soft/hard line-count tracking for every inline edit session.
     - Refs reset to null when inlineEditNodeId becomes null, so re-entering
       the same paragraph starts fresh with no stale line-count state.
@@ -130,20 +133,20 @@ editor-only shortcuts.
     column all correct; assertPaginatedDocument passes.
   - **Renderer smoke**: PDF (%PDF) and DOCX (PK) for spacing+alignment, wrapped text,
     two-column, hard-newline documents — all render without throwing.
-- [x] Build paragraph-local reflow for typing, delete, and resize previews.
-- [x] Add incremental reflow from the edited line forward.
+- [x] Build paragraph-local edit preview for typing, delete, and resize.
+  - Current production behavior uses the inline textarea as the active visual
+    text surface and updates local fragment height/geometry while editing.
+  - Measured line output is reconciled by browser/server pagination after the
+    edit settles or exits.
+- [x] Add `measureParagraphFrom` as a core helper and test it.
   - Added `measureParagraphFrom(node, fromOffset, width, measurer, wb)` to
     `layout/measure.ts`. Refactored shared text-building logic into
     `buildParagraphFullText` and `measureHardLines` helpers. `measureHardLines`
     skips hard lines ending before `fromOffset`, then measures only from the
     containing hard line onward with correct `offsetBase`.
-  - Updated `EditorShell.tsx` local reflow effect: when `caretLineIndex > 0`,
-    reuses head lines and calls `measureParagraphFrom` for the tail only.
-    `buildTailLines` positions tail paginated lines starting from the Y position
-    after the last head line. Falls back to full `measureParagraph` when caret
-    is on the first line.
-  - Fixed `buildLocalLines` in `EditorShell` to apply alignment offset (center/right)
-    using the same formula as `buildPaginatedLines` in the core paginator.
+  - Earlier editor code used this helper to patch active paragraph lines; the
+    current editor no longer uses that path during inline editing because the
+    textarea owns active wrapping/caret behavior.
   - 5 tests in `measure.test.ts` (`measureParagraphFrom` describe block):
     fromOffset=0 equals full measurement, fromOffset in second hard line starts
     from Beta, segment offsets reference original full text, lineHeight matches,
@@ -161,10 +164,9 @@ editor-only shortcuts.
   → Measured: zero drift for normal content. Only grapheme fallback and exact
     boundary cases drift. Acceptable for current use cases.
 - [x] Should resize previews reflow only the active paragraph or also nearby paragraphs?
-  → Active paragraph only (current behavior). The local reflow effect patches only
-  the active paragraph's lines; surrounding fragments shift after the full browser
-  pagination (0ms for hard events, 200ms debounce for soft). This is acceptable
-  because the active text is always correct and layout settles quickly.
+  → Active paragraph only (current behavior). The inline edit surface updates the
+  active fragment's live height/geometry; measured lines and surrounding layout
+  reconcile after browser/server pagination settles.
 - [x] What is the minimum golden fixture set before changing line breaking behavior again?
   → The current suite (27 measure tests + drift tests + paginator split tests) is
   the minimum. Any change to `measureParagraph` or `wrapLines` must keep all

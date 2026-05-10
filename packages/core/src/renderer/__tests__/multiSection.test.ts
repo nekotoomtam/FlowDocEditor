@@ -229,6 +229,44 @@ describe("multi-section export smoke tests", () => {
     expect(() => assertPaginatedDocument(paginate(doc))).not.toThrow()
   })
 
+  it("product fixture — report-cover-toc-body", () => {
+    const coverTitle = makePara("cover-title", "รายงานราชการ", 1)
+    const bodyPageNumber = makePageNumberPara("body-page-number")
+    const h1 = makePara("body-h1", "บทที่ 1 บทนำ", 1)
+    const h2 = makePara("body-h2", "บทที่ 2 ผลการดำเนินงาน", 1)
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "report-cover-toc-body",
+        sections: [
+          makeSection("cover", ["cover-title"], { "cover-title": coverTitle }),
+          makeTocSection("สารบัญ"),
+          makeSection(
+            "body",
+            ["body-page-number", "body-h1", "body-h2"],
+            { "body-page-number": bodyPageNumber, "body-h1": h1, "body-h2": h2 },
+            { pageNumberStart: 1 },
+          ),
+        ],
+      },
+    }
+
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    expect(result.sections).toHaveLength(3)
+    expect(result.sections.map((section) => section.sectionId)).toEqual(["cover", "toc-sec", "body"])
+    expect(result.sections[2].pages[0].fragments
+      .find((f) => f.nodeId === "body-page-number")?.lines?.[0]?.text).toBe("หน้า 1")
+    expect(result.tocEntries.map((entry) => [entry.nodeId, entry.pageNumber])).toEqual([
+      ["cover-title", 1],
+      ["body-h1", 1],
+      ["body-h2", 1],
+    ])
+    const tocFrag = result.sections[1].pages[0].fragments.find((f) => f.nodeType === "toc")
+    expect(tocFrag?.lines?.some((line) => line.text.includes("บทที่ 1 บทนำ") && line.text.endsWith(" 1"))).toBe(true)
+  })
+
   // ── PDF render ────────────────────────────────────────────────────────────
 
   it("PDF: two-section document renders without throwing", async () => {
@@ -368,5 +406,36 @@ describe("multi-section export smoke tests", () => {
     const result = await docx.render(paginate(doc))
     expect(result.buffer[0]).toBe(0x50)
     expect(result.buffer[1]).toBe(0x4b)
+  })
+
+  it("product fixture — report-docx-structure", async () => {
+    const coverTitle = makePara("cover-title", "Government Report", 1)
+    const h1 = makePara("body-h1", "Chapter 1 Introduction", 1)
+    const body1 = makePara("body-p1", "Editable body paragraph")
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "report-docx-structure",
+        sections: [
+          makeSection("cover", ["cover-title"], { "cover-title": coverTitle }),
+          makeTocSection("Contents"),
+          makeSection("body", ["body-h1", "body-p1"], { "body-h1": h1, "body-p1": body1 }, { pageNumberStart: 1 }),
+        ],
+      },
+    }
+
+    const paginated = paginate(doc)
+    assertPaginatedDocument(paginated)
+    const pageCount = paginated.sections.reduce((sum, section) => sum + section.pages.length, 0)
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(result.buffer[0]).toBe(0x50)
+    expect(result.buffer[1]).toBe(0x4b)
+    expect(countXmlTag(xml, "w:sectPr")).toBe(pageCount)
+    expect(xml).toContain("Government Report")
+    expect(xml).toContain("Contents")
+    expect(xml).toContain("Chapter 1 Introduction")
+    expect(xml).toContain("Editable body paragraph")
   })
 })

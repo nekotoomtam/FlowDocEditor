@@ -84,7 +84,8 @@ export interface PageFragment {
   lines?: PaginatedLine[]
   renderProps?: ParagraphRenderProps
   cellRenderProps?: TableCellRenderProps
-  // Paragraph split metadata — present on every paragraph fragment
+  // Paragraph split metadata — populated by pagination paths that split or
+  // explicitly track paragraph continuation.
   fragmentIndex?: number   // 0-based position among fragments of the same nodeId
   lineStart?: number       // index of first line in the source paragraph's measured lines
   lineEnd?: number         // exclusive end index (lineStart + this fragment's line count)

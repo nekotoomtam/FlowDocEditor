@@ -55,9 +55,9 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
     content page, allow documented overflow for now.
   - [x] Table row: `allowBreak=false` moves the row as a whole; `allowBreak=true`
     may split the row across pages.
-  - [x] TOC placeholder: temporary fixed-height block. Pagination places the
-    placeholder first, then TOC lines are filled in post-processing; it does not
-    yet repaginate if generated TOC content exceeds the placeholder.
+  - [x] TOC placeholder: estimated-height block in pass 1. Pagination fills TOC
+    lines in post-processing; if generated TOC content exceeds the placeholder,
+    pass 2 repaginates with the corrected height before rendering lines.
   - [x] Paragraph: splits across pages by measured lines. Keep the older
     whole-block overflow behavior only for node types whose split rules are still
     intentionally deferred.

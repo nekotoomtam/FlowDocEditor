@@ -266,16 +266,31 @@ Minimum useful fixture data:
 
 ## Fixture Roadmap
 
-These are suggested future fixtures derived from the scenarios:
+These fixtures are derived from the scenarios and should be kept in sync with
+the executable test suite.
 
-- `customs-basic-table`: 2-page table, repeated header, page footer.
-- `customs-rowspan-boundary`: rowspan group near page bottom.
-- `customs-breakable-row-uneven-cells`: long description cell plus short numeric
+- [x] `customs-basic-table`: 2-page table, repeated header, page footer.
+  - Covered by `product fixture — customs-basic-table` in
+    `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
+- [x] `customs-rowspan-boundary`: rowspan group near page bottom.
+  - Covered by `product fixture — customs-rowspan-boundary` in
+    `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
+- [x] `customs-breakable-row-uneven-cells`: long description cell plus short numeric
   cells.
-- `report-cover-toc-body`: cover, TOC, body restart at page 1.
-- `report-long-thai-paragraph`: Thai paragraph split across pages.
-- `report-keep-with-next`: heading near page bottom with following paragraph.
-- `report-docx-structure`: DOCX XML section boundary assertion.
+  - Covered by `product fixture — customs-breakable-row-uneven-cells` in
+    `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
+- [x] `report-cover-toc-body`: cover, TOC, body restart at page 1.
+  - Covered by `product fixture — report-cover-toc-body` in
+    `packages/core/src/renderer/__tests__/multiSection.test.ts`.
+- [x] `report-long-thai-paragraph`: Thai paragraph split across pages.
+  - Covered by `product fixture — report-long-thai-paragraph` in
+    `packages/core/src/pagination/__tests__/paginator.test.ts`.
+- [x] `report-keep-with-next`: heading near page bottom with following paragraph.
+  - Covered by `product fixture — report-keep-with-next` in
+    `packages/core/src/pagination/__tests__/keepWithNext.test.ts`.
+- [x] `report-docx-structure`: DOCX XML section boundary assertion.
+  - Covered by `product fixture — report-docx-structure` in
+    `packages/core/src/renderer/__tests__/multiSection.test.ts`.
 
 ## Decision Rule
 
