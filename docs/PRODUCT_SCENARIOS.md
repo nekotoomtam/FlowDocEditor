@@ -5,10 +5,21 @@ correctness matters more than free-form page design. These scenarios are the
 product north star: engine behavior, editor UX, test fixtures, and renderer
 trade-offs should be evaluated against them.
 
+For the broader product direction, including why FlowDocEditor should become a
+workflow-ready editor rather than remain only a document generator, see
+`docs/PRODUCT_DIRECTION.md`.
+
 This document is intentionally fixture-oriented. A good scenario should be
 specific enough that a future developer can build a sample `DocumentNode`, write
 pagination/export tests, and know what "correct" means without rereading the
 whole codebase.
+
+Reusable table authoring and editor operation rules live in
+`docs/TABLE_EDITING_CONTRACT.md`.
+
+Project-wide test levels and QA expectations live in `docs/TEST_STRATEGY.md`.
+
+Current fixture-to-test ownership lives in `docs/FIXTURE_CATALOG.md`.
 
 ## Scenario Quality Bar
 
@@ -82,6 +93,10 @@ Minimum useful fixture data:
 ### Required Engine Capabilities
 
 - Table grid invariants must hold after edit operations.
+- Template designers must be able to select table cells from the canvas and edit
+  cell-level props without accidentally editing only the internal paragraph.
+- Adding or removing table columns must preserve the total table width unless a
+  future explicit resize action is used.
 - `rowspan` groups must stay together across page boundaries.
 - Repeating table headers must appear on continuation pages.
 - Breakable rows must split without duplicating shorter cell content. Single-row
@@ -119,6 +134,10 @@ Minimum useful fixture data:
   the documented too-tall overflow policy.
 - Adding/removing rows and columns keeps `assertDocument` and
   `assertPaginatedDocument` green.
+- Adding/removing columns preserves total table width so a fixed form does not
+  silently grow beyond the page content box.
+- A selected cell exposes cell-level authoring controls: text, padding,
+  background, vertical alignment, row operations, and column operations.
 - PDF export succeeds and keeps the same page count as authoritative
   pagination.
 - Header/footer page-number fields show the correct page number on every page.
@@ -127,6 +146,9 @@ Current automated coverage:
 
 - Pagination and structural behavior are covered by the product fixtures in the
   roadmap below.
+- Table operation width preservation is covered in `tablePagination.test.ts`.
+- Current editor table-cell selection and property-panel flow is browser-checked;
+  it does not yet have an automated UI regression test.
 - PDF export is currently covered by renderer smoke tests, not by customs-specific
   visual/page-count golden tests.
 - Pixel-level PDF/editor visual comparison remains future visual regression work.
@@ -287,6 +309,8 @@ Current automated coverage:
 
 These fixtures are derived from the scenarios and should be kept in sync with
 the executable test suite.
+Use `docs/FIXTURE_CATALOG.md` for the wider test-file map and known coverage
+gaps.
 
 - [x] `customs-basic-table`: 2-page table, repeated header, page footer.
   - Covered by `product fixture — customs-basic-table` in
@@ -318,6 +342,8 @@ the executable test suite.
 | Customs multi-page table, repeated header, footer page number | `customs-basic-table` / `tablePagination.test.ts` | Structural pagination |
 | Customs rowspan group near page boundary | `customs-rowspan-boundary` / `tablePagination.test.ts` | Structural pagination |
 | Customs breakable uneven row without duplicated short cells and with line-slice metadata | `customs-breakable-row-uneven-cells` + table-cell metadata tests / `tablePagination.test.ts` | Structural pagination |
+| Customs table column insert/delete preserves total table width | table operation width tests / `tablePagination.test.ts` | Structural operation |
+| Customs table cell can be selected and edited from the canvas | browser table-cell property-panel check | Manual editor UX |
 | Report cover + TOC + body restart numbering | `report-cover-toc-body` / `multiSection.test.ts` | Structural pagination |
 | Report long Thai paragraph split | `report-long-thai-paragraph` / `paginator.test.ts` | Structural pagination |
 | Report heading stays with next paragraph | `report-keep-with-next` / `keepWithNext.test.ts` | Structural pagination |

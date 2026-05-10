@@ -5,6 +5,24 @@ layout output, and editor layout interactions. It should stay focused on shared
 layout behavior and the contract consumed by editor/PDF/DOCX, not text caret
 details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
 
+Table authoring and editor operation rules live in
+`docs/TABLE_EDITING_CONTRACT.md`.
+
+Product-level direction lives in `docs/PRODUCT_DIRECTION.md`: FlowDocEditor
+should grow from document generation into a workflow-ready editor.
+
+Architecture overview lives in `docs/ARCHITECTURE_OVERVIEW.md`.
+
+Editor UX expectations live in `docs/EDITOR_UX_CONTRACT.md`.
+
+Session workflow rules live in `docs/AGENT_WORKFLOW.md`.
+
+Test and QA level guidance lives in `docs/TEST_STRATEGY.md`.
+
+Export renderer rules live in `docs/EXPORT_RENDERER_CONTRACT.md`.
+
+Fixture ownership lives in `docs/FIXTURE_CATALOG.md`.
+
 ## Current Foundation
 
 - [x] `packages/core` owns flow layout and pagination contracts.
@@ -81,12 +99,14 @@ details covered in `docs/TEXT_ENGINE_CHECKLIST.md`.
     split-at-row-boundary logic within a group.
   - Grid invariants: `addTableRow`, `removeTableRow`, `addTableColumn`,
     `removeTableColumn` all pass `assertDocument` and `assertPaginatedDocument`.
-  - 33 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+  - Column operations preserve total table width: insertion splits the target
+    column; deletion transfers removed width to a neighbor.
+  - 35 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
     covering: no-rowspan baseline, 2/3-row groups staying on same page, group
     moving to next page as unit, mixed groups, operations+grid invariants, and
     multi-page breakable row split (3-page, line count preserved, fragment order),
-    plus product fixtures for customs basic table, rowspan boundary, and
-    breakable uneven cells.
+    column width preservation, plus product fixtures for customs basic table,
+    rowspan boundary, and breakable uneven cells.
 - [x] Add too-tall rowspan group edge-case coverage.
   - Fixed `paginateTable`: multi-row rowspan groups now always advance to the
     next page's `contentTop` when they don't fit, even if the group is taller
@@ -380,6 +400,15 @@ They are mostly boundary guards and regression targets, not new feature work.
     table-cell continuation done) as complete.
   - Marked renderer contract tests and DOCX limitation items as complete.
   - Marked golden continuation fixtures as complete.
+- [x] Add table editing contract before deeper cross-page table work.
+  - Added `docs/TABLE_EDITING_CONTRACT.md` to define table ownership, authored
+    table model rules, editor cell selection behavior, editable props, row/column
+    operation expectations, pagination-related table props, and verification bar.
+  - Linked the contract from `docs/LAYOUT_ENGINE_SPEC.md`,
+    `docs/CROSS_PAGE_BEHAVIOR.md`, and product scenario documentation.
+  - Documented that column insert/delete are not implicit table resize actions:
+    insertion preserves total width by splitting a column, and deletion preserves
+    total width by transferring width to a neighbor.
 
 ## Important Design Rules
 
@@ -507,7 +536,7 @@ They are mostly boundary guards and regression targets, not new feature work.
 - [x] Should spacers split across pages or always move whole? → Move whole.
 - [x] What is the minimum pagination golden fixture set before changing
   `paginator.ts` again?
-  → The current suite (272 core tests) is the minimum. Any change to
+  → The current suite (274 core tests) is the minimum. Any change to
   `paginator.ts` must keep all existing tests green. High-risk areas (paragraph
   split, widow/orphan, TOC overflow, table rowspan, page numbers) each have
   dedicated test files. Adding a regression test for the specific behavior being
@@ -523,7 +552,7 @@ They are mostly boundary guards and regression targets, not new feature work.
 
 These items address UX issues discovered during real document editing.
 
-- [ ] Fix flicker when entering inline edit mode on a split paragraph. [IN PROGRESS]
+- [ ] Harden split-paragraph inline editing UX. [OPEN]
   - Root cause: entering edit mode triggers immediate browser re-pagination.
     Browser measurer may compute fewer lines than fontkit (drift) → paragraph
     appears to collapse onto one page momentarily, then server pagination
@@ -537,8 +566,10 @@ These items address UX issues discovered during real document editing.
   - Fix 4 (done): continuation fragments use `fullText.slice(continuationCharStart)`
     as textarea value and adjust `initialCaretIndex` to be relative to the slice.
     Live text overlay disabled for continuation fragments.
-  - Status: improved but NOT fully resolved — caret positioning and edit UX on
-    continuation fragments still needs further testing and refinement.
+  - Current status: improved but not fully closed. Later inline-edit undo/layout
+    work stabilized normal paragraph edit/undo behavior, but continuation-fragment
+    caret positioning and split-fragment editing still need focused browser
+    validation before this item should be marked complete.
 
 - [x] Change default `allowBreak` to `true` for table rows.
   - Single-row groups (no rowspan) will split at line boundaries by default
@@ -558,3 +589,16 @@ These items address UX issues discovered during real document editing.
     `findParagraphFragment` already locates their paginated paragraph fragments.
   - Slight Y-position drift remains acceptable until server pagination settles —
     same trade-off as body paragraph local reflow.
+
+- [x] Make table cells directly editable from the canvas before cross-page table work.
+  - Single-clicking text inside a table cell selects the parent `table-cell`
+    instead of the inner paragraph, so the cell property panel is reachable from
+    the document canvas.
+  - Double-clicking a table cell opens inline editing for the first paragraph in
+    that cell.
+  - The table-cell property panel exposes text editing, padding, background,
+    vertical alignment, row insertion/deletion, and column insertion/deletion.
+  - The table property panel exposes `headerRowCount`; the row property panel
+    exposes `allowBreak`.
+  - Browser-checked selecting a cell, editing cell text, inserting a column, and
+    deleting a column without layout errors.

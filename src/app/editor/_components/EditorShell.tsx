@@ -138,7 +138,7 @@ type EditorAction =
   | { type: "REDO" }
   | { type: "TABLE_ADD_ROW"; tableId: string; afterIndex?: number }
   | { type: "TABLE_REMOVE_ROW"; tableId: string; rowIndex: number }
-  | { type: "TABLE_ADD_COL"; tableId: string }
+  | { type: "TABLE_ADD_COL"; tableId: string; afterIndex?: number }
   | { type: "TABLE_REMOVE_COL"; tableId: string; colIndex: number }
   | { type: "LOAD_DOCUMENT"; doc: DocumentNode; paginated?: PaginatedDocument }
   | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number }
@@ -298,7 +298,7 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     case "TABLE_REMOVE_ROW":
       return pushDoc(state, removeTableRow(state.doc, action.tableId, action.rowIndex))
     case "TABLE_ADD_COL":
-      return pushDoc(state, addTableColumn(state.doc, action.tableId))
+      return pushDoc(state, addTableColumn(state.doc, action.tableId, action.afterIndex))
     case "TABLE_REMOVE_COL":
       return pushDoc(state, removeTableColumn(state.doc, action.tableId, action.colIndex))
     case "RESIZE_COLUMNS": {
@@ -1564,7 +1564,7 @@ export default function EditorShell() {
                 tableOps={{
                   addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
                   removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
-                  addCol: (tableId) => dispatch({ type: "TABLE_ADD_COL", tableId }),
+                  addCol: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_COL", tableId, afterIndex }),
                   removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
                 }}
               />

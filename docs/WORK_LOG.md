@@ -2,6 +2,9 @@
 
 This document tracks completed work on FlowDocEditor so future sessions can quickly see what changed, what was verified, and what remains open.
 
+For the expected collaborator/session workflow, including when to update this
+file, see `docs/AGENT_WORKFLOW.md`.
+
 ## Log Format
 
 Each entry should include:
@@ -16,6 +19,317 @@ Each entry should include:
 ---
 
 ## 2026-05-10
+
+### Add P1 Verification And Fixture Docs
+
+Goal: Add the next layer of practical documentation so browser checks, export
+renderer expectations, and fixture ownership are easy to find before returning
+to table/cross-page implementation work.
+
+Completed:
+
+- Added `docs/BROWSER_SMOKE_CHECKLIST.md` with focused manual/browser check
+  steps for load/status, paragraph inline edit, split continuation edit, table
+  cell selection, table operations, and export/status feedback.
+- Added `docs/EXPORT_RENDERER_CONTRACT.md` covering the API export boundary,
+  renderer non-responsibilities, PDF authority, DOCX exchange limitations, font
+  fallback behavior, required product behaviors, and verification expectations.
+- Added `docs/FIXTURE_CATALOG.md` mapping product fixtures and current core/app
+  test files to the behaviors they protect, including known coverage gaps.
+- Linked the new P1 docs from the docs index, test strategy, agent workflow,
+  product direction, architecture overview, editor UX contract, engineering
+  principles, product scenarios, layout spec, and layout checklist.
+
+Files changed:
+
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/DOCS_INDEX.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/PRODUCT_DIRECTION.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation recheck.
+- `git diff --check`
+- Doc reference check: all explicit `docs/...md` references resolve to existing
+  files.
+
+### Add P0 Documentation Map And Editor Architecture Contracts
+
+Goal: Add the highest-priority documentation that makes the repo easier to
+orient: a docs map, an architecture overview, and an editor UX contract.
+
+Completed:
+
+- Added `docs/DOCS_INDEX.md` as the documentation entry point with source of
+  truth mapping, task-based reading paths, work log policy, and conflict
+  resolution order.
+- Added `docs/ARCHITECTURE_OVERVIEW.md` describing the current app/core/API/
+  pagination/renderer layers, runtime flows, editor state ownership, and
+  high-risk boundaries.
+- Added `docs/EDITOR_UX_CONTRACT.md` defining editor interaction expectations
+  for selection, inline editing, undo/redo, table editing, preview reconciliation,
+  status feedback, browser smoke checks, and accepted limitations.
+- Linked the new P0 docs from product direction, agent workflow, engineering
+  principles, layout spec, layout checklist, and test strategy.
+
+Files changed:
+
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/DOCS_INDEX.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/PRODUCT_DIRECTION.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation recheck.
+- `git diff --check`
+- Doc reference check: all explicit `docs/...md` references resolve to existing
+  files.
+
+### Recheck Docs Against Current Repo State
+
+Goal: Make the current documentation match the repository's actual behavior,
+test counts, and newly added direction/workflow contracts before adding more
+future roadmap content.
+
+Completed:
+
+- Rechecked all files under `docs/` and separated current-status docs from
+  historical `WORK_LOG.md` entries so older test counts remain historical rather
+  than being rewritten.
+- Updated `docs/LAYOUT_ENGINE_SPEC.md` to remove stale open questions for
+  decisions already made: paragraph fragment identity, widow/orphan behavior,
+  and basic table-cell continuation.
+- Updated `docs/LAYOUT_ENGINE_SPEC.md` to describe current paragraph fragment
+  metadata (`fragmentIndex`, `lineStart`, `lineEnd`, `continuesFrom`,
+  `isContinued`) and current keep-rule status.
+- Updated `docs/TEXT_REFLOW_PLAN.md` so UTF-16 offsets and acceptable temporary
+  browser/server drift are recorded as resolved instead of open questions.
+- Linked text docs to the current product direction and test strategy.
+- Updated `docs/TEST_STRATEGY.md` with the current verified suite size:
+  19 core test files / 274 core tests and 2 app test files / 21 app tests.
+- Reworded the split-paragraph inline editing item in
+  `docs/LAYOUT_ENGINE_CHECKLIST.md` from active "IN PROGRESS" to open
+  hardening work, with current status focused on continuation-fragment UX.
+- Verified all explicit `docs/...md` references point to existing files.
+
+Files changed:
+
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/TEXT_REFLOW_PLAN.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+- Doc reference check: all explicit `docs/...md` references resolve to existing
+  files.
+
+### Add Test Strategy And QA Playbook
+
+Goal: Make test expectations explicit so future work can choose the right
+verification level instead of guessing between unit tests, fixtures, browser
+checks, and product scenarios.
+
+Completed:
+
+- Added `docs/TEST_STRATEGY.md` covering schema/operation tests, pagination
+  fixtures, renderer smoke tests, app-level unit tests, browser smoke checks,
+  product scenario fixtures, risk-based verification, Definition of Done,
+  current coverage strengths/gaps, and command reference.
+- Linked the strategy from agent workflow, engineering principles, product
+  direction, product scenarios, and layout checklist.
+- Made browser smoke checks explicit as the current guard for editor UX qualities
+  such as selection, text visibility, undo/redo intent, layout errors, flicker,
+  jumps, and unwanted scroll.
+
+Files changed:
+
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/PRODUCT_DIRECTION.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation recheck.
+- `git diff --check`
+
+### Add Agent Workflow Contract
+
+Goal: Document the collaborator role for Codex-style sessions so future work
+knows what to read first, when to update docs, how to verify changes, and when
+to write the work log.
+
+Completed:
+
+- Added `docs/AGENT_WORKFLOW.md` covering role, start-of-session orientation,
+  during-work habits, documentation responsibilities, verification bar, browser
+  checks, work log shape, commit policy, and end-of-task expectations.
+- Linked the workflow from work log, engineering principles, product direction,
+  and layout checklist.
+- Made the rule explicit that meaningful behavior/layout/editor/export/test/doc
+  work should leave a work log entry, while tiny mechanical changes may skip it.
+
+Files changed:
+
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/PRODUCT_DIRECTION.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation recheck.
+- `git diff --check`
+
+### Add Product Direction North Star
+
+Goal: Document that FlowDocEditor is intended to grow from document generation
+into a workflow-ready editor, so future implementation choices do not optimize
+only for export.
+
+Completed:
+
+- Added `docs/PRODUCT_DIRECTION.md` with the product north star, current product
+  shape, accepted limitations, long-term non-goals, decision bias, and links to
+  the supporting docs.
+- Linked the product direction from product scenarios, engineering principles,
+  layout engine spec, and layout checklist.
+- Made the editor-quality bar explicit: interaction stability, predictable
+  selection, trustworthy undo/redo, stable table operations, documented
+  page-break behavior, and authoritative PDF output.
+
+Files changed:
+
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/PRODUCT_DIRECTION.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation recheck.
+- `git diff --check`
+
+### Recheck Table Docs Before Cross-Page Work
+
+Goal: Bring documentation back in sync after table editing work grew beyond the
+existing checklist.
+
+Completed:
+
+- Added a dedicated table editing contract covering table ownership, authored
+  model rules, editor selection behavior, editable props, row/column operation
+  rules, pagination-related props, verification expectations, and deferred work.
+- Linked the new contract from the layout engine spec, cross-page behavior
+  contract, layout checklist, product scenarios, and engineering principles.
+- Updated the layout checklist to include column width preservation after
+  insert/delete operations and to reflect the current 35 table pagination tests.
+- Updated product scenarios so customs-style fixed tables require stable column
+  insert/delete width behavior and direct table-cell editing from the canvas.
+- Updated engineering principles to treat table column insert/delete as
+  structure-preserving operations, not implicit table resize actions.
+
+Files changed:
+
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation recheck against the current table editor/code changes.
+- `git diff --check`
+
+Notes / follow-ups:
+
+- Next cross-page table work should update both
+  `docs/CROSS_PAGE_BEHAVIOR.md` and `docs/TABLE_EDITING_CONTRACT.md` whenever
+  pagination or authoring behavior changes.
+
+### Make Table Editing Usable From Canvas
+
+Goal: Improve the first table editing slice before starting cross-page table
+pagination work.
+
+Completed:
+
+- Made table cells selectable from the canvas even when the click lands on the
+  paragraph fragment rendered inside the cell.
+- Kept normal body paragraph click-to-edit behavior, while table cell
+  paragraphs now select the parent cell on single click.
+- Added table-cell double-click support that opens inline edit on the first
+  paragraph inside the cell.
+- Expanded the table-cell property panel with text editing, padding,
+  background, vertical alignment, row insertion, column insertion, column
+  deletion, and row deletion controls.
+- Added table-level header row count editing and row-level page-break toggling
+  to expose pagination-related table settings before implementing page splits.
+- Changed column insertion to split the target column width, and column
+  deletion to transfer the removed width to a neighbor, so table operations keep
+  the overall table width stable.
+- Added regression coverage for add/remove column width preservation.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/PropertyPanel.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd test`
+- Browser verification on `http://localhost:4000/editor`:
+  - Selected a table cell directly from the canvas and confirmed the
+    `TABLE-CELL` panel appears instead of the paragraph panel.
+  - Edited table cell text through the cell panel.
+  - Inserted a column to the right and confirmed the table outline updated.
+  - Deleted a column and confirmed the table returned to the previous column
+    count.
+  - Confirmed no layout error appeared during the flow.
+
+Notes / follow-ups:
+
+- Next table work should focus on cross-page behavior: single paragraph cells,
+  row break policy, repeated header rows, and split rendering/export parity.
 
 ### Make Inline Edit Undo Transactional
 

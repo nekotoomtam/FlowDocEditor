@@ -16,6 +16,26 @@ language.
 - Authored document data must stay layout-free. Page assignment, fragment
   geometry, line positions, and continuation metadata belong to paginated output.
 
+Table authoring, cell selection, and row/column operation rules are documented in
+`docs/TABLE_EDITING_CONTRACT.md`. Cross-page table work should preserve that
+contract while changing pagination behavior.
+
+## Table Authoring Preconditions For Cross-Page Work
+
+Before changing table page-boundary behavior, these authored-table rules should
+remain true:
+
+- Table row and column operations preserve `assertDocument` and
+  `assertPaginatedDocument`.
+- Adding a column preserves total table width by splitting a target or nearest
+  column width.
+- Removing a column preserves total table width by transferring the removed width
+  to a neighboring column.
+- `headerRowCount` and `allowBreak` are authored properties, not renderer-only
+  switches.
+- Editor selection may select a `table-cell` from rendered cell text, but
+  pagination still receives the same authored table model.
+
 ## Current Behavior Matrix
 
 | Structure | Current page-boundary behavior | Tests |

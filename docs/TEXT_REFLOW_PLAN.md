@@ -4,6 +4,9 @@ This note captures the intended direction for paragraph editing, resizing, and
 line reflow. The goal is to make interactive editing feel close to the shared
 layout engine without turning `DocumentNode` into a render cache.
 
+Current implementation status is tracked in `docs/TEXT_ENGINE_CHECKLIST.md`.
+Project-wide test level guidance lives in `docs/TEST_STRATEGY.md`.
+
 ## Core Rule
 
 `DocumentNode` stores authored content only. It must not store computed line
@@ -78,7 +81,12 @@ Expected future uses:
 
 - How should inline `fieldRef` map into segment offsets when it resolves to
   display text but remains a template placeholder?
-- Should segment offsets be UTF-16 indices, Unicode code points, or grapheme
-  indices?
-- How much browser-side preview drift is acceptable while waiting for
-  authoritative pagination?
+
+Resolved:
+
+- Segment offsets use UTF-16 indices to match textarea selection APIs. Grapheme
+  snapping happens at the caret layer.
+- Browser-side preview drift is acceptable only as measurable temporary
+  interaction drift. Current observed drift is zero for normal content and
+  limited to grapheme fallback / exact-boundary cases; authoritative
+  server/export pagination remains the final layout truth.

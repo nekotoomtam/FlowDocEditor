@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react"
 import type { PaginatedDocument, PageFragment, PaginatedLine, PaginatedPage, ParagraphRenderProps } from "@/pagination"
-import type { DocumentNode } from "@/schema"
+import type { DocumentNode, TableCellNode, TableNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
@@ -19,6 +19,7 @@ const NODE_COLORS: Record<string, string> = {
   stack:     "#e9d5ff",
   body:      "#bbf7d0",
   table:     "#fde68a",
+  "table-cell": "#fef3c7",
   toc:       "#d1fae5",
 }
 
@@ -93,6 +94,32 @@ function caretIndexFromPointer(
   const lineOffset = Math.round(ratio * line.text.length)
   const previousChars = lines.slice(0, lineIndex).reduce((sum, previousLine) => sum + previousLine.text.length, 0)
   return previousChars + lineOffset
+}
+
+function findFirstParagraphInCell(doc: DocumentNode, cellId: string): string | null {
+  for (const section of doc.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      if (node.type !== "table") continue
+      const table = node as unknown as TableNode
+      const cell = table.nodes[cellId] as TableCellNode | undefined
+      if (cell?.type !== "table-cell") continue
+      const paragraphId = cell.childIds.find((id) => table.nodes[id]?.type === "paragraph")
+      if (paragraphId) return paragraphId
+    }
+  }
+  return null
+}
+
+function isTableCellId(doc: DocumentNode, nodeId: string | null | undefined): boolean {
+  if (!nodeId) return false
+  for (const section of doc.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      if (node.type !== "table") continue
+      const table = node as unknown as TableNode
+      if (table.nodes[nodeId]?.type === "table-cell") return true
+    }
+  }
+  return false
 }
 
 // ─── Drop Highlight ───────────────────────────────────────────────────────────
@@ -180,7 +207,7 @@ function PageView({
   const W = page.width * scale
   const H = page.height * scale
   const hoverNodeId = drag?.preview?.hoverNodeId ?? null
-  const SELECTABLE = new Set(["paragraph", "spacer", "row", "table", "toc"])
+  const SELECTABLE = new Set(["paragraph", "spacer", "row", "table", "table-cell", "toc"])
   const editFragmentRef = useRef<{ nodeId: string; pageKey: string; fragment: PageFragment } | null>(null)
 
   useEffect(() => {
@@ -283,6 +310,7 @@ function PageView({
         const isSelectable = SELECTABLE.has(f.nodeType)
         const selectNodeId = f.nodeId
         const isSelected = f.nodeId === selectedNodeId
+        const isTableCellParagraph = f.nodeType === "paragraph" && isTableCellId(doc, f.parentNodeId)
         // For split paragraphs: only the fragment on the clicked page enters edit mode.
         // Without the pageIndex check, ALL fragments of the paragraph get isInlineEditing=true,
         // disabling pointer events and rendering textareas on every page the paragraph spans.
@@ -329,7 +357,7 @@ function PageView({
             onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
-                const clickAction = f.nodeType === "paragraph"
+                const clickAction = f.nodeType === "paragraph" && !isTableCellParagraph
                   ? {
                       type: "inline-edit" as const,
                       nodeId: f.nodeId,
@@ -337,11 +365,17 @@ function PageView({
                       pageIndex: f.pageIndex,
                     }
                   : undefined
-                onNodePointerDown({ source: "document", nodeId: selectNodeId }, e, clickAction)
+                const nodeId = isTableCellParagraph && f.parentNodeId ? f.parentNodeId : selectNodeId
+                onNodePointerDown({ source: "document", nodeId }, e, clickAction)
               }
               : undefined}
-            onDoubleClick={f.nodeType === "paragraph" && !drag
-              ? (e) => { e.stopPropagation(); onInlineEditStart(f.nodeId, caretIndexFromPointer(f, e, scale), f.pageIndex) }
+            onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "table-cell") && !drag
+              ? (e) => {
+                e.stopPropagation()
+                const paragraphId = f.nodeType === "table-cell" ? findFirstParagraphInCell(doc, f.nodeId) : f.nodeId
+                if (!paragraphId) return
+                onInlineEditStart(paragraphId, f.nodeType === "paragraph" ? caretIndexFromPointer(f, e, scale) : null, f.pageIndex)
+              }
               : undefined}
             style={{ cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default" }}
           >

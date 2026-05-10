@@ -7,6 +7,22 @@ feature can be implemented in more than one way.
 The goal is not to make perfect rules. The goal is to keep the project from
 quietly turning into several incompatible document engines.
 
+For the product-level direction behind these principles, see
+`docs/PRODUCT_DIRECTION.md`.
+
+For the system overview, see `docs/ARCHITECTURE_OVERVIEW.md`.
+
+For editor interaction expectations, see `docs/EDITOR_UX_CONTRACT.md`.
+
+For the expected Codex/session workflow around reading docs, updating work logs,
+verification, and commits, see `docs/AGENT_WORKFLOW.md`.
+
+For the project-wide test and QA strategy, see `docs/TEST_STRATEGY.md`.
+
+For browser smoke steps, export renderer rules, and fixture ownership, see
+`docs/BROWSER_SMOKE_CHECKLIST.md`, `docs/EXPORT_RENDERER_CONTRACT.md`, and
+`docs/FIXTURE_CATALOG.md`.
+
 ## 1. Core Is The Source Of Truth
 
 `packages/core` owns document semantics.
@@ -182,6 +198,7 @@ Avoid:
 
 PDF, DOCX, and editor preview should consume layout output. They should not own
 document layout rules.
+The detailed API/export contract lives in `docs/EXPORT_RENDERER_CONTRACT.md`.
 
 Do:
 
@@ -217,18 +234,25 @@ Avoid:
 ## 11. Tables Have Their Own Law
 
 Tables are not just nested rows and stacks. They have grid invariants.
+Detailed authoring and editor operation rules live in
+`docs/TABLE_EDITING_CONTRACT.md`.
 
 Do:
 
 - validate colspan and rowspan against table columns/rows
 - keep table internals inside table nodes
 - update cells, rows, columns, and child content together
+- preserve total table width when adding or removing columns unless the user is
+  performing an explicit resize action
+- expose table-cell editing through authored props and core operations, not
+  ad-hoc UI patches
 - test table operations with spans and page breaks
 
 Avoid:
 
 - using array index as column position when colspan exists
 - deleting rows/columns without considering rowspan/colspan
+- making column insert/delete silently resize a fixed form
 - allowing table mutations that assert will reject later
 
 ## 12. Add Features In Stable Slices
@@ -253,6 +277,11 @@ Avoid:
 
 Layout bugs are often visual and easy to miss. Tests and fixtures should protect
 the engine as it grows.
+
+Use `docs/TEST_STRATEGY.md` to choose the right verification level for each
+change.
+Use `docs/FIXTURE_CATALOG.md` to find existing fixture ownership before adding a
+new case.
 
 Required soon:
 

@@ -4,6 +4,9 @@ This checklist tracks the current text engine foundation, near-term work, and
 future directions. It should stay focused on shared core behavior, not
 editor-only shortcuts.
 
+For the product-level direction, see `docs/PRODUCT_DIRECTION.md`. For test and
+QA level guidance, see `docs/TEST_STRATEGY.md`.
+
 ## Already In Place
 
 - [x] Shared `TextMeasurer` contract.

@@ -353,6 +353,11 @@ function updateTableInSection(
   return doc
 }
 
+function unitWidthToPt(width: { value: number; unit: "pt" | "mm" } | undefined): number {
+  if (!width) return 0
+  return width.unit === "mm" ? width.value * 72 / 25.4 : width.value
+}
+
 function insertInlineField(
   doc: DocumentNode,
   paragraphId: string,
@@ -619,12 +624,17 @@ export function addTableColumn(doc: DocumentNode, tableId: string, afterColIndex
     const insertAt = afterColIndex != null
       ? Math.min(Math.max(0, afterColIndex + 1), table.columns.length)
       : table.columns.length
+    const splitIndex = afterColIndex != null
+      ? Math.min(Math.max(0, afterColIndex), table.columns.length - 1)
+      : table.columns.length - 1
+    const splitWidth = Math.max(24, unitWidthToPt(table.columns[splitIndex]?.width) || 150)
+    const insertedWidth = Math.max(24, splitWidth / 2)
+    const remainingWidth = Math.max(24, splitWidth - insertedWidth)
 
-    const newColumns = [
-      ...table.columns.slice(0, insertAt),
-      { width: pt(150) },
-      ...table.columns.slice(insertAt),
-    ]
+    const newColumns = table.columns.map((column, index) =>
+      index === splitIndex ? { ...column, width: pt(remainingWidth) } : column,
+    )
+    newColumns.splice(insertAt, 0, { width: pt(insertedWidth) })
 
     const internalNodes = { ...table.nodes }
 
@@ -659,6 +669,7 @@ export function removeTableColumn(doc: DocumentNode, tableId: string, colIndex: 
   return updateTableInSection(doc, tableId, (table) => {
     if (table.columns.length <= 1) return table
     const internalNodes = { ...table.nodes }
+    const removedWidth = unitWidthToPt(table.columns[colIndex]?.width)
 
     table.rowIds.forEach((rowId) => {
       const row = internalNodes[rowId] as TableRowNode | undefined
@@ -694,7 +705,14 @@ export function removeTableColumn(doc: DocumentNode, tableId: string, colIndex: 
       }
     })
 
-    return { ...table, columns: table.columns.filter((_, i) => i !== colIndex), nodes: internalNodes }
+    const columns = table.columns.filter((_, i) => i !== colIndex)
+    if (columns.length > 0 && removedWidth > 0) {
+      const absorbIndex = Math.min(Math.max(0, colIndex - 1), columns.length - 1)
+      const absorbWidth = unitWidthToPt(columns[absorbIndex]?.width)
+      columns[absorbIndex] = { ...columns[absorbIndex], width: pt(absorbWidth + removedWidth) }
+    }
+
+    return { ...table, columns, nodes: internalNodes }
   })
 }
 

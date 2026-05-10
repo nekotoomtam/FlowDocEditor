@@ -6,7 +6,7 @@ type DocNode = LayoutNode | TableRowNode | TableCellNode
 interface TableOps {
   addRow: (tableId: string, afterIndex?: number) => void
   removeRow: (tableId: string, rowIndex: number) => void
-  addCol: (tableId: string) => void
+  addCol: (tableId: string, afterIndex?: number) => void
   removeCol: (tableId: string, colIndex: number) => void
 }
 
@@ -240,9 +240,20 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
         {node.type === "table" && (() => {
           const rows = node.rowIds.length
           const cols = node.columns.length
+          const headerRowCount = node.props.headerRowCount ?? 0
           return (
             <>
               <div style={{ fontSize: 11, color: "#6b7280" }}>{rows} rows × {cols} cols</div>
+              <div>
+                <label style={label}>Header rows</label>
+                <input type="number" min={0} max={rows}
+                  value={headerRowCount}
+                  onChange={(e) => {
+                    const value = Math.min(rows, Math.max(0, Number(e.target.value) || 0))
+                    onUpdateProps(selectedNodeId, { headerRowCount: value > 0 ? value : undefined })
+                  }}
+                  style={input} />
+              </div>
               <div>
                 <label style={label}>Rows</label>
                 <div style={{ display: "flex", gap: 4 }}>
@@ -301,6 +312,12 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
           return (
             <>
               <div style={{ fontSize: 11, color: "#6b7280" }}>Row {ri + 1} of {table.rowIds.length}</div>
+              <label style={{ ...label, display: "flex", alignItems: "center", gap: 6, marginBottom: 0 }}>
+                <input type="checkbox"
+                  checked={node.props.allowBreak ?? true}
+                  onChange={(e) => onUpdateProps(selectedNodeId, { allowBreak: e.target.checked })} />
+                Allow page break
+              </label>
               <div>
                 <label style={label}>Insert</label>
                 <div style={{ display: "flex", gap: 4 }}>
@@ -328,6 +345,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
           const paragraphId = cell.childIds[0]
           const paraNode = paragraphId ? findNode(doc, paragraphId) : null
           const text = paraNode?.type === "paragraph" ? getParagraphText(paraNode) : ""
+          const cols = table.columns.length
           return (
             <>
               <div style={{ fontSize: 11, color: "#6b7280" }}>Row {pos.rowIndex + 1}, Col {pos.colIndex + 1}</div>
@@ -342,6 +360,39 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
                   />
                 </div>
               )}
+              <div style={{ display: "flex", gap: 6 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>Padding</label>
+                  <input type="number" min={0}
+                    value={cell.props.padding?.value ?? 0}
+                    onChange={(e) => onUpdateProps(selectedNodeId, { padding: pt(Math.max(0, Number(e.target.value) || 0)) })}
+                    style={input} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>Background</label>
+                  <input
+                    value={cell.props.background ?? ""}
+                    placeholder="FFFFFF"
+                    maxLength={6}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6)
+                      onUpdateProps(selectedNodeId, { background: value.length === 6 ? value : undefined })
+                    }}
+                    style={input} />
+                </div>
+              </div>
+              <div>
+                <label style={label}>Vertical align</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {(["top", "middle", "bottom"] as const).map((value) => (
+                    <button key={value}
+                      onClick={() => onUpdateProps(selectedNodeId, { verticalAlign: value })}
+                      style={{ ...btn, background: (cell.props.verticalAlign ?? "top") === value ? "#dbeafe" : "#fafafa", color: (cell.props.verticalAlign ?? "top") === value ? "#1d4ed8" : "#6b7280", fontWeight: (cell.props.verticalAlign ?? "top") === value ? "bold" : "normal" }}>
+                      {value}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label style={label}>Insert row</label>
                 <div style={{ display: "flex", gap: 4 }}>
@@ -349,6 +400,18 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
                   <button style={btn} onClick={() => tableOps.addRow(tableId, pos.rowIndex)}>↓ Below</button>
                 </div>
               </div>
+              <div>
+                <label style={label}>Insert column</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button style={btn} onClick={() => tableOps.addCol(tableId, pos.colIndex - 1)}>← Left</button>
+                  <button style={btn} onClick={() => tableOps.addCol(tableId, pos.colIndex)}>Right →</button>
+                </div>
+              </div>
+              <button style={{ ...btnDanger, opacity: cols <= 1 ? 0.4 : 1 }}
+                disabled={cols <= 1}
+                onClick={() => tableOps.removeCol(tableId, pos.colIndex)}>
+                Delete column
+              </button>
               <button style={{ ...btnDanger, opacity: table.rowIds.length <= 1 ? 0.4 : 1 }}
                 disabled={table.rowIds.length <= 1}
                 onClick={() => tableOps.removeRow(tableId, pos.rowIndex)}>

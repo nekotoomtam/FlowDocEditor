@@ -543,11 +543,40 @@ describe("tablePagination — grid invariants after operations", () => {
     expect(() => assertPaginatedDocument(paginate(updated))).not.toThrow()
   })
 
+  it("addTableColumn preserves table width by splitting the target column", () => {
+    const base = normalizeDocument(makeSimpleTableDoc())
+    const before = base.document.sections[0].nodes.tbl as unknown as TableNode
+    const updated = normalizeDocument(addTableColumn(base, "tbl", 0))
+    const after = updated.document.sections[0].nodes.tbl as unknown as TableNode
+
+    const beforeWidth = before.columns.reduce((sum, column) => sum + column.width.value, 0)
+    const afterWidth = after.columns.reduce((sum, column) => sum + column.width.value, 0)
+
+    expect(after.columns).toHaveLength(4)
+    expect(afterWidth).toBe(beforeWidth)
+    expect(after.columns[0].width.value).toBe(50)
+    expect(after.columns[1].width.value).toBe(50)
+  })
+
   it("removeTableColumn produces valid document and valid paginated output", () => {
     const base = normalizeDocument(makeSimpleTableDoc())
     const updated = normalizeDocument(removeTableColumn(base, "tbl", 1))
     expect(() => assertDocument(updated)).not.toThrow()
     expect(() => assertPaginatedDocument(paginate(updated))).not.toThrow()
+  })
+
+  it("removeTableColumn preserves table width by transferring width to a neighbor", () => {
+    const base = normalizeDocument(makeSimpleTableDoc())
+    const before = base.document.sections[0].nodes.tbl as unknown as TableNode
+    const updated = normalizeDocument(removeTableColumn(base, "tbl", 1))
+    const after = updated.document.sections[0].nodes.tbl as unknown as TableNode
+
+    const beforeWidth = before.columns.reduce((sum, column) => sum + column.width.value, 0)
+    const afterWidth = after.columns.reduce((sum, column) => sum + column.width.value, 0)
+
+    expect(after.columns).toHaveLength(2)
+    expect(afterWidth).toBe(beforeWidth)
+    expect(after.columns[0].width.value).toBe(200)
   })
 
   it("table at start of page has correct y position", () => {

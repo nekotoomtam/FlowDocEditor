@@ -11,8 +11,17 @@ changes, and refactors do not quietly create a second layout engine.
 Use this document for rules, contracts, policies, and definitions. Use checklist
 documents for execution status and implementation tasks.
 
+For the product-level direction behind the engine, see
+`docs/PRODUCT_DIRECTION.md`.
+
 For the current page-boundary support matrix, overflow fallbacks, and deferred
 cross-page behavior, see `docs/CROSS_PAGE_BEHAVIOR.md`.
+
+For table authoring, editor selection, and row/column operation rules, see
+`docs/TABLE_EDITING_CONTRACT.md`.
+
+For export/API/PDF/DOCX expectations, see
+`docs/EXPORT_RENDERER_CONTRACT.md`.
 
 ## 1. Engine Invariants
 
@@ -269,6 +278,29 @@ clear repagination policy before it is treated as complete. The current TOC
 policy is two-pass pagination: pass 1 collects entries and detects overflow;
 pass 2 runs only when the generated TOC needs more height.
 
+### 3.5 Table Authoring And Operations
+
+Tables have their own authored grid law. A table operation is incomplete if it
+only changes visible UI and leaves the model in a shape that `assertDocument`
+would reject.
+
+Rules:
+
+- table rows, cells, columns, spans, and cell child content must be updated as
+  one structural unit
+- table column insertion should preserve total table width by splitting a target
+  or nearest column width
+- table column deletion should preserve total table width by transferring the
+  removed width to a neighboring column
+- adding or deleting a column is not an implicit resize of the whole table
+- editor selection may target a `table-cell` even when the pointer lands on an
+  inner paragraph fragment, but this must remain editor interaction state and
+  must not change the authored model
+- pagination-related authored props such as `headerRowCount` and `allowBreak`
+  should be edited as schema-valid props, not as renderer-only flags
+
+Detailed table editor rules live in `docs/TABLE_EDITING_CONTRACT.md`.
+
 ## 4. Pagination Rules
 
 Pagination is where document flow becomes pages. It should be deterministic,
@@ -306,7 +338,7 @@ documented overflow fallback.
 
 There are currently three distinct code paths for placing paragraph fragments:
 
-1. **Body / stack paragraph** — `paginateParagraph` runs a full split loop and
+1. **Body-level paragraph** — `paginateParagraph` runs a full split loop and
    may produce multiple fragments across any number of pages.
 2. **Stack / column paragraph** — `pushStackContents` places the paragraph as a
    single fragment within the row's allocated height. No line-level split occurs;
@@ -341,30 +373,28 @@ still kept together as a unit at this stage.
 
 Future hardening:
 
-- explicit fragment metadata
-- widow / orphan policy
 - list-item continuation policy
 - split-at-row-boundary within rowspan groups
+- explicit stable fragment ids only when future selection, annotations, comments,
+  or collaboration require an identity beyond current fragment metadata
 
 ### 4.4 Fragment Identity
 
 Split fragments need deterministic ordering and traceability.
 
-Minimum required identity:
+Current implicit identity:
 
 - source node id
-- fragment order
 - page index
+- fragment order
 
-Recommended future metadata:
+Current paragraph fragment metadata:
 
-- `sourceNodeId`
 - `fragmentIndex`
-- `pageIndex`
 - `lineStart`
 - `lineEnd`
-- `continuedFrom`
-- `continuedTo`
+- `continuesFrom`
+- `isContinued`
 
 If explicit `fragmentId` is introduced, it must be stable and deterministic. It
 should not depend on runtime object creation order.
@@ -385,11 +415,13 @@ Rules:
 
 Keep rules should be conservative because they can fight normal pagination.
 
-Potential rules:
+Current rules:
 
-- `keepWithNext`: useful for headings and short labels
-- `keepTogether`: useful for small groups, dangerous for long content
-- widow / orphan: useful for paragraph typography, but must allow impossible-case fallback
+- `keepWithNext`: implemented for paragraphs and useful for headings and short
+  labels
+- widow / orphan: implemented for body-level paragraphs with impossible-case
+  fallback
+- `keepTogether`: deferred; useful for small groups, dangerous for long content
 
 Keep rules should never create infinite pagination loops.
 
@@ -649,21 +681,40 @@ These are also regressions:
 
 These are intentionally not fully locked yet.
 
-- Should paragraph fragment identity stay implicit or become explicit?
-- What exact widow/orphan policy should be used?
 - How should list markers behave across continuation fragments?
-- How should table-cell text split inside row-splitting policy?
+- How should advanced table-cell/table span split behavior work beyond the
+  current single-row breakable policy?
 - Should TOC generation ever need more than the current two-pass overflow
   correction, or should very rare second-order TOC growth stay documented as a
   limitation?
 - Which debug traces should be persisted in test snapshots versus emitted only on demand?
 - When should browser preview become authoritative enough to remove server-settling UX?
 
+Resolved decisions that used to be open:
+
+- Paragraph fragment identity stays implicit for now (`nodeId`, page index, and
+  `fragmentIndex` / line metadata). Explicit stable `fragmentId` is deferred
+  until selection, annotation, comments, or collaboration require it.
+- Widow/orphan policy is implemented for body-level paragraphs and covered by
+  fixtures.
+- Basic table-cell text continuation is implemented for breakable single-row
+  table groups through the table row split loop.
+
 ## 10. Related Documents
 
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ARCHITECTURE_OVERVIEW.md`
 - `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/DOCS_INDEX.md`
+- `docs/EDITOR_UX_CONTRACT.md`
 - `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
 - `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/PRODUCT_DIRECTION.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
 - `docs/TEXT_ENGINE_CHECKLIST.md`
 - `docs/TEXT_REFLOW_PLAN.md`
 - `docs/WORK_LOG.md`
