@@ -57,6 +57,11 @@ Users should be able to:
   paginated fragment/page containing the current caret. The caret index remains
   UTF-16 text-offset based and must not become page geometry stored in
   `DocumentNode`.
+- Enter and Backspace inside inline edit should operate on full paragraph text
+  offsets even when the active textarea is rendering only a continuation slice.
+  Backspace at the start of a continuation slice should edit across the
+  continuation boundary, not merge the paragraph unless the caret is at the true
+  start of the full paragraph.
 
 ## Undo/Redo Rules
 
@@ -147,12 +152,10 @@ The browser check does not replace core tests. It protects human-facing feel.
 - Some advanced editor behaviors are still delivered in slices.
 - Browser preview can temporarily differ from server/export pagination.
 - DOCX may reflow after opening and is not an exact editor/PDF visual match.
-- Split-fragment inline editing still needs focused hardening before it should
-  be considered complete.
 - The first live inline pagination slice improves visual continuity before blur,
   and active textarea page tracking now follows segment offsets when available.
-  Cross-fragment text selection and fully caret-perfect WYSIWYG editing remain
-  deferred.
+  Continuation-slice Enter/Backspace mapping is covered, but cross-fragment text
+  selection and fully caret-perfect WYSIWYG editing remain deferred.
 
 Accepted limitations should be documented and should not become invisible
 regressions.

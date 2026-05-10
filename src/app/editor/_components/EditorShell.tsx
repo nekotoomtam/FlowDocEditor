@@ -146,9 +146,9 @@ type EditorAction =
   | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
   | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
-  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number }
+  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; history?: HistoryEntry }
   | { type: "CLEAR_SPLIT_NODE_ID" }
-  | { type: "MERGE_PARAGRAPH"; nodeId: string }
+  | { type: "MERGE_PARAGRAPH"; nodeId: string; history?: HistoryEntry }
   | { type: "CLEAR_MERGE_RESULT" }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
@@ -185,7 +185,7 @@ function getRowFragmentHeight(paginated: PaginatedDocument, rowId: string): numb
 
 const MAX_HISTORY = 50
 
-function pushDoc(state: EditorState, newDoc: DocumentNode): EditorState {
+function pushDoc(state: EditorState, newDoc: DocumentNode, history?: HistoryEntry): EditorState {
   const normalizedDoc = normalizeDocument(newDoc)
   try {
     assertDocument(normalizedDoc)
@@ -195,7 +195,7 @@ function pushDoc(state: EditorState, newDoc: DocumentNode): EditorState {
   }
   return {
     ...state,
-    past: [...state.past.slice(-(MAX_HISTORY - 1)), { doc: state.doc, paginated: state.paginated }],
+    past: [...state.past.slice(-(MAX_HISTORY - 1)), history ?? { doc: state.doc, paginated: state.paginated }],
     doc: normalizedDoc,
     future: [],
   }
@@ -315,7 +315,7 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     case "SPLIT_PARAGRAPH": {
       const result = splitParagraphAtIndex(state.doc, action.nodeId, action.splitIndex)
       if (!result.newNodeId) return state
-      return { ...pushDoc(state, result.doc), lastSplitNodeId: result.newNodeId }
+      return { ...pushDoc(state, result.doc, action.history), lastSplitNodeId: result.newNodeId }
     }
     case "CLEAR_SPLIT_NODE_ID":
       return { ...state, lastSplitNodeId: null }
@@ -323,7 +323,7 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       const result = mergeParagraphWithPrevious(state.doc, action.nodeId)
       if (!result) return state
       return {
-        ...pushDoc(state, result.doc),
+        ...pushDoc(state, result.doc, action.history),
         mergeResult: { prevNodeId: result.prevNodeId, caretIndex: result.caretIndex },
       }
     }
@@ -635,6 +635,16 @@ export default function EditorShell() {
 
   const handleInlineEditEnd = finalizeInlineEditBeforeAction
 
+  const consumeInlineEditHistory = useCallback((nodeId: string): HistoryEntry | undefined => {
+    const transaction = inlineEditTransactionRef.current
+    if (!transaction || transaction.nodeId !== nodeId) return undefined
+    inlineEditTransactionRef.current = null
+    return {
+      doc: transaction.beforeDoc,
+      paginated: transaction.beforePaginated,
+    }
+  }, [])
+
   // ─── Auto-save ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
@@ -823,30 +833,48 @@ export default function EditorShell() {
   }, [zoomByWheel])
 
   const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number) => {
-    dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex })
-  }, [])
+    const history = consumeInlineEditHistory(nodeId)
+    dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex, history })
+  }, [consumeInlineEditHistory])
 
   const handleMergeParagraph = useCallback((nodeId: string) => {
-    dispatch({ type: "MERGE_PARAGRAPH", nodeId })
-  }, [])
+    const history = consumeInlineEditHistory(nodeId)
+    dispatch({ type: "MERGE_PARAGRAPH", nodeId, history })
+  }, [consumeInlineEditHistory])
 
   // Focus the new paragraph after a split
   useEffect(() => {
     if (!state.lastSplitNodeId) return
-    setInlineEditNodeId(state.lastSplitNodeId)
+    const nodeId = state.lastSplitNodeId
+    const beforeDoc = docRef.current
+    inlineEditTransactionRef.current = {
+      nodeId,
+      beforeDoc,
+      beforePaginated: paginatePreviewDoc(beforeDoc),
+      beforeText: getParagraphTextFromDoc(beforeDoc, nodeId) ?? "",
+    }
+    setInlineEditNodeId(nodeId)
     setInlineEditCaretIndex(0)
     setInlineEditPageIndex(null)
     dispatch({ type: "CLEAR_SPLIT_NODE_ID" })
-  }, [state.lastSplitNodeId])
+  }, [paginatePreviewDoc, state.lastSplitNodeId])
 
   // Focus the previous paragraph after a merge, caret at join point
   useEffect(() => {
     if (!state.mergeResult) return
-    setInlineEditNodeId(state.mergeResult.prevNodeId)
+    const nodeId = state.mergeResult.prevNodeId
+    const beforeDoc = docRef.current
+    inlineEditTransactionRef.current = {
+      nodeId,
+      beforeDoc,
+      beforePaginated: paginatePreviewDoc(beforeDoc),
+      beforeText: getParagraphTextFromDoc(beforeDoc, nodeId) ?? "",
+    }
+    setInlineEditNodeId(nodeId)
     setInlineEditCaretIndex(state.mergeResult.caretIndex)
     setInlineEditPageIndex(null)
     dispatch({ type: "CLEAR_MERGE_RESULT" })
-  }, [state.mergeResult])
+  }, [paginatePreviewDoc, state.mergeResult])
 
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)

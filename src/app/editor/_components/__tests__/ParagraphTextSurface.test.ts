@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { getContinuationEditState } from "../ParagraphTextSurface"
+import {
+  absoluteInlineEditIndex,
+  buildContinuationBackspaceInput,
+  buildSplitEditInput,
+  getContinuationEditState,
+} from "../ParagraphTextSurface"
 import type { PageFragment } from "@/pagination"
 
 function makeFragment(overrides: Partial<PageFragment> = {}): PageFragment {
@@ -90,5 +95,46 @@ describe("ParagraphTextSurface continuation editing", () => {
     expect(state.preText).toBe("")
     expect(state.editText).toBe("Hello world")
     expect(state.adjustedInitialCaret).toBe(4)
+  })
+
+  it("maps continuation textarea caret positions to absolute paragraph offsets", () => {
+    expect(absoluteInlineEditIndex("Hello ", 2, 5)).toBe(8)
+    expect(absoluteInlineEditIndex("Hello ", null, 5)).toBe(11)
+  })
+
+  it("splits continuation edit text at the absolute caret offset", () => {
+    const input = buildSplitEditInput("Hello ", "wide world", 4, 4)
+
+    expect(input.text).toBe("Hello wide world")
+    expect(input.splitIndex).toBe("Hello wide".length)
+  })
+
+  it("deletes selected local text before splitting a continuation edit", () => {
+    const input = buildSplitEditInput("Hello ", "wide world", 4, 10)
+
+    expect(input.text).toBe("Hello wide")
+    expect(input.splitIndex).toBe("Hello wide".length)
+  })
+
+  it("backspaces across a continuation boundary without merging paragraphs", () => {
+    const input = buildContinuationBackspaceInput("Hello ", "world")
+
+    expect(input).toEqual({
+      text: "Helloworld",
+      caretIndex: "Hello".length,
+    })
+  })
+
+  it("backspaces whole graphemes across a continuation boundary", () => {
+    const input = buildContinuationBackspaceInput("Aก้", "B")
+
+    expect(input).toEqual({
+      text: "AB",
+      caretIndex: 1,
+    })
+  })
+
+  it("leaves first-fragment start backspace for paragraph merge handling", () => {
+    expect(buildContinuationBackspaceInput("", "Hello")).toBeNull()
   })
 })

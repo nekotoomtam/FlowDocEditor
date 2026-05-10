@@ -102,6 +102,11 @@ metadata.
 - For caret-following changes, type across a fragment boundary and backspace
   back across it; confirm the active textarea follows the caret page when
   segment offsets are available.
+- For continuation key handling changes, press Enter inside a continuation
+  fragment and confirm the split happens at the intended full-paragraph offset.
+- Backspace at the start of a continuation fragment should delete across the
+  continuation boundary; Backspace at the true start of a paragraph should merge
+  with the previous paragraph when one exists.
 - Exit edit and confirm the document settles without duplicate or missing text.
 
 This is a targeted hardening check, not required for every ordinary paragraph

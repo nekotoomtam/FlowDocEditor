@@ -20,6 +20,50 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Harden Continuation Fragment Inline Editing Phase 3
+
+Goal: Make Enter/Backspace inside split paragraph inline editing use the full
+paragraph text offset, even when the active textarea only renders a continuation
+slice.
+
+Completed:
+
+- Added inline edit helpers for absolute caret mapping, split text generation,
+  and continuation-boundary Backspace behavior.
+- Wired paragraph inline `Enter` to split at the absolute paragraph offset,
+  deleting any selected local text before splitting.
+- Wired `Backspace` at the start of a continuation slice to delete the previous
+  grapheme across the continuation boundary instead of incorrectly merging the
+  paragraph.
+- Kept `Backspace` at the true start of the full paragraph mapped to
+  `mergeParagraphWithPrevious()`.
+- Preserved inline edit history snapshots across split/merge dispatches so the
+  previous edit transaction does not linger after structural paragraph actions.
+- Started a fresh inline edit transaction after split/merge focus moves to the
+  new or previous paragraph.
+- Updated editor UX and browser smoke docs with the continuation key handling
+  contract.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+
+Notes:
+
+- Cross-fragment text selection and fully caret-perfect visual editing remain
+  deferred polish. This phase focuses on correct full-text offset mapping and
+  avoiding wrong paragraph merges from continuation slices.
+
 ### Add Inline Edit Caret Page Tracking Phase 2
 
 Goal: Move the active inline edit surface to the paginated fragment containing

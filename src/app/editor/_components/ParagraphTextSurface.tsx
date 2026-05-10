@@ -25,6 +25,11 @@ export interface ContinuationEditState {
   adjustedInitialCaret: number | null
 }
 
+interface SplitEditInput {
+  text: string
+  splitIndex: number
+}
+
 const EDIT_CHROME_X = 3
 const EDIT_CHROME_Y = 3
 
@@ -67,6 +72,55 @@ export function getContinuationEditState(
     : initialCaretIndex
 
   return { continuationCharStart, editText, preText, adjustedInitialCaret }
+}
+
+export function absoluteInlineEditIndex(preText: string, localIndex: number | null | undefined, fallback: number): number {
+  return preText.length + Math.max(0, localIndex ?? fallback)
+}
+
+export function buildSplitEditInput(
+  preText: string,
+  editText: string,
+  selectionStart: number,
+  selectionEnd: number,
+): SplitEditInput {
+  const start = Math.max(0, Math.min(selectionStart, editText.length))
+  const end = Math.max(start, Math.min(selectionEnd, editText.length))
+  const nextEditText = editText.slice(0, start) + editText.slice(end)
+  return {
+    text: preText + nextEditText,
+    splitIndex: preText.length + start,
+  }
+}
+
+function previousGraphemeBoundary(text: string, index: number): number {
+  const safeIndex = Math.max(0, Math.min(index, text.length))
+  if (safeIndex === 0) return 0
+
+  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+    const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "grapheme" })
+    let offset = 0
+    for (const part of segmenter.segment(text)) {
+      const nextOffset = offset + part.segment.length
+      if (nextOffset >= safeIndex) return offset
+      offset = nextOffset
+    }
+    return offset
+  }
+
+  return safeIndex - 1
+}
+
+export function buildContinuationBackspaceInput(
+  preText: string,
+  editText: string,
+): { text: string; caretIndex: number } | null {
+  if (preText.length === 0) return null
+  const deleteFrom = previousGraphemeBoundary(preText, preText.length)
+  return {
+    text: preText.slice(0, deleteFrom) + editText,
+    caretIndex: deleteFrom,
+  }
 }
 
 function textAnchorForAlign(align: ParagraphRenderProps["align"] | undefined): "start" | "middle" | "end" {
@@ -324,7 +378,7 @@ export function ParagraphTextSurface({
             }}
             onInput={(event) => {
               const el = event.currentTarget
-              const caretIndex = preText.length + (el.selectionStart ?? el.value.length)
+              const caretIndex = absoluteInlineEditIndex(preText, el.selectionStart, el.value.length)
               syncTextareaHeight(el)
               onChange(fragment.nodeId, preText + el.value, caretIndex)
             }}
@@ -334,9 +388,39 @@ export function ParagraphTextSurface({
             onBlur={onEndEdit}
             onKeyDown={(event) => {
               event.stopPropagation()
+              if (event.nativeEvent.isComposing) return
               if (event.key === "Escape") {
                 event.preventDefault()
                 onEndEdit()
+                return
+              }
+
+              if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+                event.preventDefault()
+                const el = event.currentTarget
+                const selectionStart = el.selectionStart ?? el.value.length
+                const selectionEnd = el.selectionEnd ?? selectionStart
+                const input = buildSplitEditInput(preText, el.value, selectionStart, selectionEnd)
+                onChange(fragment.nodeId, input.text, input.splitIndex)
+                onSplitParagraph(fragment.nodeId, input.splitIndex)
+                return
+              }
+
+              if (event.key === "Backspace" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+                const el = event.currentTarget
+                const selectionStart = el.selectionStart ?? el.value.length
+                const selectionEnd = el.selectionEnd ?? selectionStart
+                if (selectionStart !== 0 || selectionEnd !== 0) return
+
+                event.preventDefault()
+                const continuationBackspace = buildContinuationBackspaceInput(preText, el.value)
+                if (continuationBackspace) {
+                  onChange(fragment.nodeId, continuationBackspace.text, continuationBackspace.caretIndex)
+                  return
+                }
+
+                onChange(fragment.nodeId, el.value, 0)
+                onMergeParagraph(fragment.nodeId)
               }
             }}
             onClick={(event) => event.stopPropagation()}
