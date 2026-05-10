@@ -58,6 +58,9 @@ Users should be able to:
   needed for stable visual restoration.
 - Typing drafts should not flood undo history.
 - Exiting edit with no text change should not create a meaningless history step.
+- Current Fill mode policy: template undo/redo is disabled while filling. Field
+  inputs may use native browser input undo; dedicated submission history is
+  deferred.
 
 ## Table Editing Rules
 

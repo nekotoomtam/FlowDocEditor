@@ -20,6 +20,47 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Disable Template Undo/Redo While Filling
+
+Goal: Make Fill mode undo/redo match the current binding/history contract.
+
+Completed:
+
+- Disabled toolbar Undo/Redo while Fill mode is active, even when template
+  history exists.
+- Guarded editor-shell Ctrl+Z/Ctrl+Y so Fill mode does not trigger template
+  history undo/redo from the editor surface.
+- Left field inputs to use native browser input undo behavior.
+- Documented the current policy: template history is disabled while filling;
+  dedicated submission history is deferred.
+- Did not change reducer/history architecture, binding behavior, core
+  pagination, or template-mode undo/redo behavior.
+
+Files changed:
+
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorShell.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `git diff --check`
+- Doc reference check: all explicit `docs/*.md` references resolve.
+- Browser smoke on `http://localhost:4000/editor`:
+  - Template mode Ctrl+Z undoes a template text edit; toolbar Redo restores it.
+  - Fill mode disables toolbar Undo/Redo even when template history exists.
+  - Fill mode Ctrl+Z does not undo template content.
+  - Switching back to Template mode restores template undo/redo behavior.
+  - Field input native undo is preserved by the code path because text inputs
+    return before editor-shell shortcut handling; no field input was available
+    in the active smoke template.
+
+Notes:
+
+- Broader Fill mode lock-surface review, such as non-history keyboard actions,
+  is deferred to a separate focused slice.
+
 ### Fix Inline Edit Lifecycle Finalization
 
 Goal: Prevent inline edit drafts from entering `state.doc` without a matching

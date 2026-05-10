@@ -741,16 +741,18 @@ export default function EditorShell() {
   }, [])
 
   const handleUndo = useCallback(() => {
+    if (!isTemplateMode) return
     const hadInlineEdit = finalizeInlineEditBeforeAction()
     if (state.past.length === 0 && !hadInlineEdit) return
     dispatch({ type: "UNDO" })
-  }, [finalizeInlineEditBeforeAction, state.past])
+  }, [finalizeInlineEditBeforeAction, isTemplateMode, state.past])
 
   const handleRedo = useCallback(() => {
+    if (!isTemplateMode) return
     const hadInlineEdit = finalizeInlineEditBeforeAction()
     if (state.future.length === 0 && !hadInlineEdit) return
     dispatch({ type: "REDO" })
-  }, [finalizeInlineEditBeforeAction, state.future])
+  }, [finalizeInlineEditBeforeAction, isTemplateMode, state.future])
 
   const setManualScale = useCallback((nextScale: number) => {
     setZoomMode("manual")
@@ -1353,14 +1355,16 @@ export default function EditorShell() {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === "z") {
       if (isTextInput) return
       e.preventDefault()
+      if (!isTemplateMode) return
       handleUndo()
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.shiftKey && e.key === "z"))) {
       if (isTextInput) return
       e.preventDefault()
+      if (!isTemplateMode) return
       handleRedo()
     }
-  }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
+  }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, isTemplateMode, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
 
   return (
     <div
@@ -1379,7 +1383,7 @@ export default function EditorShell() {
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {(["Undo", "Redo"] as const).map((label) => {
             const isUndo = label === "Undo"
-            const disabled = isUndo ? state.past.length === 0 : state.future.length === 0
+            const disabled = !isTemplateMode || (isUndo ? state.past.length === 0 : state.future.length === 0)
             return (
               <button key={label} disabled={disabled}
                 onClick={isUndo ? handleUndo : handleRedo}
