@@ -20,6 +20,50 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Add Table Split Accounting Tests
+
+Goal: Add narrow regression coverage for table row split accounting before
+changing cross-page table behavior or refactoring the paginator.
+
+Completed:
+
+- Added table row split accounting assertions for uneven multi-cell splits so
+  each long cell preserves contiguous `lineStart` / `lineEnd` ranges
+  independently.
+- Added regression coverage for an empty cell in a split row, ensuring it does
+  not disturb progress or duplicate sibling paragraph content.
+- Added regression coverage for a spacer before a continued table-cell paragraph
+  so the spacer is not duplicated across continuation pages.
+- Added regression coverage for padded table cells where padding reduces split
+  capacity while paragraph line accounting remains contiguous.
+- Added regression coverage for tall repeated table headers that consume most of
+  the page height while a breakable body row still makes progress and preserves
+  continuation line accounting.
+- Updated current suite snapshots and fixture ownership docs after adding the
+  table pagination tests.
+
+Files changed:
+
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- pagination/__tests__/tablePagination.test.ts`
+  passed: 40 table pagination tests.
+- `npm.cmd test` passed: 19 core test files / 279 core tests, plus 2 app test
+  files / 21 app tests.
+- `npm.cmd run type-check`
+
+Notes / follow-ups:
+
+- No production behavior was changed in this slice.
+- The next useful table split hardening pass can target proven edge failures
+  only, such as too-large padding, repeated-header starvation, or span-specific
+  continuation behavior.
+
 ### Tighten Agent Precheck And Runtime Guardrails
 
 Goal: Apply follow-up documentation review findings so future agents have less

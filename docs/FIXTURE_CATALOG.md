@@ -11,7 +11,7 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 19 core test files / 274 core tests
+- 19 core test files / 279 core tests
 - 2 app test files / 21 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
@@ -68,6 +68,11 @@ segments, spacing, and grapheme fallback.
 Protects page placement, line continuation, metadata, keep rules, page numbers,
 TOC overflow, drift reporting, table split behavior, row/stack behavior, resize
 convergence, and paginated-output invariants.
+
+`tablePagination.test.ts` also owns table row split accounting coverage for
+uneven multi-cell splits, empty cells, spacer-before-paragraph cells, padded
+cells, tall repeated headers, and line-range contiguity across continuation
+fragments.
 
 ### Renderers
 

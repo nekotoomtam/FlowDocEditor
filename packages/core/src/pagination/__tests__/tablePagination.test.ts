@@ -11,7 +11,7 @@ import {
   addTableColumn,
   removeTableColumn,
 } from "../../document"
-import type { DocumentNode, LayoutNode, ParagraphNode, TableNode, TableCellNode, TableRowNode } from "../../schema"
+import type { DocumentNode, LayoutNode, ParagraphNode, SpacerNode, TableNode, TableCellNode, TableRowNode } from "../../schema"
 
 // ─── Page Metrics ─────────────────────────────────────────────────────────────
 // A4 + 72pt margins → contentBox.y=72, contentBox.height=698, contentBottom=770
@@ -43,6 +43,14 @@ function makePara(id: string, text: string): ParagraphNode {
       indentRight: pt(0),
     },
     children: [{ id: `${id}-t`, type: "text", text }],
+  }
+}
+
+function makeSpacer(id: string, height: number): SpacerNode {
+  return {
+    id,
+    type: "spacer",
+    props: { height },
   }
 }
 
@@ -139,6 +147,36 @@ function getPageOfFragment(result: ReturnType<typeof paginate>, nodeId: string):
     if (page.fragments.some((f) => f.nodeId === nodeId)) return page.index
   }
   return -1
+}
+
+function getFragments(result: ReturnType<typeof paginate>, nodeId: string) {
+  return result.sections[0].pages.flatMap((pg) =>
+    pg.fragments.filter((f) => f.nodeId === nodeId),
+  )
+}
+
+function expectContiguousLineAccounting(
+  result: ReturnType<typeof paginate>,
+  nodeId: string,
+  lineCount: number,
+): void {
+  const fragments = getFragments(result, nodeId)
+
+  expect(fragments.length).toBeGreaterThan(0)
+  expect(fragments[0].lineStart).toBe(0)
+
+  for (let i = 0; i < fragments.length - 1; i++) {
+    expect(fragments[i].lineEnd).toBe(fragments[i + 1]!.lineStart)
+    expect(fragments[i].isContinued).toBe(true)
+    expect(fragments[i + 1]!.continuesFrom).toBe(true)
+  }
+
+  const totalLines = fragments.reduce((sum, fragment) => sum + (fragment.lines?.length ?? 0), 0)
+  const last = fragments[fragments.length - 1]!
+
+  expect(totalLines).toBe(lineCount)
+  expect(last.lineEnd).toBe(lineCount)
+  expect(last.isContinued).toBe(false)
 }
 
 // ─── No rowspan: existing behavior preserved ──────────────────────────────────
@@ -741,5 +779,129 @@ describe("tablePagination — multi-page row split", () => {
     for (const page of result.sections[0].pages.filter((pg) => bodyPages.has(pg.index) && pg.index > 0)) {
       expect(page.fragments.some((f) => f.nodeId === "tbl-row0")).toBe(true)
     }
+  })
+
+  it("keeps split accounting when a tall repeated header consumes most page height", () => {
+    const headerText = Array.from({ length: 55 }, (_, i) => `Header ${i}`).join("\n")
+    const bodyLineCount = 24
+    const bodyText = Array.from({ length: bodyLineCount }, (_, i) => `Body ${i}`).join("\n")
+    const tbl = makeTable("tbl", [451], [
+      [{ text: headerText }],
+      [{ text: bodyText }],
+    ])
+    tbl.props = { ...tbl.props, headerRowCount: 1 }
+    const bodyRow = tbl.nodes["tbl-row1"]
+    if (bodyRow?.type === "table-row") bodyRow.props = { ...bodyRow.props, allowBreak: true }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const bodyRowFragments = getFragments(result, "tbl-row1")
+    const bodyPages = new Set(bodyRowFragments.map((fragment) => fragment.pageIndex))
+
+    assertPaginatedDocument(result)
+    expect(bodyPages.size).toBeGreaterThan(1)
+    expectContiguousLineAccounting(result, "tbl-p1-0", bodyLineCount)
+
+    for (const page of result.sections[0].pages.filter((page) => bodyPages.has(page.index))) {
+      expect(page.fragments.some((fragment) => fragment.nodeId === "tbl-row0")).toBe(true)
+    }
+  })
+
+  it("keeps independent line accounting for uneven multi-cell splits", () => {
+    const leftLineCount = 145
+    const middleLineCount = 83
+    const leftText = Array.from({ length: leftLineCount }, (_, i) => `Left ${i}`).join("\n")
+    const middleText = Array.from({ length: middleLineCount }, (_, i) => `Middle ${i}`).join("\n")
+    const tbl = makeTable("tbl", [150, 150, 150], [
+      [{ text: leftText }, { text: middleText }, { text: "Short" }],
+    ])
+    const row = tbl.nodes["tbl-row0"]
+    if (row?.type === "table-row") row.props = { ...row.props, allowBreak: true }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+
+    assertPaginatedDocument(result)
+    expectContiguousLineAccounting(result, "tbl-p0-0", leftLineCount)
+    expectContiguousLineAccounting(result, "tbl-p0-1", middleLineCount)
+
+    const shortFragments = getFragments(result, "tbl-p0-2")
+    expect(shortFragments).toHaveLength(1)
+    expect(shortFragments[0].lines?.map((line) => line.text).join("")).toBe("Short")
+  })
+
+  it("empty cells do not disturb split progress or duplicate sibling content", () => {
+    const lineCount = 130
+    const text = Array.from({ length: lineCount }, (_, i) => `Body ${i}`).join("\n")
+    const rowId = "tbl-row"
+    const emptyCellId = "tbl-empty"
+    const bodyCellId = "tbl-body-cell"
+    const paraId = "tbl-body-para"
+    const tbl: TableNode = {
+      id: "tbl",
+      type: "table",
+      props: {},
+      columns: [{ width: pt(120) }, { width: pt(331) }],
+      rowIds: [rowId],
+      nodes: {
+        [rowId]: { id: rowId, type: "table-row", props: { allowBreak: true }, cellIds: [emptyCellId, bodyCellId] } as TableRowNode,
+        [emptyCellId]: { id: emptyCellId, type: "table-cell", props: {}, childIds: [] } as TableCellNode,
+        [bodyCellId]: { id: bodyCellId, type: "table-cell", props: {}, childIds: [paraId] } as TableCellNode,
+        [paraId]: makePara(paraId, text),
+      },
+    }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const rowFragments = getFragments(result, rowId)
+    const emptyCellFragments = getFragments(result, emptyCellId)
+
+    assertPaginatedDocument(result)
+    expect(rowFragments.length).toBeGreaterThan(1)
+    expect(emptyCellFragments).toHaveLength(rowFragments.length)
+    expectContiguousLineAccounting(result, paraId, lineCount)
+  })
+
+  it("does not duplicate a spacer before continued table-cell paragraph lines", () => {
+    const lineCount = 115
+    const text = Array.from({ length: lineCount }, (_, i) => `Body ${i}`).join("\n")
+    const rowId = "tbl-row"
+    const cellId = "tbl-cell"
+    const spacerId = "tbl-spacer"
+    const paraId = "tbl-para"
+    const tbl: TableNode = {
+      id: "tbl",
+      type: "table",
+      props: {},
+      columns: [{ width: pt(451) }],
+      rowIds: [rowId],
+      nodes: {
+        [rowId]: { id: rowId, type: "table-row", props: { allowBreak: true }, cellIds: [cellId] } as TableRowNode,
+        [cellId]: { id: cellId, type: "table-cell", props: {}, childIds: [spacerId, paraId] } as TableCellNode,
+        [spacerId]: makeSpacer(spacerId, 24),
+        [paraId]: makePara(paraId, text),
+      },
+    }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+
+    assertPaginatedDocument(result)
+    expect(getFragments(result, spacerId)).toHaveLength(1)
+    expectContiguousLineAccounting(result, paraId, lineCount)
+  })
+
+  it("keeps line accounting contiguous when cell padding reduces split capacity", () => {
+    const lineCount = 95
+    const text = Array.from({ length: lineCount }, (_, i) => `Padded ${i}`).join("\n")
+    const tbl = makeTable("tbl", [451], [
+      [{ text }],
+    ])
+    const row = tbl.nodes["tbl-row0"]
+    const cell = tbl.nodes["tbl-c0-0"]
+    if (row?.type === "table-row") row.props = { ...row.props, allowBreak: true }
+    if (cell?.type === "table-cell") cell.props = { ...cell.props, padding: pt(36) }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+
+    assertPaginatedDocument(result)
+    expect(getFragments(result, "tbl-row0").length).toBeGreaterThan(1)
+    expectContiguousLineAccounting(result, "tbl-p0-0", lineCount)
   })
 })
