@@ -17,6 +17,9 @@ For the product-level direction behind the engine, see
 For the current page-boundary support matrix, overflow fallbacks, and deferred
 cross-page behavior, see `docs/CROSS_PAGE_BEHAVIOR.md`.
 
+For the current natural-flow-first, policy-based fragmentation model, see
+`docs/PAGE_FRAGMENTATION_MODEL.md`.
+
 For table authoring, editor selection, and row/column operation rules, see
 `docs/TABLE_EDITING_CONTRACT.md`.
 

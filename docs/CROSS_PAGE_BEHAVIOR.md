@@ -5,6 +5,9 @@ a page boundary. It describes current behavior, accepted overflow cases, and
 deferred work so pagination, editor preview, PDF, DOCX, and tests speak the same
 language.
 
+For the conceptual model behind these policies, read
+`docs/PAGE_FRAGMENTATION_MODEL.md`.
+
 ## Ownership
 
 - `packages/core` owns page-break decisions and continuation boundaries.
@@ -44,7 +47,7 @@ remain true:
 | Stack/column paragraph | Does not split independently today. The containing row is atomic; paragraph content is placed as one fragment inside the row's allocated height. If the row is taller than one content page, overflow is documented. | `rowStack.test.ts` |
 | Row/stack group | Moves as a whole row when it fits on the next page. Very tall rows stay at page content top and may overflow to force progress. | `rowStack.test.ts`, `resizeConvergence.test.ts` |
 | Table row with `allowBreak=false` | Moves as a whole row when possible. Too-tall rows may overflow according to the documented forced-progress policy. | `tablePagination.test.ts` |
-| Table row with `allowBreak=true` or omitted | A single-row group may split across pages. Cell paragraphs split by measured line boundaries through the table row split loop. Shorter cells render only once and are not duplicated on continuation pages. | `tablePagination.test.ts` |
+| Table row with `allowBreak=true` or omitted (default breakable) | A single-row group may split across pages. Cell paragraphs split by measured line boundaries through the table row split loop. Shorter cells render only once and are not duplicated on continuation pages. | `tablePagination.test.ts` |
 | Rowspan-linked table rows | Rowspan-linked rows stay together as an atomic group. If the group does not fit, it moves to the next page as a unit. Split-at-row-boundary inside a rowspan group is deferred. | `tablePagination.test.ts` |
 | Repeating table headers | The first `headerRowCount` rows repeat at the top of continuation pages where table body rows continue. | `tablePagination.test.ts` |
 | Header/footer page numbers | Header and footer fragments are cloned per page and inline page-number fields resolve using physical or section-local display page numbers. | `sectionPageNumbers.test.ts`, `tablePagination.test.ts`, `multiSection.test.ts` |

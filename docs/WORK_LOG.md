@@ -20,6 +20,44 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Add Page Fragmentation Model Contract
+
+Goal: Create a shared language for current page-boundary behavior before
+touching more pagination code.
+
+Completed:
+
+- Added `docs/PAGE_FRAGMENTATION_MODEL.md` documenting the current
+  natural-flow-first, policy-based fragmentation model.
+- Described the flow, pagination, and renderer layers without implying an
+  immediate refactor.
+- Added the current fragmentation policy matrix by structure, including
+  paragraph line fragmentation, atomic blocks, breakable table row slices,
+  rowspan groups, and TOC repagination.
+- Documented the key table row split accounting risk: the row loop is
+  height/slice-driven while each cell tracks child/line continuation state.
+- Added agent guardrails against making frontend preview or renderers the layout
+  truth, changing cross-page behavior without focused tests, or unifying
+  fragmentation policies opportunistically.
+- Linked the new contract from the docs index, agent workflow, cross-page
+  behavior contract, layout spec, and layout checklist.
+
+Files changed:
+
+- `docs/AGENT_WORKFLOW.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/DOCS_INDEX.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/PAGE_FRAGMENTATION_MODEL.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `git diff --check`
+- Doc reference check: all explicit docs markdown references resolve to
+  existing files.
+
 ### Tighten Table Split Metadata Assertions
 
 Goal: Add the final small table split accounting assertion suggested by review

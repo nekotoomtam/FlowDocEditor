@@ -417,6 +417,8 @@ They are mostly boundary guards and regression targets, not new feature work.
 
 ## Important Design Rules
 
+- For the conceptual model behind page-boundary behavior, see
+  `docs/PAGE_FRAGMENTATION_MODEL.md`.
 - [ ] Layout rules belong in `packages/core`, not React/CSS.
 - [ ] `DocumentNode` must not store computed `x`, `y`, `width`, `height`,
   page numbers, fragment ids, or resize preview geometry.

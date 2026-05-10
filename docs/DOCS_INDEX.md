@@ -35,6 +35,7 @@ contract, then inspect the code and tests near the change.
 | Layout/pagination engine rules | `docs/LAYOUT_ENGINE_SPEC.md` |
 | Layout implementation checklist/status | `docs/LAYOUT_ENGINE_CHECKLIST.md` |
 | Page-boundary behavior | `docs/CROSS_PAGE_BEHAVIOR.md` |
+| Page fragmentation model | `docs/PAGE_FRAGMENTATION_MODEL.md` |
 | Editor interaction and UX behavior | `docs/EDITOR_UX_CONTRACT.md` |
 | Table authoring and table operations | `docs/TABLE_EDITING_CONTRACT.md` |
 | Product scenarios and fixture coverage | `docs/PRODUCT_SCENARIOS.md` |
@@ -59,6 +60,7 @@ editing, property panels, or browser interaction feel.
 
 Start with:
 
+- `docs/PAGE_FRAGMENTATION_MODEL.md`
 - `docs/CROSS_PAGE_BEHAVIOR.md`
 - `docs/LAYOUT_ENGINE_SPEC.md`
 - `docs/LAYOUT_ENGINE_CHECKLIST.md`

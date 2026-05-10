@@ -44,7 +44,8 @@ Recommended read order:
 8. The relevant contract/checklist for the task:
    - layout: `docs/LAYOUT_ENGINE_SPEC.md`,
      `docs/LAYOUT_ENGINE_CHECKLIST.md`
-   - cross-page behavior: `docs/CROSS_PAGE_BEHAVIOR.md`
+   - cross-page behavior: `docs/PAGE_FRAGMENTATION_MODEL.md`,
+     `docs/CROSS_PAGE_BEHAVIOR.md`
    - editor UX: `docs/EDITOR_UX_CONTRACT.md`
    - table editing: `docs/TABLE_EDITING_CONTRACT.md`
    - text engine: `docs/TEXT_ENGINE_CHECKLIST.md`
