@@ -101,9 +101,9 @@ behavior:
 
 - Core table operation or pagination change:
   - run the focused `tablePagination.test.ts`
-  - run `npm.cmd test`
+  - run the full test command for the current shell
 - Editor table interaction change:
-  - run `npm.cmd run type-check`
+  - run type-check for the current shell
   - browser-check selection and property-panel flow on `http://localhost:4000/editor`
 - Contract or behavior change:
   - update this document, `docs/CROSS_PAGE_BEHAVIOR.md`, or

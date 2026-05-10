@@ -14,6 +14,11 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
 - [x] Server/API pagination path uses fontkit measurement.
 - [x] Server/API pagination path uses `Intl.Segmenter` through `thaiWordBreaker`.
 - [x] Default project font is routed through the shared font registry.
+  - Runtime source of truth: `public/fonts/THSarabun.ttf`.
+  - Server/API loads from `process.cwd()/public/fonts/...`; browser CSS loads
+    from `/fonts/...`.
+  - Do not depend on `src/fonts/THSarabun.ttf` unless the font loading contract
+    is intentionally changed.
 - [x] Paragraph measurement returns measured lines.
 - [x] Pagination returns renderer-facing `PaginatedLine` output.
 - [x] Editor preview renders from `PaginatedDocument` instead of CSS flow.
@@ -58,8 +63,9 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
     - Page movement visible even when line counts match: purple overlay + "PG"
       badge. Orange (+L), blue (-L) remain for line-count drift.
   - [x] Add focused tests for `comparePagination`.
-    - 8 tests: no-drift, +/- line delta, page movement, split-page aggregation,
-      non-paragraph ignored, totalParagraphs count. Root vitest.config.ts added.
+    - Covered by `comparePagination.test.ts`: no-drift, +/- line delta, page
+      movement, split-page aggregation, non-paragraph handling, and
+      totalParagraphs count. Root vitest.config.ts added.
   - [x] Add soft/hard reflow risk tracking during typing.
     - Current editor interaction truth is the native textarea while inline edit
       is active.
@@ -82,7 +88,8 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
     missing, matching paginate route behavior. Previously export fell back silently
     with no observable signal to the caller.
 - [x] Add drift fixtures for Thai/page-boundary cases (Level 1 — mock measurers).
-  - Added 4 tests in a new "Thai-specific and near-boundary" describe block in `drift.test.ts`:
+  - Covered by the "Thai-specific and near-boundary" describe block in
+    `drift.test.ts`:
     - Thai + English mixed text crosses line boundary (browser 1 line, server 2 lines).
     - Long unbroken Thai token (140 chars): browser 2 lines vs server 3 lines via grapheme fallback.
     - Thai paragraph stays on page 0 with browser but drifts to page 1+ with server.
@@ -123,7 +130,7 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
 - [ ] Consider a Web Worker for browser-side layout.
 - [ ] Consider HarfBuzz/WASM only after the current fontkit + segment contracts become limiting.
 - [x] Add PDF/DOCX smoke tests that compare expected text flow behavior.
-  - 21 tests in `renderer/__tests__/textFlow.test.ts` across 5 describe blocks:
+  - Covered by `renderer/__tests__/textFlow.test.ts`:
   - **Line content**: short text → 1 line preserved, hard newlines → correct text per
     line, long text wraps (text preserved across lines), empty paragraph → 1 empty line.
   - **Spacing**: spacingBefore/After add to fragment height, spacingBefore shifts first
@@ -150,7 +157,7 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
   - Earlier editor code used this helper to patch active paragraph lines; the
     current editor no longer uses that path during inline editing because the
     textarea owns active wrapping/caret behavior.
-  - 5 tests in `measure.test.ts` (`measureParagraphFrom` describe block):
+  - Covered by the `measureParagraphFrom` describe block in `measure.test.ts`:
     fromOffset=0 equals full measurement, fromOffset in second hard line starts
     from Beta, segment offsets reference original full text, lineHeight matches,
     fromOffset past all content returns empty tail.
@@ -171,7 +178,7 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
   active fragment's live height/geometry; measured lines and surrounding layout
   reconcile after browser/server pagination settles.
 - [x] What is the minimum golden fixture set before changing line breaking behavior again?
-  → The current suite (27 measure tests + drift tests + paginator split tests) is
-  the minimum. Any change to `measureParagraph` or `wrapLines` must keep all
-  existing measure tests green. High-risk cases (Thai, mixed Thai/English, grapheme
-  fallback, hard newlines, segment offsets) each have dedicated fixtures.
+  → The current measure, drift, and paginator split fixtures are the minimum.
+  Any change to `measureParagraph` or `wrapLines` must keep existing measure
+  tests green. High-risk cases (Thai, mixed Thai/English, grapheme fallback,
+  hard newlines, segment offsets) each have dedicated fixtures.

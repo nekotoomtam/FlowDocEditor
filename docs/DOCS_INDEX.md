@@ -7,12 +7,14 @@ right source of truth before changing code, tests, or product behavior.
 
 For a new session or agent:
 
-1. `docs/PRODUCT_DIRECTION.md`
+1. `docs/DOCS_INDEX.md`
 2. `docs/AGENT_WORKFLOW.md`
-3. `docs/ARCHITECTURE_OVERVIEW.md`
-4. `docs/WORK_LOG.md` recent entries
-5. `docs/TEST_STRATEGY.md`
-6. The task-specific contract or checklist below
+3. `docs/PRODUCT_DIRECTION.md`
+4. `docs/ENGINEERING_PRINCIPLES.md`
+5. `docs/ARCHITECTURE_OVERVIEW.md`
+6. `docs/WORK_LOG.md` recent entries
+7. `docs/TEST_STRATEGY.md`
+8. The task-specific contract or checklist below
 
 For a quick bug fix, read only enough to avoid contradicting the relevant
 contract, then inspect the code and tests near the change.

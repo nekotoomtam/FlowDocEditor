@@ -150,6 +150,10 @@ import/export, and future workflow features.
 Turns template data plus filling data into a resolved document for preview and
 export.
 
+Current support is scalar `fieldRef` resolution only. Repeat regions and nested
+repeat behavior are draft/deferred; do not add them while fixing unrelated
+layout, editor, or renderer issues.
+
 Rules:
 
 - templates keep field references

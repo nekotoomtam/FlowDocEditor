@@ -31,7 +31,7 @@ Protects:
 Typical commands:
 
 - focused core test file
-- `npm.cmd test` for meaningful behavior risk
+- full test command for meaningful behavior risk
 
 ### Level 2: Layout And Pagination Fixtures
 
@@ -50,7 +50,7 @@ Protects:
 Typical commands:
 
 - focused pagination test file
-- `npm.cmd test`
+- full test command
 
 ### Level 3: Renderer Contract And Smoke Tests
 
@@ -81,8 +81,8 @@ Protects:
 
 Typical command:
 
-- `npm.cmd run test:app`
-- `npm.cmd test` when the change also touches core
+- app test command
+- full test command when the change also touches core
 
 ### Level 5: Browser Smoke Checks
 
@@ -123,15 +123,21 @@ Product fixtures should stay named and discoverable, such as
 
 ## Risk-Based Verification Matrix
 
+Command examples use Windows PowerShell spelling. On non-Windows shells, replace
+`npm.cmd` with `npm`. Run commands from the repository root unless a task
+explicitly targets `packages/core`. If dependencies, config, or workspace setup
+are unavailable, report that verification could not run instead of claiming a
+pass.
+
 | Change type | Required verification |
 |---|---|
 | Docs only | `git diff --check` |
-| UI copy or minor panel wiring | `npm.cmd run type-check`; browser check if interaction changed |
-| Editor interaction behavior | `npm.cmd run type-check`; focused app tests if available; browser smoke |
-| Core document operation | focused core test; `npm.cmd test` for meaningful behavior risk |
-| Text measurement or line breaking | focused text/layout tests; `npm.cmd test`; update text docs |
-| Pagination/page-break behavior | focused pagination test; `npm.cmd test`; update cross-page/checklist docs |
-| Table editing or table pagination | focused table pagination/operation tests; `npm.cmd test`; browser check for editor UX; update table contract/checklist |
+| UI copy or minor panel wiring | type-check; browser check if interaction changed |
+| Editor interaction behavior | type-check; focused app tests if available; browser smoke |
+| Core document operation | focused core test; full test command for meaningful behavior risk |
+| Text measurement or line breaking | focused text/layout tests; full test command; update text docs |
+| Pagination/page-break behavior | focused pagination test; full test command; update cross-page/checklist docs |
+| Table editing or table pagination | focused table pagination/operation tests; full test command; browser check for editor UX; update table contract/checklist |
 | Renderer/export behavior | focused renderer tests; export smoke; document accepted fidelity limits |
 | Product scenario change | update `docs/PRODUCT_SCENARIOS.md`; add or update fixture coverage |
 
@@ -189,9 +195,19 @@ Avoid:
 
 ## Command Reference
 
-- Full verification: `npm.cmd test`
-- Type check: `npm.cmd run type-check`
-- App tests only: `npm.cmd run test:app`
-- Core tests only: `npm.cmd run test -w packages/core`
-- Focused core test: `npm.cmd run test -w packages/core -- <test-file-or-filter>`
+- Full verification:
+  - Windows PowerShell: `npm.cmd test`
+  - Non-Windows: `npm test`
+- Type check:
+  - Windows PowerShell: `npm.cmd run type-check`
+  - Non-Windows: `npm run type-check`
+- App tests only:
+  - Windows PowerShell: `npm.cmd run test:app`
+  - Non-Windows: `npm run test:app`
+- Core tests only:
+  - Windows PowerShell: `npm.cmd run test -w packages/core`
+  - Non-Windows: `npm run test -w packages/core`
+- Focused core test:
+  - Windows PowerShell: `npm.cmd run test -w packages/core -- <test-file-or-filter>`
+  - Non-Windows: `npm run test -w packages/core -- <test-file-or-filter>`
 - Diff hygiene: `git diff --check`

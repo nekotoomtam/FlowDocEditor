@@ -108,6 +108,11 @@ state must be visible.
 
 Current behavior:
 
+- authoritative runtime font file is `public/fonts/THSarabun.ttf`
+- API routes load fonts from `process.cwd()/public/fonts/...`
+- browser font CSS loads from `/fonts/...`
+- `src/fonts/THSarabun.ttf` is not the runtime font source unless the project
+  intentionally changes the font loading contract
 - the API logs the missing font path/error server-side
 - `/api/paginate` exposes `X-FlowDoc-Font: fallback`
 - editor status should make fallback understandable to the user
@@ -135,7 +140,7 @@ Choose the smallest verification that protects the changed layer.
 
 - Renderer implementation change:
   - focused renderer tests
-  - `npm.cmd test` for meaningful behavior risk
+  - full test command for meaningful behavior risk
 - API export/pagination boundary change:
   - route-focused check or export smoke
   - renderer tests if `PaginatedDocument` shape changes

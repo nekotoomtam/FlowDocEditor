@@ -35,12 +35,13 @@ Before changing code, orient from the repository rather than guessing.
 Recommended read order:
 
 1. `docs/DOCS_INDEX.md`
-2. `docs/PRODUCT_DIRECTION.md`
-3. `docs/ENGINEERING_PRINCIPLES.md`
-4. `docs/ARCHITECTURE_OVERVIEW.md` when the task touches system flow
-5. `docs/WORK_LOG.md` recent entries
-6. `docs/TEST_STRATEGY.md` when the task touches behavior or verification
-7. The relevant contract/checklist for the task:
+2. `docs/AGENT_WORKFLOW.md`
+3. `docs/PRODUCT_DIRECTION.md`
+4. `docs/ENGINEERING_PRINCIPLES.md`
+5. `docs/ARCHITECTURE_OVERVIEW.md` when the task touches system flow
+6. `docs/WORK_LOG.md` recent entries
+7. `docs/TEST_STRATEGY.md` when the task touches behavior or verification
+8. The relevant contract/checklist for the task:
    - layout: `docs/LAYOUT_ENGINE_SPEC.md`,
      `docs/LAYOUT_ENGINE_CHECKLIST.md`
    - cross-page behavior: `docs/CROSS_PAGE_BEHAVIOR.md`
@@ -51,11 +52,60 @@ Recommended read order:
    - browser checks: `docs/BROWSER_SMOKE_CHECKLIST.md`
    - export/renderers: `docs/EXPORT_RENDERER_CONTRACT.md`
    - fixture catalog: `docs/FIXTURE_CATALOG.md`
-8. `git status --short`
-9. The code and tests near the requested change
+9. `git status --short`
+10. The code and tests near the requested change
 
 The agent does not need to read every doc for every small task, but it should
 read enough to avoid contradicting the product direction or engine contracts.
+
+## Agent Precheck Before Editing
+
+Before editing, identify the task area and read only the matching docs/tests
+needed for that area:
+
+- document schema, normalize, or operations
+- layout measurement
+- pagination and page-boundary behavior
+- renderer or export
+- editor interaction
+- table editing
+- binding and fields
+- font or Thai measurement
+- documentation/test strategy
+
+Never:
+
+- store layout geometry or runtime editor state in `DocumentNode`
+- make frontend/browser preview the source of layout truth
+- change renderer behavior without checking pagination output
+- add repeat binding behavior unless the task explicitly asks for it
+- claim tests passed if dependencies, config, or the current workspace cannot
+  run them
+- update `docs/WORK_LOG.md` without deciding whether the change is meaningful
+  enough to need a historical entry
+
+## Repository Context
+
+Run commands from the repository root unless a task explicitly targets a
+workspace such as `packages/core`.
+
+Command examples often use Windows PowerShell spelling:
+
+- Windows PowerShell: `npm.cmd run type-check`, `npm.cmd test`
+- Non-Windows shells: `npm run type-check`, `npm test`
+
+If dependencies, config files, or workspace setup are unavailable, report that
+verification could not run. Do not pretend a command passed.
+
+The root `tsconfig.json` defines `@/*` path aliases that resolve to
+`packages/core/src/*` and `src/*`. Do not rewrite aliased imports to long
+relative imports unless the alias config is intentionally changed.
+
+The authoritative runtime font location is `public/fonts/THSarabun.ttf`.
+Server/API code loads it through `process.cwd()/public/fonts/...`; browser code
+loads it through `/fonts/...`. Do not import or depend on
+`src/fonts/THSarabun.ttf` unless the font loading contract is intentionally
+changed.
 
 ## During Work
 
@@ -77,7 +127,9 @@ Update docs when the work changes the project's shared understanding.
 
 - Update `docs/WORK_LOG.md` for meaningful implementation, debugging, or
   documentation sessions.
-- Update checklists when status, test counts, or deferred work changes.
+- Update checklists when status or deferred work changes.
+- Update coverage snapshots or fixture catalogs when suite size or coverage
+  ownership meaningfully changes.
 - Update specs/contracts when behavior rules change.
 - Update `docs/PRODUCT_SCENARIOS.md` when product acceptance expectations or
   fixture coverage change.
@@ -97,14 +149,14 @@ truth; the quick guide is:
   - review the rendered/linked docs mentally
   - run `git diff --check`
 - Editor-only TypeScript change:
-  - run `npm.cmd run type-check`
+  - run type-check using the shell-appropriate npm command
   - browser-check the affected interaction when practical
 - Core document operation change:
   - run the focused core test file
-  - run `npm.cmd test` when behavior risk is meaningful
+  - run the full test command when behavior risk is meaningful
 - Pagination/layout/table change:
   - run the focused pagination tests
-  - run `npm.cmd test`
+  - run the full test command
   - update the relevant checklist/contract
 - Export/renderer change:
   - run renderer tests or a focused export smoke test

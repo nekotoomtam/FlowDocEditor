@@ -154,18 +154,26 @@ Avoid:
 
 Templates and filling data are separate assets.
 
+Current binding support is intentionally narrow: scalar `fieldRef` resolution
+only. Repeat regions, nested repeat behavior, resolver policy, and composite
+keys are still draft/deferred.
+
 Do:
 
 - store `fieldRef` nodes in templates
 - store field values in filling/submission data
 - bind template + data into a temporary resolved document for preview/export
 - validate required data before authoritative render
+- keep repeat behavior deferred unless a task explicitly asks for it and updates
+  the binding contract/tests
 
 Avoid:
 
 - replacing template field references with real data during filling
 - editing static text/layout in filling mode
 - treating submitted field data as template history
+- adding repeat-region behavior opportunistically while fixing unrelated
+  editor, layout, or export bugs
 
 Rule of thumb:
 

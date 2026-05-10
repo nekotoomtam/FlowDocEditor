@@ -23,6 +23,10 @@ Export renderer rules live in `docs/EXPORT_RENDERER_CONTRACT.md`.
 
 Fixture ownership lives in `docs/FIXTURE_CATALOG.md`.
 
+This checklist should describe coverage areas, not maintain fragile per-file
+test totals. Use `docs/FIXTURE_CATALOG.md` and the current test runner output
+for exact counts.
+
 ## Current Foundation
 
 - [x] `packages/core` owns flow layout and pagination contracts.
@@ -41,22 +45,22 @@ Fixture ownership lives in `docs/FIXTURE_CATALOG.md`.
 ## Near-Term Checklist
 
 - [x] Add pagination golden fixtures.
-  - 23 tests in `packages/core/src/pagination/__tests__/paginator.test.ts`.
+  - Covered by `packages/core/src/pagination/__tests__/paginator.test.ts`.
   - Covers: fragment geometry (x/y/width), paragraph stacking, spacer placement,
     paragraph splits across pages by measured lines, spacer moves whole to next page,
     tall-paragraph at page top forces progress without crash, row/stack parentNodeId
     relationships, two-column width split, paragraph hard-newline line texts, line
     x positions, line top-to-bottom order, table fragment relationships.
 - [x] Add layout drift fixtures for server-authoritative reconciliation.
-  - 6 tests in `packages/core/src/pagination/__tests__/drift.test.ts`.
+  - Covered by `packages/core/src/pagination/__tests__/drift.test.ts`.
   - Two separate measurers (browser=narrower, server=wider) simulate real metrics gap.
   - Covers: agreement on short text, server wraps more on long ASCII/Thai, drift
     accumulates with near-boundary lines, page-break shift, fragment height drift.
 - [x] Add renderer smoke tests.
-  - 16 tests in `packages/core/src/renderer/__tests__/renderer.test.ts`.
+  - Covered by `packages/core/src/renderer/__tests__/renderer.test.ts`.
   - PDF: verifies %PDF header, single/multi-paragraph, spacer, row/columns, multi-page, empty paragraph.
   - DOCX: verifies PK ZIP header, same document shapes as PDF set.
-  - Renderer input contract: 5 tests verifying fragment kinds and split fragments before render.
+  - Renderer input contract verifies fragment kinds and split fragments before render.
   - Both renderers use no FontProvider (Helvetica fallback) to stay dependency-free in CI.
 - [x] Verify fragment parent/child relationships.
   - Tests in `paginator.test.ts` (row/stack group, new table group).
@@ -85,8 +89,8 @@ Fixture ownership lives in `docs/FIXTURE_CATALOG.md`.
   - Stack widths sum to contentBox.width; proportional to widthShare; contiguous x positions.
   - Multi-column overflow: whole row moves to next page as a unit; both stacks land on same page.
   - Very tall rows (taller than one page) stay at contentTop without crashing (documented overflow).
-  - 13 tests in `packages/core/src/pagination/__tests__/rowStack.test.ts`.
-  - All tests pass `assertPaginatedDocument` with no violations.
+  - Covered by `packages/core/src/pagination/__tests__/rowStack.test.ts`.
+  - The covered fixtures pass `assertPaginatedDocument` with no violations.
 - [x] Stabilize table pagination rules.
   - Rowspan group detection: `buildRowspanGroups` in `paginator.ts` uses union-find
     to group rows sharing rowspan cells. Multi-row groups are paginated as a unit
@@ -101,8 +105,8 @@ Fixture ownership lives in `docs/FIXTURE_CATALOG.md`.
     `removeTableColumn` all pass `assertDocument` and `assertPaginatedDocument`.
   - Column operations preserve total table width: insertion splits the target
     column; deletion transfers removed width to a neighbor.
-  - 35 tests in `packages/core/src/pagination/__tests__/tablePagination.test.ts`
-    covering: no-rowspan baseline, 2/3-row groups staying on same page, group
+  - Covered by `packages/core/src/pagination/__tests__/tablePagination.test.ts`:
+    no-rowspan baseline, 2/3-row groups staying on same page, group
     moving to next page as unit, mixed groups, operations+grid invariants, and
     multi-page breakable row split (3-page, line count preserved, fragment order),
     column width preservation, plus product fixtures for customs basic table,
@@ -111,7 +115,7 @@ Fixture ownership lives in `docs/FIXTURE_CATALOG.md`.
   - Fixed `paginateTable`: multi-row rowspan groups now always advance to the
     next page's `contentTop` when they don't fit, even if the group is taller
     than one content page. Matches paragraph behavior.
-  - Regression test added: too-tall group after filler content starts at
+  - Regression coverage: too-tall group after filler content starts at
     `contentTop` (72pt), not mid-page; both rows still land on the same page.
 - [x] Add layout assertion helpers for paginated output.
   - `checkPaginatedDocument(paginated)` → `PaginationViolation[]` in
@@ -120,8 +124,8 @@ Fixture ownership lives in `docs/FIXTURE_CATALOG.md`.
   - Four rules: negative-height, outside-content-box (x/x+width with 0.5pt epsilon),
     wrong-y-order (Y non-decreasing within a page), split-fragment-order (same nodeId
     must appear in ascending page order).
-  - 17 tests covering happy path, each violation type, epsilon tolerance, and
-    assertPaginatedDocument throw behavior.
+  - Covered by `assertPaginated.test.ts`: happy path, each violation type,
+    epsilon tolerance, and assertPaginatedDocument throw behavior.
 - [x] Make editor resize preview converge with authoritative pagination.
   - Column resize: added `Math.max(0.01, ...)` guard in `EditorShell` commit
     path so widthShare never reaches 0 from floating-point rounding.
@@ -129,8 +133,8 @@ Fixture ownership lives in `docs/FIXTURE_CATALOG.md`.
     documented). After commit, server/API pagination settles the authoritative
     result.
   - Page margin: already settles through server/API pagination on commit.
-  - 15 tests in `packages/core/src/pagination/__tests__/resizeConvergence.test.ts`
-    verifying column resize (normal, near-min, minimum-clamp), row min-height
+  - Covered by `packages/core/src/pagination/__tests__/resizeConvergence.test.ts`:
+    column resize (normal, near-min, minimum-clamp), row min-height
     (increase, decrease, natural fallback, large), and margin update (symmetric,
     large, asymmetric, x-position after resize) all pass `assertPaginatedDocument`.
 - [x] Document DOCX layout limitations.
@@ -212,7 +216,7 @@ fragments they receive.
   - Populated in both fast path (whole paragraph fits) and split path. Fast path
     always produces `fragmentIndex=0, lineStart=0, lineEnd=totalLines,
     continuesFrom=false, isContinued=false`.
-  - 7 tests in `fragmentMeta.test.ts`: fast-path single fragment, first/last/middle
+  - Covered by `fragmentMeta.test.ts`: fast-path single fragment, first/last/middle
     fragment flags for 2-page and 3-page splits, lineStart/lineEnd contiguity (no
     gaps or overlaps), lineEnd-lineStart equals fragment line count, fragmentIndex
     strictly increasing, assertPaginatedDocument passes.
@@ -235,7 +239,7 @@ fragments they receive.
   - Uses `lineStart` metadata from fragment (added in paragraph-fragment metadata
     work) for accurate split-boundary tracking; falls back to cumulative line count
     when `lineStart` is absent.
-  - 4 new tests in `comparePagination.test.ts`: continuationChanged browser→server,
+  - Covered by `comparePagination.test.ts`: continuationChanged browser→server,
     splitBoundaryMoved same fragment count, no drift when splits match, multi-paragraph
     continuationChangedCount.
 
@@ -254,7 +258,7 @@ fragments they receive.
     gracefully by falling back to normal split).
   - Widow guard also requires `count >= 2` to avoid creating an orphan as a
     side effect of the widow adjustment.
-  - 8 tests in `widowOrphan.test.ts`: orphan moves 3-line para to page 2,
+  - Covered by `widowOrphan.test.ts`: orphan moves 3-line para to page 2,
     line count preserved, single-line para unaffected, contentTop guard,
     widow splits 4 lines 2+2, line count preserved, 2-line remainder unaffected,
     assertPaginatedDocument passes for all cases.
@@ -275,7 +279,8 @@ fragments they receive.
 ### Renderer Rules
 
 - [x] Add renderer contract tests for split paragraph fragments.
-  - 5 tests in "renderer input contract" describe block in `renderer.test.ts`.
+  - Covered by the "renderer input contract" describe block in
+    `renderer.test.ts`.
   - Verifies fragment kinds present, split fragments on multiple pages, ascending
     page order, PDF handles split fragments, DOCX handles split fragments.
 - [x] Keep DOCX limitation documented separately.
@@ -295,7 +300,7 @@ fragments they receive.
   - Emitted in fast path (whole paragraph fits: `isSplit=false`) and for every
     fragment placed in the split loop (`isSplit=true`). Orphan/widow flags are set
     on the fragment that benefited from the policy (not the ones that were skipped).
-  - 9 tests in `splitTrace.test.ts`: fast-path fields, split emits one decision per
+  - Covered by `splitTrace.test.ts`: fast-path fields, split emits one decision per
     fragment, fragmentIndex increments, total lineCount preserved, availableHeight/
     fragmentHeight > 0, orphanPrevented flag, widowPrevented flag + lineCount check,
     multiple paragraphs.
@@ -332,7 +337,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     toolbar badge are unaffected.
   - `EditorShell` console log now shows a "layout geometry drift" sub-group when the
     Drift overlay is active and geometry drift is detected.
-  - Added 4 new tests in `comparePagination.test.ts`: row height drift, table-row page
+  - Covered by `comparePagination.test.ts`: row height drift, table-row page
     movement, no geometry drift when matching, stack drift tracked independently.
 - [x] Give table cells a stable renderer/debug fragment identity.
   - Added `"table-cell"` to `PageFragment.nodeType` union in `pagination/types.ts`.
@@ -351,7 +356,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     Covers pages 1–99; layout now reserves enough width so page 10+ never visually overflows.
   - Fixed `pushStackContents`: paragraphs inside row/stack columns were not calling
     `resolvePageNumbers`, so page numbers inside columns stayed as `"00"`. Now resolved correctly.
-  - Added 2 regression tests in `pageNumbers.test.ts`: page 9→10 boundary resolves to "10",
+  - Covered by `pageNumbers.test.ts`: page 9→10 boundary resolves to "10",
     and narrow column (widthShare=20) passes `assertPaginatedDocument` and resolves to "1".
 - [x] Define TOC overflow policy.
   - Chosen: two-pass repagination. Pass 1 paginates with estimated height; if actual
@@ -364,7 +369,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     imported in `paginator.ts` (removed duplicate local constants in `fillTocFragments`).
   - `tocHeightOverrides?: Map<string, number>` threaded through `flowSection`, `flowNode`,
     `flowVerticalContainer`, `flowRow` so the corrected height reaches `case "toc"`.
-  - 6 tests in `tocOverflow.test.ts`: no-overflow single-section, overflow grows fragment
+  - Covered by `tocOverflow.test.ts`: no-overflow single-section, overflow grows fragment
     height, lines don't exceed fragment bottom, entries have correct page numbers after
     pass 2, assertPaginatedDocument passes, exact-match single-entry no-overflow.
 - [x] Extend table row splitting from two-slice to multi-page loop.
@@ -383,7 +388,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     metadata, assertPaginatedDocument passes, 2-page regression.
   - Rowspan-linked groups remain conservative (whole-group approach B, no intra-group split).
 - [x] Add renderer contract checks around fragment coverage.
-  - Added "renderer input contract" describe block in `renderer.test.ts` (5 tests):
+  - Added "renderer input contract" describe block in `renderer.test.ts`:
     - row/stack/paragraph fragment kinds all present in paginated input
     - split paragraph (80 lines) produces ≥2 fragments on different pages
     - split fragments are ordered by ascending pageIndex
@@ -393,8 +398,8 @@ They are mostly boundary guards and regression targets, not new feature work.
     catching dropped or merged fragment types at the pagination layer.
 - [x] Keep checklist status synchronized with implementation status.
   - Updated "Add pagination golden fixtures" wording: paragraphs now split by lines,
-    not whole-block move; test count updated to 23.
-  - Updated renderer smoke test count from 11 to 16.
+    not whole-block move.
+  - Updated renderer smoke coverage to include renderer input contract checks.
   - Updated table fragment relationship description to use `nodeType="table-cell"`.
   - Marked Stage 3 (keepWithNext done, keepTogether deferred) and Stage 5 (basic
     table-cell continuation done) as complete.
@@ -436,7 +441,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     page order, passing `assertPaginatedDocument`.
   - Force-at-least-one-line guard prevents infinite loops when a single line is
     taller than the content page.
-  - 8 tests in `paginator.test.ts` (split group): total line count preserved,
+  - Covered by `paginator.test.ts` split fixtures: total line count preserved,
     first/continuation fragment y positions, spacingBefore/After placement,
     3-page span, assertPaginatedDocument, paragraph after split.
 - [ ] Incremental pagination from the first changed fragment forward.
@@ -462,7 +467,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     loops when the combined height exceeds one full page.
   - `keepTogether` (whole-block no-split) deferred — produces bad UX for long
     paragraphs; addressed if a real use case arises.
-  - 6 tests in `keepWithNext.test.ts`: baseline without flag, heading moves with
+  - Covered by `keepWithNext.test.ts`: baseline without flag, heading moves with
     next sibling, stays on page 1 when fits, no-loop guard, multiple headings,
     and the report-keep-with-next product fixture.
 - [x] Widow/orphan control. → done as Stage 2 (Policy Stages section above).
@@ -479,7 +484,7 @@ They are mostly boundary guards and regression targets, not new feature work.
   - Also resolved in `pushStackContents` (row/stack columns) and
     `pushTableCellContents` (table cells) — previously these paths never called
     `resolvePageNumbers` and left page numbers as the placeholder string.
-  - 7 tests in `pageNumbers.test.ts`: resolves to "1" on page 1, "2" on page 2,
+  - Covered by `pageNumbers.test.ts`: resolves to "1" on page 1, "2" on page 2,
     multiple nodes, prefix text preserved, standalone node, page 9→10 boundary,
     narrow column assertPaginatedDocument.
 - [x] Section-level page numbering and restart rules.
@@ -496,12 +501,12 @@ They are mostly boundary guards and regression targets, not new feature work.
     before returning. Previously, non-first sections (startPageIndex > 0) stored
     pages at global array indices, leaving sparse holes at the front. This caused
     crashes when iterating pages and incorrect first-page header detection.
-  - 5 tests in `sectionPageNumbers.test.ts`: global numbering continues across
+  - Covered by `sectionPageNumbers.test.ts`: global numbering continues across
     sections (default), restart at 1 on second section, pageNumberStart=5 on first
     section, explicit pageNumberStart=1 same as default, assertPaginatedDocument
     passes.
 - [x] Multi-section export smoke and DOCX structure tests.
-  - 14 tests in `renderer/__tests__/multiSection.test.ts` covering:
+  - Covered by `renderer/__tests__/multiSection.test.ts`:
   - **Pagination structure**: two-section document produces two `PaginatedSection`s,
     each section's pages array is dense (no sparse holes), page number restart
     displays correct inline numbers, TOC + content section fills TOC entries,
@@ -524,7 +529,7 @@ They are mostly boundary guards and regression targets, not new feature work.
 
 - [x] Should a row split when one stack overflows, or should the whole row move
   when possible? → Whole row moves when possible. Overflow without split is the
-  documented behavior for rows taller than a page. Covered by 12 tests in
+  documented behavior for rows taller than a page. Covered by
   `rowStack.test.ts`.
 - [x] How should advanced table spans behave at page boundaries beyond the
   current rowspan approach B?
@@ -536,7 +541,7 @@ They are mostly boundary guards and regression targets, not new feature work.
 - [x] Should spacers split across pages or always move whole? → Move whole.
 - [x] What is the minimum pagination golden fixture set before changing
   `paginator.ts` again?
-  → The current suite (274 core tests) is the minimum. Any change to
+  → The current core suite is the minimum. Any change to
   `paginator.ts` must keep all existing tests green. High-risk areas (paragraph
   split, widow/orphan, TOC overflow, table rowspan, page numbers) each have
   dedicated test files. Adding a regression test for the specific behavior being
@@ -577,7 +582,7 @@ These items address UX issues discovered during real document editing.
   - Rowspan groups are unaffected — approach B keeps them together regardless
     of `allowBreak`.
   - Explicit `allowBreak=false` remains available for authored keep-together rows.
-  - Added regression tests: default single-row group splits across pages; explicit
+  - Regression coverage: default single-row group splits across pages; explicit
     `allowBreak=false` still moves whole when it fits on the next page.
 
 - [x] Live text preview in table cell during inline editing.

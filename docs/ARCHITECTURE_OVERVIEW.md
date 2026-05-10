@@ -63,6 +63,14 @@ Responsibilities:
 - return layout JSON (`/api/paginate`) or rendered binary output
   (`/api/export`)
 
+Font loading contract:
+
+- authoritative runtime font file: `public/fonts/THSarabun.ttf`
+- server/API path: `process.cwd()/public/fonts/THSarabun.ttf`
+- browser path: `/fonts/THSarabun.ttf`
+- `src/fonts/THSarabun.ttf` is not the runtime source of truth unless the font
+  loading contract is intentionally changed
+
 ### Core Document Model
 
 Locations:
@@ -151,7 +159,10 @@ Current role:
 
 - early foundation for template/filling separation
 - should keep template field references and submitted field values separate
-- should produce resolved temporary documents for preview/export when expanded
+- currently supports scalar `fieldRef` resolution into temporary preview/export
+  documents
+- repeat regions remain draft/deferred; do not add repeat behavior
+  opportunistically while fixing unrelated editor, layout, or export bugs
 
 ## Runtime Flow
 

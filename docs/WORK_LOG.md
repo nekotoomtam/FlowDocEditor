@@ -20,6 +20,55 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Tighten Agent Precheck And Runtime Guardrails
+
+Goal: Apply follow-up documentation review findings so future agents have less
+room to misread orientation, verification, font, alias, binding, or test-count
+rules.
+
+Completed:
+
+- Aligned the new-session read order between `docs/DOCS_INDEX.md` and
+  `docs/AGENT_WORKFLOW.md`.
+- Added an "Agent Precheck Before Editing" section covering task-area
+  identification and hard never-rules before editing.
+- Added repository-context rules for shell-specific npm commands, repository
+  root execution, honest verification reporting when dependencies/config are
+  missing, `@/*` path aliases, and the authoritative runtime font location.
+- Documented that `public/fonts/THSarabun.ttf` is the runtime font source of
+  truth; `src/fonts/THSarabun.ttf` should not be used unless the font loading
+  contract changes.
+- Documented current binding as scalar `fieldRef` resolution only, with repeat
+  behavior intentionally deferred.
+- Reduced fragile per-file test-count wording in current checklists so exact
+  counts come from the test runner and `docs/FIXTURE_CATALOG.md`.
+- Removed leftover count-update wording from the layout checklist addendum so
+  agents do not treat historical per-file totals as current truth.
+- Removed placeholder-style doc path wording from work log verification notes to
+  avoid false positives in simple doc reference scanners.
+- Reworded checklist responsibility guidance so agents update coverage snapshots
+  only when suite size or coverage ownership meaningfully changes.
+
+Files changed:
+
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/DOCS_INDEX.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `git diff --check`
+- Doc reference check: all explicit docs markdown references resolve to existing
+  files.
+
 ### Add P1 Verification And Fixture Docs
 
 Goal: Add the next layer of practical documentation so browser checks, export
@@ -61,7 +110,7 @@ Verification:
 
 - Documentation recheck.
 - `git diff --check`
-- Doc reference check: all explicit `docs/...md` references resolve to existing
+- Doc reference check: all explicit docs markdown references resolve to existing
   files.
 
 ### Add P0 Documentation Map And Editor Architecture Contracts
@@ -100,7 +149,7 @@ Verification:
 
 - Documentation recheck.
 - `git diff --check`
-- Doc reference check: all explicit `docs/...md` references resolve to existing
+- Doc reference check: all explicit docs markdown references resolve to existing
   files.
 
 ### Recheck Docs Against Current Repo State
@@ -128,7 +177,7 @@ Completed:
 - Reworded the split-paragraph inline editing item in
   `docs/LAYOUT_ENGINE_CHECKLIST.md` from active "IN PROGRESS" to open
   hardening work, with current status focused on continuation-fragment UX.
-- Verified all explicit `docs/...md` references point to existing files.
+- Verified all explicit docs markdown references point to existing files.
 
 Files changed:
 
@@ -144,7 +193,7 @@ Verification:
 - `npm.cmd run type-check`
 - `npm.cmd test`
 - `git diff --check`
-- Doc reference check: all explicit `docs/...md` references resolve to existing
+- Doc reference check: all explicit docs markdown references resolve to existing
   files.
 
 ### Add Test Strategy And QA Playbook
