@@ -17,6 +17,73 @@ Each entry should include:
 
 ## 2026-05-10
 
+### Align Inline Edit Visual Text With Core Layout
+
+Goal: Reduce the snap between inline edit mode and normal paragraph display when
+typing enough text to create a soft-wrapped line.
+
+Completed:
+
+- Kept the native textarea as the input/caret surface, but made its glyphs
+  transparent during edit mode.
+- Added a core-measured SVG text overlay during edit mode so the visible text is
+  positioned with the same measured-line rules used by normal display.
+- Measured the live textarea value locally so soft-wrap changes update the edit
+  overlay immediately while typing.
+- Included core-measured edit height in the active edit height calculation so
+  the editor frame can grow according to the normal text layout, not only the
+  browser textarea's native wrapping.
+- Preserved continuation-fragment text slicing and full-paragraph reconstruction
+  from the continuation edit tests.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser verification on `http://localhost:4000/editor`:
+  - Kept the dev server running and reloaded the editor without the
+    layout-error state.
+  - Opened a soft-wrap paragraph edit case and confirmed edit mode renders the
+    visible text through the measured SVG overlay while the textarea remains the
+    input surface.
+  - Replaced the active paragraph with a long no-newline Thai probe, then typed
+    additional text until the paragraph soft-wrapped during edit mode.
+  - Exited inline edit and confirmed the normal paragraph display kept the same
+    line layout/frame shape as the edit overlay, with no new console errors.
+
+### Add Continuation Inline Edit Tests
+
+Goal: Make the split-paragraph inline edit continuation case reachable by tests
+before changing the editor UX further.
+
+Completed:
+
+- Extracted `getContinuationEditState` from `ParagraphTextSurface` so the
+  continuation text/caret calculation can be tested without a browser harness.
+- Added app tests covering first-fragment editing, continuation-fragment text
+  slicing, caret adjustment, caret clamping, full-text reconstruction after a
+  continuation edit, and missing segment-offset fallback.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+
+Verification:
+
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser sanity: reloaded `http://localhost:4000/editor`; console warning/error
+  logs were empty.
+
 ### Default Table Rows To Breakable
 
 Goal: Make normal single-row table groups split across page boundaries by default
