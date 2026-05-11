@@ -3,7 +3,7 @@
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
 import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
-import { assertDocument, createDefaultDocument, DEFAULT_STACK_MIN_HEIGHT, normalizeDocument } from "@/document"
+import { assertDocument, createDefaultDocument, DEFAULT_STACK_MIN_HEIGHT, isPlainTextParagraph, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
 import { bindDocument } from "@/binding"
 import type { FieldData, FieldValue } from "@/binding"
@@ -118,7 +118,7 @@ type ZoomMode = "fit" | "manual"
 const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
-const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 16
+const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 0
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
@@ -395,10 +395,8 @@ function findParagraphNode(doc: DocumentNode, nodeId: string) {
 function getParagraphTextFromDoc(doc: DocumentNode, nodeId: string): string | null {
   const node = findParagraphNode(doc, nodeId)
   if (!node) return null
-  return node.children
-    .filter((child) => child.type === "text")
-    .map((child) => child.text)
-    .join("")
+  if (!isPlainTextParagraph(node)) return null
+  return node.children.map((child) => child.type === "text" ? child.text : "").join("")
 }
 
 function findParagraphFragment(paginated: PaginatedDocument, nodeId: string, pageIndex?: number | null): PageFragment | null {
@@ -598,7 +596,6 @@ export default function EditorShell() {
   const [inlineEditPageIndex, setInlineEditPageIndex] = useState<number | null>(null)
   const [inlineEditDraftVersion, setInlineEditDraftVersion] = useState(0)
   const [inlineEditVisualVersion, setInlineEditVisualVersion] = useState(0)
-  const [inlineEditVisualLockNodeId, setInlineEditVisualLockNodeId] = useState<string | null>(null)
   const docRef = useRef(state.doc)
   const inlineEditTransactionRef = useRef<InlineEditTransaction | null>(null)
   const wasInlineEditingRef = useRef(false)
@@ -624,7 +621,6 @@ export default function EditorShell() {
     inlineEditVisualVersionRef.current = 0
     setInlineEditDraftVersion(0)
     setInlineEditVisualVersion(0)
-    setInlineEditVisualLockNodeId(null)
   }, [])
 
   const markInlineEditDraftChanged = useCallback(() => {
@@ -813,12 +809,14 @@ export default function EditorShell() {
     }
 
     const beforeDoc = docRef.current
+    const beforeText = getParagraphTextFromDoc(beforeDoc, nodeId)
+    if (beforeText == null) return
     resetInlineEditVisualFreshness()
     inlineEditTransactionRef.current = {
       nodeId,
       beforeDoc,
       beforePaginated: paginatedRef.current,
-      beforeText: getParagraphTextFromDoc(beforeDoc, nodeId) ?? "",
+      beforeText,
     }
     dispatch({ type: "SELECT_NODE", nodeId })
     setInlineEditNodeId(nodeId)
@@ -834,7 +832,9 @@ export default function EditorShell() {
 
   const handleInlineEditUserInteraction = useCallback((nodeId: string) => {
     if (inlineEditNodeIdRef.current !== nodeId) return
-    setInlineEditVisualLockNodeId(nodeId)
+    // Keep document-rendered SVG as the visual target during active typing.
+    // The textarea remains the input/caret surface and only becomes visible
+    // while the paginated visual snapshot is catching up to the latest draft.
   }, [])
 
   const handleInlineEditCaretChange = useCallback((nodeId: string, caretIndex: number | null) => {
@@ -935,41 +935,40 @@ export default function EditorShell() {
     dispatch({ type: "MERGE_PARAGRAPH", nodeId, history })
   }, [consumeInlineEditHistory])
 
+  const startInlineEditAfterStructuralChange = useCallback((nodeId: string, caretIndex: number | null) => {
+    cancelPendingInlineEditEnd()
+    const beforeDoc = docRef.current
+    const beforeText = getParagraphTextFromDoc(beforeDoc, nodeId)
+    if (beforeText == null) return
+    const beforePaginated = paginatePreviewDoc(beforeDoc)
+    dispatch({ type: "SET_PAGINATED", paginated: beforePaginated })
+    inlineEditTransactionRef.current = {
+      nodeId,
+      beforeDoc,
+      beforePaginated,
+      beforeText,
+    }
+    resetInlineEditVisualFreshness()
+    setInlineEditNodeId(nodeId)
+    setInlineEditCaretIndex(caretIndex)
+    setInlineEditPageIndex(null)
+  }, [cancelPendingInlineEditEnd, paginatePreviewDoc, resetInlineEditVisualFreshness])
+
   // Focus the new paragraph after a split
   useEffect(() => {
     if (!state.lastSplitNodeId) return
     const nodeId = state.lastSplitNodeId
-    const beforeDoc = docRef.current
-    inlineEditTransactionRef.current = {
-      nodeId,
-      beforeDoc,
-      beforePaginated: paginatePreviewDoc(beforeDoc),
-      beforeText: getParagraphTextFromDoc(beforeDoc, nodeId) ?? "",
-    }
-    resetInlineEditVisualFreshness()
-    setInlineEditNodeId(nodeId)
-    setInlineEditCaretIndex(0)
-    setInlineEditPageIndex(null)
+    startInlineEditAfterStructuralChange(nodeId, 0)
     dispatch({ type: "CLEAR_SPLIT_NODE_ID" })
-  }, [paginatePreviewDoc, resetInlineEditVisualFreshness, state.lastSplitNodeId])
+  }, [startInlineEditAfterStructuralChange, state.lastSplitNodeId])
 
   // Focus the previous paragraph after a merge, caret at join point
   useEffect(() => {
     if (!state.mergeResult) return
     const nodeId = state.mergeResult.prevNodeId
-    const beforeDoc = docRef.current
-    inlineEditTransactionRef.current = {
-      nodeId,
-      beforeDoc,
-      beforePaginated: paginatePreviewDoc(beforeDoc),
-      beforeText: getParagraphTextFromDoc(beforeDoc, nodeId) ?? "",
-    }
-    resetInlineEditVisualFreshness()
-    setInlineEditNodeId(nodeId)
-    setInlineEditCaretIndex(state.mergeResult.caretIndex)
-    setInlineEditPageIndex(null)
+    startInlineEditAfterStructuralChange(nodeId, state.mergeResult.caretIndex)
     dispatch({ type: "CLEAR_MERGE_RESULT" })
-  }, [paginatePreviewDoc, resetInlineEditVisualFreshness, state.mergeResult])
+  }, [startInlineEditAfterStructuralChange, state.mergeResult])
 
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
@@ -1004,8 +1003,9 @@ export default function EditorShell() {
   }, [inlineEditCaretIndex, inlineEditFragmentRanges, inlineEditNodeId, inlineEditPageIndex])
 
   // Inline edit contract:
-  // - While editing, the textarea owns active-paragraph text/caret wrapping.
-  // - Browser pagination owns optimistic page/fragment geometry from previewDoc.
+  // - While editing, the textarea owns input/caret events for the active paragraph.
+  // - Browser pagination owns optimistic text wrapping and page/fragment geometry
+  //   from previewDoc so the visible text matches normal document rendering.
   // - After edit mode exits, settle preview pagination from the latest rendered
   //   document snapshot. This avoids reconciling from a stale onBlur closure.
   useEffect(() => {
@@ -1030,8 +1030,9 @@ export default function EditorShell() {
   }, [inlineEditNodeId, inlineEditPageIndex])
 
   // While inline editing, the textarea is the interaction truth for the active
-  // paragraph. Do not patch its fragment with core/browser-measured lines on
-  // every input; that creates a second line-breaking pass under the caret.
+  // paragraph, but browser pagination remains the visual truth. Do not patch
+  // fragments through the older same-page local reflow path; that can fight the
+  // full paginated preview when text starts crossing page boundaries.
   useEffect(() => {
     if (!inlineEditNodeId) return
     const paraNode = findParagraphNode(previewDoc, inlineEditNodeId)
@@ -1532,9 +1533,8 @@ export default function EditorShell() {
     }
   }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, isTemplateMode, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
 
-  const inlineEditVisualLocked = inlineEditNodeId !== null && inlineEditVisualLockNodeId === inlineEditNodeId
   const inlineEditVisualFresh = inlineEditNodeId === null ||
-    (!inlineEditVisualLocked && inlineEditVisualVersion >= inlineEditDraftVersion)
+    inlineEditVisualVersion >= inlineEditDraftVersion
 
   return (
     <div
@@ -1719,6 +1719,7 @@ export default function EditorShell() {
           scale={scale}
           selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
           isLayoutLoading={isLayoutLoading}
+          textMeasurer={editorTextMeasurer}
           inlineEditVisualFresh={isTemplateMode ? inlineEditVisualFresh : true}
           inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
           inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}

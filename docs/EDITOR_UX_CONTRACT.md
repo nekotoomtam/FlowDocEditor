@@ -45,8 +45,12 @@ Users should be able to:
 - Inline editing should preserve visible text.
 - Entering edit mode should not trigger unnecessary full re-pagination that
   causes visible collapse/flicker.
-- Active paragraph input/caret handling is owned by the textarea during editing,
-  but the authored text remains in `DocumentNode`.
+- Active paragraph input/caret events are captured by the textarea during
+  editing, but visible text should come from the document renderer whenever the
+  active draft has a fresh paginated snapshot.
+- The textarea inline editor is a plain-text bridge only. Paragraphs containing
+  fields, page numbers, or other non-text inline nodes should not enter textarea
+  editing or be rewritten through property-panel textareas.
 - During inline paragraph editing, browser pagination may run against
   `previewDoc` with the active draft and update the canvas as optimistic visual
   layout so long paragraphs can show continuation fragments before blur.
@@ -56,22 +60,31 @@ Users should be able to:
   keeps edit entry visually close to normal mode.
 - When the active edit visual snapshot is stale, the textarea must keep visible
   text as a fallback so fast typing never makes text disappear.
-- Once the user changes text, uses a keyboard edit/navigation command, or starts
-  composition in the inline textarea, edit mode should lock to visible textarea
-  text until that edit session ends. It should not auto-handoff back to SVG
-  while focus remains in the same edit session, because textarea and SVG text
-  layout are different engines.
-- Programmatic focus/selection on edit entry should not trigger this visual
-  lock. `onSelect` may update caret state but must not be the lock trigger.
-- Pointer clicks used only to place the native caret should not trigger the
-  visual lock by themselves; otherwise a second click can reveal textarea
-  layout drift before the user actually edits text.
+- After text input, edit mode should hand back to the SVG/document visual layer
+  as soon as browser pagination catches up to the active draft. The textarea may
+  be visible only as a short stale-frame fallback, or for composition/IME states
+  that are not yet safe to render through the paginated layer.
+- When the active draft has fresh SVG lines and the textarea selection is
+  collapsed, the editor should draw the collapsed caret from paginated line
+  geometry and hide the native textarea caret. If the custom caret cannot be
+  resolved, range selection is active, or composition is active, the editor
+  should fall back to visible textarea text/native caret until dedicated
+  overlays exist.
+- Programmatic focus/selection on edit entry should not force the visible
+  textarea layer. `onSelect` may update caret state without changing the visual
+  owner.
+- Pointer clicks used only to place the native caret should not force the
+  visible textarea layer by themselves; otherwise a second click can reveal
+  textarea layout drift before the user actually edits text.
 - The editor should avoid showing both layers visibly at the same time.
 - Page splitting and non-active continuation fragments still come from
   `PaginatedDocument`.
 - Full browser/server pagination should reconcile after edit settles or exits.
 - Continuation fragments need extra care: only the clicked fragment should enter
   edit mode, and continuation text/caret offsets must remain slice-aware.
+- Active textarea instances must be keyed by their fragment slice identity, not
+  only paragraph id, so remounted continuation slices do not reuse stale DOM
+  values with a new `preText` prefix.
 - When segment offsets are available, the active inline textarea may move to the
   paginated fragment/page containing the current caret. The caret index remains
   UTF-16 text-offset based and must not become page geometry stored in
@@ -86,6 +99,13 @@ Users should be able to:
   Backspace at the start of a continuation slice should edit across the
   continuation boundary, not merge the paragraph unless the caret is at the true
   start of the full paragraph.
+- Plain Enter in inline textareas should insert a newline in the current
+  paragraph while textarea is the bridge editor. Structural paragraph split is
+  deferred to a more explicit command or the WYSIWYG track.
+- Structural Backspace merge should keep the user in an active textarea when
+  possible and must not reuse stale SVG paragraph snapshots as the edit visual.
+- Backspace at the true start of a table-cell paragraph should not call the
+  body-paragraph merge operation.
 
 ## Undo/Redo Rules
 
@@ -108,6 +128,8 @@ Table-specific interaction rules are defined in
 - insert/delete column preserves total table width
 - row `allowBreak` and table `headerRowCount` are visible authored controls
 - table operations should not leave the editor in an invalid document state
+- margin resizing with tables should expose a visible, predictable drag affordance
+  and enough feedback that users understand the table is being reflowed.
 
 ## Preview And Authoritative Layout
 

@@ -91,14 +91,18 @@ Initial internal helper:
 
 - `resolveCollapsedCaretOverlayInFragment(...)`
 - `resolveParagraphCollapsedCaretOverlay(...)`
-- These helpers return page-local line geometry for a collapsed caret, but the
-  default editor does not render the custom caret yet.
+- These helpers return page-local line geometry for a collapsed caret.
+- The default editor now renders the collapsed custom caret for plain paragraph
+  inline editing when the active visual snapshot is fresh, the textarea
+  selection is collapsed, and composition is not active.
 
 - Use the caret mapping contract for offset to position.
 - Draw an SVG caret over paginated text.
 - Keep the textarea focused for input, IME, keyboard, and clipboard basics.
 - Do not implement selection highlight yet.
 - Fall back to visible textarea text during composition or mapping uncertainty.
+- Fall back to visible textarea text and the native textarea caret when the
+  custom caret cannot be resolved from current `fragment.lines` geometry.
 
 ## Stage 4: Hit Testing Activation
 
@@ -108,12 +112,19 @@ Initial activation:
 
 - `EditorCanvas` uses `resolveCaretOffsetFromPointInFragment(...)` for
   paragraph pointer hit testing.
+- Pointer hit testing passes the editor browser text measurer into the mapping
+  helper so click-to-caret uses the same measurement source as preview
+  pagination and custom caret placement.
 - The older line-width ratio fallback remains available when segment geometry
   is missing.
 
 - Use point to offset mapping.
 - Start with one paragraph and page-local coordinates.
 - Use fragment ranges for split paragraphs.
+- Point-to-offset mapping should compare the click point against measured
+  grapheme-safe caret candidates, not infer text offsets from a segment-width
+  ratio. This keeps variable-width glyphs, Thai marks, emoji, and ZWJ sequences
+  from drifting toward invalid or visibly wrong caret stops.
 - Do not implement drag selection yet.
 
 ## Stage 5: Selection Overlay

@@ -1,4 +1,4 @@
-import type { DocumentNode, LayoutNode, ParagraphNode, TableNode, TableRowNode, TableCellNode } from "../schema"
+import type { DocumentNode, LayoutNode, ParagraphNode, TableNode, TableRowNode, TableCellNode, TextRun } from "../schema"
 import { pt } from "../schema"
 import type { DragSource, PlacementOperation } from "../placement/types"
 import {
@@ -50,7 +50,7 @@ function setChildIds(nodes: Nodes, parentId: string, childIds: string[]): Nodes 
   return { ...nodes, [parentId]: { ...node, childIds } as LayoutNode }
 }
 
-function isPlainTextParagraph(node: ParagraphNode): boolean {
+export function isPlainTextParagraph(node: ParagraphNode): node is ParagraphNode & { children: TextRun[] } {
   return node.children.length > 0 && node.children.every((child) => child.type === "text")
 }
 

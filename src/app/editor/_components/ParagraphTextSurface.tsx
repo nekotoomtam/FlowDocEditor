@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { isPlainTextParagraph } from "@/document"
+import { snapToGraphemeBoundary } from "@/layout"
+import type { TextMeasurer } from "@/layout"
 import type { DocumentNode, ParagraphNode, TableNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily } from "@/font-registry"
+import { resolveCollapsedCaretOverlayInFragment } from "./wysiwygCaretMapping"
 
 interface Props {
   fragment: PageFragment
   doc: DocumentNode
   pageKey: string
   scale: number
+  textMeasurer?: TextMeasurer
   isEditing: boolean
   isVisualFresh: boolean
   showTextSegments: boolean
@@ -41,8 +46,28 @@ export function shouldUseInlineEditSvgVisual(isEditing: boolean, isVisualFresh: 
   return isEditing && isVisualFresh
 }
 
+export function shouldUseInlineEditDocumentVisual(
+  isEditing: boolean,
+  isVisualFresh: boolean,
+  isSelectionCollapsed: boolean,
+  isComposing: boolean,
+): boolean {
+  return shouldUseInlineEditSvgVisual(isEditing, isVisualFresh) && isSelectionCollapsed && !isComposing
+}
+
 export function inlineEditTextareaTextColor(useSvgVisual: boolean): string {
   return useSvgVisual ? "transparent" : INLINE_EDIT_TEXT_COLOR
+}
+
+export function inlineEditTextareaCaretColor(useCustomCaret: boolean): string {
+  return useCustomCaret ? "transparent" : INLINE_EDIT_TEXT_COLOR
+}
+
+export function shouldUseInlineEditDocumentLayer(
+  canUseDocumentVisual: boolean,
+  hasCustomCaret: boolean,
+): boolean {
+  return canUseDocumentVisual && hasCustomCaret
 }
 
 function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
@@ -63,10 +88,56 @@ function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | n
 function getEditableParagraphText(doc: DocumentNode, nodeId: string): string | null {
   const node = findParagraphNode(doc, nodeId)
   if (!node) return null
+  if (!isPlainTextParagraph(node)) return null
   return node.children
-    .filter((child) => child.type === "text")
-    .map((child) => (child as { text: string }).text)
+    .map((child) => child.type === "text" ? child.text : "")
     .join("")
+}
+
+function isTableCellNodeId(doc: DocumentNode, nodeId: string | null | undefined): boolean {
+  if (!nodeId) return false
+  for (const section of doc.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      if (node.type !== "table") continue
+      const inner = (node as unknown as TableNode).nodes[nodeId]
+      if (inner?.type === "table-cell") return true
+    }
+  }
+  return false
+}
+
+function isParagraphInsideTableCell(
+  doc: DocumentNode,
+  nodeId: string,
+  parentNodeId: string | null | undefined,
+): boolean {
+  if (isTableCellNodeId(doc, parentNodeId)) return true
+  for (const section of doc.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      if (node.type !== "table") continue
+      const table = node as unknown as TableNode
+      for (const candidate of Object.values(table.nodes)) {
+        if (candidate.type === "table-cell" && candidate.childIds.includes(nodeId)) return true
+      }
+    }
+  }
+  return false
+}
+
+export function buildInlineEditSliceKey(fragment: PageFragment, continuationCharStart: number | null): string {
+  const fragmentPart = fragment.fragmentIndex ?? fragment.lineStart ?? "x"
+  return `${fragment.nodeId}:${fragment.pageIndex}:${fragmentPart}:${continuationCharStart ?? 0}`
+}
+
+export function shouldUseNativeInlineEditEnter(): boolean {
+  return true
+}
+
+export function shouldUseNativeTableCellBoundaryBackspace(
+  isTableCellParagraph: boolean,
+  preText: string,
+): boolean {
+  return isTableCellParagraph && preText.length === 0
 }
 
 export function getContinuationEditState(
@@ -90,22 +161,7 @@ export function absoluteInlineEditIndex(preText: string, localIndex: number | nu
   return preText.length + Math.max(0, localIndex ?? fallback)
 }
 
-export function buildSplitEditInput(
-  preText: string,
-  editText: string,
-  selectionStart: number,
-  selectionEnd: number,
-): SplitEditInput {
-  const start = Math.max(0, Math.min(selectionStart, editText.length))
-  const end = Math.max(start, Math.min(selectionEnd, editText.length))
-  const nextEditText = editText.slice(0, start) + editText.slice(end)
-  return {
-    text: preText + nextEditText,
-    splitIndex: preText.length + start,
-  }
-}
-
-function previousGraphemeBoundary(text: string, index: number): number {
+function previousGraphemeBoundary(text: string, index: number, includeExact = false): number {
   const safeIndex = Math.max(0, Math.min(index, text.length))
   if (safeIndex === 0) return 0
 
@@ -114,13 +170,59 @@ function previousGraphemeBoundary(text: string, index: number): number {
     let offset = 0
     for (const part of segmenter.segment(text)) {
       const nextOffset = offset + part.segment.length
-      if (nextOffset >= safeIndex) return offset
+      if (nextOffset === safeIndex) return includeExact ? nextOffset : offset
+      if (nextOffset > safeIndex) return offset
       offset = nextOffset
     }
     return offset
   }
 
   return safeIndex - 1
+}
+
+function nextGraphemeBoundary(text: string, index: number): number {
+  const safeIndex = Math.max(0, Math.min(index, text.length))
+  if (safeIndex === 0) return 0
+
+  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+    const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "grapheme" })
+    let offset = 0
+    for (const part of segmenter.segment(text)) {
+      const nextOffset = offset + part.segment.length
+      if (nextOffset >= safeIndex) return nextOffset
+      offset = nextOffset
+    }
+    return text.length
+  }
+
+  return safeIndex + 1
+}
+
+export function buildSplitEditInput(
+  preText: string,
+  editText: string,
+  selectionStart: number,
+  selectionEnd: number,
+): SplitEditInput {
+  const rawStart = Math.max(0, Math.min(selectionStart, editText.length))
+  const rawEnd = Math.max(rawStart, Math.min(selectionEnd, editText.length))
+  const currentText = preText + editText
+  const rawFullStart = preText.length + rawStart
+  const rawFullEnd = preText.length + rawEnd
+  const fullStart = rawStart === rawEnd
+    ? snapToGraphemeBoundary(currentText, rawFullStart)
+    : Math.max(preText.length, previousGraphemeBoundary(currentText, rawFullStart, true))
+  const fullEnd = rawStart === rawEnd
+    ? fullStart
+    : Math.max(fullStart, nextGraphemeBoundary(currentText, rawFullEnd))
+  const start = Math.max(0, Math.min(fullStart - preText.length, editText.length))
+  const end = Math.max(start, Math.min(fullEnd - preText.length, editText.length))
+  const nextEditText = editText.slice(0, start) + editText.slice(end)
+  const text = preText + nextEditText
+  return {
+    text,
+    splitIndex: snapToGraphemeBoundary(text, Math.min(preText.length + start, text.length)),
+  }
 }
 
 export function buildContinuationBackspaceInput(
@@ -265,11 +367,40 @@ function renderSegmentDebug(
   }) ?? null
 }
 
+function renderCollapsedCaret(
+  fragment: PageFragment,
+  pageKey: string,
+  scale: number,
+  caretIndex: number | null,
+  textMeasurer: TextMeasurer | undefined,
+) {
+  if (caretIndex == null) return null
+  const overlay = resolveCollapsedCaretOverlayInFragment(fragment, caretIndex, { textMeasurer })
+  if (!overlay) return null
+
+  return (
+    <line
+      key={`caret-${fragment.nodeId}-${overlay.offset}`}
+      data-wysiwyg-caret="true"
+      x1={overlay.x1 * scale}
+      y1={overlay.y1 * scale}
+      x2={overlay.x2 * scale}
+      y2={overlay.y2 * scale}
+      stroke={INLINE_EDIT_TEXT_COLOR}
+      strokeWidth={Math.max(1, 1.1 * scale)}
+      strokeLinecap="round"
+      clipPath={`url(#cp-${pageKey}-${fragment.nodeId})`}
+      style={{ pointerEvents: "none" }}
+    />
+  )
+}
+
 export function ParagraphTextSurface({
   fragment,
   doc,
   pageKey,
   scale,
+  textMeasurer,
   isEditing,
   isVisualFresh,
   showTextSegments,
@@ -283,6 +414,8 @@ export function ParagraphTextSurface({
   onMergeParagraph,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [isSelectionCollapsed, setIsSelectionCollapsed] = useState(true)
+  const [isComposing, setIsComposing] = useState(false)
   const renderProps = fragment.renderProps
   const editHeight = Math.max(fragment.height * scale, 1)
   const fontSize = (renderProps?.fontSize ?? 12) * scale
@@ -297,11 +430,24 @@ export function ParagraphTextSurface({
   // fragment so the textarea starts at the right content and the caret is
   // correctly positioned without relying on scroll (which doesn't work reliably
   // inside SVG foreignObject with overflow:hidden).
-  const fullText = getEditableParagraphText(doc, fragment.nodeId) ?? ""
-  const { editText, preText, adjustedInitialCaret } = getContinuationEditState(fullText, fragment, initialCaretIndex)
+  const fullText = getEditableParagraphText(doc, fragment.nodeId)
+  const canPlainTextEdit = fullText !== null
+  const {
+    continuationCharStart,
+    editText,
+    preText,
+    adjustedInitialCaret,
+  } = getContinuationEditState(fullText ?? "", fragment, initialCaretIndex)
+  const editSliceKey = buildInlineEditSliceKey(fragment, continuationCharStart)
+  const isTableCellParagraph = isParagraphInsideTableCell(doc, fragment.nodeId, fragment.parentNodeId)
+  const isCurrentEditSlice = useCallback((el: HTMLTextAreaElement) => (
+    el.dataset.inlineEditSliceKey === editSliceKey
+  ), [editSliceKey])
   const updateCaret = useCallback((el: HTMLTextAreaElement) => {
+    if (!isCurrentEditSlice(el)) return
+    setIsSelectionCollapsed((el.selectionStart ?? 0) === (el.selectionEnd ?? 0))
     onCaretChange(fragment.nodeId, absoluteInlineEditIndex(preText, el.selectionStart, el.value.length))
-  }, [fragment.nodeId, onCaretChange, preText])
+  }, [fragment.nodeId, isCurrentEditSlice, onCaretChange, preText])
   const markUserEditInteraction = useCallback(() => {
     onUserEditInteraction(fragment.nodeId)
   }, [fragment.nodeId, onUserEditInteraction])
@@ -312,8 +458,21 @@ export function ParagraphTextSurface({
   }, [fragment.height, fragment.lines, isEditing])
   const editPreviewHeight = (editPreview?.height ?? 0) * scale
   const activeEditHeight = Math.max(editHeight, minimumEditHeight, editPreviewHeight)
-  const useSvgVisual = shouldUseInlineEditSvgVisual(isEditing, isVisualFresh)
-  const textareaTextColor = inlineEditTextareaTextColor(useSvgVisual)
+  const canUseDocumentVisual = shouldUseInlineEditDocumentVisual(
+    isEditing,
+    isVisualFresh,
+    isSelectionCollapsed,
+    isComposing,
+  )
+  const customCaret = useMemo(() => (
+    canUseDocumentVisual
+      ? renderCollapsedCaret(fragment, pageKey, scale, initialCaretIndex, textMeasurer)
+      : null
+  ), [canUseDocumentVisual, fragment, initialCaretIndex, pageKey, scale, textMeasurer])
+  const useCustomCaret = customCaret !== null
+  const useDocumentVisual = shouldUseInlineEditDocumentLayer(canUseDocumentVisual, useCustomCaret)
+  const textareaTextColor = inlineEditTextareaTextColor(useDocumentVisual)
+  const textareaCaretColor = inlineEditTextareaCaretColor(useCustomCaret)
   // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
   // Matching padding cancels that expansion so textarea content starts at the
   // same paragraph origin as SVG lines instead of drifting by the chrome size.
@@ -334,7 +493,7 @@ export function ParagraphTextSurface({
       el.setSelectionRange(caret, caret)
       el.scrollTop = 0
     })
-  }, [fragment.nodeId, adjustedInitialCaret, isEditing])
+  }, [adjustedInitialCaret, editSliceKey, fragment.nodeId, isEditing])
 
   useEffect(() => {
     if (!isEditing) return
@@ -343,10 +502,10 @@ export function ParagraphTextSurface({
     requestAnimationFrame(() => syncTextareaHeight(el))
   }, [editHeight, isEditing, syncTextareaHeight])
 
-  if (isEditing) {
+  if (isEditing && canPlainTextEdit) {
     return (
       <>
-        {useSvgVisual && fragment.lines?.map((line, index) =>
+        {useDocumentVisual && fragment.lines?.map((line, index) =>
           renderLine(line, index, fragment, renderProps, pageKey, scale),
         )}
         {showTextSegments && renderSegmentDebug(fragment.lines, fragment, renderProps, scale)}
@@ -357,6 +516,7 @@ export function ParagraphTextSurface({
           height={activeEditHeight + EDIT_CHROME_Y * 2}
         >
           <textarea
+            key={editSliceKey}
             ref={textareaRef}
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             {...{ xmlns: "http://www.w3.org/1999/xhtml" } as any}
@@ -378,31 +538,36 @@ export function ParagraphTextSurface({
               lineHeight: `${lineHeight}px`,
               textAlign: textAlignForParagraph(renderProps?.align),
               color: textareaTextColor,
-              caretColor: INLINE_EDIT_TEXT_COLOR,
+              caretColor: textareaCaretColor,
               resize: "none",
               overflow: "hidden",
               padding: textareaPadding,
               margin: 0,
               boxSizing: "border-box",
               whiteSpace: "pre-wrap",
-              overflowWrap: "anywhere",
+              overflowWrap: "break-word",
               wordBreak: "normal",
             }}
             onInput={(event) => {
-              markUserEditInteraction()
               const el = event.currentTarget
+              if (!isCurrentEditSlice(el)) return
+              markUserEditInteraction()
+              setIsSelectionCollapsed((el.selectionStart ?? 0) === (el.selectionEnd ?? 0))
               const caretIndex = absoluteInlineEditIndex(preText, el.selectionStart, el.value.length)
               syncTextareaHeight(el)
               onChange(fragment.nodeId, preText + el.value, caretIndex)
             }}
             onSelect={(event) => {
               const el = event.currentTarget
+              if (!isCurrentEditSlice(el)) return
               el.scrollTop = 0
               updateCaret(el)
             }}
             onBlur={() => onEndEdit(fragment.nodeId, "blur")}
             onKeyDown={(event) => {
               event.stopPropagation()
+              const el = event.currentTarget
+              if (!isCurrentEditSlice(el)) return
               markUserEditInteraction()
               if (event.nativeEvent.isComposing) return
               if (event.key === "Escape") {
@@ -412,8 +577,8 @@ export function ParagraphTextSurface({
               }
 
               if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+                if (shouldUseNativeInlineEditEnter()) return
                 event.preventDefault()
-                const el = event.currentTarget
                 const selectionStart = el.selectionStart ?? el.value.length
                 const selectionEnd = el.selectionEnd ?? selectionStart
                 const input = buildSplitEditInput(preText, el.value, selectionStart, selectionEnd)
@@ -423,18 +588,19 @@ export function ParagraphTextSurface({
               }
 
               if (event.key === "Backspace" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-                const el = event.currentTarget
                 const selectionStart = el.selectionStart ?? el.value.length
                 const selectionEnd = el.selectionEnd ?? selectionStart
                 if (selectionStart !== 0 || selectionEnd !== 0) return
 
-                event.preventDefault()
                 const continuationBackspace = buildContinuationBackspaceInput(preText, el.value)
                 if (continuationBackspace) {
+                  event.preventDefault()
                   onChange(fragment.nodeId, continuationBackspace.text, continuationBackspace.caretIndex)
                   return
                 }
 
+                if (shouldUseNativeTableCellBoundaryBackspace(isTableCellParagraph, preText)) return
+                event.preventDefault()
                 onChange(fragment.nodeId, el.value, 0)
                 onMergeParagraph(fragment.nodeId)
               }
@@ -447,10 +613,20 @@ export function ParagraphTextSurface({
             onPointerDown={(event) => {
               event.stopPropagation()
             }}
-            onCompositionStart={markUserEditInteraction}
+            onCompositionStart={() => {
+              setIsComposing(true)
+              markUserEditInteraction()
+            }}
+            onCompositionEnd={(event) => {
+              setIsComposing(false)
+              updateCaret(event.currentTarget)
+            }}
             data-inline-edit-node-id={fragment.nodeId}
+            data-inline-edit-slice-key={editSliceKey}
+            data-inline-edit-slice-start={continuationCharStart ?? 0}
           />
         </foreignObject>
+        {customCaret}
       </>
     )
   }

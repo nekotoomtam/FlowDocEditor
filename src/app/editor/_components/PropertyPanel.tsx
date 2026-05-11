@@ -1,5 +1,6 @@
 import type { DocumentNode, LayoutNode, TableNode, TableRowNode, TableCellNode, ParagraphNode, TocNode } from "@/schema"
 import { pt } from "@/schema"
+import { isPlainTextParagraph } from "@/document"
 
 type DocNode = LayoutNode | TableRowNode | TableCellNode
 
@@ -117,6 +118,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
         {/* ── Paragraph ── */}
         {node.type === "paragraph" && (() => {
           const text = getParagraphText(node)
+          const canEditText = isPlainTextParagraph(node)
           return (
             <>
               <div>
@@ -124,8 +126,16 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
                 <textarea
                   value={text}
                   rows={4}
-                  onChange={(e) => onUpdateText(selectedNodeId, e.target.value)}
-                  style={{ ...input, resize: "vertical" }}
+                  readOnly={!canEditText}
+                  onChange={(e) => {
+                    if (canEditText) onUpdateText(selectedNodeId, e.target.value)
+                  }}
+                  style={{
+                    ...input,
+                    resize: "vertical",
+                    background: canEditText ? input.background : "#f9fafb",
+                    color: canEditText ? input.color : "#9ca3af",
+                  }}
                 />
               </div>
               <div style={{ display: "flex", gap: 6 }}>
@@ -345,6 +355,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
           const paragraphId = cell.childIds[0]
           const paraNode = paragraphId ? findNode(doc, paragraphId) : null
           const text = paraNode?.type === "paragraph" ? getParagraphText(paraNode) : ""
+          const canEditText = paraNode?.type === "paragraph" ? isPlainTextParagraph(paraNode) : false
           const cols = table.columns.length
           return (
             <>
@@ -355,8 +366,16 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
                   <textarea
                     value={text}
                     rows={3}
-                    onChange={(e) => onUpdateText(paragraphId, e.target.value)}
-                    style={{ ...input, resize: "vertical" }}
+                    readOnly={!canEditText}
+                    onChange={(e) => {
+                      if (canEditText) onUpdateText(paragraphId, e.target.value)
+                    }}
+                    style={{
+                      ...input,
+                      resize: "vertical",
+                      background: canEditText ? input.background : "#f9fafb",
+                      color: canEditText ? input.color : "#9ca3af",
+                    }}
                   />
                 </div>
               )}

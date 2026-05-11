@@ -85,6 +85,23 @@ const fixedWidthMeasurer: TextMeasurer = {
   },
 }
 
+const variableWidthMeasurer: TextMeasurer = {
+  measureText(text) {
+    let width = 0
+    for (const char of Array.from(text)) {
+      if (char === "W") width += 30
+      else if (char === "i") width += 5
+      else if (char === "ก") width += 12
+      else if (char === "้") width += 0
+      else width += 10
+    }
+    return { width }
+  },
+  measureLineHeight(_fontFamilyKey, fontSize, lineHeightRatio) {
+    return fontSize * lineHeightRatio
+  },
+}
+
 describe("WYSIWYG caret mapping contract", () => {
   it("builds caret candidates from grapheme boundaries, not raw segment boundaries", () => {
     const line = makeLine({
@@ -157,6 +174,63 @@ describe("WYSIWYG caret mapping contract", () => {
     const result = resolveCaretOffsetFromPointInFragment(fragment, { x: 37, y: 24 })
 
     expect(result?.offset).toBe(3)
+  })
+
+  it("maps point-to-offset by nearest measured candidate instead of segment ratio", () => {
+    const line = makeLine({
+      text: "Wiii",
+      width: 45,
+      segments: [{
+        kind: "word",
+        text: "Wiii",
+        start: 0,
+        end: 4,
+        x: 0,
+        width: 45,
+        breakableAfter: false,
+      }],
+    })
+    const fragment = makeFragment({ lines: [line] })
+
+    const result = resolveCaretOffsetFromPointInFragment(
+      fragment,
+      { x: 42, y: 24 },
+      { textMeasurer: variableWidthMeasurer },
+    )
+
+    expect(result).toMatchObject({
+      offset: 1,
+      x: 40,
+      source: "segment-candidate",
+    })
+  })
+
+  it("keeps point-to-offset mapping outside emoji ZWJ grapheme internals", () => {
+    const emoji = "👩‍💻"
+    const text = `A${emoji}B`
+    const line = makeLine({
+      text,
+      width: 40,
+      segments: [{
+        kind: "word",
+        text,
+        start: 0,
+        end: text.length,
+        x: 0,
+        width: 40,
+        breakableAfter: false,
+      }],
+    })
+    const fragment = makeFragment({ lines: [line] })
+    const candidates = getWysiwygCaretCandidatesForLine(fragment, line, 0, { textMeasurer: fixedWidthMeasurer })
+    const result = resolveCaretOffsetFromPointInFragment(
+      fragment,
+      { x: 24, y: 24 },
+      { textMeasurer: fixedWidthMeasurer },
+    )
+
+    expect(candidates.map((candidate) => candidate.offset)).toEqual([0, 1, 1 + emoji.length, text.length])
+    expect(result?.offset).toBe(1)
   })
 
   it("selects the continuation fragment when an offset lands on a split boundary", () => {

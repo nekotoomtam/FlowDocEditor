@@ -1,8 +1,10 @@
 "use client"
 
 import { useRef, useEffect } from "react"
+import type { TextMeasurer } from "@/layout"
 import type { PaginatedDocument, PageFragment, PaginatedLine, PaginatedPage, ParagraphRenderProps } from "@/pagination"
-import type { DocumentNode, TableCellNode, TableNode } from "@/schema"
+import { isPlainTextParagraph } from "@/document"
+import type { DocumentNode, ParagraphNode, TableCellNode, TableNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
@@ -46,6 +48,7 @@ function caretIndexFromPointer(
   fragment: PageFragment,
   event: React.PointerEvent | React.MouseEvent,
   scale: number,
+  textMeasurer: TextMeasurer,
 ): number | null {
   const svg = (event.currentTarget as SVGGElement).ownerSVGElement
   const lines = fragment.lines ?? []
@@ -54,7 +57,7 @@ function caretIndexFromPointer(
   const rect = svg.getBoundingClientRect()
   const docX = (event.clientX - rect.left) / scale
   const docY = (event.clientY - rect.top) / scale
-  const mappedCaret = resolveCaretOffsetFromPointInFragment(fragment, { x: docX, y: docY })
+  const mappedCaret = resolveCaretOffsetFromPointInFragment(fragment, { x: docX, y: docY }, { textMeasurer })
   if (mappedCaret) return mappedCaret.offset
 
   const directLineIndex = lines.findIndex((line) => docY >= line.y && docY <= line.y + line.height)
@@ -82,11 +85,32 @@ function findFirstParagraphInCell(doc: DocumentNode, cellId: string): string | n
       const table = node as unknown as TableNode
       const cell = table.nodes[cellId] as TableCellNode | undefined
       if (cell?.type !== "table-cell") continue
-      const paragraphId = cell.childIds.find((id) => table.nodes[id]?.type === "paragraph")
+      const paragraphId = cell.childIds.find((id) => {
+        const paragraph = table.nodes[id]
+        return paragraph?.type === "paragraph" && isPlainTextParagraph(paragraph as ParagraphNode)
+      })
       if (paragraphId) return paragraphId
     }
   }
   return null
+}
+
+function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[nodeId]
+    if (node?.type === "paragraph") return node
+    for (const candidate of Object.values(section.nodes)) {
+      if (candidate.type !== "table") continue
+      const inner = (candidate as unknown as TableNode).nodes[nodeId]
+      if (inner?.type === "paragraph") return inner as ParagraphNode
+    }
+  }
+  return null
+}
+
+function canInlineEditParagraph(doc: DocumentNode, nodeId: string): boolean {
+  const paragraph = findParagraphNode(doc, nodeId)
+  return paragraph !== null && isPlainTextParagraph(paragraph)
 }
 
 function isTableCellId(doc: DocumentNode, nodeId: string | null | undefined): boolean {
@@ -154,12 +178,13 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading, inlineEditVisualFresh,
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
-  pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
+  pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
+  textMeasurer: TextMeasurer
   inlineEditVisualFresh: boolean
   showTextSegments: boolean
   showDrift: boolean
@@ -293,6 +318,7 @@ function PageView({
         const selectNodeId = f.nodeId
         const isSelected = f.nodeId === selectedNodeId
         const isTableCellParagraph = f.nodeType === "paragraph" && isTableCellId(doc, f.parentNodeId)
+        const canInlineEditThisParagraph = f.nodeType === "paragraph" && canInlineEditParagraph(doc, f.nodeId)
         // For split paragraphs: only the fragment on the clicked page enters edit mode.
         // Without the pageIndex check, ALL fragments of the paragraph get isInlineEditing=true,
         // disabling pointer events and rendering textareas on every page the paragraph spans.
@@ -342,11 +368,11 @@ function PageView({
             onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
-                const clickAction = f.nodeType === "paragraph" && !isTableCellParagraph
+                const clickAction = canInlineEditThisParagraph && !isTableCellParagraph
                   ? {
                       type: "inline-edit" as const,
                       nodeId: f.nodeId,
-                      caretIndex: caretIndexFromPointer(f, e, scale),
+                      caretIndex: caretIndexFromPointer(f, e, scale, textMeasurer),
                       pageIndex: f.pageIndex,
                     }
                   : undefined
@@ -358,8 +384,8 @@ function PageView({
               ? (e) => {
                 e.stopPropagation()
                 const paragraphId = f.nodeType === "table-cell" ? findFirstParagraphInCell(doc, f.nodeId) : f.nodeId
-                if (!paragraphId) return
-                onInlineEditStart(paragraphId, f.nodeType === "paragraph" ? caretIndexFromPointer(f, e, scale) : null, f.pageIndex)
+                if (!paragraphId || !canInlineEditParagraph(doc, paragraphId)) return
+                onInlineEditStart(paragraphId, f.nodeType === "paragraph" ? caretIndexFromPointer(f, e, scale, textMeasurer) : null, f.pageIndex)
               }
               : undefined}
             style={{ cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default" }}
@@ -432,6 +458,7 @@ function PageView({
                 doc={doc}
                 pageKey={pageKey}
                 scale={scale}
+                textMeasurer={textMeasurer}
                 isEditing={isInlineEditing}
                 isVisualFresh={isInlineEditing && inlineEditVisualFresh}
                 showTextSegments={showTextSegments}
@@ -547,6 +574,7 @@ interface Props {
   scale: number
   selectedNodeId: string | null
   isLayoutLoading: boolean
+  textMeasurer: TextMeasurer
   inlineEditVisualFresh: boolean
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
@@ -575,6 +603,7 @@ interface Props {
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
+  textMeasurer,
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
@@ -613,6 +642,7 @@ export function EditorCanvas({
                 <PageView
                   page={page} doc={doc} drag={drag} scale={scale}
                   selectedNodeId={selectedNodeId} isLayoutLoading={isLayoutLoading}
+                  textMeasurer={textMeasurer}
                   inlineEditVisualFresh={inlineEditVisualFresh}
                   inlineEditNodeId={inlineEditNodeId}
                   inlineEditCaretIndex={inlineEditCaretIndex}

@@ -56,16 +56,20 @@ changes.
 - Confirm the paragraph text does not visibly jump when edit mode opens.
 - Type enough text to wrap into 3-4 visual lines.
 - Confirm typed text remains visible while editing.
-- During fast typing, confirm stale visual pagination keeps textarea text
-  visible as fallback, the editor does not visibly flicker between textarea and
-  SVG text on every keystroke, and the active edit session does not snap back to
-  SVG text after an idle pause.
+- During fast typing, confirm fresh visual pagination returns the visible text
+  to SVG/document rendering, while stale visual pagination keeps textarea text
+  visible as fallback instead of making text disappear.
+- Confirm the collapsed custom caret appears when SVG geometry is fresh,
+  selection is collapsed, and composition is inactive.
+- Confirm missing caret geometry, range selection, or composition falls back to
+  visible textarea text/native caret rather than leaving invisible input state.
 - Confirm entering edit without typing may use the fresh SVG visual layer, while
-  autofocus/programmatic selection alone does not lock textarea mode.
+  autofocus/programmatic selection alone does not force visible textarea mode.
 - Confirm a second click inside the active textarea to place the caret does not
   switch to visible textarea text or visibly change line layout by itself.
-- Confirm keyboard commands, text input, or composition start still lock the
-  active edit session to visible textarea text until edit exits.
+- Confirm keyboard text input hands back to SVG/custom-caret visuals after the
+  active draft becomes fresh; composition start may stay in native textarea
+  fallback until composition ends.
 - Confirm the active inline textarea does not grow into a giant hit area that
   extends far past the active fragment/page.
 - For page-boundary checks, use a paragraph near the bottom of a page and type

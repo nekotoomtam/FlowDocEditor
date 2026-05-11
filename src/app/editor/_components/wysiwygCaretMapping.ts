@@ -172,6 +172,20 @@ function nearestCandidate(
   }, candidates[0])
 }
 
+function nearestCandidateByX(
+  candidates: WysiwygCaretCandidate[],
+  x: number,
+): WysiwygCaretCandidate | null {
+  if (candidates.length === 0) return null
+  return candidates.reduce((best, candidate) => {
+    const bestDistance = Math.abs(best.x - x)
+    const distance = Math.abs(candidate.x - x)
+    if (distance < bestDistance) return candidate
+    if (distance === bestDistance && candidate.offset < best.offset) return candidate
+    return best
+  }, candidates[0])
+}
+
 function paragraphFragments(paginated: PaginatedDocument, nodeId: string): PageFragment[] {
   const fragments: PageFragment[] = []
   for (const section of paginated.sections) {
@@ -254,24 +268,10 @@ export function resolveCaretOffsetFromPointInFragment(
     }, 0)
 
   const line = lines[lineIndex]
-  const segments = line.segments ?? []
-  if (segments.length === 0) return null
-  if (point.x <= line.x) {
-    return candidateFromSegment(fragment, line, lineIndex, segments[0], 0, options)
-  }
-
-  for (const segment of segments) {
-    const left = line.x + segment.x
-    const right = left + segment.width
-    if (point.x <= right) {
-      const ratio = segment.width > 0 ? clamp((point.x - left) / segment.width, 0, 1) : 0
-      const localOffset = Math.round(ratio * segment.text.length)
-      return candidateFromSegment(fragment, line, lineIndex, segment, localOffset, options)
-    }
-  }
-
-  const last = segments[segments.length - 1]
-  return candidateFromSegment(fragment, line, lineIndex, last, last.text.length, options)
+  return nearestCandidateByX(
+    getWysiwygCaretCandidatesForLine(fragment, line, lineIndex, options),
+    point.x,
+  )
 }
 
 export function resolveParagraphCaretPosition(

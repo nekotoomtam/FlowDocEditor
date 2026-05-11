@@ -4360,3 +4360,168 @@ Notes:
 - The current saved browser document still triggers `/api/paginate` 500 and shows the layout-error badge; this appears separate from the inline edit height preview because the API receives only the document model, not the temporary edit geometry.
 - Follow-up fix: converted the reported textarea height from screen pixels back into document units before updating the preview fragment. Without this, canvas scales above/below 1 could create a feedback loop where the paragraph grew downward while typing.
 - Follow-up browser verification: a short Thai probe stayed at `20.07` before/after waiting, and a longer wrapped probe grew to `49` and stayed stable instead of continuing to expand.
+
+---
+
+### Harden Plain Textarea Inline Editing
+
+Goal: Keep the temporary textarea editor stable while the WYSIWYG track is built in parallel.
+
+Completed:
+
+- Exported and reused a shared `isPlainTextParagraph` guard.
+- Blocked textarea/property-panel text rewrites for mixed inline paragraphs.
+- Keyed active inline textarea instances by page/fragment slice and continuation offset.
+- Snapped split and selection-delete offsets to grapheme boundaries for the structural split helper.
+- Let inline paragraph textareas keep native multiline Enter behavior and avoid body-paragraph merge at the true table-cell start.
+- UX-smoke follow-up: structural merge now cancels stale blur finalization, refreshes pagination immediately, and keeps textarea text visible instead of reusing stale SVG snapshots.
+- Changed textarea emergency wrapping from `anywhere` to `break-word` so long typing uses more natural browser line wrapping while the textarea bridge is active.
+- Confirmed long active paragraph editing can move the textarea to a continuation slice on page 2 while keeping caret focus.
+- Captured margin-resize-with-table UX risk: the table reflows when margins move, but transparent margin hit areas make the interaction hard to discover/control.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Isolated Chromium CDP smoke: typed Thai/English paragraph text, verified plain Enter stays in the same paragraph as a newline, verified structural Backspace merge keeps visible edit text aligned with the merged textarea, then checked table-cell multiline Enter and true-start Backspace.
+- Isolated Chromium CDP smoke follow-up: typed long text one character at a time until multiple wraps, inserted a newline with Enter, extended the paragraph across page 2, and dragged the left page margin with a table present.
+
+---
+
+### Restore Document-Rendered Inline Typing Visuals
+
+Goal: Make active paragraph typing feel like editing the document text itself, not a detached textarea layout.
+
+Completed:
+
+- Reproduced the user-style long English typing case with isolated Chromium CDP by inserting characters one at a time until the paragraph wrapped.
+- Confirmed the active editor was still showing native textarea text during typing while normal SVG/document text appeared only after blur.
+- Removed the per-session visual lock that kept textarea glyphs visible after the first keyboard/input interaction.
+- Changed inline edit preview pagination to run immediately while typing so fresh SVG lines can become the visible layer as soon as the active draft updates.
+- Updated the inline edit contract so `fragment.lines` remains the visual truth during active typing, with textarea text only as a stale-frame or composition fallback.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Isolated Chromium CDP smoke: typed continuous English characters one at a time until wrapping; active textarea text was transparent, active SVG lines matched the after-blur SVG lines, and Enter inserted a newline in the same paragraph while keeping renderer-visible text.
+
+---
+
+### Add Collapsed WYSIWYG Caret Foundation
+
+Goal: Start the minimum viable WYSIWYG path by making the active caret come from
+the same paginated SVG geometry as visible paragraph text.
+
+Completed:
+
+- Accepted the WYSIWYG plan direction: SVG text visual, custom collapsed caret,
+  point-to-offset hit testing, textarea input fallback, and conservative
+  IME/native fallback rules.
+- Passed the browser text measurer into canvas paragraph surfaces so caret
+  overlay placement can use the same measurement source as editor preview
+  pagination.
+- Rendered a custom SVG collapsed caret from
+  `resolveCollapsedCaretOverlayInFragment(...)` when the active edit visual is
+  fresh, the textarea selection is collapsed, and composition is inactive.
+- Hid the native textarea caret only when a custom caret was successfully
+  resolved; missing geometry, range selection, and composition fall back to the
+  native textarea visual/caret path.
+- Kept selection overlay, hidden input mode, and cross-page selection deferred.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Isolated Chromium CDP smoke: opened a plain paragraph, typed `abcd`, confirmed
+  textarea glyphs and native caret were transparent, confirmed one
+  `data-wysiwyg-caret` SVG line was present, then typed long continuous English
+  text until wrapping and confirmed the custom caret followed the rendered last
+  line.
+
+Follow-up hardening:
+
+- Passed the editor browser text measurer into point-to-offset hit testing in
+  `EditorCanvas` so initial click-to-caret mapping uses the same measurement
+  source as preview rendering and custom caret placement.
+- Made missing custom-caret geometry fall back to visible textarea text/native
+  caret instead of showing SVG text with no custom caret.
+- Updated browser smoke docs to match the WYSIWYG-first direction: fresh drafts
+  should return to SVG/custom-caret visuals, while stale geometry, range
+  selection, and composition use native textarea fallback.
+- Added a focused policy regression that keeps textarea text visible when the
+  document visual layer is otherwise eligible but custom caret geometry is
+  missing.
+
+Follow-up verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- Isolated Chromium CDP smoke: opened a plain paragraph, typed `abcdef`, and
+  confirmed the collapsed edit state used transparent textarea glyphs/native
+  caret plus one SVG `data-wysiwyg-caret` line.
+
+---
+
+### Harden WYSIWYG Point-To-Offset Precision
+
+Goal: Make click-to-caret mapping use measured caret candidates instead of
+guessing offsets from segment-width ratios.
+
+Completed:
+
+- Changed `resolveCaretOffsetFromPointInFragment(...)` to build grapheme-safe
+  caret candidates for the selected visual line, then choose the candidate with
+  the nearest measured `x` position to the click point.
+- Preserved the existing null fallback when line segment geometry is unavailable.
+- Added a variable-width glyph regression where the old ratio approach would
+  choose a deeper offset than the nearest measured candidate.
+- Added an emoji ZWJ regression that keeps point-to-offset results on valid
+  grapheme boundaries.
+- Updated the WYSIWYG roadmap to make measured candidate-distance mapping the
+  Stage 4 rule.
+
+Files changed:
+
+- `src/app/editor/_components/wysiwygCaretMapping.ts`
+- `src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`

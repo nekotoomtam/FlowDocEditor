@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest"
 import {
   absoluteInlineEditIndex,
   buildContinuationBackspaceInput,
+  buildInlineEditSliceKey,
   buildSplitEditInput,
   getContinuationEditState,
+  inlineEditTextareaCaretColor,
   inlineEditTextareaTextColor,
+  shouldUseInlineEditDocumentLayer,
+  shouldUseInlineEditDocumentVisual,
+  shouldUseNativeInlineEditEnter,
+  shouldUseNativeTableCellBoundaryBackspace,
   shouldUseInlineEditSvgVisual,
 } from "../ParagraphTextSurface"
 import type { PageFragment } from "@/pagination"
@@ -118,6 +124,20 @@ describe("ParagraphTextSurface continuation editing", () => {
     expect(input.splitIndex).toBe("Hello wide".length)
   })
 
+  it("snaps paragraph splits away from the middle of a grapheme", () => {
+    const input = buildSplitEditInput("", "Aก้B", 2, 2)
+
+    expect(input.text).toBe("Aก้B")
+    expect(input.splitIndex).toBe(1)
+  })
+
+  it("deletes whole graphemes when a split selection touches the middle of one", () => {
+    const input = buildSplitEditInput("", "Aก้B", 2, 3)
+
+    expect(input.text).toBe("AB")
+    expect(input.splitIndex).toBe(1)
+  })
+
   it("backspaces across a continuation boundary without merging paragraphs", () => {
     const input = buildContinuationBackspaceInput("Hello ", "world")
 
@@ -139,6 +159,21 @@ describe("ParagraphTextSurface continuation editing", () => {
   it("leaves first-fragment start backspace for paragraph merge handling", () => {
     expect(buildContinuationBackspaceInput("", "Hello")).toBeNull()
   })
+
+  it("keys inline edit slices by stable fragment identity and continuation start", () => {
+    const fragment = makeFragment({ fragmentIndex: 1, lineStart: 4, lineEnd: 6 })
+
+    expect(buildInlineEditSliceKey(fragment, 25)).toBe(buildInlineEditSliceKey({ ...fragment, lineEnd: 8 }, 25))
+    expect(buildInlineEditSliceKey(fragment, 25)).not.toBe(buildInlineEditSliceKey(fragment, 30))
+    expect(buildInlineEditSliceKey(fragment, 25)).not.toBe(buildInlineEditSliceKey({ ...fragment, pageIndex: 1 }, 25))
+  })
+
+  it("lets inline textareas keep native multiline Enter editing", () => {
+    expect(shouldUseNativeInlineEditEnter()).toBe(true)
+    expect(shouldUseNativeTableCellBoundaryBackspace(true, "")).toBe(true)
+    expect(shouldUseNativeTableCellBoundaryBackspace(true, "Hello")).toBe(false)
+    expect(shouldUseNativeTableCellBoundaryBackspace(false, "")).toBe(false)
+  })
 })
 
 describe("ParagraphTextSurface inline edit visual parity", () => {
@@ -151,5 +186,23 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
   it("keeps textarea text visible while visual lines are stale", () => {
     expect(inlineEditTextareaTextColor(false)).toBe("#1e40af")
     expect(inlineEditTextareaTextColor(true)).toBe("transparent")
+  })
+
+  it("uses document visual only for fresh collapsed non-composition editing", () => {
+    expect(shouldUseInlineEditDocumentVisual(true, true, true, false)).toBe(true)
+    expect(shouldUseInlineEditDocumentVisual(true, false, true, false)).toBe(false)
+    expect(shouldUseInlineEditDocumentVisual(true, true, false, false)).toBe(false)
+    expect(shouldUseInlineEditDocumentVisual(true, true, true, true)).toBe(false)
+  })
+
+  it("falls back to visible textarea text when custom caret geometry is missing", () => {
+    expect(shouldUseInlineEditDocumentLayer(true, true)).toBe(true)
+    expect(shouldUseInlineEditDocumentLayer(true, false)).toBe(false)
+    expect(inlineEditTextareaTextColor(shouldUseInlineEditDocumentLayer(true, false))).toBe("#1e40af")
+  })
+
+  it("hides the native textarea caret only when a custom caret is available", () => {
+    expect(inlineEditTextareaCaretColor(false)).toBe("#1e40af")
+    expect(inlineEditTextareaCaretColor(true)).toBe("transparent")
   })
 })
