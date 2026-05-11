@@ -136,6 +136,17 @@ Initial internal helper:
 
 Harden real-world text input behavior.
 
+Initial internal helper:
+
+- `src/app/editor/_components/wysiwygTextInteraction.ts`
+- Native textarea fallback reasons are explicit: composition, clipboard,
+  accessibility, stale visual state, and missing geometry.
+- Current key handling can be classified without changing default textarea
+  behavior.
+- Textarea selection snapshots can be converted into full paragraph UTF-16
+  offsets for continuation fragments.
+- Copy, cut, and paste remain native by default.
+
 - Composition update and composition end behavior.
 - Thai and combined grapheme caret stops.
 - Copy, cut, paste, and selected text replacement.

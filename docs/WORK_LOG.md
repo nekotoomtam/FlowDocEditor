@@ -20,6 +20,43 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Add Internal WYSIWYG Text Interaction Policy
+
+Goal: Continue Stage 6 with pure IME, clipboard, keyboard, accessibility, and
+selection-range policy helpers while keeping default textarea UX unchanged.
+
+Completed:
+
+- Added `src/app/editor/_components/wysiwygTextInteraction.ts`.
+- Added explicit native fallback reasons for composition, clipboard,
+  accessibility, stale visual state, and missing geometry.
+- Added pure classification for current inline edit keyboard decisions:
+  native, end edit, split paragraph, and merge/boundary backspace.
+- Kept copy/cut/paste policy native by default.
+- Added selection snapshot helpers that convert textarea local selection into
+  full paragraph UTF-16 offsets, including continuation-fragment `preText` and
+  backward selection direction.
+- Updated the WYSIWYG roadmap with the Stage 6 internal helper contract.
+
+Files changed:
+
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/wysiwygTextInteraction.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+
+Notes:
+
+- This does not replace native IME or clipboard behavior. It only gives future
+  WYSIWYG stages a tested policy layer to call.
+
 ### Add Internal Selection Overlay Geometry
 
 Goal: Continue Stage 5 as an internal geometry contract for selection
