@@ -198,11 +198,20 @@ function assertTableGrid(
 
       colCursor += colspan
     })
+
+    while (colCursor < colCount && occupiedCols[rowIndex].has(colCursor)) colCursor++
+    if (colCursor !== colCount) {
+      fail(`${rowPath}.cellIds`, `table row must fill all ${colCount} columns`)
+    }
   })
 }
 
 function assertTable(table: TableNode, path: string): void {
   assertUniqueIds(table.rowIds, `${path}.rowIds`, "table row")
+
+  if ((table.props.headerRowCount ?? 0) > table.rowIds.length) {
+    fail(`${path}.props.headerRowCount`, "headerRowCount cannot exceed table row count")
+  }
 
   Object.entries(table.nodes).forEach(([nodeId, node]) => {
     const nodePath = `${path}.nodes.${nodeId}`

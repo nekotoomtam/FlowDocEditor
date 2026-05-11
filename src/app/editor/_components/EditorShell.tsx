@@ -28,7 +28,7 @@ import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import { comparePagination } from "./comparePagination"
 import type { DriftReport } from "./comparePagination"
 import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
-import { shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
+import { decideInlineEditStart, shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -794,6 +794,24 @@ export default function EditorShell() {
 
   // ─── Inline editing ───────────────────────────────────────────────────────────
   const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null) => {
+    const startDecision = decideInlineEditStart(
+      inlineEditNodeIdRef.current,
+      nodeId,
+      inlineEditTransactionRef.current !== null,
+    )
+
+    if (startDecision === "continue-current") {
+      cancelPendingInlineEditEnd()
+      dispatch({ type: "SELECT_NODE", nodeId })
+      setInlineEditCaretIndex(caretIndex)
+      setInlineEditPageIndex(pageIndex)
+      return
+    }
+
+    if (startDecision === "finalize-previous") {
+      finalizeInlineEditBeforeAction()
+    }
+
     const beforeDoc = docRef.current
     resetInlineEditVisualFreshness()
     inlineEditTransactionRef.current = {
@@ -806,7 +824,7 @@ export default function EditorShell() {
     setInlineEditNodeId(nodeId)
     setInlineEditCaretIndex(caretIndex)
     setInlineEditPageIndex(pageIndex)
-  }, [resetInlineEditVisualFreshness])
+  }, [cancelPendingInlineEditEnd, finalizeInlineEditBeforeAction, resetInlineEditVisualFreshness])
 
   const handleInlineEditChange = useCallback((nodeId: string, text: string, caretIndex: number | null) => {
     markInlineEditDraftChanged()
