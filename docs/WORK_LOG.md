@@ -20,6 +20,39 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Add Internal Collapsed Caret Overlay Geometry
+
+Goal: Continue Stage 3 safely by deriving collapsed caret overlay geometry from
+the new WYSIWYG mapping contract without rendering a custom caret in the editor
+yet.
+
+Completed:
+
+- Added collapsed caret overlay geometry helpers to
+  `wysiwygCaretMapping.ts`.
+- Covered single-fragment and split-fragment overlay coordinates in focused
+  tests.
+- Updated the WYSIWYG roadmap to note that Stage 3 has internal geometry
+  helpers, but default editor rendering is unchanged.
+
+Files changed:
+
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/wysiwygCaretMapping.ts`
+- `src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+- `npm.cmd test`
+
+Notes:
+
+- This deliberately avoids drawing the custom caret in `ParagraphTextSurface`
+  until the native textarea interaction/fallback rules are ready.
+
 ### Start Internal WYSIWYG Caret Mapping Contract
 
 Goal: Begin Stage 1-2 of the WYSIWYG track with an internal caret mapping

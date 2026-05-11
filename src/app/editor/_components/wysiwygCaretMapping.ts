@@ -24,6 +24,16 @@ export interface WysiwygCaretMappingOptions {
   textMeasurer?: TextMeasurer
 }
 
+export interface WysiwygCollapsedCaretOverlay {
+  offset: number
+  pageIndex: number
+  fragmentIndex?: number
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
 type LineRange = {
   line: PaginatedLine
   lineIndex: number
@@ -273,4 +283,37 @@ export function resolveParagraphCaretPosition(
   }
 
   return fallback ? resolveCaretPositionInFragment(fallback, offset, options) : null
+}
+
+export function collapsedCaretOverlayFromCandidate(
+  candidate: WysiwygCaretCandidate,
+): WysiwygCollapsedCaretOverlay {
+  return {
+    offset: candidate.offset,
+    pageIndex: candidate.pageIndex,
+    fragmentIndex: candidate.fragmentIndex,
+    x1: candidate.x,
+    y1: candidate.y,
+    x2: candidate.x,
+    y2: candidate.y + candidate.height,
+  }
+}
+
+export function resolveCollapsedCaretOverlayInFragment(
+  fragment: PageFragment,
+  offset: number,
+  options: WysiwygCaretMappingOptions = {},
+): WysiwygCollapsedCaretOverlay | null {
+  const candidate = resolveCaretPositionInFragment(fragment, offset, options)
+  return candidate ? collapsedCaretOverlayFromCandidate(candidate) : null
+}
+
+export function resolveParagraphCollapsedCaretOverlay(
+  paginated: PaginatedDocument,
+  nodeId: string,
+  offset: number,
+  options: WysiwygCaretMappingOptions = {},
+): WysiwygCollapsedCaretOverlay | null {
+  const candidate = resolveParagraphCaretPosition(paginated, nodeId, offset, options)
+  return candidate ? collapsedCaretOverlayFromCandidate(candidate) : null
 }

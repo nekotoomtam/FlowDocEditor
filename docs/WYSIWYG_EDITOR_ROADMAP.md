@@ -87,6 +87,13 @@ Composition-safe rule:
 
 Draw only the collapsed caret first.
 
+Initial internal helper:
+
+- `resolveCollapsedCaretOverlayInFragment(...)`
+- `resolveParagraphCollapsedCaretOverlay(...)`
+- These helpers return page-local line geometry for a collapsed caret, but the
+  default editor does not render the custom caret yet.
+
 - Use the caret mapping contract for offset to position.
 - Draw an SVG caret over paginated text.
 - Keep the textarea focused for input, IME, keyboard, and clipboard basics.

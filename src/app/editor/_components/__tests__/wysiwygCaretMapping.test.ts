@@ -5,6 +5,8 @@ import {
   getWysiwygCaretCandidatesForLine,
   resolveCaretOffsetFromPointInFragment,
   resolveCaretPositionInFragment,
+  resolveCollapsedCaretOverlayInFragment,
+  resolveParagraphCollapsedCaretOverlay,
   resolveParagraphCaretPosition,
 } from "../wysiwygCaretMapping"
 
@@ -213,5 +215,90 @@ describe("WYSIWYG caret mapping contract", () => {
 
     expect(resolveCaretPositionInFragment(fragment, 2)).toBeNull()
     expect(resolveCaretOffsetFromPointInFragment(fragment, { x: 15, y: 21 })).toBeNull()
+  })
+
+  it("resolves collapsed caret overlay geometry without touching editor rendering", () => {
+    const fragment = makeFragment({
+      lines: [makeLine({
+        text: "abcd",
+        width: 40,
+        height: 14,
+        segments: [{
+          kind: "word",
+          text: "abcd",
+          start: 0,
+          end: 4,
+          x: 0,
+          width: 40,
+          breakableAfter: false,
+        }],
+      })],
+    })
+
+    const overlay = resolveCollapsedCaretOverlayInFragment(fragment, 2, { textMeasurer: fixedWidthMeasurer })
+
+    expect(overlay).toEqual({
+      offset: 2,
+      pageIndex: 0,
+      fragmentIndex: 0,
+      x1: 30,
+      y1: 20,
+      x2: 30,
+      y2: 34,
+    })
+  })
+
+  it("resolves collapsed caret overlay across split paragraph fragments", () => {
+    const first = makeFragment({
+      pageIndex: 0,
+      fragmentIndex: 0,
+      lines: [makeLine({
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        segments: [{
+          kind: "word",
+          text: "Hello",
+          start: 0,
+          end: 5,
+          x: 0,
+          width: 50,
+          breakableAfter: false,
+        }],
+      })],
+    })
+    const second = makeFragment({
+      pageIndex: 1,
+      fragmentIndex: 1,
+      lines: [makeLine({
+        text: "world",
+        x: 30,
+        y: 40,
+        width: 50,
+        height: 16,
+        segments: [{
+          kind: "word",
+          text: "world",
+          start: 5,
+          end: 10,
+          x: 0,
+          width: 50,
+          breakableAfter: false,
+        }],
+      })],
+    })
+
+    const overlay = resolveParagraphCollapsedCaretOverlay(makeDoc([first, second]), "p1", 5)
+
+    expect(overlay).toMatchObject({
+      offset: 5,
+      pageIndex: 1,
+      fragmentIndex: 1,
+      x1: 30,
+      y1: 40,
+      x2: 30,
+      y2: 56,
+    })
   })
 })
