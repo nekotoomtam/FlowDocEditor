@@ -603,6 +603,23 @@ describe("tablePagination — grid invariants after operations", () => {
     expect(after.columns[1].width.value).toBe(50)
   })
 
+  it("scales oversized table columns to fit the available content width", () => {
+    const tbl = makeTable("tbl", [200, 200, 200], [
+      [{ text: "A" }, { text: "B" }, { text: "C" }],
+    ])
+    const doc = makeDoc(["tbl"], { tbl })
+    const result = paginate(doc)
+    const page = result.sections[0].pages[0]
+    const cells = result.sections[0].pages
+      .flatMap((p) => p.fragments)
+      .filter((f) => f.nodeId.startsWith("tbl-c0-") && f.nodeType === "table-cell")
+      .sort((a, b) => a.x - b.x)
+
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+    expect(cells).toHaveLength(3)
+    expect(cells[cells.length - 1]!.x + cells[cells.length - 1]!.width).toBeCloseTo(page.contentBox.x + page.contentBox.width, 6)
+  })
+
   it("removeTableColumn produces valid document and valid paginated output", () => {
     const base = normalizeDocument(makeSimpleTableDoc())
     const updated = normalizeDocument(removeTableColumn(base, "tbl", 1))

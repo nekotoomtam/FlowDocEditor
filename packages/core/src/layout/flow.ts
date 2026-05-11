@@ -304,6 +304,29 @@ function resolveTableCellWidth(
   return { cellWidth, padding, innerWidth: Math.max(0, cellWidth - padding * 2) }
 }
 
+function resolveTableColumnWidths(table: TableNode, availableWidth: number): number[] {
+  const rawWidths = table.columns.map((col) =>
+    toAbstractUnit(col.width.value, col.width.unit),
+  )
+  const totalWidth = rawWidths.reduce((sum, width) => sum + width, 0)
+  const safeAvailableWidth = Math.max(0, availableWidth)
+
+  if (rawWidths.length === 0) return []
+  if (totalWidth <= 0) {
+    const equalWidth = safeAvailableWidth / rawWidths.length
+    return rawWidths.map(() => equalWidth)
+  }
+  if (totalWidth <= safeAvailableWidth) return rawWidths
+
+  let assigned = 0
+  return rawWidths.map((rawWidth, index) => {
+    if (index === rawWidths.length - 1) return Math.max(0, safeAvailableWidth - assigned)
+    const width = safeAvailableWidth * (rawWidth / totalWidth)
+    assigned += width
+    return width
+  })
+}
+
 function measureTableCellHeight(
   cellNode: TableCellNode,
   table: TableNode,
@@ -330,9 +353,7 @@ function flowTable(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
 ): FlowBox {
-  const colWidths = table.columns.map((col) =>
-    toAbstractUnit(col.width.value, col.width.unit),
-  )
+  const colWidths = resolveTableColumnWidths(table, width)
   const cellPositions = buildColStartMap(table)
 
   // ─── Pass 1: measure row heights from rowspan=1 cells ────────────────────────

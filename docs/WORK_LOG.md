@@ -20,6 +20,43 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Fit Oversized Table Columns During Flow
+
+Goal: Clear the server `/api/paginate` layout assertion failure where table
+cells could extend slightly past the page content box when authored column
+widths exceeded the available table container width.
+
+Completed:
+
+- Added table column width resolution in the flow layer. Authored table column
+  widths are preserved in `DocumentNode`, but layout scales them down
+  proportionally when their sum exceeds the available parent width.
+- Kept the last table column absorbing floating-point remainder so the final
+  cell right edge lands on the available width instead of drifting outside the
+  content box.
+- Added a core pagination test for an oversized 3-column table that now fits the
+  available content width and passes `assertPaginatedDocument`.
+- Browser recheck on the current editor document confirmed the visible
+  `Server pagination failed` / `layout error` badge disappeared after reload.
+
+Files changed:
+
+- `docs/WORK_LOG.md`
+- `packages/core/src/layout/flow.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- tablePagination`
+- `npm.cmd test`
+- Browser reload of `http://localhost:4000/editor`
+
+Notes:
+
+- This is a layout containment fix only. It does not change schema, authored
+  table columns, export APIs, or renderer behavior.
+
 ### Restore Visible Active Inline Text Feedback
 
 Goal: Fix the live inline pagination UX regression where the native textarea
