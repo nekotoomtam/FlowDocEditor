@@ -6,6 +6,9 @@ FlowDocEditor.
 Use this document when changing localStorage, JSON import/export, future
 migrations, template persistence, or document package metadata.
 
+For field-key identity and registry validation rules, also read
+`docs/FIELD_REGISTRY_CONTRACT.md`.
+
 ## Decision
 
 FlowDocEditor uses a document-first package envelope for persisted editor JSON:
@@ -176,6 +179,10 @@ Current implementation:
 
 Until a new package version exists, migration is intentionally small. It should
 not add field registry, data versions, history, or reviewer workflow data.
+
+The field registry contract already exists for validation and future package
+planning. Persisting a registry in JSON remains a future package version
+decision.
 
 ## Test Expectations
 

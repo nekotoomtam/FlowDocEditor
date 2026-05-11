@@ -52,6 +52,7 @@ Recommended read order:
    - product fixtures: `docs/PRODUCT_SCENARIOS.md`
    - browser checks: `docs/BROWSER_SMOKE_CHECKLIST.md`
    - export/renderers: `docs/EXPORT_RENDERER_CONTRACT.md`
+   - fields/registry: `docs/FIELD_REGISTRY_CONTRACT.md`
    - fixture catalog: `docs/FIXTURE_CATALOG.md`
 9. `git status --short`
 10. The code and tests near the requested change

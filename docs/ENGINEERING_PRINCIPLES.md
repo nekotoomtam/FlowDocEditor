@@ -184,8 +184,11 @@ keys are still draft/deferred.
 Do:
 
 - store `fieldRef` nodes in templates
+- keep field definitions in a registry outside `DocumentNode`
 - store field values in filling/submission data
 - bind template + data into a temporary resolved document for preview/export
+- use field registry validation helpers when adding package/data/history
+  behavior, instead of making preview binding strict by accident
 - validate required data before authoritative render
 - keep repeat behavior deferred unless a task explicitly asks for it and updates
   the binding contract/tests
@@ -193,6 +196,8 @@ Do:
 Avoid:
 
 - replacing template field references with real data during filling
+- storing registry field type, submitted value, or history state in `fieldRef`
+  nodes
 - editing static text/layout in filling mode
 - treating submitted field data as template history
 - adding repeat-region behavior opportunistically while fixing unrelated

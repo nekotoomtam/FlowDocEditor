@@ -11,7 +11,7 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 23 core test files / 303 core tests
+- 24 core test files / 308 core tests
 - 9 app test files / 97 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
@@ -43,12 +43,15 @@ Product fixture names should stay visible in test descriptions, such as
 - `packages/core/src/binding/index.test.ts`
 - `packages/core/src/document/normalize.test.ts`
 - `packages/core/src/document/operations.test.ts`
+- `packages/core/src/fieldRegistry/index.test.ts`
 
 Protects scalar field binding, authored document validity, normalization
 defaults, table grid operations, and operation-level invariants. Operation
 coverage includes table row/column insertion, deletion cleanup, width
 preservation, header-row clamping, last-row/last-column guards, and inline
-`fieldRef` insertion in body and table-cell paragraphs. Current binding coverage
+`fieldRef` insertion in body and table-cell paragraphs. Field registry coverage
+collects body/table fieldRef usages and validates duplicate keys, missing
+definitions, and non-inline field targets. Current binding coverage
 intentionally locks scalar `fieldRef` replacement only; repeat and nested
 binding remain deferred.
 

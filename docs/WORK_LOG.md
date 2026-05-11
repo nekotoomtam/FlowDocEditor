@@ -315,6 +315,61 @@ Notes:
 - `git diff --check` reported only the repository's existing LF-to-CRLF working
   copy warnings.
 
+### Add Field Registry Contract And Validation Fixtures
+
+Goal: Start Phase A of the document/key foundation by giving `fieldRef.key` a
+clear registry contract without making current binding strict or changing
+`DocumentNode`.
+
+Completed:
+
+- Added `docs/FIELD_REGISTRY_CONTRACT.md` defining field keys, registry v1
+  shape, scalar inline field rules, validation policy, ownership boundaries,
+  and future package direction.
+- Added `packages/core/src/fieldRegistry/index.ts` with
+  `FieldRegistryV1`, `FieldDefinitionV1`, `collectDocumentFieldRefs(...)`,
+  `validateFieldRegistryReferences(...)`, and
+  `hasFieldRegistryErrors(...)`.
+- Added focused registry fixtures for body paragraph refs, table-cell refs,
+  registered scalar refs, duplicate keys, missing definitions, and invalid
+  inline targets for `image`/`collection`.
+- Aligned the sample editor field palette definition type with the core field
+  registry shape while keeping palette drag data compatible.
+- Updated docs index, architecture, engineering principles, package contract,
+  agent workflow, fixture catalog, and test strategy.
+
+Files changed:
+
+- `packages/core/src/fieldRegistry/index.ts`
+- `packages/core/src/fieldRegistry/index.test.ts`
+- `src/app/_lib/fieldRegistry.ts`
+- `docs/FIELD_REGISTRY_CONTRACT.md`
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/DOCS_INDEX.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/fieldRegistry/index.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- Binding remains descriptive and non-strict for now. Missing registry
+  definitions are warnings in the new validation helper, not binding failures.
+- `FlowDocPackage v1` still does not persist the registry; that remains a future
+  package migration decision.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
 ### Add Automated Editor Browser Smoke
 
 Goal: Start Phase 1 of the stability roadmap by turning the most important

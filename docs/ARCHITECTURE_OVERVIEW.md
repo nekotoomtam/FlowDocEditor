@@ -156,11 +156,15 @@ Detailed export/API/renderer rules live in
 Detailed persisted/editor JSON package rules live in
 `docs/FLOWDOC_PACKAGE_CONTRACT.md`.
 
+Detailed field-key and registry rules live in
+`docs/FIELD_REGISTRY_CONTRACT.md`.
+
 ### Binding
 
 Location:
 
 - `packages/core/src/binding/index.ts`
+- `packages/core/src/fieldRegistry/index.ts`
 
 Current role:
 
@@ -168,6 +172,8 @@ Current role:
 - should keep template field references and submitted field values separate
 - currently supports scalar `fieldRef` resolution into temporary preview/export
   documents
+- field registry helpers collect `fieldRef` usages and validate them against a
+  registry without making binding strict
 - repeat regions remain draft/deferred; do not add repeat behavior
   opportunistically while fixing unrelated editor, layout, or export bugs
 
@@ -238,6 +244,10 @@ export, and renderers continue to consume `DocumentNode` / `PaginatedDocument`.
 This foundation intentionally does not include field history, reviewer
 workflow, or binding data yet; those are higher layers that can be added around
 the package later.
+
+The field registry contract is defined now, but `FlowDocPackage v1` still does
+not persist registry/data/history. Those belong to a future package migration,
+not to `DocumentNode`.
 
 Meaningful edits should pass through reducer actions and core operations. UI
 components should not manually mutate document structure.

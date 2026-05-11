@@ -29,6 +29,7 @@ contract, then inspect the code and tests near the change.
 | Engineering boundaries and principles | `docs/ENGINEERING_PRINCIPLES.md` |
 | Test levels and Definition of Done | `docs/TEST_STRATEGY.md` |
 | Persisted/editor JSON package contract | `docs/FLOWDOC_PACKAGE_CONTRACT.md` |
+| Field registry and key rules | `docs/FIELD_REGISTRY_CONTRACT.md` |
 | Browser/manual editor smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Export/API/PDF/DOCX renderer contract | `docs/EXPORT_RENDERER_CONTRACT.md` |
 | Fixture and test coverage catalog | `docs/FIXTURE_CATALOG.md` |
@@ -109,6 +110,8 @@ reflow in Word/LibreOffice.
 Start with:
 
 - `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FIELD_REGISTRY_CONTRACT.md` when the change touches field keys,
+  registry shape, data snapshots, or future history
 - `docs/ARCHITECTURE_OVERVIEW.md`
 - `docs/ENGINEERING_PRINCIPLES.md`
 - `docs/TEST_STRATEGY.md`
@@ -116,6 +119,19 @@ Start with:
 Persisted/editor JSON should use `FlowDocPackage v1`. Core layout, pagination,
 API export, and renderers should continue to consume `DocumentNode` /
 `PaginatedDocument`.
+
+### Field, Binding, Or Data Work
+
+Start with:
+
+- `docs/FIELD_REGISTRY_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/TEST_STRATEGY.md`
+
+Field registry/data/history work should stay outside `DocumentNode`. Existing
+binding remains descriptive unless the registry contract and focused binding
+fixtures are intentionally updated together.
 
 ### Test Or Fixture Work
 

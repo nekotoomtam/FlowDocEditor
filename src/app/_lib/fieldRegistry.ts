@@ -1,7 +1,6 @@
-import type { FieldDragData } from "@/placement/types"
+import type { FieldDefinitionV1 } from "@/fieldRegistry"
 
-export interface EditorFieldDefinition extends FieldDragData {
-  required?: boolean
+export interface EditorFieldDefinition extends FieldDefinitionV1 {
   group?: string
 }
 
