@@ -446,7 +446,6 @@ export function ParagraphTextSurface({
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => {
               event.stopPropagation()
-              markUserEditInteraction()
             }}
             onCompositionStart={markUserEditInteraction}
             data-inline-edit-node-id={fragment.nodeId}

@@ -56,12 +56,16 @@ Users should be able to:
   keeps edit entry visually close to normal mode.
 - When the active edit visual snapshot is stale, the textarea must keep visible
   text as a fallback so fast typing never makes text disappear.
-- Once the user actively interacts with the inline textarea, edit mode should
-  lock to visible textarea text until that edit session ends. It should not
-  auto-handoff back to SVG while focus remains in the same edit session, because
-  textarea and SVG text layout are different engines.
+- Once the user changes text, uses a keyboard edit/navigation command, or starts
+  composition in the inline textarea, edit mode should lock to visible textarea
+  text until that edit session ends. It should not auto-handoff back to SVG
+  while focus remains in the same edit session, because textarea and SVG text
+  layout are different engines.
 - Programmatic focus/selection on edit entry should not trigger this visual
   lock. `onSelect` may update caret state but must not be the lock trigger.
+- Pointer clicks used only to place the native caret should not trigger the
+  visual lock by themselves; otherwise a second click can reveal textarea
+  layout drift before the user actually edits text.
 - The editor should avoid showing both layers visibly at the same time.
 - Page splitting and non-active continuation fragments still come from
   `PaginatedDocument`.
@@ -113,6 +117,23 @@ Table-specific interaction rules are defined in
 - The editor may show optimistic layout while editing, but it should settle back
   predictably.
 - Layout assertion failures and font fallback should be visible to the user.
+
+## WYSIWYG Track Guardrails
+
+The WYSIWYG editor track is documented in
+`docs/WYSIWYG_EDITOR_ROADMAP.md`. It is an opt-in/internal future path until its
+stability gates pass.
+
+- WYSIWYG work must not change the document model first.
+- `PaginatedLine` / `fragment.lines` are visual truth; textarea remains an input
+  device, not layout truth.
+- The editor may fall back to visible textarea text during composition or other
+  unstable states.
+- Caret milestones must not include selection overlay work by default.
+- Cross-page selection is deferred until single-page paragraph selection is
+  stable.
+- Caret candidates are a separate contract from line segments; segments provide
+  coarse measured ranges, not final caret boundaries.
 
 ## State Race Invariants
 

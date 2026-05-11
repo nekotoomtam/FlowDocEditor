@@ -20,6 +20,52 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Document WYSIWYG Roadmap And Narrow Pointer Lock
+
+Goal: Lock the future WYSIWYG direction in docs while fixing the failed active
+edit visual lock trigger where a second caret-placement click exposed textarea
+layout drift.
+
+Completed:
+
+- Removed `onPointerDown` as a trigger for locking the active edit session to
+  visible textarea text. Pointer events still stop propagation, but a caret
+  placement click no longer changes the visual layer by itself.
+- Kept visible textarea locking for actual text input, keyboard interaction, and
+  composition start.
+- Added `docs/WYSIWYG_EDITOR_ROADMAP.md` with the staged WYSIWYG track:
+  current hybrid stability, visual truth contract, caret mapping contract,
+  collapsed custom caret, hit testing, selection overlay, IME/clipboard/
+  accessibility hardening, and hidden input mode.
+- Documented WYSIWYG guardrails in the editor UX contract, including no document
+  model changes first, no textarea layout truth, composition fallback, deferred
+  selection, and `caret candidates != line segments`.
+- Updated browser smoke expectations for second-click caret placement and
+  keyboard/input/composition locking.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser smoke on `http://localhost:4000/editor`: opening inline paragraph edit
+  starts with transparent textarea/SVG visual, a second caret-placement click
+  keeps the textarea transparent, typing locks the textarea visible, and Escape
+  exits back to normal SVG rendering.
+
+Notes:
+
+- This does not start custom caret implementation. The roadmap remains an
+  internal future track until the hybrid editor is stable enough.
+
 ### Lock Active Inline Edit Visual Mode
 
 Goal: Stop active paragraph editing from snapping after idle by preventing

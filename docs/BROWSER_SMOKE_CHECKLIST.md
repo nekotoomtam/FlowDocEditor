@@ -62,6 +62,10 @@ changes.
   SVG text after an idle pause.
 - Confirm entering edit without typing may use the fresh SVG visual layer, while
   autofocus/programmatic selection alone does not lock textarea mode.
+- Confirm a second click inside the active textarea to place the caret does not
+  switch to visible textarea text or visibly change line layout by itself.
+- Confirm keyboard commands, text input, or composition start still lock the
+  active edit session to visible textarea text until edit exits.
 - Confirm the active inline textarea does not grow into a giant hit area that
   extends far past the active fragment/page.
 - For page-boundary checks, use a paragraph near the bottom of a page and type
