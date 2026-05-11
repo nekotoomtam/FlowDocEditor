@@ -12,7 +12,7 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 Last verified full-suite size:
 
 - 26 core test files / 321 core tests
-- 9 app test files / 101 app tests
+- 9 app test files / 106 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 `docs/TEST_STRATEGY.md` as the current coverage snapshot until the suite changes.
@@ -122,14 +122,18 @@ drift comparison, inline edit lifecycle and continuation helpers, paragraph
 text surface policy, WYSIWYG caret mapping, and internal text interaction
 policy. API smoke coverage checks `/api/paginate` asserted JSON output plus
 `/api/export` PDF/DOCX headers and artifact readability. Persistence coverage
-checks document-first `FlowDocPackage v1`, legacy raw `DocumentNode v1` import,
-normalize/validate behavior, invalid JSON, unsupported versions, invalid
-package structure, package/document id agreement, current `localStorage` key
-behavior, JSON package serialization, safe package filenames, and import status
-messages. It also covers inline `fieldRef` package round-tripping, legacy raw
-document migration into `FlowDocPackage v1`, idempotent package v1 migration,
-proposal-aligned package v2 parsing, v2 registry warning propagation, and v2
-registry warning import status, and v2 registry hard-error rejection.
+checks document-first `FlowDocPackage v1`, proposal-aligned
+`FlowDocPackage v2`, legacy raw `DocumentNode v1` import, normalize/validate
+behavior, invalid JSON, unsupported versions, invalid package structure,
+package/document id agreement, current `localStorage` key behavior,
+localStorage package v2 save/load, v2 field registry preservation, JSON package
+serialization as v1, explicit package v2 JSON serialization with field registry
+preservation, safe package filenames including the transition v2 suffix, and
+import status messages. It also covers inline `fieldRef` package
+round-tripping, legacy raw document migration into `FlowDocPackage v1`,
+idempotent package v1 migration, legacy/package v1 in-memory migration to
+package v2, package v2 migration idempotence, v2 registry warning propagation,
+v2 registry warning import status, and v2 registry hard-error rejection.
 Real-font drift coverage loads
 `public/fonts/THSarabun.ttf` into Chromium canvas and fontkit, then checks
 representative Thai width parity and no `comparePagination` drift for a Thai
@@ -143,8 +147,9 @@ typing, undo/redo, flicker, and table panel workflows.
 Protects the default `/editor` load path with a real browser, deterministic
 localStorage document fixtures, paragraph inline edit commit, undo/redo, table
 cell selection, the property-panel title, table-cell row/column insert/delete
-controls, and Fill mode readiness warning/clear behavior for a required used
-field. It starts its own Next dev server on port `4010` unless
+controls, localStorage package v2 autosave, and Fill mode readiness
+warning/clear behavior for a required used field. It starts its own Next dev
+server on port `4010` unless
 `SMOKE_BASE_URL` is provided.
 
 This is intentionally a focused workflow smoke, not a fixture catalog for every

@@ -41,13 +41,13 @@ property panel:
 - Windows PowerShell: `npm.cmd run smoke:editor`
 - Non-Windows: `npm run smoke:editor`
 
-The script starts an isolated Next dev server on port `4010`, loads a fixture
-document into `localStorage`, tolerates either legacy raw `DocumentNode` or
-`FlowDocPackage v1` storage after autosave, then verifies:
+The script starts an isolated Next dev server on port `4010`, loads fixture
+documents into `localStorage`, then verifies:
 
 - editor shell, toolbar, canvas, and first page render
 - no unexpected layout error badge is visible
 - paragraph inline edit commits multiline text
+- autosave writes `FlowDocPackage v2` to localStorage
 - undo and redo restore the expected paragraph text
 - clicking inside a table cell selects the parent `table-cell` and opens that
   property panel
@@ -197,6 +197,8 @@ Use when editor UI changes how export, font fallback, or authoritative
 pagination status is presented.
 
 - Trigger or inspect the affected export/status path.
+- For package export changes, check both `Save JSON` and the transition
+  `Save v2` action when both are visible.
 - Confirm any failure or fallback is visible and not silent.
 - Confirm editor preview remains usable after the status update.
 

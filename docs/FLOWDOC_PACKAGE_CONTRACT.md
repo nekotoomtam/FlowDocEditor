@@ -26,10 +26,14 @@ Core layout, pagination, API export, and renderers still consume `DocumentNode`
 or `PaginatedDocument`. The package is an app/file boundary, not a layout engine
 input.
 
-Current write format is still `FlowDocPackage v1`. The parser can also read the
-proposal-aligned `FlowDocPackage v2` shape for compatibility tests, but
-localStorage saves and JSON exports still write v1 until v2 migration is
-explicitly enabled.
+Current write behavior is intentionally split:
+
+- localStorage autosave writes `FlowDocPackage v2`
+- default JSON export still writes `FlowDocPackage v1`
+- transition JSON export can explicitly write `FlowDocPackage v2`
+
+The parser accepts `FlowDocPackage v2`, `FlowDocPackage v1`, and legacy raw
+`DocumentNode v1`.
 
 ## Shape
 
@@ -53,6 +57,9 @@ Current implementation:
 
 - `src/app/editor/_components/documentPersistence.ts`
 - storage key: `flowdoc_document`
+- localStorage package version: `2`
+- default JSON export package version: `1`
+- transition JSON export package version: `2`
 - JSON export extension: `.flowdoc.json`
 
 ## Identity Rules
@@ -84,8 +91,9 @@ Persistence/import must:
 - reject invalid document structure
 
 Legacy raw `DocumentNode v1` import exists for compatibility with older saved
-files and test fixtures. New localStorage saves and JSON exports should write
-`FlowDocPackage v1` until the v2 migration is intentionally activated.
+files and test fixtures. New localStorage saves should write `FlowDocPackage
+v2`; default JSON exports should continue writing `FlowDocPackage v1` while
+the explicit v2 export option proves file-level compatibility.
 
 ## Ownership
 
@@ -142,11 +150,16 @@ the document/editor base is stable.
 
 ## Export Rules
 
-JSON export from the editor writes `FlowDocPackage v1`.
+Default JSON export from the editor writes `FlowDocPackage v1`. The transition
+`Save v2` action writes `FlowDocPackage v2` with the active field registry and
+uses a `.v2.flowdoc.json` filename suffix. This dual export state should be
+short-lived; package v2 is the target canonical package format.
 
 The editor should:
 
 - use the `.flowdoc.json` extension for package downloads
+- use `.v2.flowdoc.json` for explicit package v2 downloads during the
+  transition
 - derive a safe filename from the document title
 - show concise import/export status in the toolbar
 - report invalid JSON, unsupported versions, invalid packages, and invalid
@@ -184,14 +197,22 @@ unknown JSON
 Current implementation:
 
 - `migratePersistedDocumentPackage(...)`
-- wraps legacy raw `DocumentNode v1` into `FlowDocPackage v1`
+- wraps legacy raw `DocumentNode v1` into `FlowDocPackage v1` for the generic
+  migration path
 - canonicalizes `FlowDocPackage v1`
-- parses proposal-aligned `FlowDocPackage v2` without making it the default
-  write format
+- parses proposal-aligned `FlowDocPackage v2`
 - stays idempotent for existing `FlowDocPackage v1`
+- `migratePersistedDocumentPackageToV2(...)`
+- migrates legacy raw documents and package v1 into an in-memory
+  `FlowDocPackage v2` with an empty `FieldRegistryV1`
+- reports missing field definitions as registry warnings during that in-memory
+  v2 migration
+- keeps existing package v2 input idempotent while preserving optional
+  `data`, `history`, and `migrations` members
 
-Until a new package version exists, migration is intentionally small. It should
-not add field registry, data versions, history, or reviewer workflow data.
+Runtime localStorage autosave now uses package v2 and preserves the active
+field registry. Default JSON export still uses package v1, while explicit v2
+export can preserve the active field registry in a downloaded file.
 
 The field registry contract already exists for validation and future package
 planning. Persisting a registry in JSON remains a future package version
@@ -211,8 +232,15 @@ Persistence/package changes should cover:
 - package v2 registry hard-error rejection
 - legacy raw document import
 - package serialize/export shape
+- localStorage package v2 save/load
+- localStorage package v2 field registry preservation
+- explicit package v2 JSON export with field registry preservation
+- default package v1 JSON export remains available during transition
 - legacy raw document -> package migration
 - package v1 idempotent migration
+- legacy raw document -> package v2 in-memory migration
+- package v1 -> package v2 in-memory migration
+- package v2 migration idempotence
 - localStorage save/load
 - safe JSON export filename generation
 - inline `fieldRef` preservation through package export/import

@@ -7,6 +7,7 @@ import { assertDocument, createDefaultDocument, DEFAULT_STACK_MIN_HEIGHT, isPlai
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
+import type { FieldRegistryV1 } from "@/fieldRegistry"
 import { assessDocumentDataReadiness } from "@/readiness"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
@@ -31,11 +32,13 @@ import { comparePagination } from "./comparePagination"
 import {
   documentImportSuccessMessage,
   documentParseFailureMessage,
+  type DocumentParseResult,
   loadDocumentFromStorage,
   makeFlowDocFileName,
   parsePersistedDocument,
   saveDocumentToStorage,
   serializeDocumentPackage,
+  serializeDocumentPackageV2,
 } from "./documentPersistence"
 import type { DriftReport } from "./comparePagination"
 import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
@@ -163,8 +166,14 @@ type EditorAction =
   | { type: "MERGE_PARAGRAPH"; nodeId: string; history?: HistoryEntry }
   | { type: "CLEAR_MERGE_RESULT" }
 
-function saveToStorage(doc: DocumentNode): void {
-  saveDocumentToStorage(localStorage, doc)
+function fieldRegistryFromDocumentParseResult(result: DocumentParseResult): FieldRegistryV1 {
+  return result.ok && result.package?.packageVersion === 2
+    ? result.package.fields
+    : SAMPLE_FIELD_REGISTRY_V1
+}
+
+function saveToStorage(doc: DocumentNode, fields: FieldRegistryV1): void {
+  saveDocumentToStorage(localStorage, doc, { fields })
 }
 
 function loadFromStorage(): DocumentNode | null {
@@ -562,18 +571,21 @@ export default function EditorShell() {
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
   const [mode, setMode] = useState<"template" | "fill">("template")
   const [dataSnapshot, setDataSnapshot] = useState<DataSnapshotV1>(() => createEmptyDataSnapshot())
+  const [packageFieldRegistry, setPackageFieldRegistry] = useState<FieldRegistryV1>(() => (
+    fieldRegistryFromDocumentParseResult(loadDocumentFromStorage(localStorage))
+  ))
   const isTemplateMode = mode === "template"
   const resolvePreviewDoc = useCallback((doc: DocumentNode) => (
     isTemplateMode
       ? doc
-      : bindDocumentWithSnapshot(doc, { registry: SAMPLE_FIELD_REGISTRY_V1, snapshot: dataSnapshot }).doc
-  ), [dataSnapshot, isTemplateMode])
+      : bindDocumentWithSnapshot(doc, { registry: packageFieldRegistry, snapshot: dataSnapshot }).doc
+  ), [dataSnapshot, isTemplateMode, packageFieldRegistry])
   const previewDoc = useMemo(() => resolvePreviewDoc(state.doc), [resolvePreviewDoc, state.doc])
   const dataReadiness = useMemo(() => assessDocumentDataReadiness({
     doc: state.doc,
-    registry: SAMPLE_FIELD_REGISTRY_V1,
+    registry: packageFieldRegistry,
     snapshot: dataSnapshot,
-  }), [dataSnapshot, state.doc])
+  }), [dataSnapshot, packageFieldRegistry, state.doc])
   const paginatePreviewDoc = useCallback((doc: DocumentNode) => (
     paginateDocument(resolvePreviewDoc(doc), editorTextMeasurer)
   ), [editorTextMeasurer, resolvePreviewDoc])
@@ -711,12 +723,12 @@ export default function EditorShell() {
   useEffect(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(() => {
-      saveToStorage(state.doc)
+      saveToStorage(state.doc, packageFieldRegistry)
       setSavedAt(new Date())
     }, 500)
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.doc])
+  }, [packageFieldRegistry, state.doc])
 
   const handleExport = useCallback(async (format: "pdf" | "docx") => {
     finalizeInlineEditBeforeAction()
@@ -767,6 +779,19 @@ export default function EditorShell() {
     setDocumentIoStatus({ type: "info", message: "Saved FlowDoc package JSON." })
   }, [finalizeInlineEditBeforeAction])
 
+  const handleExportJsonV2 = useCallback(() => {
+    finalizeInlineEditBeforeAction()
+    const doc = docRef.current
+    const title = doc.document.meta?.title ?? "document"
+    const blob = new Blob([serializeDocumentPackageV2(doc, packageFieldRegistry)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url; a.download = makeFlowDocFileName(title, "v2")
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 100)
+    setDocumentIoStatus({ type: "info", message: "Saved FlowDoc package v2 JSON." })
+  }, [finalizeInlineEditBeforeAction, packageFieldRegistry])
+
   const handleImportJson = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -777,6 +802,7 @@ export default function EditorShell() {
       if (result.ok) {
         const doc = result.doc
         resetInlineEditStateForDocumentReplace()
+        setPackageFieldRegistry(fieldRegistryFromDocumentParseResult(result))
         dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
         setDocumentIoStatus({ type: "info", message: documentImportSuccessMessage(result.source, result.fieldRegistryIssues) })
       } else {
@@ -794,6 +820,7 @@ export default function EditorShell() {
     if (!confirm("สร้างเอกสารใหม่? history จะถูกล้าง")) return
     const doc = createDefaultDocument("Untitled")
     resetInlineEditStateForDocumentReplace()
+    setPackageFieldRegistry(SAMPLE_FIELD_REGISTRY_V1)
     dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
   }, [paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
 
@@ -1665,6 +1692,11 @@ export default function EditorShell() {
             style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
             Save JSON
           </button>
+          <button onClick={handleExportJsonV2}
+            title="Save package v2 JSON"
+            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
+            Save v2
+          </button>
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
@@ -1793,6 +1825,7 @@ export default function EditorShell() {
           ) : (
             <FillingPanel
               doc={state.doc}
+              registry={packageFieldRegistry}
               snapshot={dataSnapshot}
               readinessIssues={dataReadiness.issues}
               onChange={(key, value) => setDataSnapshot((prev) => setDataSnapshotValue(prev, key, value))}

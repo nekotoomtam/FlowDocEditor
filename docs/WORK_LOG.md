@@ -650,6 +650,149 @@ Notes:
 - `git diff --check` reported only the repository's existing LF-to-CRLF working
   copy warnings.
 
+### Add In-Memory Package V2 Migration Helper
+
+Goal: Continue the package v2 path by proving explicit migration behavior
+without changing current localStorage or JSON export defaults.
+
+Completed:
+
+- Added `migratePersistedDocumentPackageToV2(...)`.
+- Added `createDocumentPackageV2(...)` for explicit package v2 construction.
+- Migrated package v1 input to package v2 in memory with an empty
+  `FieldRegistryV1`.
+- Migrated legacy raw `DocumentNode v1` JSON to package v2 in memory with an
+  empty `FieldRegistryV1`.
+- Surfaced missing field definitions as warning-level registry issues during
+  v2 migration.
+- Kept existing package v2 input idempotent and preserved optional `data`,
+  `history`, and `migrations` members.
+- Kept `serializeDocumentPackage(...)`, localStorage save, and JSON export on
+  package v1.
+- Updated package contract, package v2 proposal, fixture catalog, test
+  strategy, and work log docs.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This is the last low-risk migration foundation before choosing whether
+  package v2 should become the active localStorage and/or JSON export format.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Activate Package V2 For LocalStorage
+
+Goal: Activate package v2 in the lowest-risk runtime boundary while keeping
+downloaded JSON export on package v1.
+
+Completed:
+
+- Added `CURRENT_STORAGE_PACKAGE_VERSION = 2`.
+- Changed localStorage autosave to write `FlowDocPackage v2`.
+- Kept `serializeDocumentPackage(...)` and JSON export writing
+  `FlowDocPackage v1`.
+- Allowed `saveDocumentToStorage(...)` to receive the active
+  `FieldRegistryV1`.
+- Preserved package v2 field registries loaded from localStorage or JSON import
+  in editor Fill mode, readiness checks, and subsequent autosaves.
+- Used the sample editor field registry for new documents and legacy/package
+  v1 inputs that do not carry a package-level registry.
+- Updated the automated editor smoke to assert autosaved localStorage packages
+  are v2.
+- Updated package contract, package v2 proposal, browser smoke, fixture catalog,
+  test strategy, and work log docs.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/FillingPanel.tsx`
+- `scripts/editor-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- JSON export intentionally remains package v1. The next major decision is
+  whether and when downloaded `.flowdoc.json` files should switch to package v2.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Add Transition Package V2 JSON Export
+
+Goal: Continue the short transition toward package v2 as the canonical file
+format without removing the stable package v1 export yet.
+
+Completed:
+
+- Added `serializeDocumentPackageV2(...)`.
+- Added an explicit `Save v2` editor toolbar action that downloads package v2
+  JSON with the active field registry.
+- Kept the existing `Save JSON` action writing package v1.
+- Added `.v2.flowdoc.json` filenames for transition package v2 downloads so v1
+  and v2 exports are not easy to confuse or overwrite.
+- Added focused persistence coverage for package v2 export serialization and
+  v2 filename generation.
+- Updated package contract, package v2 proposal, browser smoke checklist,
+  fixture catalog, test strategy, and work log docs.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This is intentionally transitional. The next package decision should make
+  package v2 the default JSON export and remove or demote package v1 export.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
 ### Add Automated Editor Browser Smoke
 
 Goal: Start Phase 1 of the stability roadmap by turning the most important

@@ -5,6 +5,7 @@ import type { FieldRegistryV1 } from "@/fieldRegistry"
 import {
   CURRENT_DOCUMENT_VERSION,
   CURRENT_PACKAGE_VERSION,
+  CURRENT_STORAGE_PACKAGE_VERSION,
   STORAGE_KEY,
   createDocumentPackage,
   documentImportSuccessMessage,
@@ -12,9 +13,11 @@ import {
   loadDocumentFromStorage,
   makeFlowDocFileName,
   migratePersistedDocumentPackage,
+  migratePersistedDocumentPackageToV2,
   parsePersistedDocument,
   saveDocumentToStorage,
   serializeDocumentPackage,
+  serializeDocumentPackageV2,
 } from "../documentPersistence"
 
 function firstParagraph(doc: ReturnType<typeof createDefaultDocument>): ParagraphNode {
@@ -117,12 +120,43 @@ describe("document persistence", () => {
 
     expect(saveDocumentToStorage(storage, doc)).toEqual({ ok: true })
     expect(items.has(STORAGE_KEY)).toBe(true)
-    expect(JSON.parse(items.get(STORAGE_KEY)!)["packageVersion"]).toBe(CURRENT_PACKAGE_VERSION)
+    const storedPackage = JSON.parse(items.get(STORAGE_KEY)!)
+    expect(storedPackage["packageVersion"]).toBe(CURRENT_STORAGE_PACKAGE_VERSION)
+    expect(storedPackage["fields"]).toEqual({ version: 1, fields: [] })
 
     const result = loadDocumentFromStorage(storage)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.doc.document.meta?.title).toBe("Storage")
+    expect(result.package?.packageVersion).toBe(CURRENT_STORAGE_PACKAGE_VERSION)
+  })
+
+  it("saves localStorage packages as v2 with the provided field registry", () => {
+    const items = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => { items.set(key, value) },
+    }
+    const doc = createDefaultDocument("Storage V2 Registry")
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+    const fields: FieldRegistryV1 = {
+      version: 1,
+      fields: [{ key: "customer.name", fieldType: "text", label: "Customer name", required: true }],
+    }
+
+    expect(saveDocumentToStorage(storage, doc, { fields, now: "2026-05-12T00:00:00.000Z" })).toEqual({ ok: true })
+    const storedPackage = JSON.parse(items.get(STORAGE_KEY)!)
+    expect(storedPackage["packageVersion"]).toBe(2)
+    expect(storedPackage["fields"]).toEqual(fields)
+
+    const result = loadDocumentFromStorage(storage)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.package?.packageVersion).toBe(2)
+    expect(result.package?.packageVersion === 2 ? result.package.fields : null).toEqual(fields)
+    expect(result.fieldRegistryIssues).toEqual([])
   })
 
   it("serializes JSON export as a document package", () => {
@@ -133,6 +167,25 @@ describe("document persistence", () => {
     expect(exported.packageVersion).toBe(1)
     expect(exported.kind).toBe("document")
     expect(exported.document.document.meta.title).toBe("Download")
+  })
+
+  it("serializes optional v2 JSON export with a field registry", () => {
+    const doc = createDefaultDocument("Download V2")
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+    const fields: FieldRegistryV1 = {
+      version: 1,
+      fields: [{ key: "customer.name", fieldType: "text", label: "Customer name" }],
+    }
+
+    const exported = JSON.parse(serializeDocumentPackageV2(doc, fields))
+
+    expect(exported.packageVersion).toBe(2)
+    expect(exported.kind).toBe("document")
+    expect(exported.document.document.meta.title).toBe("Download V2")
+    expect(exported.fields).toEqual(fields)
+    expect(JSON.parse(serializeDocumentPackage(doc)).packageVersion).toBe(1)
   })
 
   it("parses package v2 with a field registry while default export stays v1", () => {
@@ -242,8 +295,73 @@ describe("document persistence", () => {
     expect(second.package).toEqual(first.package)
   })
 
+  it("migrates package v1 into package v2 in memory without changing default export", () => {
+    const doc = createDefaultDocument("V2 Migration")
+    const pack = createDocumentPackage(doc, "2026-05-11T00:00:00.000Z")
+
+    const result = migratePersistedDocumentPackageToV2(JSON.stringify(pack), "2026-05-12T00:00:00.000Z")
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.source).toBe("package")
+    expect(result.package.packageVersion).toBe(2)
+    expect(result.package.id).toBe(pack.id)
+    expect(result.package.meta).toEqual(pack.meta)
+    expect(result.package.document).toEqual(pack.document)
+    expect(result.package.fields).toEqual({ version: 1, fields: [] })
+    expect(result.fieldRegistryIssues).toEqual([])
+    expect(JSON.parse(serializeDocumentPackage(result.package.document)).packageVersion).toBe(1)
+  })
+
+  it("migrates legacy raw documents into package v2 with missing field warnings", () => {
+    const doc = createDefaultDocument("Legacy V2 Migration")
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+
+    const result = migratePersistedDocumentPackageToV2(JSON.stringify(doc), "2026-05-11T00:00:00.000Z")
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.source).toBe("legacy-document")
+    expect(result.package.packageVersion).toBe(2)
+    expect(result.package.fields).toEqual({ version: 1, fields: [] })
+    expect(result.package.meta.createdAt).toBe("2026-05-11T00:00:00.000Z")
+    expect(result.fieldRegistryIssues).toEqual([
+      expect.objectContaining({
+        code: "missing-definition",
+        severity: "warning",
+        key: "customer.name",
+        fieldRefId: "field-customer",
+      }),
+    ])
+  })
+
+  it("keeps package v2 migration idempotent while preserving optional layers", () => {
+    const doc = createDefaultDocument("Existing V2")
+    const pack = {
+      ...packageV2(doc, [{ key: "customer.name", fieldType: "text" }]),
+      data: { version: 1, values: { "customer.name": "Acme" } },
+      history: { version: 1, entries: [] },
+      migrations: [{ from: 1, to: 2 }],
+    }
+
+    const result = migratePersistedDocumentPackageToV2(JSON.stringify(pack), "2026-05-12T00:00:00.000Z")
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.source).toBe("package")
+    expect(result.package.packageVersion).toBe(2)
+    expect(result.package.fields).toEqual(pack.fields)
+    expect(result.package.data).toEqual(pack.data)
+    expect(result.package.history).toEqual(pack.history)
+    expect(result.package.migrations).toEqual(pack.migrations)
+    expect(result.fieldRegistryIssues).toEqual([])
+  })
+
   it("builds safe FlowDoc package file names from document titles", () => {
     expect(makeFlowDocFileName("Invoice: A/B * Draft?")).toBe("Invoice-A-B-Draft.flowdoc.json")
+    expect(makeFlowDocFileName("Invoice: A/B * Draft?", "v2")).toBe("Invoice-A-B-Draft.v2.flowdoc.json")
     expect(makeFlowDocFileName("   ...   ")).toBe("document.flowdoc.json")
     expect(makeFlowDocFileName(null)).toBe("document.flowdoc.json")
   })

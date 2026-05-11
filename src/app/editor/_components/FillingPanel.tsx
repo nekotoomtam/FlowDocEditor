@@ -1,7 +1,7 @@
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
+import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DocumentDataReadinessIssue } from "@/readiness"
 import type { DocumentNode, TableNode } from "@/schema"
-import { SAMPLE_FIELD_REGISTRY } from "@/app/_lib/fieldRegistry"
 
 interface UsedField {
   key: string
@@ -12,6 +12,7 @@ interface UsedField {
 
 interface Props {
   doc: DocumentNode
+  registry: FieldRegistryV1
   snapshot: DataSnapshotV1
   readinessIssues?: DocumentDataReadinessIssue[]
   onChange: (key: string, value: FieldScalarValue) => void
@@ -50,11 +51,11 @@ function fieldInputType(fieldType: string): string {
   return "text"
 }
 
-export function FillingPanel({ doc, snapshot, readinessIssues = [], onChange }: Props) {
+export function FillingPanel({ doc, registry, snapshot, readinessIssues = [], onChange }: Props) {
   const errorCount = readinessIssues.filter((issue) => issue.severity === "error").length
   const warningCount = readinessIssues.filter((issue) => issue.severity === "warning").length
   const usedKeys = collectUsedFieldKeys(doc)
-  const fields: UsedField[] = SAMPLE_FIELD_REGISTRY
+  const fields: UsedField[] = registry.fields
     .filter((field) => usedKeys.has(field.key))
     .map((field) => ({
       key: field.key,

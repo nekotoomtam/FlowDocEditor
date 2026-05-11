@@ -133,7 +133,7 @@ async function waitForStoredParagraphText(page, nodeId, expectedText) {
       const raw = window.localStorage.getItem(key)
       if (!raw) return false
       const parsed = JSON.parse(raw)
-      const doc = parsed?.packageVersion === 1 && parsed?.kind === "document"
+      const doc = parsed?.kind === "document" && (parsed?.packageVersion === 1 || parsed?.packageVersion === 2)
         ? parsed.document
         : parsed
       for (const section of doc.document.sections) {
@@ -158,7 +158,7 @@ async function waitForStoredTableShape(page, tableId, expected) {
       const raw = window.localStorage.getItem(key)
       if (!raw) return false
       const parsed = JSON.parse(raw)
-      const doc = parsed?.packageVersion === 1 && parsed?.kind === "document"
+      const doc = parsed?.kind === "document" && (parsed?.packageVersion === 1 || parsed?.packageVersion === 2)
         ? parsed.document
         : parsed
       for (const section of doc.document.sections) {
@@ -181,7 +181,7 @@ async function storedTableCellId(page, tableId, rowIndex, colIndex) {
       const raw = window.localStorage.getItem(key)
       if (!raw) return null
       const parsed = JSON.parse(raw)
-      const doc = parsed?.packageVersion === 1 && parsed?.kind === "document"
+      const doc = parsed?.kind === "document" && (parsed?.packageVersion === 1 || parsed?.packageVersion === 2)
         ? parsed.document
         : parsed
       for (const section of doc.document.sections) {
@@ -203,7 +203,7 @@ async function storedTableCellFirstChildId(page, tableId, rowIndex, colIndex) {
       const raw = window.localStorage.getItem(key)
       if (!raw) return null
       const parsed = JSON.parse(raw)
-      const doc = parsed?.packageVersion === 1 && parsed?.kind === "document"
+      const doc = parsed?.kind === "document" && (parsed?.packageVersion === 1 || parsed?.packageVersion === 2)
         ? parsed.document
         : parsed
       for (const section of doc.document.sections) {
@@ -225,6 +225,19 @@ async function waitForVisibleTableCellCount(page, expectedCount) {
   await page.waitForFunction(
     (count) => document.querySelectorAll('[data-testid="editor-fragment"][data-node-type="table-cell"]').length === count,
     expectedCount,
+    { timeout: 5000 },
+  )
+}
+
+async function waitForStoredPackageVersion(page, expectedVersion) {
+  await page.waitForFunction(
+    ({ key, expectedVersion }) => {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) return false
+      const parsed = JSON.parse(raw)
+      return parsed?.packageVersion === expectedVersion && parsed?.kind === "document"
+    },
+    { key: STORAGE_KEY, expectedVersion },
     { timeout: 5000 },
   )
 }
@@ -341,6 +354,7 @@ async function run() {
     await textarea.fill(editedText)
     await textarea.press("Escape")
     await waitForStoredParagraphText(page, "smoke-p1", editedText)
+    await waitForStoredPackageVersion(page, 2)
     await expectNoLayoutError(page)
 
     await page.getByRole("button", { name: "Undo" }).click()
@@ -416,6 +430,7 @@ async function run() {
       null,
       { timeout: 5000 },
     )
+    await waitForStoredPackageVersion(fillPage, 2)
     await expectNoLayoutError(fillPage)
     await fillPage.close()
 

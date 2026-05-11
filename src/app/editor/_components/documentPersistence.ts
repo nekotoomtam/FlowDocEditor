@@ -12,6 +12,7 @@ import type { DocumentNode } from "@/schema"
 export const STORAGE_KEY = "flowdoc_document"
 export const CURRENT_DOCUMENT_VERSION = 1
 export const CURRENT_PACKAGE_VERSION = 1
+export const CURRENT_STORAGE_PACKAGE_VERSION = 2
 export const SUPPORTED_PACKAGE_VERSIONS = [1, 2] as const
 
 export interface FlowDocPackageV1 {
@@ -66,9 +67,21 @@ export type DocumentPackageMigrationResult =
   | { ok: true; package: FlowDocPackage; source: "package" | "legacy-document"; fieldRegistryIssues?: FieldRegistryIssue[] }
   | { ok: false; reason: DocumentParseFailureReason }
 
+export type DocumentPackageV2MigrationResult =
+  | { ok: true; package: FlowDocPackageV2; source: "package" | "legacy-document"; fieldRegistryIssues: FieldRegistryIssue[] }
+  | { ok: false; reason: DocumentParseFailureReason }
+
 export type DocumentStorageResult =
   | { ok: true }
   | { ok: false; reason: "storage-unavailable" }
+
+export interface DocumentStorageSaveOptions {
+  key?: string
+  fields?: FieldRegistryV1
+  now?: string
+}
+
+export type FlowDocExportFormat = "v1" | "v2"
 
 export function documentParseFailureMessage(reason: DocumentParseFailureReason): string {
   switch (reason) {
@@ -100,7 +113,7 @@ export function documentImportSuccessMessage(
   return `${baseMessage} ${warningCount} field warning${warningCount === 1 ? "" : "s"}.`
 }
 
-export function makeFlowDocFileName(title: string | null | undefined): string {
+export function makeFlowDocFileName(title: string | null | undefined, format: FlowDocExportFormat = "v1"): string {
   const base = (title ?? "document")
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
     .replace(/\s+/g, "-")
@@ -108,7 +121,7 @@ export function makeFlowDocFileName(title: string | null | undefined): string {
     .replace(/^[-.]+/g, "")
     .trim()
   const safeBase = base.length > 0 ? base : "document"
-  return `${safeBase}.flowdoc.json`
+  return `${safeBase}${format === "v2" ? ".v2" : ""}.flowdoc.json`
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -192,6 +205,30 @@ export function createDocumentPackage(doc: DocumentNode, now = new Date().toISOS
       updatedAt: now,
     },
     document: doc,
+  }
+}
+
+function createEmptyFieldRegistry(): FieldRegistryV1 {
+  return { version: 1, fields: [] }
+}
+
+export function createDocumentPackageV2(
+  doc: DocumentNode,
+  fields: FieldRegistryV1 = createEmptyFieldRegistry(),
+  now = new Date().toISOString(),
+): FlowDocPackageV2 {
+  const title = doc.document.meta?.title ?? "Untitled"
+  return {
+    packageVersion: CURRENT_STORAGE_PACKAGE_VERSION,
+    kind: "document",
+    id: doc.document.id,
+    meta: {
+      title,
+      createdAt: doc.document.meta?.createdAt ?? now,
+      updatedAt: now,
+    },
+    document: doc,
+    fields,
   }
 }
 
@@ -294,6 +331,37 @@ function migratePersistedValue(value: unknown, now?: string): DocumentPackageMig
   }
 }
 
+function migrateParseResultToPackageV2(
+  result: Extract<DocumentParseResult, { ok: true }>,
+  now?: string,
+): DocumentPackageV2MigrationResult {
+  if (result.package?.packageVersion === 2) {
+    return {
+      ok: true,
+      package: result.package,
+      source: result.source,
+      fieldRegistryIssues: result.fieldRegistryIssues ?? [],
+    }
+  }
+
+  const currentPackage = result.package ?? createDocumentPackage(result.doc, now)
+  const fields = createEmptyFieldRegistry()
+  const fieldRegistryValidation = validateFieldRegistryReferences(currentPackage.document, fields)
+  return {
+    ok: true,
+    package: {
+      packageVersion: 2,
+      kind: currentPackage.kind,
+      id: currentPackage.id,
+      meta: currentPackage.meta,
+      document: currentPackage.document,
+      fields,
+    },
+    source: result.source,
+    fieldRegistryIssues: fieldRegistryValidation.issues,
+  }
+}
+
 export function parsePersistedDocument(raw: string | null | undefined): DocumentParseResult {
   const result = migratePersistedDocumentPackage(raw)
   if (!result.ok) return result
@@ -319,6 +387,21 @@ export function migratePersistedDocumentPackage(
   }
 }
 
+export function migratePersistedDocumentPackageToV2(
+  raw: string | null | undefined,
+  now?: string,
+): DocumentPackageV2MigrationResult {
+  if (raw == null || raw.trim() === "") return { ok: false, reason: "empty" }
+
+  try {
+    const result = parsePersistedValue(JSON.parse(raw))
+    if (!result.ok) return result
+    return migrateParseResultToPackageV2(result, now)
+  } catch {
+    return { ok: false, reason: "invalid-json" }
+  }
+}
+
 export function loadDocumentFromStorage(storage: Pick<Storage, "getItem">, key = STORAGE_KEY): DocumentParseResult {
   try {
     return parsePersistedDocument(storage.getItem(key))
@@ -330,10 +413,12 @@ export function loadDocumentFromStorage(storage: Pick<Storage, "getItem">, key =
 export function saveDocumentToStorage(
   storage: Pick<Storage, "setItem">,
   doc: DocumentNode,
-  key = STORAGE_KEY,
+  options: DocumentStorageSaveOptions = {},
 ): DocumentStorageResult {
   try {
-    storage.setItem(key, JSON.stringify(createDocumentPackage(doc)))
+    const key = options.key ?? STORAGE_KEY
+    const fields = options.fields ?? createEmptyFieldRegistry()
+    storage.setItem(key, JSON.stringify(createDocumentPackageV2(doc, fields, options.now)))
     return { ok: true }
   } catch {
     return { ok: false, reason: "storage-unavailable" }
@@ -342,4 +427,8 @@ export function saveDocumentToStorage(
 
 export function serializeDocumentPackage(doc: DocumentNode): string {
   return JSON.stringify(createDocumentPackage(doc), null, 2)
+}
+
+export function serializeDocumentPackageV2(doc: DocumentNode, fields: FieldRegistryV1): string {
+  return JSON.stringify(createDocumentPackageV2(doc, fields), null, 2)
 }

@@ -203,7 +203,7 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  26 core test files / 321 core tests, plus 9 app test files / 101 app tests.
+  26 core test files / 321 core tests, plus 9 app test files / 106 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases,
   including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
@@ -232,13 +232,16 @@ Current strengths:
 - API route contract smoke protects `/api/paginate` and `/api/export` status,
   headers, and artifact readability.
 - Document package persistence coverage protects `FlowDocPackage v1`,
-  legacy raw `DocumentNode v1` import, localStorage save/load, JSON package
-  serialization, package/document identity agreement, normalize, and validation
-  behavior, safe filename generation, import status messages, raw-document
-  migration, package v1 idempotent migration, and inline `fieldRef`
-  round-tripping. It also covers proposal-aligned `FlowDocPackage v2` parsing,
-  v2 registry warning propagation, v2 registry warning import status, and v2
-  registry hard-error rejection while default save/export remains v1.
+  proposal-aligned `FlowDocPackage v2`, legacy raw `DocumentNode v1` import,
+  localStorage package v2 save/load, JSON package v1 serialization,
+  package/document identity agreement, normalize, and validation behavior, safe
+  filename generation, import status messages, raw-document migration, package
+  v1 idempotent migration, and inline `fieldRef` round-tripping. It also covers
+  localStorage field registry preservation, explicit package v2 JSON export
+  serialization with field registry preservation, legacy/package v1 in-memory
+  migration to package v2, package v2 migration idempotence, v2 registry
+  warning propagation, v2 registry warning import status, and v2 registry
+  hard-error rejection while default JSON export remains v1.
 - App-level tests cover drift and editor helper behavior.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.
