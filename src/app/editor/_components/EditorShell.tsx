@@ -596,10 +596,14 @@ export default function EditorShell() {
   const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
   const [inlineEditCaretIndex, setInlineEditCaretIndex] = useState<number | null>(null)
   const [inlineEditPageIndex, setInlineEditPageIndex] = useState<number | null>(null)
+  const [inlineEditDraftVersion, setInlineEditDraftVersion] = useState(0)
+  const [inlineEditVisualVersion, setInlineEditVisualVersion] = useState(0)
   const docRef = useRef(state.doc)
   const inlineEditTransactionRef = useRef<InlineEditTransaction | null>(null)
   const wasInlineEditingRef = useRef(false)
   const inlineEditEndFrameRef = useRef<number | null>(null)
+  const inlineEditDraftVersionRef = useRef(0)
+  const inlineEditVisualVersionRef = useRef(0)
 
   useEffect(() => { docRef.current = state.doc }, [state.doc])
 
@@ -612,6 +616,25 @@ export default function EditorShell() {
     if (inlineEditEndFrameRef.current === null || typeof cancelAnimationFrame === "undefined") return
     cancelAnimationFrame(inlineEditEndFrameRef.current)
     inlineEditEndFrameRef.current = null
+  }, [])
+
+  const resetInlineEditVisualFreshness = useCallback(() => {
+    inlineEditDraftVersionRef.current = 0
+    inlineEditVisualVersionRef.current = 0
+    setInlineEditDraftVersion(0)
+    setInlineEditVisualVersion(0)
+  }, [])
+
+  const markInlineEditDraftChanged = useCallback(() => {
+    const nextVersion = inlineEditDraftVersionRef.current + 1
+    inlineEditDraftVersionRef.current = nextVersion
+    setInlineEditDraftVersion(nextVersion)
+    return nextVersion
+  }, [])
+
+  const markInlineEditVisualFresh = useCallback((version: number) => {
+    inlineEditVisualVersionRef.current = version
+    setInlineEditVisualVersion(version)
   }, [])
 
   const finalizeInlineEditBeforeAction = useCallback((): boolean => {
@@ -632,8 +655,9 @@ export default function EditorShell() {
     setInlineEditNodeId(null)
     setInlineEditCaretIndex(null)
     setInlineEditPageIndex(null)
+    resetInlineEditVisualFreshness()
     return transaction !== null
-  }, [cancelPendingInlineEditEnd, paginatePreviewDoc])
+  }, [cancelPendingInlineEditEnd, paginatePreviewDoc, resetInlineEditVisualFreshness])
 
   const resetInlineEditStateForDocumentReplace = useCallback(() => {
     cancelPendingInlineEditEnd()
@@ -641,7 +665,8 @@ export default function EditorShell() {
     setInlineEditNodeId(null)
     setInlineEditCaretIndex(null)
     setInlineEditPageIndex(null)
-  }, [cancelPendingInlineEditEnd])
+    resetInlineEditVisualFreshness()
+  }, [cancelPendingInlineEditEnd, resetInlineEditVisualFreshness])
 
   useEffect(() => cancelPendingInlineEditEnd, [cancelPendingInlineEditEnd])
 
@@ -768,6 +793,7 @@ export default function EditorShell() {
   // ─── Inline editing ───────────────────────────────────────────────────────────
   const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null) => {
     const beforeDoc = docRef.current
+    resetInlineEditVisualFreshness()
     inlineEditTransactionRef.current = {
       nodeId,
       beforeDoc,
@@ -778,12 +804,13 @@ export default function EditorShell() {
     setInlineEditNodeId(nodeId)
     setInlineEditCaretIndex(caretIndex)
     setInlineEditPageIndex(pageIndex)
-  }, [])
+  }, [resetInlineEditVisualFreshness])
 
   const handleInlineEditChange = useCallback((nodeId: string, text: string, caretIndex: number | null) => {
+    markInlineEditDraftChanged()
     setInlineEditCaretIndex(caretIndex)
     dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
-  }, [])
+  }, [markInlineEditDraftChanged])
 
   const handleInlineEditCaretChange = useCallback((nodeId: string, caretIndex: number | null) => {
     if (inlineEditNodeIdRef.current !== nodeId) return
@@ -894,11 +921,12 @@ export default function EditorShell() {
       beforePaginated: paginatePreviewDoc(beforeDoc),
       beforeText: getParagraphTextFromDoc(beforeDoc, nodeId) ?? "",
     }
+    resetInlineEditVisualFreshness()
     setInlineEditNodeId(nodeId)
     setInlineEditCaretIndex(0)
     setInlineEditPageIndex(null)
     dispatch({ type: "CLEAR_SPLIT_NODE_ID" })
-  }, [paginatePreviewDoc, state.lastSplitNodeId])
+  }, [paginatePreviewDoc, resetInlineEditVisualFreshness, state.lastSplitNodeId])
 
   // Focus the previous paragraph after a merge, caret at join point
   useEffect(() => {
@@ -911,11 +939,12 @@ export default function EditorShell() {
       beforePaginated: paginatePreviewDoc(beforeDoc),
       beforeText: getParagraphTextFromDoc(beforeDoc, nodeId) ?? "",
     }
+    resetInlineEditVisualFreshness()
     setInlineEditNodeId(nodeId)
     setInlineEditCaretIndex(state.mergeResult.caretIndex)
     setInlineEditPageIndex(null)
     dispatch({ type: "CLEAR_MERGE_RESULT" })
-  }, [paginatePreviewDoc, state.mergeResult])
+  }, [paginatePreviewDoc, resetInlineEditVisualFreshness, state.mergeResult])
 
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
@@ -1020,6 +1049,9 @@ export default function EditorShell() {
     // effect only reruns when the draft document or measurement inputs change.
     const generation = ++browserPaginationGenerationRef.current
     const inlineEditNodeIdAtSchedule = inlineEditNodeIdRef.current
+    const inlineEditDraftVersionAtSchedule = inlineEditNodeIdAtSchedule
+      ? inlineEditDraftVersionRef.current
+      : null
     const debounceMs = inlineEditNodeIdAtSchedule ? INLINE_EDIT_PREVIEW_DEBOUNCE_MS : 16
     interactiveDebounceRef.current = setTimeout(() => {
       if (generation !== browserPaginationGenerationRef.current) return
@@ -1028,11 +1060,14 @@ export default function EditorShell() {
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
       dispatch({ type: "SET_PAGINATED", paginated })
+      if (inlineEditDraftVersionAtSchedule !== null) {
+        markInlineEditVisualFresh(inlineEditDraftVersionAtSchedule)
+      }
     }, debounceMs)
 
     return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorTextMeasurer, fontReadyVersion, previewDoc])
+  }, [editorTextMeasurer, fontReadyVersion, markInlineEditVisualFresh, previewDoc])
 
   // Authoritative pagination — server/export layout truth. The editor canvas
   // keeps the browser preview so normal display and inline editing share the
@@ -1472,6 +1507,8 @@ export default function EditorShell() {
     }
   }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, isTemplateMode, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
 
+  const inlineEditVisualFresh = inlineEditNodeId === null || inlineEditVisualVersion >= inlineEditDraftVersion
+
   return (
     <div
       ref={editorRootRef}
@@ -1655,6 +1692,7 @@ export default function EditorShell() {
           scale={scale}
           selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
           isLayoutLoading={isLayoutLoading}
+          inlineEditVisualFresh={isTemplateMode ? inlineEditVisualFresh : true}
           inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
           inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
           inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}

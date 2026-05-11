@@ -20,6 +20,58 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Add Guarded Inline Edit Visual Overlay
+
+Goal: Make normal paragraph view and inline edit view share the same visual
+text source when safe, without starting a custom caret/selection project.
+
+Completed:
+
+- Added inline edit draft/visual version tracking so the editor knows when the
+  current paginated visual lines match the active draft.
+- Kept textarea input/caret as the interaction truth, but render active SVG
+  paragraph lines during edit when the visual snapshot is fresh.
+- Kept textarea text visible as the fallback while visual pagination is stale,
+  preventing fast typing from making text disappear.
+- Made the textarea geometry intent explicit: foreignObject chrome expands the
+  hit/outline box while matching padding keeps the content origin aligned with
+  the paragraph fragment.
+- Added focused app tests for the guarded overlay helper behavior and updated
+  UX/smoke docs with the no-disappear/no-double-text contract.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser smoke on `http://localhost:4000/editor` with the current localStorage
+  document:
+  - reloaded the editor and confirmed the toolbar/pages rendered with no visible
+    `layout error` / `Server pagination failed` badge;
+  - opened an inline paragraph editor and confirmed exactly one active textarea;
+  - confirmed the fresh edit state uses transparent textarea text with visible
+    caret color, allowing the SVG paragraph lines to be the visual layer;
+  - closed the inline editor with Escape and confirmed the textarea unmounted
+    with no visible layout error badge.
+
+Notes:
+
+- This keeps server pagination, export, schema, and the core pagination engine
+  unchanged. Custom caret/selection remains a later decision gate.
+- The browser console buffer still contained earlier authoritative pagination
+  errors from the page session, so the smoke result is based on visible status
+  and current editor state rather than a clean console log.
+
 ### Fit Oversized Table Columns During Flow
 
 Goal: Clear the server `/api/paginate` layout assertion failure where table

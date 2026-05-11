@@ -4,6 +4,8 @@ import {
   buildContinuationBackspaceInput,
   buildSplitEditInput,
   getContinuationEditState,
+  inlineEditTextareaTextColor,
+  shouldUseInlineEditSvgVisual,
 } from "../ParagraphTextSurface"
 import type { PageFragment } from "@/pagination"
 
@@ -136,5 +138,18 @@ describe("ParagraphTextSurface continuation editing", () => {
 
   it("leaves first-fragment start backspace for paragraph merge handling", () => {
     expect(buildContinuationBackspaceInput("", "Hello")).toBeNull()
+  })
+})
+
+describe("ParagraphTextSurface inline edit visual parity", () => {
+  it("uses SVG text as the edit visual only when the snapshot is fresh", () => {
+    expect(shouldUseInlineEditSvgVisual(true, true)).toBe(true)
+    expect(shouldUseInlineEditSvgVisual(true, false)).toBe(false)
+    expect(shouldUseInlineEditSvgVisual(false, true)).toBe(false)
+  })
+
+  it("keeps textarea text visible while visual lines are stale", () => {
+    expect(inlineEditTextareaTextColor(false)).toBe("#1e40af")
+    expect(inlineEditTextareaTextColor(true)).toBe("transparent")
   })
 })

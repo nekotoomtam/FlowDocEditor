@@ -53,8 +53,12 @@ changes.
 
 - Start from a body paragraph.
 - Enter inline edit.
+- Confirm the paragraph text does not visibly jump when edit mode opens.
 - Type enough text to wrap into 3-4 visual lines.
 - Confirm typed text remains visible while editing.
+- During fast typing, confirm stale visual pagination keeps textarea text
+  visible as fallback and fresh visual pagination does not show a readable
+  double-text layer.
 - Confirm the active inline textarea does not grow into a giant hit area that
   extends far past the active fragment/page.
 - For page-boundary checks, use a paragraph near the bottom of a page and type

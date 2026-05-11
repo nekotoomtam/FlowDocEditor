@@ -9,6 +9,7 @@ interface Props {
   pageKey: string
   scale: number
   isEditing: boolean
+  isVisualFresh: boolean
   showTextSegments: boolean
   initialCaretIndex: number | null
   onChange: (nodeId: string, text: string, caretIndex: number | null) => void
@@ -33,6 +34,15 @@ interface SplitEditInput {
 
 const EDIT_CHROME_X = 3
 const EDIT_CHROME_Y = 3
+const INLINE_EDIT_TEXT_COLOR = "#1e40af"
+
+export function shouldUseInlineEditSvgVisual(isEditing: boolean, isVisualFresh: boolean): boolean {
+  return isEditing && isVisualFresh
+}
+
+export function inlineEditTextareaTextColor(useSvgVisual: boolean): string {
+  return useSvgVisual ? "transparent" : INLINE_EDIT_TEXT_COLOR
+}
 
 function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
   for (const section of doc.document.sections) {
@@ -260,6 +270,7 @@ export function ParagraphTextSurface({
   pageKey,
   scale,
   isEditing,
+  isVisualFresh,
   showTextSegments,
   initialCaretIndex,
   onChange,
@@ -296,6 +307,12 @@ export function ParagraphTextSurface({
   }, [fragment.height, fragment.lines, isEditing])
   const editPreviewHeight = (editPreview?.height ?? 0) * scale
   const activeEditHeight = Math.max(editHeight, minimumEditHeight, editPreviewHeight)
+  const useSvgVisual = shouldUseInlineEditSvgVisual(isEditing, isVisualFresh)
+  const textareaTextColor = inlineEditTextareaTextColor(useSvgVisual)
+  // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
+  // Matching padding cancels that expansion so textarea content starts at the
+  // same paragraph origin as SVG lines instead of drifting by the chrome size.
+  const textareaPadding = `${spacingBefore + EDIT_CHROME_Y}px ${EDIT_CHROME_X}px ${spacingAfter + EDIT_CHROME_Y}px`
 
   const syncTextareaHeight = useCallback((el: HTMLTextAreaElement) => {
     el.scrollTop = 0
@@ -324,6 +341,9 @@ export function ParagraphTextSurface({
   if (isEditing) {
     return (
       <>
+        {useSvgVisual && fragment.lines?.map((line, index) =>
+          renderLine(line, index, fragment, renderProps, pageKey, scale),
+        )}
         {showTextSegments && renderSegmentDebug(fragment.lines, fragment, renderProps, scale)}
         <foreignObject
           x={fragment.x * scale - EDIT_CHROME_X}
@@ -352,11 +372,11 @@ export function ParagraphTextSurface({
               fontSize,
               lineHeight: `${lineHeight}px`,
               textAlign: textAlignForParagraph(renderProps?.align),
-              color: "#1e40af",
-              caretColor: "#1e40af",
+              color: textareaTextColor,
+              caretColor: INLINE_EDIT_TEXT_COLOR,
               resize: "none",
               overflow: "hidden",
-              padding: `${spacingBefore + EDIT_CHROME_Y}px ${EDIT_CHROME_X}px ${spacingAfter + EDIT_CHROME_Y}px`,
+              padding: textareaPadding,
               margin: 0,
               boxSizing: "border-box",
               whiteSpace: "pre-wrap",

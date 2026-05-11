@@ -173,7 +173,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 // ─── Page View ────────────────────────────────────────────────────────────────
 
 function PageView({
-  page, doc, drag, scale, selectedNodeId, isLayoutLoading,
+  page, doc, drag, scale, selectedNodeId, isLayoutLoading, inlineEditVisualFresh,
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
@@ -181,6 +181,7 @@ function PageView({
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
+  inlineEditVisualFresh: boolean
   showTextSegments: boolean
   showDrift: boolean
   driftMap: Map<string, FragmentDrift> | null
@@ -452,6 +453,7 @@ function PageView({
                 pageKey={pageKey}
                 scale={scale}
                 isEditing={isInlineEditing}
+                isVisualFresh={isInlineEditing && inlineEditVisualFresh}
                 showTextSegments={showTextSegments}
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
@@ -564,6 +566,7 @@ interface Props {
   scale: number
   selectedNodeId: string | null
   isLayoutLoading: boolean
+  inlineEditVisualFresh: boolean
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
   inlineEditPageIndex: number | null
@@ -590,7 +593,7 @@ interface Props {
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
 }: Props) {
@@ -628,6 +631,7 @@ export function EditorCanvas({
                 <PageView
                   page={page} doc={doc} drag={drag} scale={scale}
                   selectedNodeId={selectedNodeId} isLayoutLoading={isLayoutLoading}
+                  inlineEditVisualFresh={inlineEditVisualFresh}
                   inlineEditNodeId={inlineEditNodeId}
                   inlineEditCaretIndex={inlineEditCaretIndex}
                   inlineEditPageIndex={inlineEditPageIndex}

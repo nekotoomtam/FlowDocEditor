@@ -45,14 +45,19 @@ Users should be able to:
 - Inline editing should preserve visible text.
 - Entering edit mode should not trigger unnecessary full re-pagination that
   causes visible collapse/flicker.
-- Active paragraph text may be owned visually by the textarea during editing,
+- Active paragraph input/caret handling is owned by the textarea during editing,
   but the authored text remains in `DocumentNode`.
 - During inline paragraph editing, browser pagination may run against
   `previewDoc` with the active draft and update the canvas as optimistic visual
   layout so long paragraphs can show continuation fragments before blur.
-- The active fragment textarea may render its own visible text so caret and
-  immediate typing feedback stay in the same browser layout layer. Page
-  splitting and non-active continuation fragments still come from
+- When the active edit visual snapshot is fresh for the current draft, the
+  active fragment should render the same SVG `fragment.lines` used by normal
+  mode and make textarea text transparent. This keeps normal/edit visual text
+  sourced from the same paginated lines.
+- When the active edit visual snapshot is stale, the textarea must keep visible
+  text as a fallback so fast typing never makes text disappear. The editor
+  should avoid showing both layers visibly at the same time.
+- Page splitting and non-active continuation fragments still come from
   `PaginatedDocument`.
 - Full browser/server pagination should reconcile after edit settles or exits.
 - Continuation fragments need extra care: only the clicked fragment should enter
