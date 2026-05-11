@@ -238,16 +238,18 @@ Current strengths:
   filename generation, import status messages, raw-document migration, package
   v1 idempotent migration, and inline `fieldRef` round-tripping. It also covers
   localStorage field registry preservation, package v2 JSON export
-  serialization with field registry preservation, legacy/package v1 migration
-  to package v2, package v2 migration idempotence, v2 registry warning
-  propagation, v2 registry warning import status, and v2 registry hard-error
-  rejection.
+  serialization with field registry preservation, package v2 data snapshot
+  preservation for localStorage/export/import, invalid package data snapshot
+  rejection, legacy/package v1 migration to package v2, package v2 migration
+  idempotence, v2 registry warning propagation, v2 registry warning import
+  status, and v2 registry hard-error rejection.
 - App-level tests cover drift and editor helper behavior.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.
 - Automated browser smoke now protects default editor load, paragraph inline
   edit commit, undo/redo, table-cell selection, the property-panel title, and
-  table-cell row/column insert/delete controls.
+  table-cell row/column insert/delete controls, plus Fill mode package v2 data
+  snapshot autosave.
 - Manual browser checks are still used for editor feel where automation
   coverage is light.
 

@@ -242,6 +242,22 @@ async function waitForStoredPackageVersion(page, expectedVersion) {
   )
 }
 
+async function waitForStoredSnapshotValue(page, keyName, expectedValue) {
+  await page.waitForFunction(
+    ({ storageKey, keyName, expectedValue }) => {
+      const raw = window.localStorage.getItem(storageKey)
+      if (!raw) return false
+      const parsed = JSON.parse(raw)
+      return parsed?.packageVersion === 2 &&
+        parsed?.kind === "document" &&
+        parsed?.data?.version === 1 &&
+        parsed?.data?.values?.[keyName] === expectedValue
+    },
+    { storageKey: STORAGE_KEY, keyName, expectedValue },
+    { timeout: 5000 },
+  )
+}
+
 async function expectPropertyPanelTitle(page, expectedTitle) {
   const panelTitle = page.getByTestId("property-panel-title")
   await panelTitle.waitFor({ state: "visible", timeout: 5000 })
@@ -431,6 +447,7 @@ async function run() {
       { timeout: 5000 },
     )
     await waitForStoredPackageVersion(fillPage, 2)
+    await waitForStoredSnapshotValue(fillPage, "customer.name", "Acme Co")
     await expectNoLayoutError(fillPage)
     await fillPage.close()
 

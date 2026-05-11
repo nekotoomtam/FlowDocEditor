@@ -128,11 +128,13 @@ behavior, invalid JSON, unsupported versions, invalid package structure,
 package/document id agreement, current `localStorage` key behavior,
 localStorage package v2 save/load, v2 field registry preservation, default
 JSON package serialization as v2, field-registry-preserving package v2 export,
-safe package filenames, and import status messages. It also covers inline
-`fieldRef` package round-tripping, legacy raw document migration into the
-current `FlowDocPackage v2`, legacy package v1 migration to package v2,
-package v2 migration idempotence, v2 registry warning propagation, v2 registry
-warning import status, and v2 registry hard-error rejection.
+package v2 data snapshot preservation for localStorage/export/import, invalid
+package data snapshot rejection, safe package filenames, and import status
+messages. It also covers inline `fieldRef` package round-tripping, legacy raw
+document migration into the current `FlowDocPackage v2`, legacy package v1
+migration to package v2, package v2 migration idempotence, v2 registry warning
+propagation, v2 registry warning import status, and v2 registry hard-error
+rejection.
 Real-font drift coverage loads
 `public/fonts/THSarabun.ttf` into Chromium canvas and fontkit, then checks
 representative Thai width parity and no `comparePagination` drift for a Thai
@@ -146,9 +148,9 @@ typing, undo/redo, flicker, and table panel workflows.
 Protects the default `/editor` load path with a real browser, deterministic
 localStorage document fixtures, paragraph inline edit commit, undo/redo, table
 cell selection, the property-panel title, table-cell row/column insert/delete
-controls, localStorage package v2 autosave, and Fill mode readiness
-warning/clear behavior for a required used field. It starts its own Next dev
-server on port `4010` unless
+controls, localStorage package v2 autosave, Fill mode readiness warning/clear
+behavior for a required used field, and package v2 data snapshot autosave for
+filled values. It starts its own Next dev server on port `4010` unless
 `SMOKE_BASE_URL` is provided.
 
 This is intentionally a focused workflow smoke, not a fixture catalog for every

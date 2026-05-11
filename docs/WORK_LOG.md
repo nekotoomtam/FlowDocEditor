@@ -5608,3 +5608,36 @@ Notes:
 - The first app-suite run hit a 10-second Chromium launch timeout in
   `realFontDrift.test.ts`; the focused real-font test and the repeated app
   suite both passed.
+
+---
+
+### Persist Document-Bound Data Snapshots In Package V2
+
+Goal: Keep the next layer focused on document creation and data placement by
+restoring current Fill mode values without introducing history, reviewer, or
+workflow state.
+
+Completed:
+
+- Added typed `data?: DataSnapshotV1` support to `FlowDocPackageV2`.
+- Kept scalar snapshot values outside `DocumentNode`; binding still resolves a
+  temporary preview/export document only.
+- Saved localStorage package v2 with the active field registry and current Fill
+  mode data snapshot.
+- Exported `Save JSON` package v2 with the active field registry and current
+  data snapshot.
+- Restored package v2 `data` back into Fill mode when opening JSON or loading
+  localStorage.
+- Rejected structurally invalid package data snapshots while keeping readiness
+  validation separate from package validity.
+- Extended editor smoke to confirm filled values are autosaved under
+  `data.values`.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check` passed with only LF-to-CRLF working-copy warnings.

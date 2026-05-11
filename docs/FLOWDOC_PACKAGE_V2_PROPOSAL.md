@@ -9,6 +9,7 @@ Current default JSON export writes:
 FlowDocPackage v2
   -> document: DocumentNode v1
   -> fields: FieldRegistryV1
+  -> data?: DataSnapshotV1
 ```
 
 Current localStorage autosave writes:
@@ -17,6 +18,7 @@ Current localStorage autosave writes:
 FlowDocPackage v2
   -> document: DocumentNode v1
   -> fields: FieldRegistryV1
+  -> data?: DataSnapshotV1
 ```
 
 Current implementation status:
@@ -27,14 +29,16 @@ Current implementation status:
 - default JSON export writes package v2
 - package v1 export is no longer exposed in the toolbar
 - package v2 is active for localStorage and JSON export
-- scalar data snapshot validation exists outside package persistence
+- scalar data snapshot validation exists and package v2 can preserve the
+  current document-bound snapshot
 - snapshot binding can resolve a temporary preview document from
   `DocumentNode + FieldRegistryV1 + DataSnapshotV1`
 - Fill mode can surface non-blocking registry/snapshot readiness issues
 - package v2 registry warnings appear in import success status
 
-The proposed v2 direction adds package-level field registry support first, then
-leaves persisted data snapshots and key history as explicit follow-up layers.
+The v2 direction added package-level field registry support first, then a
+current scalar data snapshot for document-bound placement. Key history remains
+an explicit follow-up layer.
 
 ## Goals
 
@@ -46,7 +50,7 @@ It should support:
 - stable field key identity
 - package-level field registry
 - validation between document `fieldRef.key` values and registry definitions
-- a clear future place for data snapshots
+- a clear place for current data snapshots
 - a clear future place for key history
 - migration from document-only package v1
 
@@ -56,7 +60,7 @@ It should not turn the document model into workflow state.
 
 This proposal does not implement:
 
-- submitted data storage
+- submitted/reviewer data workflows
 - key history UI
 - reviewer comments
 - repeat-region runtime behavior
@@ -84,9 +88,9 @@ interface FlowDocPackageV2 {
 }
 ```
 
-Only `fields` is proposed as a required new v2 member. `data`, `history`, and
-`migrations` are shown so the package has an agreed place for future layers,
-but they should not be made mandatory in the first v2 migration.
+Only `fields` is a required v2 member. `data` is optional and currently stores
+the scalar values needed to restore Fill mode for the same document. `history`
+and `migrations` remain optional/deferred layers.
 
 ## Field Registry
 
@@ -112,13 +116,13 @@ The early-v2 missing-key policy should remain warning-level so older templates
 or hand-authored files can still open. A later authoring mode may choose to block
 publish/export when warnings remain.
 
-## Data Snapshot Placeholder
+## Data Snapshot Layer
 
 Data snapshots should stay outside `DocumentNode`.
 
 Detailed rules live in `docs/DATA_SNAPSHOT_CONTRACT.md`.
 
-Proposed future shape:
+Current shape:
 
 ```ts
 type FieldScalarValue = string | number | boolean | null
@@ -133,10 +137,12 @@ interface DataSnapshotV1 {
 Rules:
 
 - keys in `values` refer to registry keys
+- package v2 import/export may preserve `data?: DataSnapshotV1`
 - missing values use `fieldRef.fallback`, field definition fallback, or empty
   string depending on the binding policy
 - binding must produce a temporary resolved document
 - binding must not mutate the template document
+- this layer stores only the current scalar snapshot, not history
 - values for `collection` fields need a later repeat-region design
 
 Deferred:
@@ -269,7 +275,8 @@ Now that package v2 is active beyond localStorage:
 Early v2 should distinguish validity from readiness:
 
 - Package validity: JSON shape, package version, identity, document validity,
-  duplicate registry keys, invalid inline field targets
+  duplicate registry keys, invalid inline field targets, invalid data snapshot
+  structure
 - Registry readiness: missing definitions for used fieldRefs, unused registry
   definitions
 - Data readiness: required fields missing values, invalid value type
@@ -291,6 +298,7 @@ When implementation begins, v2 work should cover:
 - migrate legacy raw document to v2 with empty registry
 - keep package/document id agreement
 - preserve document fieldRefs through migration
+- preserve optional data snapshots through package v2 save/load/export/import
 - keep PDF/DOCX export routes receiving `DocumentNode`
 - keep current binding behavior descriptive until strict readiness checks are
   intentionally enabled
@@ -303,16 +311,17 @@ These are intentionally deferred until the next phase needs them:
   blocking in a template publish mode
 - how to represent nested data and collection/repeat values
 - how key rename aliases should be represented
-- whether data snapshots and history belong in the same package file for every
-  workflow, or only in review/submission packages
+- whether key history belongs in the same package file for every workflow, or
+  only in review/submission packages
 
 ## Implementation Status And Next Phase
 
 Phase C added parser compatibility without migrating runtime storage. The next
 slices added data snapshot validation, snapshot binding/readiness feedback, an
 in-memory package v1/raw-document -> package v2 migration helper, package v2
-localStorage autosave activation, a short explicit v2 export transition, and
-finally the default JSON export switch to package v2.
+localStorage autosave activation, a short explicit v2 export transition, the
+default JSON export switch to package v2, and document-bound data snapshot
+placement persistence.
 
 Completed Phase C slice:
 
@@ -344,13 +353,22 @@ Completed v2 transition/default export slices:
 - remove the temporary visible `Save v2` toolbar action
 - keep package v1 as import/migration compatibility only
 
+Completed document-bound data placement slice:
+
+- preserve optional `data?: DataSnapshotV1` in package v2 parse/import
+- save localStorage package v2 with the current Fill mode snapshot
+- export package v2 JSON with the current Fill mode snapshot
+- restore package v2 `data` back into Fill mode on open
+- keep resolved values outside `DocumentNode`
+- reject structurally invalid package data snapshots
+- extend browser smoke to confirm filled values are autosaved in package v2
+
 Recommended next implementation phase:
 
-- decide whether package v2 should persist a `data` snapshot layer next
 - decide whether registry-readiness warnings should remain non-blocking or be
   promoted in a publish/template validation mode
+- harden field authoring/placement UX before adding any history layer
 
 Still not done:
 
-- data snapshot package persistence
 - key history implementation

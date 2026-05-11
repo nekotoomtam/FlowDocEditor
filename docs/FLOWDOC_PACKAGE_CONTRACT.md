@@ -21,6 +21,7 @@ The current canonical write format is `FlowDocPackage v2`:
 FlowDocPackage v2
   -> package metadata
   -> fields: FieldRegistryV1
+  -> data?: DataSnapshotV1
   -> document: DocumentNode v1
 ```
 
@@ -32,6 +33,7 @@ Current write behavior:
 
 - localStorage autosave writes `FlowDocPackage v2`
 - default JSON export writes `FlowDocPackage v2`
+- current Fill mode scalar values may be stored as optional `data`
 - package v1 remains an import/migration compatibility format only
 
 The parser accepts `FlowDocPackage v2`, `FlowDocPackage v1`, and legacy raw
@@ -39,8 +41,9 @@ The parser accepts `FlowDocPackage v2`, `FlowDocPackage v1`, and legacy raw
 
 ## Shape
 
-`FlowDocPackage v2` contains document-layer data plus the field registry needed
-to understand inline `fieldRef` keys:
+`FlowDocPackage v2` contains document-layer data, the field registry needed to
+understand inline `fieldRef` keys, and an optional current data snapshot for
+document-bound value placement:
 
 ```ts
 interface FlowDocPackageV2 {
@@ -54,7 +57,7 @@ interface FlowDocPackageV2 {
   }
   document: DocumentNode
   fields: FieldRegistryV1
-  data?: unknown
+  data?: DataSnapshotV1
   history?: unknown
   migrations?: unknown
 }
@@ -70,7 +73,8 @@ Current implementation:
 
 ## Identity Rules
 
-For `FlowDocPackage v1`, the package identity is the document identity:
+For `FlowDocPackage v1` and `FlowDocPackage v2`, the package identity is the
+document identity:
 
 - `package.id` must equal `package.document.document.id`
 - `package.kind` must be `"document"`
@@ -143,11 +147,11 @@ Do not store these in `FlowDocPackage`:
 
 Do not store these yet:
 
-- submitted field data
-- data versions
 - key-based history
 - reviewer comments or workflow state
 - repeat-region runtime data
+- submitted/reviewer data workflows
+- actor identity or approval state
 
 Those are higher layers. They can be added around the package foundation after
 the document/editor base is stable.
@@ -155,7 +159,8 @@ the document/editor base is stable.
 ## Export Rules
 
 Default JSON export from the editor writes `FlowDocPackage v2` with the active
-field registry. Package v1 JSON export is no longer exposed in the toolbar.
+field registry and current scalar data snapshot. Package v1 JSON export is no
+longer exposed in the toolbar.
 
 The editor should:
 
@@ -166,6 +171,8 @@ The editor should:
   documents as distinct import failures
 - surface package v2 registry readiness warnings in the import success status
   without blocking the file from opening
+- restore package v2 `data` into Fill mode without writing resolved values back
+  into `DocumentNode`
 
 PDF/DOCX export still sends a valid `DocumentNode` through:
 
@@ -211,13 +218,14 @@ Current implementation:
   `data`, `history`, and `migrations` members
 
 Runtime localStorage autosave and default JSON export now use package v2 and
-preserve the active field registry.
+preserve the active field registry plus the current document-bound data
+snapshot.
 
 The field registry contract already exists for validation and package planning.
 Persisting a registry in JSON is part of the current package v2 baseline.
 
-The current v2 proposal recommends adding required package-level `fields` first,
-while leaving `data` and `history` as optional/deferred layers.
+Package v2 now persists `fields` and may persist current `data`. `history`
+remains a deferred layer.
 
 ## Test Expectations
 
@@ -233,6 +241,8 @@ Persistence/package changes should cover:
 - localStorage package v2 save/load
 - localStorage package v2 field registry preservation
 - default package v2 JSON export with field registry preservation
+- package v2 data snapshot save/load/export/import preservation
+- invalid package v2 data snapshot structure rejection
 - legacy raw document -> package migration
 - package v1 idempotent migration
 - legacy raw document -> package v2 in-memory migration

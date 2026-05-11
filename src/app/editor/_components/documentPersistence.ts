@@ -1,4 +1,5 @@
 import { assertDocument, normalizeDocument } from "@/document"
+import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
 import {
   hasFieldRegistryErrors,
   validateFieldRegistryReferences,
@@ -39,7 +40,7 @@ export interface FlowDocPackageV2 {
   }
   document: DocumentNode
   fields: FieldRegistryV1
-  data?: unknown
+  data?: DataSnapshotV1
   history?: unknown
   migrations?: unknown
 }
@@ -77,6 +78,7 @@ export type DocumentStorageResult =
 export interface DocumentStorageSaveOptions {
   key?: string
   fields?: FieldRegistryV1
+  data?: DataSnapshotV1
   now?: string
 }
 
@@ -172,6 +174,28 @@ function parseFieldRegistryValue(value: unknown): FieldRegistryV1 | null {
   return { version: 1, fields }
 }
 
+function isFieldScalarValue(value: unknown): value is FieldScalarValue {
+  return value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+}
+
+function parseDataSnapshotValue(value: unknown): DataSnapshotV1 | null {
+  if (!isObject(value)) return null
+  if (value["version"] !== 1) return null
+  if (typeof value["updatedAt"] !== "string") return null
+  if (!isObject(value["values"])) return null
+
+  const values: DataSnapshotV1["values"] = {}
+  for (const [key, snapshotValue] of Object.entries(value["values"])) {
+    if (!isFieldScalarValue(snapshotValue)) return null
+    values[key] = snapshotValue
+  }
+
+  return { version: 1, updatedAt: value["updatedAt"], values }
+}
+
 function parseDocumentValue(value: unknown): Extract<DocumentParseResult, { ok: true }> | Extract<DocumentParseResult, { ok: false }> {
   if (!isObject(value)) return { ok: false, reason: "invalid-document" }
   if (value["version"] !== CURRENT_DOCUMENT_VERSION) return { ok: false, reason: "unsupported-version" }
@@ -213,9 +237,10 @@ export function createDocumentPackageV2(
   doc: DocumentNode,
   fields: FieldRegistryV1 = createEmptyFieldRegistry(),
   now = new Date().toISOString(),
+  data?: DataSnapshotV1,
 ): FlowDocPackageV2 {
   const title = doc.document.meta?.title ?? "Untitled"
-  return {
+  const pack: FlowDocPackageV2 = {
     packageVersion: CURRENT_STORAGE_PACKAGE_VERSION,
     kind: "document",
     id: doc.document.id,
@@ -227,6 +252,8 @@ export function createDocumentPackageV2(
     document: doc,
     fields,
   }
+  if (data) pack.data = data
+  return pack
 }
 
 function parsePackageMeta(value: Record<string, unknown>, doc: DocumentNode): FlowDocPackageV1["meta"] {
@@ -286,7 +313,11 @@ function parsePackageV2Value(value: Record<string, unknown>): DocumentParseResul
     document: documentResult.doc,
     fields,
   }
-  if ("data" in value) pack.data = value["data"]
+  if ("data" in value) {
+    const data = parseDataSnapshotValue(value["data"])
+    if (!data) return { ok: false, reason: "invalid-package" }
+    pack.data = data
+  }
   if ("history" in value) pack.history = value["history"]
   if ("migrations" in value) pack.migrations = value["migrations"]
 
@@ -408,7 +439,7 @@ export function saveDocumentToStorage(
   try {
     const key = options.key ?? STORAGE_KEY
     const fields = options.fields ?? createEmptyFieldRegistry()
-    storage.setItem(key, JSON.stringify(createDocumentPackageV2(doc, fields, options.now)))
+    storage.setItem(key, JSON.stringify(createDocumentPackageV2(doc, fields, options.now, options.data)))
     return { ok: true }
   } catch {
     return { ok: false, reason: "storage-unavailable" }
@@ -419,8 +450,12 @@ export function serializeDocumentPackage(doc: DocumentNode): string {
   return JSON.stringify(createDocumentPackageV2(doc), null, 2)
 }
 
-export function serializeDocumentPackageWithFields(doc: DocumentNode, fields: FieldRegistryV1): string {
-  return JSON.stringify(createDocumentPackageV2(doc, fields), null, 2)
+export function serializeDocumentPackageWithFields(
+  doc: DocumentNode,
+  fields: FieldRegistryV1,
+  data?: DataSnapshotV1,
+): string {
+  return JSON.stringify(createDocumentPackageV2(doc, fields, undefined, data), null, 2)
 }
 
 export function serializeLegacyDocumentPackage(doc: DocumentNode): string {

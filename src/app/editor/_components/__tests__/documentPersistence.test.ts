@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { createDefaultDocument, DEFAULT_PARAGRAPH_PROPS } from "@/document"
 import type { ParagraphNode } from "@/schema"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
+import type { DataSnapshotV1 } from "@/dataSnapshot"
 import {
   CURRENT_DOCUMENT_VERSION,
   CURRENT_PACKAGE_VERSION,
@@ -41,6 +42,14 @@ function packageV2(doc: ReturnType<typeof createDefaultDocument>, fields: FieldR
     },
     document: doc,
     fields: { version: 1, fields },
+  }
+}
+
+function dataSnapshot(values: DataSnapshotV1["values"]): DataSnapshotV1 {
+  return {
+    version: 1,
+    updatedAt: "2026-05-12T00:00:00.000Z",
+    values,
   }
 }
 
@@ -163,6 +172,34 @@ describe("document persistence", () => {
     expect(result.fieldRegistryIssues).toEqual([])
   })
 
+  it("saves and loads package v2 data snapshots through localStorage", () => {
+    const items = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => { items.set(key, value) },
+    }
+    const doc = createDefaultDocument("Storage V2 Data")
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+    const fields: FieldRegistryV1 = {
+      version: 1,
+      fields: [{ key: "customer.name", fieldType: "text", label: "Customer name" }],
+    }
+    const data = dataSnapshot({ "customer.name": "Acme Co" })
+
+    expect(saveDocumentToStorage(storage, doc, { fields, data, now: "2026-05-12T00:00:00.000Z" })).toEqual({ ok: true })
+    const storedPackage = JSON.parse(items.get(STORAGE_KEY)!)
+    expect(storedPackage["packageVersion"]).toBe(2)
+    expect(storedPackage["data"]).toEqual(data)
+
+    const result = loadDocumentFromStorage(storage)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.package?.packageVersion).toBe(2)
+    expect(result.package?.packageVersion === 2 ? result.package.data : null).toEqual(data)
+  })
+
   it("serializes JSON export as the current package v2 shape", () => {
     const doc = createDefaultDocument("Download")
     const exported = JSON.parse(serializeDocumentPackage(doc))
@@ -174,7 +211,7 @@ describe("document persistence", () => {
     expect(exported.fields).toEqual({ version: 1, fields: [] })
   })
 
-  it("serializes JSON export with a field registry", () => {
+  it("serializes JSON export with a field registry and data snapshot", () => {
     const doc = createDefaultDocument("Download V2")
     firstParagraph(doc).children = [
       { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
@@ -183,13 +220,15 @@ describe("document persistence", () => {
       version: 1,
       fields: [{ key: "customer.name", fieldType: "text", label: "Customer name" }],
     }
+    const data = dataSnapshot({ "customer.name": "Acme Co" })
 
-    const exported = JSON.parse(serializeDocumentPackageWithFields(doc, fields))
+    const exported = JSON.parse(serializeDocumentPackageWithFields(doc, fields, data))
 
     expect(exported.packageVersion).toBe(2)
     expect(exported.kind).toBe("document")
     expect(exported.document.document.meta.title).toBe("Download V2")
     expect(exported.fields).toEqual(fields)
+    expect(exported.data).toEqual(data)
   })
 
   it("parses package v2 with a field registry as the current package format", () => {
@@ -228,6 +267,33 @@ describe("document persistence", () => {
         fieldRefId: "field-customer",
       }),
     ])
+  })
+
+  it("parses package v2 with a document-bound data snapshot", () => {
+    const doc = createDefaultDocument("Package V2 Data")
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+    const data = dataSnapshot({ "customer.name": "Acme Co" })
+    const result = parsePersistedDocument(JSON.stringify({
+      ...packageV2(doc, [{ key: "customer.name", fieldType: "text", label: "Customer name" }]),
+      data,
+    }))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.package?.packageVersion).toBe(2)
+    expect(result.package?.packageVersion === 2 ? result.package.data : null).toEqual(data)
+    expect(result.fieldRegistryIssues).toEqual([])
+  })
+
+  it("rejects package v2 with structurally invalid data snapshots", () => {
+    const doc = createDefaultDocument("Invalid Data Snapshot")
+
+    expect(parsePersistedDocument(JSON.stringify({
+      ...packageV2(doc, []),
+      data: { version: 1, updatedAt: "2026-05-12T00:00:00.000Z", values: { nested: { bad: true } } },
+    }))).toEqual({ ok: false, reason: "invalid-package" })
   })
 
   it("rejects package v2 with duplicate registry keys", () => {
@@ -352,7 +418,7 @@ describe("document persistence", () => {
     const doc = createDefaultDocument("Existing V2")
     const pack = {
       ...packageV2(doc, [{ key: "customer.name", fieldType: "text" }]),
-      data: { version: 1, values: { "customer.name": "Acme" } },
+      data: dataSnapshot({ "customer.name": "Acme" }),
       history: { version: 1, entries: [] },
       migrations: [{ from: 1, to: 2 }],
     }

@@ -169,24 +169,23 @@ None of the editor runtime state belongs in the registry.
 `FlowDocPackage v1` intentionally remains document-first and does not persist the
 registry.
 
-The expected future direction is:
+The current package direction is:
 
 ```txt
 FlowDocPackage v2
   -> package metadata
   -> document: DocumentNode
   -> fields: FieldRegistryV1
-  -> data snapshot (contract implemented; package persistence deferred)
+  -> data?: DataSnapshotV1
   -> key history (deferred)
 ```
 
 Adding `fields` to a package is a package migration decision, not a
 `DocumentNode` schema change.
 
-The current package v2 proposal in `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
-recommends making package-level `fields` the first required new v2 layer, while
-leaving data snapshots and key history optional package members until their
-runtime and UX contracts are ready.
+The current package v2 contract makes package-level `fields` required and keeps
+`data?: DataSnapshotV1` optional for document-bound value placement. Key history
+remains deferred until its runtime and UX contract is ready.
 
 Data snapshot value rules live in `docs/DATA_SNAPSHOT_CONTRACT.md`.
 

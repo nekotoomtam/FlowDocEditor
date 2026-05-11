@@ -57,6 +57,7 @@ documents into `localStorage`, then verifies:
   without a layout error
 - Fill mode shows a required-field readiness warning for an empty used field
   and clears the warning after the value is filled
+- filled values are autosaved as package v2 `data.values`
 
 Use `SMOKE_BASE_URL=http://localhost:<port>/editor npm run smoke:editor` when
 you intentionally want to run against an already-started server. Use

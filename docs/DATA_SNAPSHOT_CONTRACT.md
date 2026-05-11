@@ -15,6 +15,10 @@ Field values belong outside `DocumentNode`.
 template document and a data snapshot into a temporary resolved document for
 preview/export.
 
+The current package use is document-bound data placement only: save/open should
+restore the current values into the same field keys. It is not a review,
+submission, audit, or history layer.
+
 ## Shape
 
 Phase D starts with scalar values only:
@@ -32,6 +36,8 @@ interface DataSnapshotV1 {
 Current implementation:
 
 - `packages/core/src/dataSnapshot/index.ts`
+- `src/app/editor/_components/documentPersistence.ts` for optional package v2
+  persistence
 
 ## Ownership
 
@@ -80,9 +86,17 @@ Current implementation:
 
 `FlowDocPackage v1` does not persist data snapshots.
 
-The package v2 proposal reserves an optional `data?: DataSnapshotV1` member, but
-Phase D does not turn it on. Persisting data in package JSON remains a future
-package migration decision.
+`FlowDocPackage v2` may persist an optional `data?: DataSnapshotV1` member.
+This stores the current scalar values needed to restore Fill mode and resolved
+document preview for the same package.
+
+This must stay narrow:
+
+- persist only the current scalar snapshot
+- keep values outside `DocumentNode`
+- do not write resolved field values back into template paragraphs
+- do not add key history, reviewer state, submissions, approvals, or actor
+  identity in this layer
 
 ## Binding Direction
 
@@ -114,7 +128,7 @@ rendered into the resolved document.
 - data-source metadata
 - field-level validation messages in the editor UI
 - key history entries from value changes
-- data snapshot persistence in package v2
+- submitted/reviewer data workflows
 
 ## Test Expectations
 
@@ -130,6 +144,8 @@ Data snapshot changes should cover:
 - missing snapshot values using fieldRef or registry fallback text
 - invalid snapshot values reporting issues and falling back
 - document-scoped readiness so unused required registry fields do not warn
+- package v2 save/load/export/import preserving `data?: DataSnapshotV1`
+- invalid package data snapshot structure rejection
 
 Current coverage lives in:
 

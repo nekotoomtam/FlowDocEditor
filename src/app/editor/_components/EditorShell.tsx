@@ -171,8 +171,14 @@ function fieldRegistryFromDocumentParseResult(result: DocumentParseResult): Fiel
     : SAMPLE_FIELD_REGISTRY_V1
 }
 
-function saveToStorage(doc: DocumentNode, fields: FieldRegistryV1): void {
-  saveDocumentToStorage(localStorage, doc, { fields })
+function dataSnapshotFromDocumentParseResult(result: DocumentParseResult): DataSnapshotV1 {
+  return result.ok && result.package?.packageVersion === 2 && result.package.data
+    ? result.package.data
+    : createEmptyDataSnapshot()
+}
+
+function saveToStorage(doc: DocumentNode, fields: FieldRegistryV1, data: DataSnapshotV1): void {
+  saveDocumentToStorage(localStorage, doc, { fields, data })
 }
 
 function loadFromStorage(): DocumentNode | null {
@@ -569,7 +575,9 @@ export default function EditorShell() {
   const editorTextMeasurer = useMemo(() => createBrowserTextMeasurer(), [])
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
   const [mode, setMode] = useState<"template" | "fill">("template")
-  const [dataSnapshot, setDataSnapshot] = useState<DataSnapshotV1>(() => createEmptyDataSnapshot())
+  const [dataSnapshot, setDataSnapshot] = useState<DataSnapshotV1>(() => (
+    dataSnapshotFromDocumentParseResult(loadDocumentFromStorage(localStorage))
+  ))
   const [packageFieldRegistry, setPackageFieldRegistry] = useState<FieldRegistryV1>(() => (
     fieldRegistryFromDocumentParseResult(loadDocumentFromStorage(localStorage))
   ))
@@ -722,12 +730,12 @@ export default function EditorShell() {
   useEffect(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(() => {
-      saveToStorage(state.doc, packageFieldRegistry)
+      saveToStorage(state.doc, packageFieldRegistry, dataSnapshot)
       setSavedAt(new Date())
     }, 500)
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [packageFieldRegistry, state.doc])
+  }, [dataSnapshot, packageFieldRegistry, state.doc])
 
   const handleExport = useCallback(async (format: "pdf" | "docx") => {
     finalizeInlineEditBeforeAction()
@@ -769,14 +777,14 @@ export default function EditorShell() {
     finalizeInlineEditBeforeAction()
     const doc = docRef.current
     const title = doc.document.meta?.title ?? "document"
-    const blob = new Blob([serializeDocumentPackageWithFields(doc, packageFieldRegistry)], { type: "application/json" })
+    const blob = new Blob([serializeDocumentPackageWithFields(doc, packageFieldRegistry, dataSnapshot)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url; a.download = makeFlowDocFileName(title)
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 100)
     setDocumentIoStatus({ type: "info", message: "Saved FlowDoc package v2 JSON." })
-  }, [finalizeInlineEditBeforeAction, packageFieldRegistry])
+  }, [dataSnapshot, finalizeInlineEditBeforeAction, packageFieldRegistry])
 
   const handleImportJson = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -789,6 +797,7 @@ export default function EditorShell() {
         const doc = result.doc
         resetInlineEditStateForDocumentReplace()
         setPackageFieldRegistry(fieldRegistryFromDocumentParseResult(result))
+        setDataSnapshot(dataSnapshotFromDocumentParseResult(result))
         dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
         setDocumentIoStatus({ type: "info", message: documentImportSuccessMessage(result.source, result.fieldRegistryIssues) })
       } else {
@@ -807,6 +816,7 @@ export default function EditorShell() {
     const doc = createDefaultDocument("Untitled")
     resetInlineEditStateForDocumentReplace()
     setPackageFieldRegistry(SAMPLE_FIELD_REGISTRY_V1)
+    setDataSnapshot(createEmptyDataSnapshot())
     dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
   }, [paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
 
