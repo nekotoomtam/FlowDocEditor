@@ -50,15 +50,19 @@ Users should be able to:
 - During inline paragraph editing, browser pagination may run against
   `previewDoc` with the active draft and update the canvas as optimistic visual
   layout so long paragraphs can show continuation fragments before blur.
-- When the active edit visual snapshot is fresh for the current draft and the
-  current typing burst has settled, the active fragment should render the same
-  SVG `fragment.lines` used by normal mode and make textarea text transparent.
-  This keeps normal/edit visual text sourced from the same paginated lines.
+- When entering inline edit and the active edit visual snapshot is fresh for
+  the current draft, the active fragment may render the same SVG
+  `fragment.lines` used by normal mode and make textarea text transparent. This
+  keeps edit entry visually close to normal mode.
 - When the active edit visual snapshot is stale, the textarea must keep visible
-  text as a fallback so fast typing never makes text disappear. The editor
-  should also hold this textarea fallback briefly during continuous typing so
-  it does not flicker between two text layout engines on every keystroke.
-  The editor should avoid showing both layers visibly at the same time.
+  text as a fallback so fast typing never makes text disappear.
+- Once the user actively interacts with the inline textarea, edit mode should
+  lock to visible textarea text until that edit session ends. It should not
+  auto-handoff back to SVG while focus remains in the same edit session, because
+  textarea and SVG text layout are different engines.
+- Programmatic focus/selection on edit entry should not trigger this visual
+  lock. `onSelect` may update caret state but must not be the lock trigger.
+- The editor should avoid showing both layers visibly at the same time.
 - Page splitting and non-active continuation fragments still come from
   `PaginatedDocument`.
 - Full browser/server pagination should reconcile after edit settles or exits.

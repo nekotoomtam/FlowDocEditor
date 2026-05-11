@@ -119,7 +119,6 @@ const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
 const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 16
-const INLINE_EDIT_VISUAL_SETTLE_MS = 140
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
@@ -599,12 +598,11 @@ export default function EditorShell() {
   const [inlineEditPageIndex, setInlineEditPageIndex] = useState<number | null>(null)
   const [inlineEditDraftVersion, setInlineEditDraftVersion] = useState(0)
   const [inlineEditVisualVersion, setInlineEditVisualVersion] = useState(0)
-  const [inlineEditVisualSettled, setInlineEditVisualSettled] = useState(true)
+  const [inlineEditVisualLockNodeId, setInlineEditVisualLockNodeId] = useState<string | null>(null)
   const docRef = useRef(state.doc)
   const inlineEditTransactionRef = useRef<InlineEditTransaction | null>(null)
   const wasInlineEditingRef = useRef(false)
   const inlineEditEndFrameRef = useRef<number | null>(null)
-  const inlineEditVisualSettleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inlineEditDraftVersionRef = useRef(0)
   const inlineEditVisualVersionRef = useRef(0)
 
@@ -621,20 +619,13 @@ export default function EditorShell() {
     inlineEditEndFrameRef.current = null
   }, [])
 
-  const cancelInlineEditVisualSettle = useCallback(() => {
-    if (inlineEditVisualSettleTimeoutRef.current === null) return
-    clearTimeout(inlineEditVisualSettleTimeoutRef.current)
-    inlineEditVisualSettleTimeoutRef.current = null
-  }, [])
-
   const resetInlineEditVisualFreshness = useCallback(() => {
-    cancelInlineEditVisualSettle()
     inlineEditDraftVersionRef.current = 0
     inlineEditVisualVersionRef.current = 0
     setInlineEditDraftVersion(0)
     setInlineEditVisualVersion(0)
-    setInlineEditVisualSettled(true)
-  }, [cancelInlineEditVisualSettle])
+    setInlineEditVisualLockNodeId(null)
+  }, [])
 
   const markInlineEditDraftChanged = useCallback(() => {
     const nextVersion = inlineEditDraftVersionRef.current + 1
@@ -647,15 +638,6 @@ export default function EditorShell() {
     inlineEditVisualVersionRef.current = version
     setInlineEditVisualVersion(version)
   }, [])
-
-  const holdInlineEditTextareaFallback = useCallback(() => {
-    cancelInlineEditVisualSettle()
-    setInlineEditVisualSettled(false)
-    inlineEditVisualSettleTimeoutRef.current = setTimeout(() => {
-      inlineEditVisualSettleTimeoutRef.current = null
-      setInlineEditVisualSettled(true)
-    }, INLINE_EDIT_VISUAL_SETTLE_MS)
-  }, [cancelInlineEditVisualSettle])
 
   const finalizeInlineEditBeforeAction = useCallback((): boolean => {
     cancelPendingInlineEditEnd()
@@ -689,7 +671,6 @@ export default function EditorShell() {
   }, [cancelPendingInlineEditEnd, resetInlineEditVisualFreshness])
 
   useEffect(() => cancelPendingInlineEditEnd, [cancelPendingInlineEditEnd])
-  useEffect(() => cancelInlineEditVisualSettle, [cancelInlineEditVisualSettle])
 
   const handleInlineEditEnd = useCallback((nodeId?: string, reason: "blur" | "keyboard" = "keyboard") => {
     if (reason !== "blur") {
@@ -829,10 +810,14 @@ export default function EditorShell() {
 
   const handleInlineEditChange = useCallback((nodeId: string, text: string, caretIndex: number | null) => {
     markInlineEditDraftChanged()
-    holdInlineEditTextareaFallback()
     setInlineEditCaretIndex(caretIndex)
     dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
-  }, [holdInlineEditTextareaFallback, markInlineEditDraftChanged])
+  }, [markInlineEditDraftChanged])
+
+  const handleInlineEditUserInteraction = useCallback((nodeId: string) => {
+    if (inlineEditNodeIdRef.current !== nodeId) return
+    setInlineEditVisualLockNodeId(nodeId)
+  }, [])
 
   const handleInlineEditCaretChange = useCallback((nodeId: string, caretIndex: number | null) => {
     if (inlineEditNodeIdRef.current !== nodeId) return
@@ -1529,8 +1514,9 @@ export default function EditorShell() {
     }
   }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, isTemplateMode, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
 
+  const inlineEditVisualLocked = inlineEditNodeId !== null && inlineEditVisualLockNodeId === inlineEditNodeId
   const inlineEditVisualFresh = inlineEditNodeId === null ||
-    (inlineEditVisualSettled && inlineEditVisualVersion >= inlineEditDraftVersion)
+    (!inlineEditVisualLocked && inlineEditVisualVersion >= inlineEditDraftVersion)
 
   return (
     <div
@@ -1722,6 +1708,7 @@ export default function EditorShell() {
           onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
           onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
           onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
+          onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
           onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightChange : () => undefined}
           onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
           onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}

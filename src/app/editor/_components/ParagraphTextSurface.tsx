@@ -14,6 +14,7 @@ interface Props {
   initialCaretIndex: number | null
   onChange: (nodeId: string, text: string, caretIndex: number | null) => void
   onCaretChange: (nodeId: string, caretIndex: number | null) => void
+  onUserEditInteraction: (nodeId: string) => void
   onHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
   onEndEdit: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
@@ -275,6 +276,7 @@ export function ParagraphTextSurface({
   initialCaretIndex,
   onChange,
   onCaretChange,
+  onUserEditInteraction,
   onHeightChange,
   onEndEdit,
   onSplitParagraph,
@@ -300,6 +302,9 @@ export function ParagraphTextSurface({
   const updateCaret = useCallback((el: HTMLTextAreaElement) => {
     onCaretChange(fragment.nodeId, absoluteInlineEditIndex(preText, el.selectionStart, el.value.length))
   }, [fragment.nodeId, onCaretChange, preText])
+  const markUserEditInteraction = useCallback(() => {
+    onUserEditInteraction(fragment.nodeId)
+  }, [fragment.nodeId, onUserEditInteraction])
 
   const editPreview = useMemo(() => {
     if (!isEditing) return null
@@ -384,6 +389,7 @@ export function ParagraphTextSurface({
               wordBreak: "normal",
             }}
             onInput={(event) => {
+              markUserEditInteraction()
               const el = event.currentTarget
               const caretIndex = absoluteInlineEditIndex(preText, el.selectionStart, el.value.length)
               syncTextareaHeight(el)
@@ -397,6 +403,7 @@ export function ParagraphTextSurface({
             onBlur={() => onEndEdit(fragment.nodeId, "blur")}
             onKeyDown={(event) => {
               event.stopPropagation()
+              markUserEditInteraction()
               if (event.nativeEvent.isComposing) return
               if (event.key === "Escape") {
                 event.preventDefault()
@@ -437,7 +444,11 @@ export function ParagraphTextSurface({
               updateCaret(event.currentTarget)
             }}
             onClick={(event) => event.stopPropagation()}
-            onPointerDown={(event) => event.stopPropagation()}
+            onPointerDown={(event) => {
+              event.stopPropagation()
+              markUserEditInteraction()
+            }}
+            onCompositionStart={markUserEditInteraction}
             data-inline-edit-node-id={fragment.nodeId}
           />
         </foreignObject>

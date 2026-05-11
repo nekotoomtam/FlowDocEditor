@@ -174,7 +174,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading, inlineEditVisualFresh,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap,
@@ -191,6 +191,7 @@ function PageView({
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
   onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
+  onInlineEditUserInteraction: (nodeId: string) => void
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
@@ -458,6 +459,7 @@ function PageView({
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
                 onCaretChange={onInlineEditCaretChange}
+                onUserEditInteraction={onInlineEditUserInteraction}
                 onHeightChange={onInlineEditHeightChange}
                 onEndEdit={onInlineEditEnd}
                 onSplitParagraph={onSplitParagraph}
@@ -573,6 +575,7 @@ interface Props {
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
   onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
+  onInlineEditUserInteraction: (nodeId: string) => void
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
@@ -593,7 +596,7 @@ interface Props {
 
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
-  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
 }: Props) {
@@ -638,6 +641,7 @@ export function EditorCanvas({
                   onInlineEditStart={onInlineEditStart}
                   onInlineEditChange={onInlineEditChange}
                   onInlineEditCaretChange={onInlineEditCaretChange}
+                  onInlineEditUserInteraction={onInlineEditUserInteraction}
                   onInlineEditHeightChange={onInlineEditHeightChange}
                   onInlineEditEnd={onInlineEditEnd}
                   onSplitParagraph={onSplitParagraph}

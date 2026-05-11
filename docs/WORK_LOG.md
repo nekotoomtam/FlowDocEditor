@@ -20,6 +20,59 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Lock Active Inline Edit Visual Mode
+
+Goal: Stop active paragraph editing from snapping after idle by preventing
+automatic handoff from textarea text back to SVG text once the user has started
+interacting with the textarea.
+
+Completed:
+
+- Replaced the short settle timer with a node-scoped visual lock:
+  `inlineEditVisualLockNodeId`.
+- Kept SVG visual parity available on edit entry when the paginated visual
+  snapshot is already fresh.
+- Lock the active edit session to visible textarea text after real user
+  interaction (`onInput`, `onKeyDown`, `onPointerDown`, or
+  `onCompositionStart`).
+- Kept `onSelect` as caret-state only so autofocus/programmatic caret setup
+  does not lock textarea mode by itself.
+- Reset the visual lock when starting a new edit session, ending edit, or
+  replacing the document.
+- Updated editor UX and browser smoke docs with the active-session visual lock
+  contract.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser smoke on `http://localhost:4000/editor` with the current localStorage
+  document:
+  - reloaded the editor and confirmed no visible `layout error` /
+    `Server pagination failed` badge;
+  - entered inline edit and confirmed the initial fresh state kept textarea text
+    transparent after autofocus/programmatic selection;
+  - typed one `x` and confirmed textarea text became visible;
+  - waited past the previous idle handoff window and confirmed textarea text
+    stayed visible instead of snapping back to SVG;
+  - used native textarea undo to restore the smoke character, closed edit with
+    Escape, and restored app undo/redo state after the smoke check.
+
+Notes:
+
+- This is a visual-mode decision only. It does not change document truth,
+  browser/server pagination, export, schema, or custom caret/selection behavior.
+
 ### Hold Textarea Fallback During Active Inline Typing
 
 Goal: Reduce inline edit visual jitter after the guarded overlay change by

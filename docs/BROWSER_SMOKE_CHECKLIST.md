@@ -58,8 +58,10 @@ changes.
 - Confirm typed text remains visible while editing.
 - During fast typing, confirm stale visual pagination keeps textarea text
   visible as fallback, the editor does not visibly flicker between textarea and
-  SVG text on every keystroke, and fresh/settled visual pagination does not show
-  a readable double-text layer.
+  SVG text on every keystroke, and the active edit session does not snap back to
+  SVG text after an idle pause.
+- Confirm entering edit without typing may use the fresh SVG visual layer, while
+  autofocus/programmatic selection alone does not lock textarea mode.
 - Confirm the active inline textarea does not grow into a giant hit area that
   extends far past the active fragment/page.
 - For page-boundary checks, use a paragraph near the bottom of a page and type
