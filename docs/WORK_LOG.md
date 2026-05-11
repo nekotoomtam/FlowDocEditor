@@ -20,6 +20,53 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Hold Textarea Fallback During Active Inline Typing
+
+Goal: Reduce inline edit visual jitter after the guarded overlay change by
+avoiding rapid per-keystroke switching between the native textarea text layer
+and the SVG paginated text layer.
+
+Completed:
+
+- Added a short inline edit visual settle gate. Each draft text change keeps the
+  textarea visible for the current typing burst, then allows the SVG visual
+  layer only after the user pauses briefly and browser pagination has caught up.
+- Kept the previous freshness guard: stale visual snapshots still cannot hide
+  typed text, and fresh SVG lines only become the visual layer after the settle
+  delay.
+- Documented the intended behavior in the editor UX contract and browser smoke
+  checklist.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorShell.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser smoke on `http://localhost:4000/editor` with the current localStorage
+  document:
+  - reloaded the editor and confirmed no visible `layout error` /
+    `Server pagination failed` badge;
+  - opened a paragraph inline editor and confirmed the settled fresh state keeps
+    textarea text transparent;
+  - typed one `x` and confirmed textarea text became visible during the typing
+    burst;
+  - waited for the settle delay and confirmed textarea text became transparent
+    again once the SVG visual layer was ready;
+  - closed edit with Escape and used Undo to restore the one-character smoke
+    change.
+
+Notes:
+
+- This is still not a custom caret/selection implementation. It only smooths
+  the handoff between textarea fallback and SVG visual parity.
+
 ### Add Guarded Inline Edit Visual Overlay
 
 Goal: Make normal paragraph view and inline edit view share the same visual
