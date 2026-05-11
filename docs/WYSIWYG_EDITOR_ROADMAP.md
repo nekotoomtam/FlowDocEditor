@@ -104,6 +104,13 @@ Initial internal helper:
 
 Let clicks on SVG text set `caretIndex`.
 
+Initial activation:
+
+- `EditorCanvas` uses `resolveCaretOffsetFromPointInFragment(...)` for
+  paragraph pointer hit testing.
+- The older line-width ratio fallback remains available when segment geometry
+  is missing.
+
 - Use point to offset mapping.
 - Start with one paragraph and page-local coordinates.
 - Use fragment ranges for split paragraphs.

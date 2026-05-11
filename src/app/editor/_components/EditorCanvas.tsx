@@ -7,8 +7,8 @@ import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
 import { getRowGeometry } from "@/placement/geometry"
-import { snapToGraphemeBoundary } from "@/layout"
 import { ParagraphTextSurface } from "./ParagraphTextSurface"
+import { resolveCaretOffsetFromPointInFragment } from "./wysiwygCaretMapping"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,27 +42,6 @@ function lineVisualLeft(line: PaginatedLine): number {
   return line.x
 }
 
-function caretIndexFromSegments(line: PaginatedLine, docX: number, visualLeft: number): number | null {
-  const segments = line.segments
-  if (!segments || segments.length === 0) return null
-
-  if (docX <= visualLeft) return segments[0].start
-
-  for (const segment of segments) {
-    const left = visualLeft + segment.x
-    const right = left + segment.width
-
-    if (docX <= right) {
-      if (segment.width <= 0 || segment.end <= segment.start) return segment.start
-      const ratio = clamp((docX - left) / segment.width, 0, 1)
-      const localIndex = Math.round(ratio * (segment.end - segment.start))
-      return segment.start + snapToGraphemeBoundary(segment.text, localIndex)
-    }
-  }
-
-  return segments[segments.length - 1].end
-}
-
 function caretIndexFromPointer(
   fragment: PageFragment,
   event: React.PointerEvent | React.MouseEvent,
@@ -75,6 +54,9 @@ function caretIndexFromPointer(
   const rect = svg.getBoundingClientRect()
   const docX = (event.clientX - rect.left) / scale
   const docY = (event.clientY - rect.top) / scale
+  const mappedCaret = resolveCaretOffsetFromPointInFragment(fragment, { x: docX, y: docY })
+  if (mappedCaret) return mappedCaret.offset
+
   const directLineIndex = lines.findIndex((line) => docY >= line.y && docY <= line.y + line.height)
   const lineIndex = directLineIndex >= 0
     ? directLineIndex
@@ -87,9 +69,6 @@ function caretIndexFromPointer(
 
   const line = lines[lineIndex]
   const visualLeft = lineVisualLeft(line)
-  const segmentCaretIndex = caretIndexFromSegments(line, docX, visualLeft)
-  if (segmentCaretIndex != null) return segmentCaretIndex
-
   const ratio = line.width > 0 ? clamp((docX - visualLeft) / line.width, 0, 1) : 0
   const lineOffset = Math.round(ratio * line.text.length)
   const previousChars = lines.slice(0, lineIndex).reduce((sum, previousLine) => sum + previousLine.text.length, 0)

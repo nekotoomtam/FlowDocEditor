@@ -20,6 +20,40 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Activate WYSIWYG Point-To-Offset Hit Testing
+
+Goal: Start Stage 4 by routing paragraph pointer hit testing through the new
+WYSIWYG point-to-offset mapping helper while preserving the previous fallback
+path.
+
+Completed:
+
+- Updated `EditorCanvas` paragraph click/double-click caret lookup to call
+  `resolveCaretOffsetFromPointInFragment(...)`.
+- Kept the older line-width ratio fallback for fragments that do not have
+  segment geometry.
+- Documented the Stage 4 activation in the WYSIWYG roadmap.
+
+Files changed:
+
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/EditorCanvas.tsx`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- Browser smoke on `http://localhost:4000/editor`: clicking paragraph text opens
+  inline edit and starts with transparent textarea/SVG visual after the
+  point-to-offset helper activation.
+
+Notes:
+
+- This activates the mapping contract for click hit testing only. It does not
+  draw a custom caret and does not add drag selection.
+
 ### Add Internal Collapsed Caret Overlay Geometry
 
 Goal: Continue Stage 3 safely by deriving collapsed caret overlay geometry from
