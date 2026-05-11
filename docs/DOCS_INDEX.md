@@ -28,6 +28,7 @@ contract, then inspect the code and tests near the change.
 | System/layer overview | `docs/ARCHITECTURE_OVERVIEW.md` |
 | Engineering boundaries and principles | `docs/ENGINEERING_PRINCIPLES.md` |
 | Test levels and Definition of Done | `docs/TEST_STRATEGY.md` |
+| Persisted/editor JSON package contract | `docs/FLOWDOC_PACKAGE_CONTRACT.md` |
 | Browser/manual editor smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Export/API/PDF/DOCX renderer contract | `docs/EXPORT_RENDERER_CONTRACT.md` |
 | Fixture and test coverage catalog | `docs/FIXTURE_CATALOG.md` |
@@ -102,6 +103,19 @@ Start with:
 
 PDF is the authoritative output target. DOCX is an exchange format and may
 reflow in Word/LibreOffice.
+
+### Package, Persistence, Or JSON Import Work
+
+Start with:
+
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/TEST_STRATEGY.md`
+
+Persisted/editor JSON should use `FlowDocPackage v1`. Core layout, pagination,
+API export, and renderers should continue to consume `DocumentNode` /
+`PaginatedDocument`.
 
 ### Test Or Fixture Work
 

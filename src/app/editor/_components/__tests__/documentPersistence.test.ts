@@ -6,7 +6,11 @@ import {
   CURRENT_PACKAGE_VERSION,
   STORAGE_KEY,
   createDocumentPackage,
+  documentImportSuccessMessage,
+  documentParseFailureMessage,
   loadDocumentFromStorage,
+  makeFlowDocFileName,
+  migratePersistedDocumentPackage,
   parsePersistedDocument,
   saveDocumentToStorage,
   serializeDocumentPackage,
@@ -71,6 +75,14 @@ describe("document persistence", () => {
       .toEqual({ ok: false, reason: "invalid-package" })
   })
 
+  it("rejects document packages whose package id does not match the document id", () => {
+    const doc = createDefaultDocument("Mismatched")
+    const pack = createDocumentPackage(doc)
+
+    expect(parsePersistedDocument(JSON.stringify({ ...pack, id: "different-id" })))
+      .toEqual({ ok: false, reason: "invalid-package" })
+  })
+
   it("rejects structurally invalid documents", () => {
     const doc = createDefaultDocument("Broken")
     const broken = structuredClone(doc) as any
@@ -104,5 +116,68 @@ describe("document persistence", () => {
     expect(exported.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
     expect(exported.kind).toBe("document")
     expect(exported.document.document.meta.title).toBe("Download")
+  })
+
+  it("round-trips fieldRef inline nodes through package export and import", () => {
+    const doc = createDefaultDocument("Field Package")
+    firstParagraph(doc).children = [
+      { id: "field-prefix", type: "text", text: "Customer: " },
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer", fallback: "-" },
+    ]
+
+    const result = parsePersistedDocument(serializeDocumentPackage(doc))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const children = firstParagraph(result.doc).children
+    expect(children).toHaveLength(2)
+    expect(children[0]).toMatchObject({ id: "field-prefix", type: "text", text: "Customer: " })
+    expect(children[1]).toMatchObject({
+      id: "field-customer",
+      type: "fieldRef",
+      key: "customer.name",
+      label: "Customer",
+      fallback: "-",
+    })
+  })
+
+  it("migrates legacy raw document JSON into a document package", () => {
+    const doc = createDefaultDocument("Legacy Migration")
+    const result = migratePersistedDocumentPackage(JSON.stringify(doc), "2026-05-11T00:00:00.000Z")
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.source).toBe("legacy-document")
+    expect(result.package.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
+    expect(result.package.id).toBe(doc.document.id)
+    expect(result.package.document.document.meta?.title).toBe("Legacy Migration")
+    expect(result.package.meta.createdAt).toBe("2026-05-11T00:00:00.000Z")
+  })
+
+  it("keeps package migration idempotent for package v1", () => {
+    const doc = createDefaultDocument("Idempotent")
+    const pack = createDocumentPackage(doc, "2026-05-11T00:00:00.000Z")
+
+    const first = migratePersistedDocumentPackage(JSON.stringify(pack), "2026-05-12T00:00:00.000Z")
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    const second = migratePersistedDocumentPackage(JSON.stringify(first.package), "2026-05-13T00:00:00.000Z")
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.package).toEqual(first.package)
+  })
+
+  it("builds safe FlowDoc package file names from document titles", () => {
+    expect(makeFlowDocFileName("Invoice: A/B * Draft?")).toBe("Invoice-A-B-Draft.flowdoc.json")
+    expect(makeFlowDocFileName("   ...   ")).toBe("document.flowdoc.json")
+    expect(makeFlowDocFileName(null)).toBe("document.flowdoc.json")
+  })
+
+  it("maps parse results to concise import status messages", () => {
+    expect(documentImportSuccessMessage("package")).toBe("Opened FlowDoc package.")
+    expect(documentImportSuccessMessage("legacy-document")).toBe("Opened legacy document JSON.")
+    expect(documentParseFailureMessage("invalid-json")).toBe("This file is not valid JSON.")
+    expect(documentParseFailureMessage("unsupported-package-version")).toBe("This FlowDoc package version is not supported.")
   })
 })

@@ -23,6 +23,9 @@ For browser smoke steps, export renderer rules, and fixture ownership, see
 `docs/BROWSER_SMOKE_CHECKLIST.md`, `docs/EXPORT_RENDERER_CONTRACT.md`, and
 `docs/FIXTURE_CATALOG.md`.
 
+For persisted/editor JSON package rules, see
+`docs/FLOWDOC_PACKAGE_CONTRACT.md`.
+
 ## 1. Core Is The Source Of Truth
 
 `packages/core` owns document semantics.
@@ -149,6 +152,26 @@ Avoid:
 - saving selection, drag state, caret state, or temporary overlay geometry into
   `DocumentNode`
 - using React component state as a second document model
+
+## 6.1. Packages Are File Boundaries
+
+`FlowDocPackage` is the persisted/editor JSON boundary. It is not the core
+document model and it is not a place for runtime editor state.
+
+Do:
+
+- keep `FlowDocPackage v1` document-first
+- unwrap packages before editing/layout/export
+- keep package metadata separate from authored document content
+- accept legacy raw `DocumentNode v1` imports through the persistence layer
+
+Avoid:
+
+- feeding packages directly into pagination or renderers
+- storing `PaginatedDocument`, selection, caret, undo/redo, or transient preview
+  state in packages
+- adding form/history/reviewer data before the document package foundation is
+  intentionally expanded
 
 ## 7. Binding Produces Resolved Documents
 

@@ -51,6 +51,25 @@ Typical commands:
 - focused core test file
 - full test command for meaningful behavior risk
 
+### Level 1A: Package And Persistence Tests
+
+Use for `FlowDocPackage`, localStorage, JSON import, or JSON export changes.
+Detailed package rules live in `docs/FLOWDOC_PACKAGE_CONTRACT.md`.
+
+Protects:
+
+- package parse/serialize behavior
+- legacy raw document import compatibility
+- package/document version separation
+- normalize and assert before editor state receives a document
+- no runtime editor state or computed layout in persisted packages
+
+Typical commands:
+
+- focused persistence test file
+- type-check
+- browser smoke when editor load/import/export behavior changed
+
 ### Level 2: Layout And Pagination Fixtures
 
 Use for flow layout, page breaks, text continuation, table splitting, page
@@ -182,16 +201,21 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  23 core test files / 295 core tests, plus 9 app test files / 91 app tests.
+  23 core test files / 303 core tests, plus 9 app test files / 97 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases,
   including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
 - Binding has focused scalar `fieldRef` contract coverage for missing values,
   fallbacks, table-cell paragraphs, non-mutation, and non-strict registry
   behavior.
+- Operation coverage protects inline `fieldRef` insertion in body paragraphs
+  and table-cell paragraphs without flattening existing text runs.
 - Table row split accounting has focused coverage for uneven cells, empty cells,
   spacer-containing cells, padded cells, tall repeated headers, and continuation
   line ranges.
+- Table operation coverage protects row/column structural edits, subtree
+  cleanup, total-width preservation, header-row clamping, and last-row/column
+  deletion guards.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage.
 - Product export golden smoke protects PDF page-count parity for customs/report
   fixtures and DOCX table row structure for the customs fixture.
@@ -199,12 +223,16 @@ Current strengths:
   headers, and artifact readability.
 - Document package persistence coverage protects `FlowDocPackage v1`,
   legacy raw `DocumentNode v1` import, localStorage save/load, JSON package
-  serialization, normalize, and validation behavior.
+  serialization, package/document identity agreement, normalize, and validation
+  behavior, safe filename generation, import status messages, raw-document
+  migration, package v1 idempotent migration, and inline `fieldRef`
+  round-tripping.
 - App-level tests cover drift and editor helper behavior.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.
 - Automated browser smoke now protects default editor load, paragraph inline
-  edit commit, undo/redo, table-cell selection, and the property-panel title.
+  edit commit, undo/redo, table-cell selection, the property-panel title, and
+  table-cell row/column insert/delete controls.
 - Manual browser checks are still used for editor feel where automation
   coverage is light.
 

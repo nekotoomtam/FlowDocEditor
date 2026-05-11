@@ -79,6 +79,8 @@ Table operations must preserve document validity.
   pass `assertDocument`.
 - `addTableColumn` and `removeTableColumn` must preserve table grid invariants
   and pass `assertDocument`.
+- Row deletion must keep `headerRowCount` valid by clamping it to the remaining
+  row count.
 - Column insertion should keep the total table width stable by splitting the
   target or nearest column width.
 - Column deletion should keep the total table width stable by transferring the

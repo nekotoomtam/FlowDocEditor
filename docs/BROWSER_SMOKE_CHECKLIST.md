@@ -50,6 +50,10 @@ document into `localStorage`, tolerates either legacy raw `DocumentNode` or
 - undo and redo restore the expected paragraph text
 - clicking inside a table cell selects the parent `table-cell` and opens that
   property panel
+- table-cell property-panel column insert/delete updates authored column count
+  without a layout error
+- table-cell property-panel row insert/delete updates authored row count
+  without a layout error
 
 Use `SMOKE_BASE_URL=http://localhost:<port>/editor npm run smoke:editor` when
 you intentionally want to run against an already-started server. Use

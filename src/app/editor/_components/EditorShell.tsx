@@ -26,7 +26,15 @@ import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import { comparePagination } from "./comparePagination"
-import { loadDocumentFromStorage, parsePersistedDocument, saveDocumentToStorage, serializeDocumentPackage } from "./documentPersistence"
+import {
+  documentImportSuccessMessage,
+  documentParseFailureMessage,
+  loadDocumentFromStorage,
+  makeFlowDocFileName,
+  parsePersistedDocument,
+  saveDocumentToStorage,
+  serializeDocumentPackage,
+} from "./documentPersistence"
 import type { DriftReport } from "./comparePagination"
 import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
 import { decideInlineEditStart, shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
@@ -576,6 +584,7 @@ export default function EditorShell() {
   const [marginDrag, setMarginDrag] = useState<MarginDrag | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [documentIoStatus, setDocumentIoStatus] = useState<{ type: "info" | "error"; message: string } | null>(null)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
   const [showTextSegments, setShowTextSegments] = useState(false)
   const [showDrift, setShowDrift] = useState(false)
@@ -750,24 +759,30 @@ export default function EditorShell() {
     const blob = new Blob([serializeDocumentPackage(doc)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
-    a.href = url; a.download = `${title}.flowdoc.json`
+    a.href = url; a.download = makeFlowDocFileName(title)
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 100)
+    setDocumentIoStatus({ type: "info", message: "Saved FlowDoc package JSON." })
   }, [finalizeInlineEditBeforeAction])
 
   const handleImportJson = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    setDocumentIoStatus(null)
     const reader = new FileReader()
     reader.onload = (ev) => {
-      try {
-        const result = parsePersistedDocument(ev.target?.result as string)
-        if (result.ok) {
-          const doc = result.doc
-          resetInlineEditStateForDocumentReplace()
-          dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
-        }
-      } catch { /* invalid JSON */ }
+      const result = parsePersistedDocument(ev.target?.result as string)
+      if (result.ok) {
+        const doc = result.doc
+        resetInlineEditStateForDocumentReplace()
+        dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
+        setDocumentIoStatus({ type: "info", message: documentImportSuccessMessage(result.source) })
+      } else {
+        setDocumentIoStatus({ type: "error", message: documentParseFailureMessage(result.reason) })
+      }
+    }
+    reader.onerror = () => {
+      setDocumentIoStatus({ type: "error", message: "Could not read this file." })
     }
     reader.readAsText(file)
     e.target.value = ""
@@ -1643,7 +1658,7 @@ export default function EditorShell() {
             style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
             Open…
           </button>
-          <input ref={importRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleImportJson} />
+          <input ref={importRef} type="file" accept=".flowdoc.json,.json,application/json" style={{ display: "none" }} onChange={handleImportJson} />
           <button onClick={handleExportJson}
             style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
             Save JSON
@@ -1675,6 +1690,22 @@ export default function EditorShell() {
           {exportError && (
             <span title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {exportError}
+            </span>
+          )}
+          {documentIoStatus && (
+            <span
+              data-testid="document-io-status"
+              title={documentIoStatus.message}
+              style={{
+                fontSize: 10,
+                color: documentIoStatus.type === "error" ? "#dc2626" : "#2563eb",
+                maxWidth: 220,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {documentIoStatus.message}
             </span>
           )}
           {(["pdf", "docx"] as const).map((fmt) => (

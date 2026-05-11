@@ -11,8 +11,8 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 23 core test files / 295 core tests
-- 9 app test files / 91 app tests
+- 23 core test files / 303 core tests
+- 9 app test files / 97 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 `docs/TEST_STRATEGY.md` as the current coverage snapshot until the suite changes.
@@ -45,9 +45,12 @@ Product fixture names should stay visible in test descriptions, such as
 - `packages/core/src/document/operations.test.ts`
 
 Protects scalar field binding, authored document validity, normalization
-defaults, table grid operations, and operation-level invariants. Current binding
-coverage intentionally locks scalar `fieldRef` replacement only; repeat and
-nested binding remain deferred.
+defaults, table grid operations, and operation-level invariants. Operation
+coverage includes table row/column insertion, deletion cleanup, width
+preservation, header-row clamping, last-row/last-column guards, and inline
+`fieldRef` insertion in body and table-cell paragraphs. Current binding coverage
+intentionally locks scalar `fieldRef` replacement only; repeat and nested
+binding remain deferred.
 
 ### Text Measurement
 
@@ -112,12 +115,15 @@ policy. API smoke coverage checks `/api/paginate` asserted JSON output plus
 `/api/export` PDF/DOCX headers and artifact readability. Persistence coverage
 checks document-first `FlowDocPackage v1`, legacy raw `DocumentNode v1` import,
 normalize/validate behavior, invalid JSON, unsupported versions, invalid
-package structure, current `localStorage` key behavior, and JSON package
-serialization. Real-font drift coverage loads `public/fonts/THSarabun.ttf` into
-Chromium canvas and fontkit, then checks representative Thai width parity and
-no `comparePagination` drift for a Thai document. Editor feel still needs
-focused browser smoke checks for selection, typing, undo/redo, flicker, and
-table panel workflows.
+package structure, package/document id agreement, current `localStorage` key
+behavior, JSON package serialization, safe package filenames, and import status
+messages. It also covers inline `fieldRef` package round-tripping, legacy raw
+document migration into `FlowDocPackage v1`, and idempotent package v1 migration.
+Real-font drift coverage loads
+`public/fonts/THSarabun.ttf` into Chromium canvas and fontkit, then checks
+representative Thai width parity and no `comparePagination` drift for a Thai
+document. Editor feel still needs focused browser smoke checks for selection,
+typing, undo/redo, flicker, and table panel workflows.
 
 ## Browser Smoke Scripts
 
@@ -125,8 +131,9 @@ table panel workflows.
 
 Protects the default `/editor` load path with a real browser, a deterministic
 localStorage document fixture, paragraph inline edit commit, undo/redo, table
-cell selection, and the property-panel title. It starts its own Next dev server
-on port `4010` unless `SMOKE_BASE_URL` is provided.
+cell selection, the property-panel title, and table-cell row/column
+insert/delete controls. It starts its own Next dev server on port `4010` unless
+`SMOKE_BASE_URL` is provided.
 
 This is intentionally a focused workflow smoke, not a fixture catalog for every
 editor scenario.
@@ -139,7 +146,8 @@ Known gaps:
 - broad automated browser workflow regression suite beyond the first editor
   smoke
 - DOCX semantic heading/style assertions
-- deeper automated table-cell property-panel regression coverage
+- broader automated table-cell property-panel regression coverage beyond the
+  row/column smoke path
 - broader real-font visual parity checks beyond width/pagination drift
 
 These gaps are not permission to accept regressions. They identify where manual

@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest"
 import type { DocumentNode, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../schema"
 import { pt } from "../schema"
+import { assertDocument } from "./assert"
 import {
+  applyPlacementOperation,
+  addTableColumn,
+  addTableRow,
   mergeParagraphWithPrevious,
+  removeTableColumn,
+  removeTableRow,
   splitParagraphAtIndex,
   updateParagraphText,
 } from "./operations"
@@ -65,6 +71,60 @@ function makeTableDoc(paragraph: ParagraphNode): DocumentNode {
     },
   }
   return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
+}
+
+function makeGridTableDoc(options: {
+  columnWidths?: number[]
+  rows?: string[][]
+  headerRowCount?: number
+} = {}): DocumentNode {
+  const rows = options.rows ?? [
+    ["A", "B", "C"],
+    ["D", "E", "F"],
+    ["G", "H", "I"],
+  ]
+  const columnWidths = options.columnWidths ?? rows[0].map(() => 100)
+  const tableNodes: TableNode["nodes"] = {}
+  const rowIds: string[] = []
+
+  rows.forEach((rowText, rowIndex) => {
+    const cellIds: string[] = []
+    rowText.forEach((text, columnIndex) => {
+      const paragraph = makeParagraph(`p-${rowIndex}-${columnIndex}`, [
+        { id: `t-${rowIndex}-${columnIndex}`, type: "text", text },
+      ])
+      const cell: TableCellNode = {
+        id: `cell-${rowIndex}-${columnIndex}`,
+        type: "table-cell",
+        props: {},
+        childIds: [paragraph.id],
+      }
+      tableNodes[paragraph.id] = paragraph
+      tableNodes[cell.id] = cell
+      cellIds.push(cell.id)
+    })
+    const row: TableRowNode = { id: `row-${rowIndex}`, type: "table-row", props: {}, cellIds }
+    tableNodes[row.id] = row
+    rowIds.push(row.id)
+  })
+
+  const table: TableNode = {
+    id: "table",
+    type: "table",
+    props: options.headerRowCount != null ? { headerRowCount: options.headerRowCount } : {},
+    columns: columnWidths.map((width) => ({ width: pt(width) })),
+    rowIds,
+    nodes: tableNodes,
+  }
+  return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
+}
+
+function getTable(doc: DocumentNode): TableNode {
+  return doc.document.sections[0].nodes.table as unknown as TableNode
+}
+
+function tableWidth(table: TableNode): number {
+  return table.columns.reduce((sum, column) => sum + column.width.value, 0)
 }
 
 function paragraphText(node: ParagraphNode): string {
@@ -178,5 +238,209 @@ describe("paragraph text operations", () => {
     const result = mergeParagraphWithPrevious(makeDoc({ p1, p2 }, ["p1", "p2"]), "p2")
 
     expect(result).toBeNull()
+  })
+})
+
+describe("field reference operations", () => {
+  it("inserts a fieldRef inline into a body paragraph without flattening text runs", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Customer: " },
+      { id: "t2", type: "text", text: " due" },
+    ])
+    const updated = applyPlacementOperation(
+      makeDoc({ p1: p }, ["p1"]),
+      "section",
+      { kind: "insert-inline-field", paragraphId: "p1", index: 1 },
+      {
+        source: "field",
+        field: { key: "customer.name", label: "Customer", fallback: "-", fieldType: "text" },
+      },
+    )
+    const paragraph = updated.document.sections[0].nodes.p1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.children).toHaveLength(3)
+    expect(paragraph.children[0]).toMatchObject({ id: "t1", type: "text", text: "Customer: " })
+    expect(paragraph.children[1]).toMatchObject({
+      type: "fieldRef",
+      key: "customer.name",
+      label: "Customer",
+      fallback: "-",
+    })
+    expect(paragraph.children[2]).toMatchObject({ id: "t2", type: "text", text: " due" })
+  })
+
+  it("inserts a fieldRef inline into a table-cell paragraph", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "SKU: " }])
+    const updated = applyPlacementOperation(
+      makeTableDoc(p),
+      "section",
+      { kind: "insert-inline-field", paragraphId: "p1", index: 1 },
+      {
+        source: "field",
+        field: { key: "line.sku", label: "SKU", fallback: "N/A", fieldType: "text" },
+      },
+    )
+    const table = updated.document.sections[0].nodes.table as unknown as TableNode
+    const paragraph = table.nodes.p1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.children).toHaveLength(2)
+    expect(paragraph.children[0]).toMatchObject({ id: "t1", type: "text", text: "SKU: " })
+    expect(paragraph.children[1]).toMatchObject({
+      type: "fieldRef",
+      key: "line.sku",
+      label: "SKU",
+      fallback: "N/A",
+    })
+  })
+})
+
+describe("table structural operations", () => {
+  it("adds a row above the first row and preserves the table cell shape", () => {
+    const doc = makeGridTableDoc({
+      columnWidths: [120, 80],
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+    })
+    const updated = addTableRow(doc, "table", -1)
+    const table = getTable(updated)
+    const inserted = table.nodes[table.rowIds[0]]
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.rowIds).toHaveLength(3)
+    expect(inserted.type).toBe("table-row")
+    if (inserted.type !== "table-row") return
+    expect(inserted.cellIds).toHaveLength(2)
+
+    inserted.cellIds.forEach((cellId) => {
+      const cell = table.nodes[cellId]
+      expect(cell.type).toBe("table-cell")
+      if (cell.type !== "table-cell") return
+      expect(cell.childIds).toHaveLength(1)
+      const paragraph = table.nodes[cell.childIds[0]]
+      expect(paragraph.type).toBe("paragraph")
+      if (paragraph.type !== "paragraph") return
+      expect(paragraphText(paragraph)).toBe("")
+    })
+  })
+
+  it("removes a row subtree and clamps header rows to the remaining row count", () => {
+    const doc = makeGridTableDoc({ headerRowCount: 3 })
+    const before = getTable(doc)
+    const removedRow = before.nodes[before.rowIds[2]]
+    expect(removedRow.type).toBe("table-row")
+    if (removedRow.type !== "table-row") return
+    const removedIds = new Set<string>([removedRow.id])
+    removedRow.cellIds.forEach((cellId) => {
+      removedIds.add(cellId)
+      const cell = before.nodes[cellId]
+      if (cell.type === "table-cell") cell.childIds.forEach((childId) => { removedIds.add(childId) })
+    })
+
+    const updated = removeTableRow(doc, "table", 2)
+    const table = getTable(updated)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.rowIds).toHaveLength(2)
+    expect(table.props.headerRowCount).toBe(2)
+    removedIds.forEach((id) => {
+      expect(table.nodes[id]).toBeUndefined()
+    })
+  })
+
+  it("does not delete the last table row", () => {
+    const doc = makeGridTableDoc({
+      columnWidths: [100],
+      rows: [["Only cell"]],
+      headerRowCount: 1,
+    })
+    const updated = removeTableRow(doc, "table", 0)
+    const table = getTable(updated)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.rowIds).toHaveLength(1)
+    expect(table.props.headerRowCount).toBe(1)
+  })
+
+  it("adds a column to the left of the first column by splitting the nearest width", () => {
+    const doc = makeGridTableDoc({
+      columnWidths: [120, 80],
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+    })
+    const before = getTable(doc)
+    const updated = addTableColumn(doc, "table", -1)
+    const table = getTable(updated)
+    const firstRow = table.nodes[table.rowIds[0]]
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns.map((column) => column.width.value)).toEqual([60, 60, 80])
+    expect(tableWidth(table)).toBe(tableWidth(before))
+    expect(firstRow.type).toBe("table-row")
+    if (firstRow.type !== "table-row") return
+    expect(firstRow.cellIds).toHaveLength(3)
+
+    const insertedCell = table.nodes[firstRow.cellIds[0]]
+    expect(insertedCell.type).toBe("table-cell")
+    if (insertedCell.type !== "table-cell") return
+    const insertedParagraph = table.nodes[insertedCell.childIds[0]]
+    expect(insertedParagraph.type).toBe("paragraph")
+    if (insertedParagraph.type !== "paragraph") return
+    expect(paragraphText(insertedParagraph)).toBe("")
+  })
+
+  it("removes a column subtree and transfers its width to the left neighbor", () => {
+    const doc = makeGridTableDoc({ columnWidths: [120, 80, 60] })
+    const before = getTable(doc)
+    const removedIds = new Set<string>()
+    before.rowIds.forEach((rowId) => {
+      const row = before.nodes[rowId]
+      if (row.type !== "table-row") return
+      const cellId = row.cellIds[1]
+      removedIds.add(cellId)
+      const cell = before.nodes[cellId]
+      if (cell.type === "table-cell") cell.childIds.forEach((childId) => { removedIds.add(childId) })
+    })
+
+    const updated = removeTableColumn(doc, "table", 1)
+    const table = getTable(updated)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns.map((column) => column.width.value)).toEqual([200, 60])
+    expect(tableWidth(table)).toBe(tableWidth(before))
+    table.rowIds.forEach((rowId) => {
+      const row = table.nodes[rowId]
+      expect(row.type).toBe("table-row")
+      if (row.type !== "table-row") return
+      expect(row.cellIds).toHaveLength(2)
+    })
+    removedIds.forEach((id) => {
+      expect(table.nodes[id]).toBeUndefined()
+    })
+  })
+
+  it("does not delete the last table column", () => {
+    const doc = makeGridTableDoc({
+      columnWidths: [100],
+      rows: [["Only cell"]],
+    })
+    const updated = removeTableColumn(doc, "table", 0)
+    const table = getTable(updated)
+    const row = table.nodes[table.rowIds[0]]
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns).toHaveLength(1)
+    expect(row.type).toBe("table-row")
+    if (row.type !== "table-row") return
+    expect(row.cellIds).toHaveLength(1)
   })
 })

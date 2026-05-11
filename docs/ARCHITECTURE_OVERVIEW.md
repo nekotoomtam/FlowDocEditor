@@ -153,6 +153,9 @@ and may reflow when opened in Word/LibreOffice.
 Detailed export/API/renderer rules live in
 `docs/EXPORT_RENDERER_CONTRACT.md`.
 
+Detailed persisted/editor JSON package rules live in
+`docs/FLOWDOC_PACKAGE_CONTRACT.md`.
+
 ### Binding
 
 Location:

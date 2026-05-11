@@ -122,6 +122,92 @@ async function waitForStoredParagraphText(page, nodeId, expectedText) {
   )
 }
 
+async function waitForStoredTableShape(page, tableId, expected) {
+  await page.waitForFunction(
+    ({ key, tableId, rows, cols, headerRowCount }) => {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) return false
+      const parsed = JSON.parse(raw)
+      const doc = parsed?.packageVersion === 1 && parsed?.kind === "document"
+        ? parsed.document
+        : parsed
+      for (const section of doc.document.sections) {
+        const table = section.nodes[tableId]
+        if (table?.type !== "table") continue
+        return table.rowIds.length === rows &&
+          table.columns.length === cols &&
+          (headerRowCount == null || (table.props.headerRowCount ?? 0) === headerRowCount)
+      }
+      return false
+    },
+    { key: STORAGE_KEY, tableId, ...expected },
+    { timeout: 5000 },
+  )
+}
+
+async function storedTableCellId(page, tableId, rowIndex, colIndex) {
+  return page.evaluate(
+    ({ key, tableId, rowIndex, colIndex }) => {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      const doc = parsed?.packageVersion === 1 && parsed?.kind === "document"
+        ? parsed.document
+        : parsed
+      for (const section of doc.document.sections) {
+        const table = section.nodes[tableId]
+        if (table?.type !== "table") continue
+        const rowId = table.rowIds[rowIndex]
+        const row = table.nodes[rowId]
+        return row?.type === "table-row" ? row.cellIds[colIndex] ?? null : null
+      }
+      return null
+    },
+    { key: STORAGE_KEY, tableId, rowIndex, colIndex },
+  )
+}
+
+async function storedTableCellFirstChildId(page, tableId, rowIndex, colIndex) {
+  return page.evaluate(
+    ({ key, tableId, rowIndex, colIndex }) => {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      const doc = parsed?.packageVersion === 1 && parsed?.kind === "document"
+        ? parsed.document
+        : parsed
+      for (const section of doc.document.sections) {
+        const table = section.nodes[tableId]
+        if (table?.type !== "table") continue
+        const rowId = table.rowIds[rowIndex]
+        const row = table.nodes[rowId]
+        const cellId = row?.type === "table-row" ? row.cellIds[colIndex] : null
+        const cell = cellId ? table.nodes[cellId] : null
+        return cell?.type === "table-cell" ? cell.childIds[0] ?? null : null
+      }
+      return null
+    },
+    { key: STORAGE_KEY, tableId, rowIndex, colIndex },
+  )
+}
+
+async function waitForVisibleTableCellCount(page, expectedCount) {
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('[data-testid="editor-fragment"][data-node-type="table-cell"]').length === count,
+    expectedCount,
+    { timeout: 5000 },
+  )
+}
+
+async function expectPropertyPanelTitle(page, expectedTitle) {
+  const panelTitle = page.getByTestId("property-panel-title")
+  await panelTitle.waitFor({ state: "visible", timeout: 5000 })
+  await page.waitForFunction((titleText) => {
+    const title = document.querySelector('[data-testid="property-panel-title"]')
+    return title?.textContent?.trim() === titleText
+  }, expectedTitle, { timeout: 3000 })
+}
+
 async function waitForServer(url, server, timeoutMs = 60000) {
   const startedAt = Date.now()
   let lastError = null
@@ -234,12 +320,39 @@ async function run() {
     assert(await tableParagraph.count() === 1, "expected one table-cell paragraph fragment")
     await tableParagraph.click()
 
-    const panelTitle = page.getByTestId("property-panel-title")
-    await panelTitle.waitFor({ state: "visible", timeout: 5000 })
-    await page.waitForFunction(() => {
-      const title = document.querySelector('[data-testid="property-panel-title"]')
-      return title?.textContent?.trim() === "table-cell"
-    }, null, { timeout: 3000 })
+    await expectPropertyPanelTitle(page, "table-cell")
+    await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
+    await waitForVisibleTableCellCount(page, 6)
+    await expectNoLayoutError(page)
+
+    await page.getByRole("button", { name: /Right/ }).click()
+    await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 4, headerRowCount: 1 })
+    await waitForVisibleTableCellCount(page, 8)
+    const insertedColumnCellId = await storedTableCellId(page, "smoke-table", 1, 2)
+    const insertedColumnParagraphId = await storedTableCellFirstChildId(page, "smoke-table", 1, 2)
+    assert(insertedColumnCellId, "expected inserted table column cell id")
+    assert(insertedColumnParagraphId, "expected inserted table column paragraph id")
+    await page.locator(`[data-testid="editor-fragment"][data-node-id="${insertedColumnParagraphId}"]`).click()
+    await expectPropertyPanelTitle(page, "table-cell")
+    await page.getByRole("button", { name: "Delete column" }).click()
+    await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
+    await waitForVisibleTableCellCount(page, 6)
+    await expectNoLayoutError(page)
+
+    await tableParagraph.click()
+    await expectPropertyPanelTitle(page, "table-cell")
+    await page.getByRole("button", { name: /Below/ }).click()
+    await waitForStoredTableShape(page, "smoke-table", { rows: 3, cols: 3, headerRowCount: 1 })
+    await waitForVisibleTableCellCount(page, 9)
+    const insertedRowCellId = await storedTableCellId(page, "smoke-table", 2, 1)
+    const insertedRowParagraphId = await storedTableCellFirstChildId(page, "smoke-table", 2, 1)
+    assert(insertedRowCellId, "expected inserted table row cell id")
+    assert(insertedRowParagraphId, "expected inserted table row paragraph id")
+    await page.locator(`[data-testid="editor-fragment"][data-node-id="${insertedRowParagraphId}"]`).click()
+    await expectPropertyPanelTitle(page, "table-cell")
+    await page.getByRole("button", { name: "Delete row" }).click()
+    await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
+    await waitForVisibleTableCellCount(page, 6)
     await expectNoLayoutError(page)
 
     assert(pageErrors.length === 0, `page errors during smoke:\n${pageErrors.join("\n")}`)

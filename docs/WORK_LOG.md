@@ -42,6 +42,10 @@ Completed:
   document structure, localStorage behavior, and JSON package serialization.
 - Updated architecture, fixture catalog, and test strategy docs to document the
   new document-first package boundary.
+- Follow-up Phase 1 package contract work added
+  `docs/FLOWDOC_PACKAGE_CONTRACT.md`, linked it from the docs index,
+  architecture, engineering principles, and test strategy, and enforced
+  `package.id === package.document.document.id` in the package parser.
 
 Files changed:
 
@@ -51,6 +55,247 @@ Files changed:
 - `scripts/editor-smoke.mjs`
 - `docs/ARCHITECTURE_OVERVIEW.md`
 - `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/DOCS_INDEX.md`
+- `docs/ENGINEERING_PRINCIPLES.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+- Phase 1 focused recheck:
+  `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+
+Notes:
+
+- This intentionally does not add field registry, data versions, key-based
+  history, reviewer workflow, or binding-data persistence yet. Those remain
+  higher layers that can be built on top of the package foundation.
+
+### Harden Package Import/Export UX
+
+Goal: Continue the package foundation by making JSON import/export safer and
+more understandable without adding form/history layers.
+
+Completed:
+
+- Added concise user-facing import success/failure messages for package and
+  legacy raw document JSON.
+- Added distinct failure messages for invalid JSON, unsupported document
+  versions, unsupported package versions, invalid packages, and invalid
+  documents.
+- Sanitized document titles before using them as `.flowdoc.json` filenames.
+- Updated JSON export to show a short toolbar status after preparing a package
+  download.
+- Updated JSON import to show a short toolbar status for package imports,
+  legacy imports, file-read failure, and parse/validation failure.
+- Updated the hidden file input to accept `.flowdoc.json`, `.json`, and
+  `application/json`.
+- Added focused persistence tests for safe filenames and status message mapping.
+- Updated package contract, fixture catalog, test strategy, and work log docs.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This is still document-first package UX only. It does not add field registry,
+  data versions, key history, reviewer workflow, or template library behavior.
+
+### Add Package Migration Entrypoint
+
+Goal: Continue Phase 3 by routing persisted/editor JSON through one migration
+entrypoint before editor state receives a document.
+
+Completed:
+
+- Added `migratePersistedDocumentPackage(...)`.
+- Made `parsePersistedDocument(...)` use the migration entrypoint.
+- Legacy raw `DocumentNode v1` JSON now migrates into a canonical
+  `FlowDocPackage v1`.
+- Existing `FlowDocPackage v1` migration is idempotent.
+- Kept migration document-first only; no form/history/reviewer data was added.
+- Added focused tests for raw document migration and package v1 idempotence.
+- Updated the package contract migration section.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This establishes the migration seam needed for future package versions while
+  keeping current runtime behavior compatible with raw document imports.
+
+### Harden Table Structural Operations
+
+Goal: Continue Phase 4 by moving table authoring guarantees closer to the core
+operations that mutate table rows and columns.
+
+Completed:
+
+- Added operation-level fixtures for inserting a row above the first row,
+  deleting a row subtree, preserving last-row safety, inserting a column to the
+  left of the first column, deleting a column subtree, preserving table width,
+  and preserving last-column safety.
+- Fixed row deletion so `headerRowCount` is clamped to the remaining row count
+  instead of leaving the table in an invalid authored state.
+- Kept the change at the document/table model layer. No span-aware authoring UI,
+  column resize UI, or higher-level package/history behavior was added.
+- Updated the table editing contract, fixture catalog, and test strategy.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Extend Table Property Panel Browser Smoke
+
+Goal: Continue Phase 5 by checking that the table-cell property panel can drive
+row and column operations in the real editor route, not only at the core
+operation layer.
+
+Completed:
+
+- Extended `scripts/editor-smoke.mjs` with localStorage table-shape helpers so
+  the smoke verifies authored row/column counts after browser interactions.
+- Added smoke coverage for selecting a table cell, inserting a column to the
+  right, selecting the inserted cell through its paragraph, deleting that
+  inserted column, inserting a row below, selecting the inserted row cell, and
+  deleting that inserted row.
+- Kept the smoke tied to `FlowDocPackage v1` or legacy raw document storage so
+  autosave format changes do not make the browser check brittle.
+- Updated browser smoke, fixture catalog, and test strategy docs to reflect the
+  new row/column property-panel coverage.
+
+Files changed:
+
+- `scripts/editor-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run smoke:editor`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This remains focused browser coverage. It does not replace future visual
+  regression tests, broad editor workflow automation, or manual checks for
+  perceived flicker and scroll feel.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Add FieldRef Operation Fixtures
+
+Goal: Continue Phase 6 by protecting the document-level key/field foundation
+without starting the future form, history, or reviewer layers.
+
+Completed:
+
+- Added operation fixtures for inserting a `fieldRef` inline into a normal body
+  paragraph.
+- Added operation fixtures for inserting a `fieldRef` inline into a paragraph
+  scoped inside a table cell.
+- Verified that insertion preserves existing text runs instead of flattening the
+  paragraph into plain text.
+- Updated fixture catalog and test strategy counts.
+
+Files changed:
+
+- `packages/core/src/document/operations.test.ts`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This intentionally stops at authored `DocumentNode` behavior. It does not add
+  field registries, data snapshots, key-based history, or reviewer workflows.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Add FieldRef Package Roundtrip Fixture
+
+Goal: Continue Phase 7 by making sure the document-first package boundary keeps
+structured inline keys intact.
+
+Completed:
+
+- Added a persistence fixture that serializes a document containing an inline
+  `fieldRef` to `FlowDocPackage v1`, then parses it back through the normal
+  import path.
+- Verified the `fieldRef` id, key, label, fallback, and surrounding text run are
+  preserved.
+- Updated the package contract, fixture catalog, and test strategy counts.
+
+Files changed:
+
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
 - `docs/FIXTURE_CATALOG.md`
 - `docs/TEST_STRATEGY.md`
 - `docs/WORK_LOG.md`
@@ -65,9 +310,10 @@ Verification:
 
 Notes:
 
-- This intentionally does not add field registry, data versions, key-based
-  history, reviewer workflow, or binding-data persistence yet. Those remain
-  higher layers that can be built on top of the package foundation.
+- This still stops at package/document preservation. It does not add a field
+  registry, binding data payload, key history, or reviewer workflow.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
 
 ### Add Automated Editor Browser Smoke
 

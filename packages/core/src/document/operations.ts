@@ -615,7 +615,12 @@ export function removeTableRow(doc: DocumentNode, tableId: string, rowIndex: num
       })
       delete internalNodes[rowId]
     }
-    return { ...table, rowIds: table.rowIds.filter((_, i) => i !== rowIndex), nodes: internalNodes }
+    const rowIds = table.rowIds.filter((_, i) => i !== rowIndex)
+    const headerRowCount = table.props.headerRowCount
+    const props = headerRowCount != null && headerRowCount > rowIds.length
+      ? { ...table.props, headerRowCount: rowIds.length }
+      : table.props
+    return { ...table, props, rowIds, nodes: internalNodes }
   })
 }
 
