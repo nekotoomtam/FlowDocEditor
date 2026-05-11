@@ -149,8 +149,10 @@ Protects the default `/editor` load path with a real browser, deterministic
 localStorage document fixtures, paragraph inline edit commit, undo/redo, table
 cell selection, the property-panel title, table-cell row/column insert/delete
 controls, localStorage package v2 autosave, Fill mode readiness warning/clear
-behavior for a required used field, and package v2 data snapshot autosave for
-filled values. It starts its own Next dev server on port `4010` unless
+behavior for a required used field, package v2 data snapshot autosave for
+filled values, active package-registry field palette loading, and property-panel
+fieldRef inspection for selected document fields. It starts its own Next dev
+server on port `4010` unless
 `SMOKE_BASE_URL` is provided.
 
 This is intentionally a focused workflow smoke, not a fixture catalog for every

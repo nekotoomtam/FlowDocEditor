@@ -244,25 +244,26 @@ Editor document + format
 - `drag`, resize, and margin interaction state
 - inline edit state and transaction snapshot
 
-Persistent editor JSON is now document-first `FlowDocPackage v1`:
+Persistent editor JSON is now document-first `FlowDocPackage v2`:
 
 ```txt
-FlowDocPackage v1
+FlowDocPackage v2
   -> package metadata
+  -> fields: FieldRegistryV1
+  -> data?: DataSnapshotV1
   -> document: DocumentNode v1
 ```
 
 The editor unwraps the package before editing. Core layout, pagination, API
 export, and renderers continue to consume `DocumentNode` / `PaginatedDocument`.
 This foundation intentionally does not include field history, reviewer
-workflow, or binding data yet; those are higher layers that can be added around
-the package later.
+workflow, submissions, approvals, or actor identity; those are higher layers
+that can be added around the package later.
 
-The field registry and data snapshot contracts are defined now, but
-`FlowDocPackage v1` still does not persist registry/data/history. Those belong
-to a future package migration, not to `DocumentNode`. The current v2 proposal
-makes package-level `fields` the first required new layer and leaves snapshot
-package persistence/history deferred.
+Package v2 persists the field registry and may persist the current scalar data
+snapshot for document-bound value placement. These belong to the package layer,
+not to `DocumentNode`; resolved field values remain temporary preview/export
+output.
 
 Meaningful edits should pass through reducer actions and core operations. UI
 components should not manually mutate document structure.

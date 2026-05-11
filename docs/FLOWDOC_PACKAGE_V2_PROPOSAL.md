@@ -363,11 +363,22 @@ Completed document-bound data placement slice:
 - reject structurally invalid package data snapshots
 - extend browser smoke to confirm filled values are autosaved in package v2
 
+Completed field placement foundation slice:
+
+- drive the Field palette from the active package registry instead of a fixed
+  sample list
+- keep sample registry fallback for new documents and legacy/package v1 inputs
+- show selected paragraph/table-cell fieldRef key, label, fallback, and registry
+  status in the property panel
+- keep missing registry definitions as non-blocking readiness warnings
+- extend browser smoke to cover custom package registries in the palette and
+  fieldRef property inspection
+
 Recommended next implementation phase:
 
 - decide whether registry-readiness warnings should remain non-blocking or be
   promoted in a publish/template validation mode
-- harden field authoring/placement UX before adding any history layer
+- continue hardening field authoring ergonomics before adding any history layer
 
 Still not done:
 

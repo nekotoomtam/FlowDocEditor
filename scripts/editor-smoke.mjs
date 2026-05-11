@@ -118,6 +118,53 @@ function makeFillReadinessDocument() {
   }
 }
 
+function makeRegistryPlacementPackage() {
+  const paragraphNode = paragraph("registry-p1", "")
+  paragraphNode.children = [
+    { id: "registry-t1", type: "text", text: "Project: " },
+    { id: "registry-f1", type: "fieldRef", key: "project.code", label: "Project code", fallback: "TBD" },
+  ]
+  const doc = {
+    version: 1,
+    document: {
+      id: "registry-placement-doc",
+      meta: { title: "Registry Placement" },
+      sections: [{
+        id: "registry-section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+        },
+        bodyRootId: "registry-body",
+        nodes: {
+          "registry-body": { id: "registry-body", type: "body", props: {}, childIds: [paragraphNode.id] },
+          [paragraphNode.id]: paragraphNode,
+        },
+      }],
+    },
+  }
+
+  return {
+    packageVersion: 2,
+    kind: "document",
+    id: doc.document.id,
+    meta: {
+      title: "Registry Placement",
+      createdAt: "2026-05-12T00:00:00.000Z",
+      updatedAt: "2026-05-12T00:00:00.000Z",
+    },
+    document: doc,
+    fields: {
+      version: 1,
+      fields: [
+        { key: "project.code", fieldType: "text", label: "Project code", fallback: "TBD" },
+      ],
+    },
+  }
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -450,6 +497,28 @@ async function run() {
     await waitForStoredSnapshotValue(fillPage, "customer.name", "Acme Co")
     await expectNoLayoutError(fillPage)
     await fillPage.close()
+
+    const registryPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    collectPageErrors(registryPage, consoleErrors, pageErrors)
+    await registryPage.addInitScript(({ key, pack }) => {
+      window.localStorage.clear()
+      window.localStorage.setItem(key, JSON.stringify(pack))
+    }, { key: STORAGE_KEY, pack: makeRegistryPlacementPackage() })
+    await registryPage.goto(baseUrl, { waitUntil: "domcontentloaded" })
+    await registryPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
+    await registryPage.getByTestId("field-palette-item").filter({ hasText: "Project code" }).first().waitFor({ state: "visible", timeout: 5000 })
+    const registryParagraph = registryPage.locator('[data-testid="editor-fragment"][data-node-id="registry-p1"]')
+    assert(await registryParagraph.count() === 1, "expected one registry field paragraph fragment")
+    await registryParagraph.click()
+    const fieldRefs = registryPage.getByTestId("property-field-refs")
+    await fieldRefs.waitFor({ state: "visible", timeout: 5000 })
+    const fieldRefText = await fieldRefs.textContent()
+    assert(
+      fieldRefText?.includes("Project code") && fieldRefText.includes("project.code") && fieldRefText.includes("text"),
+      `expected property panel field reference details, got: ${fieldRefText}`,
+    )
+    await expectNoLayoutError(registryPage)
+    await registryPage.close()
 
     assert(pageErrors.length === 0, `page errors during smoke:\n${pageErrors.join("\n")}`)
     assert(consoleErrors.length === 0, `console errors during smoke:\n${consoleErrors.join("\n")}`)

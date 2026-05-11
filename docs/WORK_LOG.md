@@ -5603,6 +5603,36 @@ Verification:
 - `npm.cmd run smoke:editor`
 - `git diff --check` passed with only LF-to-CRLF working-copy warnings.
 
+---
+
+### Harden Active Registry Field Placement
+
+Goal: Improve the document/field placement foundation without adding publish,
+reviewer, history, or registry-management workflows.
+
+Completed:
+
+- Changed the Field palette to read from the active package `FieldRegistryV1`
+  instead of the static sample list.
+- Kept the sample registry as the fallback for new documents and legacy/package
+  v1 inputs.
+- Passed the active registry into the property panel.
+- Added property-panel fieldRef inspection for selected paragraphs and selected
+  table cells, showing key, label, fallback, and registry status.
+- Kept fieldRef details read-only so this does not become a registry editor yet.
+- Extended editor smoke with a custom package v2 registry fixture to verify the
+  Field palette and property-panel fieldRef details use the package registry.
+- Updated architecture, field registry, fixture, smoke, package proposal, and
+  test-strategy docs around active registry placement.
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check` passed with only LF-to-CRLF working-copy warnings.
+
 Notes:
 
 - The first app-suite run hit a 10-second Chromium launch timeout in

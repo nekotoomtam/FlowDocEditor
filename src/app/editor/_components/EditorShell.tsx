@@ -1753,7 +1753,7 @@ export default function EditorShell() {
           {isTemplateMode ? (
             <>
               <EditorPalette onDragStart={startPaletteDrag} isDragging={!!state.drag} />
-              <FieldPalette onDragStart={startPaletteDrag} isDragging={!!state.drag} />
+              <FieldPalette registry={packageFieldRegistry} onDragStart={startPaletteDrag} isDragging={!!state.drag} />
             </>
           ) : (
             <div style={{ padding: 14, fontSize: 11, color: "#9ca3af", lineHeight: 1.5 }}>
@@ -1801,6 +1801,7 @@ export default function EditorShell() {
             <div style={{ flexShrink: 0 }}>
               <PropertyPanel
                 doc={state.doc}
+                registry={packageFieldRegistry}
                 selectedNodeId={state.selectedNodeId}
                 onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
                 onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}

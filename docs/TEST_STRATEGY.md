@@ -249,7 +249,8 @@ Current strengths:
 - Automated browser smoke now protects default editor load, paragraph inline
   edit commit, undo/redo, table-cell selection, the property-panel title, and
   table-cell row/column insert/delete controls, plus Fill mode package v2 data
-  snapshot autosave.
+  snapshot autosave, active package-registry field palette loading, and
+  property-panel fieldRef inspection.
 - Manual browser checks are still used for editor feel where automation
   coverage is light.
 

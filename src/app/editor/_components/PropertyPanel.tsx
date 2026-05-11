@@ -1,6 +1,7 @@
-import type { DocumentNode, LayoutNode, TableNode, TableRowNode, TableCellNode, ParagraphNode, TocNode } from "@/schema"
+import type { DocumentNode, FieldRefInline, LayoutNode, TableNode, TableRowNode, TableCellNode, ParagraphNode, TocNode } from "@/schema"
 import { pt } from "@/schema"
 import { isPlainTextParagraph } from "@/document"
+import type { FieldRegistryV1 } from "@/fieldRegistry"
 
 type DocNode = LayoutNode | TableRowNode | TableCellNode
 
@@ -13,6 +14,7 @@ interface TableOps {
 
 interface Props {
   doc: DocumentNode
+  registry: FieldRegistryV1
   selectedNodeId: string | null
   onUpdateProps: (nodeId: string, changes: Record<string, unknown>) => void
   onUpdateText: (nodeId: string, text: string) => void
@@ -70,6 +72,58 @@ function getParagraphText(node: ParagraphNode): string {
     .join("")
 }
 
+function getParagraphFieldRefs(node: ParagraphNode): FieldRefInline[] {
+  return node.children.filter((child): child is FieldRefInline => child.type === "fieldRef")
+}
+
+function FieldReferenceList({ refs, registry }: { refs: FieldRefInline[]; registry: FieldRegistryV1 }) {
+  if (refs.length === 0) return null
+  const definitions = new Map(registry.fields.map((field) => [field.key, field]))
+
+  return (
+    <div data-testid="property-field-refs" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <label style={label}>Field refs</label>
+      {refs.map((fieldRef) => {
+        const definition = definitions.get(fieldRef.key)
+        const isInlineCompatible = definition && definition.fieldType !== "image" && definition.fieldType !== "collection"
+        const status = definition == null ? "missing" : isInlineCompatible ? definition.fieldType : "not inline"
+        const statusColor = definition == null || !isInlineCompatible ? "#b45309" : "#047857"
+        return (
+          <div
+            key={fieldRef.id}
+            style={{
+              border: "1px solid #e5e7eb",
+              borderRadius: 4,
+              padding: "6px 7px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 3,
+              background: "#fff",
+            }}
+          >
+            <div style={{ display: "flex", gap: 6, alignItems: "center", minWidth: 0 }}>
+              <span style={{ fontSize: 10, fontWeight: "bold", color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {fieldRef.label ?? definition?.label ?? fieldRef.key}
+              </span>
+              <span style={{ marginLeft: "auto", flexShrink: 0, fontSize: 9, color: statusColor }}>
+                {status}
+              </span>
+            </div>
+            <div title={fieldRef.key} style={{ fontSize: 9, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {fieldRef.key}
+            </div>
+            {(fieldRef.fallback ?? definition?.fallback) && (
+              <div style={{ fontSize: 9, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                fallback: {fieldRef.fallback ?? definition?.fallback}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const label: React.CSSProperties = {
@@ -91,7 +145,7 @@ const btnDanger: React.CSSProperties = {
 
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
-export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText, onDelete, tableOps }: Props) {
+export function PropertyPanel({ doc, registry, selectedNodeId, onUpdateProps, onUpdateText, onDelete, tableOps }: Props) {
   if (!selectedNodeId) {
     return (
       <div style={{ background: "white", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px 0" }}>
@@ -119,6 +173,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
         {node.type === "paragraph" && (() => {
           const text = getParagraphText(node)
           const canEditText = isPlainTextParagraph(node)
+          const fieldRefs = getParagraphFieldRefs(node)
           return (
             <>
               <div>
@@ -138,6 +193,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
                   }}
                 />
               </div>
+              <FieldReferenceList refs={fieldRefs} registry={registry} />
               <div style={{ display: "flex", gap: 6 }}>
                 <div style={{ flex: 1 }}>
                   <label style={label}>Font size (pt)</label>
@@ -356,6 +412,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
           const paraNode = paragraphId ? findNode(doc, paragraphId) : null
           const text = paraNode?.type === "paragraph" ? getParagraphText(paraNode) : ""
           const canEditText = paraNode?.type === "paragraph" ? isPlainTextParagraph(paraNode) : false
+          const fieldRefs = paraNode?.type === "paragraph" ? getParagraphFieldRefs(paraNode) : []
           const cols = table.columns.length
           return (
             <>
@@ -379,6 +436,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
                   />
                 </div>
               )}
+              <FieldReferenceList refs={fieldRefs} registry={registry} />
               <div style={{ display: "flex", gap: 6 }}>
                 <div style={{ flex: 1 }}>
                   <label style={label}>Padding</label>

@@ -1,7 +1,8 @@
 import type { DragSource } from "@/placement/types"
-import { SAMPLE_FIELD_REGISTRY } from "@/app/_lib/fieldRegistry"
+import type { FieldRegistryV1 } from "@/fieldRegistry"
 
 interface Props {
+  registry: FieldRegistryV1
   onDragStart: (source: DragSource, e: React.PointerEvent) => void
   isDragging: boolean
 }
@@ -18,7 +19,7 @@ function typeLabel(type: string): string {
   }
 }
 
-export function FieldPalette({ onDragStart, isDragging }: Props) {
+export function FieldPalette({ registry, onDragStart, isDragging }: Props) {
   return (
     <div style={{
       padding: 8,
@@ -38,9 +39,14 @@ export function FieldPalette({ onDragStart, isDragging }: Props) {
         Fields
       </div>
 
-      {SAMPLE_FIELD_REGISTRY.map((field) => (
+      {registry.fields.length === 0 ? (
+        <div style={{ padding: "7px 8px", fontSize: 10, color: "#d1d5db", lineHeight: 1.4 }}>
+          no registered fields
+        </div>
+      ) : registry.fields.map((field) => (
         <div
           key={field.key}
+          data-testid="field-palette-item"
           onPointerDown={(e) => {
             if (isDragging) return
             onDragStart({ source: "field", field }, e)

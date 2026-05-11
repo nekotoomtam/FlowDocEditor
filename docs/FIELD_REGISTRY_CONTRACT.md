@@ -12,10 +12,10 @@ package migration, data snapshots, or future key-history work.
 `fieldRef.key` is the authored document's reference to a package-level field
 definition.
 
-Current implementation still stores `FlowDocPackage v1` as document-only JSON.
-The registry is not persisted in packages yet. Phase A adds the shared contract
-and validation helpers so a future package version can add registry/data/history
-without changing `DocumentNode`.
+Current package v2 JSON persists `FieldRegistryV1` next to the document.
+The editor treats that package registry as the active field source for authoring
+and Fill mode. Legacy/package v1 inputs still fall back to the sample editor
+registry so older fixtures can open.
 
 ## Shape
 
@@ -51,7 +51,8 @@ interface FieldRegistryV1 {
 Current implementation:
 
 - `packages/core/src/fieldRegistry/index.ts`
-- sample editor palette data: `src/app/_lib/fieldRegistry.ts`
+- sample editor fallback data: `src/app/_lib/fieldRegistry.ts`
+- active editor field palette: `src/app/editor/_components/FieldPalette.tsx`
 
 ## Key Rules
 
@@ -131,6 +132,24 @@ Current implementation:
 - `collectDocumentFieldRefs(...)`
 - `validateFieldRegistryReferences(...)`
 - `hasFieldRegistryErrors(...)`
+
+## Authoring UX Rules
+
+Field authoring should use the active package registry, not a hard-coded sample
+list, once a package v2 registry is available.
+
+The editor should:
+
+- list active registry fields in the Field palette
+- preserve the selected field key/label/fallback when a field is placed into a
+  paragraph or table-cell paragraph
+- show selected paragraph/table-cell `fieldRef` details in the property panel
+- keep missing registry definitions as non-blocking readiness warnings for now
+- avoid adding registry type, value, history, or validation state into
+  `fieldRef`
+
+This keeps the base document/data placement path open for future registry
+management and publish validation without introducing those workflows now.
 
 ## Ownership
 
