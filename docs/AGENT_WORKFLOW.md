@@ -53,6 +53,8 @@ Recommended read order:
    - browser checks: `docs/BROWSER_SMOKE_CHECKLIST.md`
    - export/renderers: `docs/EXPORT_RENDERER_CONTRACT.md`
    - fields/registry: `docs/FIELD_REGISTRY_CONTRACT.md`
+   - field data snapshots: `docs/DATA_SNAPSHOT_CONTRACT.md`
+   - future package shape: `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
    - fixture catalog: `docs/FIXTURE_CATALOG.md`
 9. `git status --short`
 10. The code and tests near the requested change

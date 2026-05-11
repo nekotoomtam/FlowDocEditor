@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
+import type { DataSnapshotV1, FieldScalarValue } from "../dataSnapshot"
+import type { FieldRegistryV1 } from "../fieldRegistry"
 import type { DocumentNode, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../schema"
 import { pt } from "../schema"
-import { bindDocument, type BindingContext } from "./index"
+import { bindDocument, bindDocumentWithSnapshot, type BindingContext } from "./index"
 
 function makeParagraph(id: string, children: ParagraphNode["children"]): ParagraphNode {
   return {
@@ -89,6 +91,10 @@ function bind(template: DocumentNode, data: BindingContext["data"]): DocumentNod
   return bindDocument(template, { registry: { fields: [] }, data })
 }
 
+function snapshot(values: DataSnapshotV1["values"]): DataSnapshotV1 {
+  return { version: 1, updatedAt: "2026-05-11T00:00:00.000Z", values }
+}
+
 describe("binding scalar fieldRef contract", () => {
   it("replaces existing scalar fieldRefs with text runs", () => {
     const paragraph = makeParagraph("p1", [
@@ -170,5 +176,85 @@ describe("binding scalar fieldRef contract", () => {
     })
 
     expect(textOfParagraph(result, "p1")).toBe("Unregistered: still resolves")
+  })
+
+  it("binds flat data snapshot values without mutating the template", () => {
+    const template = makeDoc({
+      p1: makeParagraph("p1", [
+        { id: "t1", type: "text", text: "Customer: " },
+        fieldRef("f1", "customer.name"),
+        { id: "t2", type: "text", text: " / Total: " },
+        fieldRef("f2", "invoice.total"),
+      ]),
+    }, ["p1"])
+    const before = structuredClone(template)
+    const registry: FieldRegistryV1 = {
+      version: 1,
+      fields: [
+        { key: "customer.name", fieldType: "text" },
+        { key: "invoice.total", fieldType: "number" },
+      ],
+    }
+
+    const result = bindDocumentWithSnapshot(template, {
+      registry,
+      snapshot: snapshot({
+        "customer.name": "Acme",
+        "invoice.total": 1200,
+      }),
+    })
+
+    expect(result.issues).toEqual([])
+    expect(template).toEqual(before)
+    expect(textOfParagraph(result.doc, "p1")).toBe("Customer: Acme / Total: 1200")
+  })
+
+  it("uses registry fallback when snapshot values are missing", () => {
+    const template = makeDoc({
+      p1: makeParagraph("p1", [
+        { id: "t1", type: "text", text: "Contact: " },
+        fieldRef("f1", "customer.contact"),
+      ]),
+    }, ["p1"])
+
+    const result = bindDocumentWithSnapshot(template, {
+      registry: {
+        version: 1,
+        fields: [{ key: "customer.contact", fieldType: "text", fallback: "N/A", required: true }],
+      },
+      snapshot: snapshot({}),
+    })
+
+    expect(result.issues).toEqual([expect.objectContaining({
+      code: "missing-required-value",
+      severity: "warning",
+      key: "customer.contact",
+    })])
+    expect(textOfParagraph(result.doc, "p1")).toBe("Contact: N/A")
+  })
+
+  it("reports invalid snapshot values and falls back instead of rendering them", () => {
+    const invalidNumber = "not-a-number" as unknown as FieldScalarValue
+    const template = makeDoc({
+      p1: makeParagraph("p1", [
+        { id: "t1", type: "text", text: "Total: " },
+        fieldRef("f1", "invoice.total", "pending"),
+      ]),
+    }, ["p1"])
+
+    const result = bindDocumentWithSnapshot(template, {
+      registry: {
+        version: 1,
+        fields: [{ key: "invoice.total", fieldType: "number" }],
+      },
+      snapshot: snapshot({ "invoice.total": invalidNumber }),
+    })
+
+    expect(result.issues).toEqual([expect.objectContaining({
+      code: "invalid-value-type",
+      severity: "error",
+      key: "invoice.total",
+    })])
+    expect(textOfParagraph(result.doc, "p1")).toBe("Total: pending")
   })
 })

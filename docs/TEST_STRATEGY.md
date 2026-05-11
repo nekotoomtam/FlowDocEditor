@@ -139,6 +139,7 @@ Protects what automated unit tests often miss:
 - undo/redo behaves like the user's mental model
 - table selection opens the expected panel
 - controls update visible document structure
+- Fill mode readiness appears and clears for required used fields
 - no layout error badge appears
 - no obvious flicker, jump, or unwanted scroll is introduced
 
@@ -177,6 +178,7 @@ pass.
 | Editor interaction behavior | type-check; focused app tests if available; `npm.cmd run smoke:editor`; manual browser smoke for interaction not covered by the script |
 | Editor state race or reconciliation | type-check; focused app tests if available; `npm.cmd run smoke:editor`; manual browser smoke using the editor state race set |
 | Persistence or JSON import | focused persistence tests; type-check; browser smoke if editor load/import/export behavior changed |
+| Package proposal docs | `git diff --check`; no runtime tests unless code or active behavior changes |
 | Core document operation | focused core test; full test command for meaningful behavior risk |
 | Text measurement or line breaking | focused text/layout tests; full test command; update text docs |
 | Pagination/page-break behavior | focused pagination test; full test command; update cross-page/checklist docs |
@@ -201,16 +203,21 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  24 core test files / 308 core tests, plus 9 app test files / 97 app tests.
+  26 core test files / 321 core tests, plus 9 app test files / 101 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases,
   including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
 - Binding has focused scalar `fieldRef` contract coverage for missing values,
-  fallbacks, table-cell paragraphs, non-mutation, and non-strict registry
-  behavior.
+  fallbacks, table-cell paragraphs, non-mutation, non-strict registry behavior,
+  and flat `DataSnapshotV1` preview binding.
 - Field registry coverage collects body/table fieldRef usages and validates
   duplicate keys, missing definitions, and non-inline field targets without
   changing current binding behavior.
+- Data snapshot coverage validates scalar field values outside `DocumentNode`,
+  including readiness warnings, invalid value types, enum options, and
+  unsupported image/collection values.
+- Readiness coverage combines registry issues with document-scoped snapshot
+  issues so unused required fields do not warn in the current document.
 - Operation coverage protects inline `fieldRef` insertion in body paragraphs
   and table-cell paragraphs without flattening existing text runs.
 - Table row split accounting has focused coverage for uneven cells, empty cells,
@@ -229,7 +236,9 @@ Current strengths:
   serialization, package/document identity agreement, normalize, and validation
   behavior, safe filename generation, import status messages, raw-document
   migration, package v1 idempotent migration, and inline `fieldRef`
-  round-tripping.
+  round-tripping. It also covers proposal-aligned `FlowDocPackage v2` parsing,
+  v2 registry warning propagation, v2 registry warning import status, and v2
+  registry hard-error rejection while default save/export remains v1.
 - App-level tests cover drift and editor helper behavior.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.

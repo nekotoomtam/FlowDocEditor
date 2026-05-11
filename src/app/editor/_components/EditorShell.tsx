@@ -5,8 +5,9 @@ import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, DEFAULT_STACK_MIN_HEIGHT, isPlainTextParagraph, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
-import { bindDocument } from "@/binding"
-import type { FieldData, FieldValue } from "@/binding"
+import { bindDocumentWithSnapshot } from "@/binding"
+import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
+import { assessDocumentDataReadiness } from "@/readiness"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
 import type { DocumentNode, TableNode } from "@/schema"
@@ -24,6 +25,7 @@ import { EditorCanvas } from "./EditorCanvas"
 import { PropertyPanel } from "./PropertyPanel"
 import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
+import { SAMPLE_FIELD_REGISTRY_V1 } from "@/app/_lib/fieldRegistry"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import { comparePagination } from "./comparePagination"
 import {
@@ -357,24 +359,19 @@ function describeDragSource(source: DragSource): string {
   return "node"
 }
 
-function setFieldDataValue(data: FieldData, key: string, value: FieldValue): FieldData {
-  const parts = key.split(".").filter(Boolean)
-  if (parts.length === 0) return data
+function createEmptyDataSnapshot(): DataSnapshotV1 {
+  return { version: 1, updatedAt: new Date().toISOString(), values: {} }
+}
 
-  const root: FieldData = { ...data }
-  let cursor: FieldData = root
-
-  parts.slice(0, -1).forEach((part) => {
-    const current = cursor[part]
-    const next = typeof current === "object" && current != null && !Array.isArray(current)
-      ? { ...current } as FieldData
-      : {}
-    cursor[part] = next
-    cursor = next
-  })
-
-  cursor[parts[parts.length - 1]] = value
-  return root
+function setDataSnapshotValue(snapshot: DataSnapshotV1, key: string, value: FieldScalarValue): DataSnapshotV1 {
+  return {
+    ...snapshot,
+    updatedAt: new Date().toISOString(),
+    values: {
+      ...snapshot.values,
+      [key]: value,
+    },
+  }
 }
 
 // ─── Local Reflow Helpers ─────────────────────────────────────────────────────
@@ -564,14 +561,19 @@ export default function EditorShell() {
   const editorTextMeasurer = useMemo(() => createBrowserTextMeasurer(), [])
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
   const [mode, setMode] = useState<"template" | "fill">("template")
-  const [fieldData, setFieldData] = useState<FieldData>({})
+  const [dataSnapshot, setDataSnapshot] = useState<DataSnapshotV1>(() => createEmptyDataSnapshot())
   const isTemplateMode = mode === "template"
   const resolvePreviewDoc = useCallback((doc: DocumentNode) => (
     isTemplateMode
       ? doc
-      : bindDocument(doc, { registry: { fields: [] }, data: fieldData })
-  ), [fieldData, isTemplateMode])
+      : bindDocumentWithSnapshot(doc, { registry: SAMPLE_FIELD_REGISTRY_V1, snapshot: dataSnapshot }).doc
+  ), [dataSnapshot, isTemplateMode])
   const previewDoc = useMemo(() => resolvePreviewDoc(state.doc), [resolvePreviewDoc, state.doc])
+  const dataReadiness = useMemo(() => assessDocumentDataReadiness({
+    doc: state.doc,
+    registry: SAMPLE_FIELD_REGISTRY_V1,
+    snapshot: dataSnapshot,
+  }), [dataSnapshot, state.doc])
   const paginatePreviewDoc = useCallback((doc: DocumentNode) => (
     paginateDocument(resolvePreviewDoc(doc), editorTextMeasurer)
   ), [editorTextMeasurer, resolvePreviewDoc])
@@ -776,7 +778,7 @@ export default function EditorShell() {
         const doc = result.doc
         resetInlineEditStateForDocumentReplace()
         dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
-        setDocumentIoStatus({ type: "info", message: documentImportSuccessMessage(result.source) })
+        setDocumentIoStatus({ type: "info", message: documentImportSuccessMessage(result.source, result.fieldRegistryIssues) })
       } else {
         setDocumentIoStatus({ type: "error", message: documentParseFailureMessage(result.reason) })
       }
@@ -1791,8 +1793,9 @@ export default function EditorShell() {
           ) : (
             <FillingPanel
               doc={state.doc}
-              data={fieldData}
-              onChange={(key, value) => setFieldData((prev) => setFieldDataValue(prev, key, value))}
+              snapshot={dataSnapshot}
+              readinessIssues={dataReadiness.issues}
+              onChange={(key, value) => setDataSnapshot((prev) => setDataSnapshotValue(prev, key, value))}
             />
           )}
           <div style={{ flex: 1, overflow: "hidden" }}>

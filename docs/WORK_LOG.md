@@ -370,6 +370,286 @@ Notes:
 - `git diff --check` reported only the repository's existing LF-to-CRLF working
   copy warnings.
 
+### Add FlowDoc Package V2 Proposal
+
+Goal: Continue Phase B by defining the next package direction before changing
+runtime storage, import/export behavior, or localStorage format.
+
+Completed:
+
+- Added `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`.
+- Proposed `FlowDocPackageV2` with required package-level `fields:
+  FieldRegistryV1`.
+- Reserved optional/deferred package locations for `data`, `history`, and
+  migration records without making them active behavior.
+- Defined v2 goals, non-goals, identity rules, ownership boundaries, validation
+  levels, migration direction, import/export policy, test expectations, and
+  open decisions.
+- Linked the proposal from docs index, package contract, field registry
+  contract, architecture overview, test strategy, and agent workflow.
+
+Files changed:
+
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/DOCS_INDEX.md`
+- `docs/FIELD_REGISTRY_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `git diff --check`
+
+Notes:
+
+- This is proposal-only work. It intentionally does not implement package v2
+  parsing, migration, localStorage changes, or JSON export changes.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Add FlowDoc Package V2 Parser Compatibility
+
+Goal: Continue Phase C by proving the v2 package proposal in the persistence
+boundary while keeping default save/export behavior on package v1.
+
+Completed:
+
+- Added `FlowDocPackageV2` and `FlowDocPackage` union types to editor
+  persistence.
+- Added package v2 parser support with required `fields: FieldRegistryV1`.
+- Kept `CURRENT_PACKAGE_VERSION` and `serializeDocumentPackage(...)` on v1 so
+  localStorage saves and JSON export behavior do not change yet.
+- Added registry validation during v2 parsing: duplicate keys and inline
+  `collection`/`image` field targets reject the package, while missing field
+  definitions are surfaced as warnings.
+- Added focused persistence tests for v2 parse success, missing-definition
+  warnings, duplicate registry rejection, collection-target rejection, and
+  default export remaining v1.
+- Updated package/proposal/test/fixture docs.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This does not migrate localStorage, switch JSON export to v2, or add data/key
+  history storage.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Add Data Snapshot Contract And Validation Fixtures
+
+Goal: Continue Phase D by defining field values outside `DocumentNode` before
+wiring data into binding, packages, or key history.
+
+Completed:
+
+- Added `docs/DATA_SNAPSHOT_CONTRACT.md`.
+- Added `packages/core/src/dataSnapshot/index.ts` with
+  `DataSnapshotV1`, scalar value types, `validateDataSnapshot(...)`, and
+  `hasDataSnapshotErrors(...)`.
+- Added focused data snapshot fixtures for valid scalar values, required-field
+  readiness warnings, unknown-key warnings, invalid value type errors, invalid
+  enum value errors, and unsupported `image`/`collection` snapshot values.
+- Linked the data snapshot contract from docs index, agent workflow,
+  architecture, field registry contract, package v2 proposal, fixture catalog,
+  and test strategy.
+
+Files changed:
+
+- `packages/core/src/dataSnapshot/index.ts`
+- `packages/core/src/dataSnapshot/index.test.ts`
+- `docs/DATA_SNAPSHOT_CONTRACT.md`
+- `docs/AGENT_WORKFLOW.md`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/DOCS_INDEX.md`
+- `docs/FIELD_REGISTRY_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/dataSnapshot/index.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This does not persist data snapshots in package JSON and does not wire
+  snapshots into binding yet.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Add Snapshot Binding Preview Foundation
+
+Goal: Continue Phase E by wiring scalar data snapshots into temporary binding
+preview without changing package persistence or mutating template documents.
+
+Completed:
+
+- Added `bindDocumentWithSnapshot(...)` to the core binding layer.
+- Kept the existing nested `FieldData` binding entrypoint intact for
+  compatibility.
+- Bound flat `DataSnapshotV1.values` keys such as `customer.name` directly to
+  matching inline `fieldRef.key` values.
+- Returned data snapshot validation issues alongside the resolved document so
+  callers can decide how to handle warnings/errors.
+- Made invalid snapshot values fall back instead of rendering invalid data into
+  preview/export output.
+- Allowed missing values to use inline `fieldRef.fallback`, registry fallback,
+  or empty text.
+- Updated Fill mode to store values as `DataSnapshotV1` and preview through the
+  snapshot binding helper.
+- Updated architecture, field registry, package v2 proposal, data snapshot,
+  fixture catalog, and test strategy docs.
+
+Files changed:
+
+- `packages/core/src/binding/index.ts`
+- `packages/core/src/binding/index.test.ts`
+- `src/app/_lib/fieldRegistry.ts`
+- `src/app/editor/_components/FillingPanel.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/DATA_SNAPSHOT_CONTRACT.md`
+- `docs/FIELD_REGISTRY_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/binding/index.test.ts src/dataSnapshot/index.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This still does not persist data snapshots in package JSON, switch
+  localStorage/export to package v2, or implement key history.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Add Document Data Readiness Feedback
+
+Goal: Continue Phase F by surfacing registry/snapshot readiness without making
+readiness warnings block opening, editing, or preview.
+
+Completed:
+
+- Added `packages/core/src/readiness/index.ts` with
+  `assessDocumentDataReadiness(...)`.
+- Combined field registry reference issues and data snapshot validation issues
+  into one readiness report.
+- Scoped required snapshot checks to fields actually used by the current
+  document so unused required registry fields do not warn in Fill mode.
+- Added readiness fixtures for valid data, missing registry definitions,
+  missing used required values, unused required fields, and invalid snapshot
+  values.
+- Updated Fill mode to show compact non-blocking readiness errors/warnings in
+  the filling panel.
+- Extended the automated editor smoke with a Fill mode readiness warning/clear
+  check on an isolated fieldRef document.
+- Updated architecture, field registry, package v2 proposal, data snapshot,
+  browser smoke, fixture catalog, and test strategy docs.
+
+Files changed:
+
+- `packages/core/src/readiness/index.ts`
+- `packages/core/src/readiness/index.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/FillingPanel.tsx`
+- `scripts/editor-smoke.mjs`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/DATA_SNAPSHOT_CONTRACT.md`
+- `docs/FIELD_REGISTRY_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/readiness/index.test.ts src/binding/index.test.ts src/dataSnapshot/index.test.ts src/fieldRegistry/index.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- Readiness remains informational in the editor. This does not decide publish,
+  export, package migration, or review-workflow blocking policy.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
+### Surface Package V2 Registry Import Warnings
+
+Goal: Continue Phase G by making package v2 registry readiness visible during
+JSON import without changing the active save/export package format.
+
+Completed:
+
+- Extended `documentImportSuccessMessage(...)` to include registry warning
+  counts when a parsed package reports warning-level field registry issues.
+- Updated JSON import wiring so package v2 missing-definition warnings appear
+  in the toolbar import status.
+- Added focused persistence coverage for the warning status message.
+- Updated package contract, package v2 proposal, fixture catalog, test
+  strategy, and work log docs.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This is still non-blocking readiness feedback. It does not migrate
+  localStorage/export to package v2.
+- `git diff --check` reported only the repository's existing LF-to-CRLF working
+  copy warnings.
+
 ### Add Automated Editor Browser Smoke
 
 Goal: Start Phase 1 of the stability roadmap by turning the most important

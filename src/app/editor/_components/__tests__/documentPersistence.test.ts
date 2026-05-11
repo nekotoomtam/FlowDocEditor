@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createDefaultDocument, DEFAULT_PARAGRAPH_PROPS } from "@/document"
 import type { ParagraphNode } from "@/schema"
+import type { FieldRegistryV1 } from "@/fieldRegistry"
 import {
   CURRENT_DOCUMENT_VERSION,
   CURRENT_PACKAGE_VERSION,
@@ -21,6 +22,21 @@ function firstParagraph(doc: ReturnType<typeof createDefaultDocument>): Paragrap
   const paragraph = Object.values(section.nodes).find((node): node is ParagraphNode => node.type === "paragraph")
   if (!paragraph) throw new Error("missing paragraph")
   return paragraph
+}
+
+function packageV2(doc: ReturnType<typeof createDefaultDocument>, fields: FieldRegistryV1["fields"]) {
+  return {
+    packageVersion: 2,
+    kind: "document",
+    id: doc.document.id,
+    meta: {
+      title: doc.document.meta?.title ?? "Untitled",
+      createdAt: "2026-05-11T00:00:00.000Z",
+      updatedAt: "2026-05-11T00:00:00.000Z",
+    },
+    document: doc,
+    fields: { version: 1, fields },
+  }
 }
 
 describe("document persistence", () => {
@@ -66,7 +82,7 @@ describe("document persistence", () => {
   it("rejects unsupported package versions", () => {
     const doc = createDefaultDocument("Future Package")
     const pack = createDocumentPackage(doc)
-    expect(parsePersistedDocument(JSON.stringify({ ...pack, packageVersion: 2 })))
+    expect(parsePersistedDocument(JSON.stringify({ ...pack, packageVersion: 99 })))
       .toEqual({ ok: false, reason: "unsupported-package-version" })
   })
 
@@ -114,8 +130,66 @@ describe("document persistence", () => {
     const exported = JSON.parse(serializeDocumentPackage(doc))
 
     expect(exported.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
+    expect(exported.packageVersion).toBe(1)
     expect(exported.kind).toBe("document")
     expect(exported.document.document.meta.title).toBe("Download")
+  })
+
+  it("parses package v2 with a field registry while default export stays v1", () => {
+    const doc = createDefaultDocument("Package V2")
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+    const result = parsePersistedDocument(JSON.stringify(packageV2(doc, [
+      { key: "customer.name", fieldType: "text", label: "Customer name", required: true },
+    ])))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.source).toBe("package")
+    expect(result.package?.packageVersion).toBe(2)
+    expect(result.fieldRegistryIssues).toEqual([])
+    expect(JSON.parse(serializeDocumentPackage(result.doc)).packageVersion).toBe(1)
+  })
+
+  it("parses package v2 with missing field definitions as registry warnings", () => {
+    const doc = createDefaultDocument("Package V2 Warnings")
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+    const result = parsePersistedDocument(JSON.stringify(packageV2(doc, [])))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.package?.packageVersion).toBe(2)
+    expect(result.fieldRegistryIssues).toEqual([
+      expect.objectContaining({
+        code: "missing-definition",
+        severity: "warning",
+        key: "customer.name",
+        fieldRefId: "field-customer",
+      }),
+    ])
+  })
+
+  it("rejects package v2 with duplicate registry keys", () => {
+    const doc = createDefaultDocument("Duplicate Registry")
+
+    expect(parsePersistedDocument(JSON.stringify(packageV2(doc, [
+      { key: "customer.name", fieldType: "text" },
+      { key: "customer.name", fieldType: "number" },
+    ])))).toEqual({ ok: false, reason: "invalid-package" })
+  })
+
+  it("rejects package v2 inline fieldRefs that target collection fields", () => {
+    const doc = createDefaultDocument("Collection FieldRef")
+    firstParagraph(doc).children = [
+      { id: "items-field", type: "fieldRef", key: "items", label: "Items" },
+    ]
+
+    expect(parsePersistedDocument(JSON.stringify(packageV2(doc, [
+      { key: "items", fieldType: "collection" },
+    ])))).toEqual({ ok: false, reason: "invalid-package" })
   })
 
   it("round-trips fieldRef inline nodes through package export and import", () => {
@@ -176,6 +250,14 @@ describe("document persistence", () => {
 
   it("maps parse results to concise import status messages", () => {
     expect(documentImportSuccessMessage("package")).toBe("Opened FlowDoc package.")
+    expect(documentImportSuccessMessage("package", [
+      {
+        code: "missing-definition",
+        severity: "warning",
+        key: "customer.name",
+        message: "fieldRef references missing field key",
+      },
+    ])).toBe("Opened FlowDoc package. 1 field warning.")
     expect(documentImportSuccessMessage("legacy-document")).toBe("Opened legacy document JSON.")
     expect(documentParseFailureMessage("invalid-json")).toBe("This file is not valid JSON.")
     expect(documentParseFailureMessage("unsupported-package-version")).toBe("This FlowDoc package version is not supported.")

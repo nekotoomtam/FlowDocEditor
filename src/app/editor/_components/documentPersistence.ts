@@ -1,9 +1,18 @@
 import { assertDocument, normalizeDocument } from "@/document"
+import {
+  hasFieldRegistryErrors,
+  validateFieldRegistryReferences,
+  type FieldDefinitionV1,
+  type FieldRegistryIssue,
+  type FieldRegistryV1,
+  type FieldValueType,
+} from "@/fieldRegistry"
 import type { DocumentNode } from "@/schema"
 
 export const STORAGE_KEY = "flowdoc_document"
 export const CURRENT_DOCUMENT_VERSION = 1
 export const CURRENT_PACKAGE_VERSION = 1
+export const SUPPORTED_PACKAGE_VERSIONS = [1, 2] as const
 
 export interface FlowDocPackageV1 {
   packageVersion: 1
@@ -17,6 +26,24 @@ export interface FlowDocPackageV1 {
   document: DocumentNode
 }
 
+export interface FlowDocPackageV2 {
+  packageVersion: 2
+  kind: "document"
+  id: string
+  meta: {
+    title: string
+    createdAt: string
+    updatedAt: string
+  }
+  document: DocumentNode
+  fields: FieldRegistryV1
+  data?: unknown
+  history?: unknown
+  migrations?: unknown
+}
+
+export type FlowDocPackage = FlowDocPackageV1 | FlowDocPackageV2
+
 export type DocumentParseFailureReason =
   | "empty"
   | "invalid-json"
@@ -26,11 +53,17 @@ export type DocumentParseFailureReason =
   | "invalid-document"
 
 export type DocumentParseResult =
-  | { ok: true; doc: DocumentNode; source: "package" | "legacy-document"; package?: FlowDocPackageV1 }
+  | {
+      ok: true
+      doc: DocumentNode
+      source: "package" | "legacy-document"
+      package?: FlowDocPackage
+      fieldRegistryIssues?: FieldRegistryIssue[]
+    }
   | { ok: false; reason: DocumentParseFailureReason }
 
 export type DocumentPackageMigrationResult =
-  | { ok: true; package: FlowDocPackageV1; source: "package" | "legacy-document" }
+  | { ok: true; package: FlowDocPackage; source: "package" | "legacy-document"; fieldRegistryIssues?: FieldRegistryIssue[] }
   | { ok: false; reason: DocumentParseFailureReason }
 
 export type DocumentStorageResult =
@@ -54,10 +87,17 @@ export function documentParseFailureMessage(reason: DocumentParseFailureReason):
   }
 }
 
-export function documentImportSuccessMessage(source: "package" | "legacy-document"): string {
-  return source === "legacy-document"
+export function documentImportSuccessMessage(
+  source: "package" | "legacy-document",
+  fieldRegistryIssues: FieldRegistryIssue[] = [],
+): string {
+  const baseMessage = source === "legacy-document"
     ? "Opened legacy document JSON."
     : "Opened FlowDoc package."
+  const warningCount = fieldRegistryIssues.filter((issue) => issue.severity === "warning").length
+  if (warningCount === 0) return baseMessage
+
+  return `${baseMessage} ${warningCount} field warning${warningCount === 1 ? "" : "s"}.`
 }
 
 export function makeFlowDocFileName(title: string | null | undefined): string {
@@ -73,6 +113,53 @@ export function makeFlowDocFileName(title: string | null | undefined): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+function isFieldValueType(value: unknown): value is FieldValueType {
+  return value === "text" ||
+    value === "number" ||
+    value === "date" ||
+    value === "boolean" ||
+    value === "enum" ||
+    value === "image" ||
+    value === "collection"
+}
+
+function parseFieldRegistryValue(value: unknown): FieldRegistryV1 | null {
+  if (!isObject(value)) return null
+  if (value["version"] !== 1) return null
+  if (!Array.isArray(value["fields"])) return null
+
+  const fields: FieldDefinitionV1[] = []
+  for (const item of value["fields"]) {
+    if (!isObject(item)) return null
+    const key = item["key"]
+    const fieldType = item["fieldType"]
+    if (typeof key !== "string" || key.length === 0) return null
+    if (!isFieldValueType(fieldType)) return null
+
+    const field: FieldDefinitionV1 = { key, fieldType }
+    if (typeof item["label"] === "string") field.label = item["label"]
+    if (typeof item["required"] === "boolean") field.required = item["required"]
+    if (typeof item["fallback"] === "string") field.fallback = item["fallback"]
+    if (typeof item["description"] === "string") field.description = item["description"]
+    if (typeof item["source"] === "string") field.source = item["source"]
+    if (item["options"] != null) {
+      if (!Array.isArray(item["options"])) return null
+      const options = []
+      for (const option of item["options"]) {
+        if (!isObject(option) || typeof option["value"] !== "string") return null
+        options.push({
+          value: option["value"],
+          ...(typeof option["label"] === "string" ? { label: option["label"] } : {}),
+        })
+      }
+      field.options = options
+    }
+    fields.push(field)
+  }
+
+  return { version: 1, fields }
 }
 
 function parseDocumentValue(value: unknown): Extract<DocumentParseResult, { ok: true }> | Extract<DocumentParseResult, { ok: false }> {
@@ -108,9 +195,79 @@ export function createDocumentPackage(doc: DocumentNode, now = new Date().toISOS
   }
 }
 
+function parsePackageMeta(value: Record<string, unknown>, doc: DocumentNode): FlowDocPackageV1["meta"] {
+  const rawMeta = isObject(value["meta"]) ? value["meta"] : {}
+  const now = new Date().toISOString()
+  return {
+    title: typeof rawMeta["title"] === "string" && rawMeta["title"].length > 0
+      ? rawMeta["title"]
+      : doc.document.meta?.title ?? "Untitled",
+    createdAt: typeof rawMeta["createdAt"] === "string" ? rawMeta["createdAt"] : now,
+    updatedAt: typeof rawMeta["updatedAt"] === "string" ? rawMeta["updatedAt"] : now,
+  }
+}
+
+function parsePackageV1Value(value: Record<string, unknown>): DocumentParseResult {
+  const id = value["id"]
+  if (typeof id !== "string" || id.length === 0) return { ok: false, reason: "invalid-package" }
+  const documentResult = parseDocumentValue(value["document"])
+  if (!documentResult.ok) return documentResult
+  if (id !== documentResult.doc.document.id) {
+    return { ok: false, reason: "invalid-package" }
+  }
+
+  const pack: FlowDocPackageV1 = {
+    packageVersion: 1,
+    kind: "document",
+    id,
+    meta: parsePackageMeta(value, documentResult.doc),
+    document: documentResult.doc,
+  }
+
+  return { ok: true, doc: documentResult.doc, source: "package", package: pack }
+}
+
+function parsePackageV2Value(value: Record<string, unknown>): DocumentParseResult {
+  const id = value["id"]
+  if (typeof id !== "string" || id.length === 0) return { ok: false, reason: "invalid-package" }
+  const documentResult = parseDocumentValue(value["document"])
+  if (!documentResult.ok) return documentResult
+  if (id !== documentResult.doc.document.id) {
+    return { ok: false, reason: "invalid-package" }
+  }
+
+  const fields = parseFieldRegistryValue(value["fields"])
+  if (!fields) return { ok: false, reason: "invalid-package" }
+
+  const fieldRegistryValidation = validateFieldRegistryReferences(documentResult.doc, fields)
+  if (hasFieldRegistryErrors(fieldRegistryValidation)) {
+    return { ok: false, reason: "invalid-package" }
+  }
+
+  const pack: FlowDocPackageV2 = {
+    packageVersion: 2,
+    kind: "document",
+    id,
+    meta: parsePackageMeta(value, documentResult.doc),
+    document: documentResult.doc,
+    fields,
+  }
+  if ("data" in value) pack.data = value["data"]
+  if ("history" in value) pack.history = value["history"]
+  if ("migrations" in value) pack.migrations = value["migrations"]
+
+  return {
+    ok: true,
+    doc: documentResult.doc,
+    source: "package",
+    package: pack,
+    fieldRegistryIssues: fieldRegistryValidation.issues,
+  }
+}
+
 function parsePackageValue(value: unknown): DocumentParseResult {
   if (!isObject(value)) return { ok: false, reason: "invalid-package" }
-  if (value["packageVersion"] !== CURRENT_PACKAGE_VERSION) {
+  if (!SUPPORTED_PACKAGE_VERSIONS.includes(value["packageVersion"] as 1 | 2)) {
     return { ok: false, reason: "unsupported-package-version" }
   }
   if (value["kind"] !== "document") return { ok: false, reason: "invalid-package" }
@@ -118,29 +275,7 @@ function parsePackageValue(value: unknown): DocumentParseResult {
     return { ok: false, reason: "invalid-package" }
   }
 
-  const documentResult = parseDocumentValue(value["document"])
-  if (!documentResult.ok) return documentResult
-  if (value["id"] !== documentResult.doc.document.id) {
-    return { ok: false, reason: "invalid-package" }
-  }
-
-  const rawMeta = isObject(value["meta"]) ? value["meta"] : {}
-  const now = new Date().toISOString()
-  const pack: FlowDocPackageV1 = {
-    packageVersion: CURRENT_PACKAGE_VERSION,
-    kind: "document",
-    id: value["id"],
-    meta: {
-      title: typeof rawMeta["title"] === "string" && rawMeta["title"].length > 0
-        ? rawMeta["title"]
-        : documentResult.doc.document.meta?.title ?? "Untitled",
-      createdAt: typeof rawMeta["createdAt"] === "string" ? rawMeta["createdAt"] : now,
-      updatedAt: typeof rawMeta["updatedAt"] === "string" ? rawMeta["updatedAt"] : now,
-    },
-    document: documentResult.doc,
-  }
-
-  return { ok: true, doc: documentResult.doc, source: "package", package: pack }
+  return value["packageVersion"] === 2 ? parsePackageV2Value(value) : parsePackageV1Value(value)
 }
 
 function parsePersistedValue(value: unknown): DocumentParseResult {
@@ -155,13 +290,20 @@ function migratePersistedValue(value: unknown, now?: string): DocumentPackageMig
     ok: true,
     package: result.package ?? createDocumentPackage(result.doc, now),
     source: result.source,
+    fieldRegistryIssues: result.fieldRegistryIssues,
   }
 }
 
 export function parsePersistedDocument(raw: string | null | undefined): DocumentParseResult {
   const result = migratePersistedDocumentPackage(raw)
   if (!result.ok) return result
-  return { ok: true, doc: result.package.document, source: result.source, package: result.package }
+  return {
+    ok: true,
+    doc: result.package.document,
+    source: result.source,
+    package: result.package,
+    fieldRegistryIssues: result.fieldRegistryIssues,
+  }
 }
 
 export function migratePersistedDocumentPackage(

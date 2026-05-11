@@ -156,8 +156,14 @@ Detailed export/API/renderer rules live in
 Detailed persisted/editor JSON package rules live in
 `docs/FLOWDOC_PACKAGE_CONTRACT.md`.
 
+The proposed next package shape lives in
+`docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`.
+
 Detailed field-key and registry rules live in
 `docs/FIELD_REGISTRY_CONTRACT.md`.
+
+Detailed field-value snapshot rules live in
+`docs/DATA_SNAPSHOT_CONTRACT.md`.
 
 ### Binding
 
@@ -165,6 +171,8 @@ Location:
 
 - `packages/core/src/binding/index.ts`
 - `packages/core/src/fieldRegistry/index.ts`
+- `packages/core/src/dataSnapshot/index.ts`
+- `packages/core/src/readiness/index.ts`
 
 Current role:
 
@@ -174,6 +182,11 @@ Current role:
   documents
 - field registry helpers collect `fieldRef` usages and validate them against a
   registry without making binding strict
+- data snapshot helpers validate scalar field values outside `DocumentNode`
+- snapshot binding accepts `DocumentNode + FieldRegistryV1 + DataSnapshotV1`
+  and returns a temporary resolved document plus validation issues
+- readiness helpers combine document field registry issues and document-scoped
+  data snapshot issues for non-blocking editor feedback
 - repeat regions remain draft/deferred; do not add repeat behavior
   opportunistically while fixing unrelated editor, layout, or export bugs
 
@@ -245,9 +258,11 @@ This foundation intentionally does not include field history, reviewer
 workflow, or binding data yet; those are higher layers that can be added around
 the package later.
 
-The field registry contract is defined now, but `FlowDocPackage v1` still does
-not persist registry/data/history. Those belong to a future package migration,
-not to `DocumentNode`.
+The field registry and data snapshot contracts are defined now, but
+`FlowDocPackage v1` still does not persist registry/data/history. Those belong
+to a future package migration, not to `DocumentNode`. The current v2 proposal
+makes package-level `fields` the first required new layer and leaves snapshot
+package persistence/history deferred.
 
 Meaningful edits should pass through reducer actions and core operations. UI
 components should not manually mutate document structure.

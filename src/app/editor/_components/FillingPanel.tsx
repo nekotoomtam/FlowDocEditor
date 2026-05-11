@@ -1,5 +1,6 @@
+import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
+import type { DocumentDataReadinessIssue } from "@/readiness"
 import type { DocumentNode, TableNode } from "@/schema"
-import type { FieldData } from "@/binding"
 import { SAMPLE_FIELD_REGISTRY } from "@/app/_lib/fieldRegistry"
 
 interface UsedField {
@@ -11,8 +12,9 @@ interface UsedField {
 
 interface Props {
   doc: DocumentNode
-  data: FieldData
-  onChange: (key: string, value: string | number | boolean | null) => void
+  snapshot: DataSnapshotV1
+  readinessIssues?: DocumentDataReadinessIssue[]
+  onChange: (key: string, value: FieldScalarValue) => void
 }
 
 function collectUsedFieldKeys(doc: DocumentNode): Set<string> {
@@ -37,11 +39,8 @@ function collectUsedFieldKeys(doc: DocumentNode): Set<string> {
   return keys
 }
 
-function readFieldValue(data: FieldData, key: string): string {
-  const value = key.split(".").reduce<unknown>((obj, part) => {
-    if (typeof obj !== "object" || obj == null || Array.isArray(obj)) return undefined
-    return (obj as Record<string, unknown>)[part]
-  }, data)
+function readFieldValue(snapshot: DataSnapshotV1, key: string): string {
+  const value = snapshot.values[key]
   return value == null ? "" : String(value)
 }
 
@@ -51,7 +50,9 @@ function fieldInputType(fieldType: string): string {
   return "text"
 }
 
-export function FillingPanel({ doc, data, onChange }: Props) {
+export function FillingPanel({ doc, snapshot, readinessIssues = [], onChange }: Props) {
+  const errorCount = readinessIssues.filter((issue) => issue.severity === "error").length
+  const warningCount = readinessIssues.filter((issue) => issue.severity === "warning").length
   const usedKeys = collectUsedFieldKeys(doc)
   const fields: UsedField[] = SAMPLE_FIELD_REGISTRY
     .filter((field) => usedKeys.has(field.key))
@@ -74,6 +75,34 @@ export function FillingPanel({ doc, data, onChange }: Props) {
         Filling
       </div>
       <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        {readinessIssues.length > 0 && (
+          <div
+            data-testid="filling-readiness"
+            style={{
+              border: `1px solid ${errorCount > 0 ? "#fecaca" : "#fde68a"}`,
+              background: errorCount > 0 ? "#fef2f2" : "#fffbeb",
+              color: errorCount > 0 ? "#991b1b" : "#92400e",
+              borderRadius: 4,
+              padding: "7px 8px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+            }}
+          >
+            <div style={{ fontSize: 10, fontWeight: "bold" }}>
+              {errorCount > 0 ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : `${warningCount} warning${warningCount === 1 ? "" : "s"}`}
+            </div>
+            {readinessIssues.slice(0, 3).map((issue, index) => (
+              <div
+                key={`${issue.source}:${issue.key}:${issue.code}:${index}`}
+                title={issue.message}
+                style={{ fontSize: 10, lineHeight: 1.35, overflow: "hidden", textOverflow: "ellipsis" }}
+              >
+                {issue.key}: {issue.message}
+              </div>
+            ))}
+          </div>
+        )}
         {allFields.length === 0 ? (
           <div style={{ fontSize: 11, color: "#d1d5db" }}>no fields in template</div>
         ) : allFields.map((field) => (
@@ -83,10 +112,10 @@ export function FillingPanel({ doc, data, onChange }: Props) {
             </span>
             <input
               type={fieldInputType(field.fieldType)}
-              value={readFieldValue(data, field.key)}
+              value={readFieldValue(snapshot, field.key)}
               onChange={(e) => {
                 const raw = e.target.value
-                onChange(field.key, field.fieldType === "number" && raw !== "" ? Number(raw) : raw)
+                onChange(field.key, field.fieldType === "number" && raw !== "" ? Number(raw) : raw || null)
               }}
               style={{
                 width: "100%",

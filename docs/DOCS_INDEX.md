@@ -29,7 +29,9 @@ contract, then inspect the code and tests near the change.
 | Engineering boundaries and principles | `docs/ENGINEERING_PRINCIPLES.md` |
 | Test levels and Definition of Done | `docs/TEST_STRATEGY.md` |
 | Persisted/editor JSON package contract | `docs/FLOWDOC_PACKAGE_CONTRACT.md` |
+| Future package v2 proposal | `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md` |
 | Field registry and key rules | `docs/FIELD_REGISTRY_CONTRACT.md` |
+| Field value data snapshots | `docs/DATA_SNAPSHOT_CONTRACT.md` |
 | Browser/manual editor smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Export/API/PDF/DOCX renderer contract | `docs/EXPORT_RENDERER_CONTRACT.md` |
 | Fixture and test coverage catalog | `docs/FIXTURE_CATALOG.md` |
@@ -110,8 +112,12 @@ reflow in Word/LibreOffice.
 Start with:
 
 - `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md` when planning registry, data, history,
+  or migration changes beyond package v1
 - `docs/FIELD_REGISTRY_CONTRACT.md` when the change touches field keys,
   registry shape, data snapshots, or future history
+- `docs/DATA_SNAPSHOT_CONTRACT.md` when the change touches field values,
+  filling data, or future data persistence
 - `docs/ARCHITECTURE_OVERVIEW.md`
 - `docs/ENGINEERING_PRINCIPLES.md`
 - `docs/TEST_STRATEGY.md`
@@ -126,6 +132,9 @@ Start with:
 
 - `docs/FIELD_REGISTRY_CONTRACT.md`
 - `docs/FLOWDOC_PACKAGE_CONTRACT.md`
+- `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md` when the field work needs persistence,
+  data snapshots, or key history
+- `docs/DATA_SNAPSHOT_CONTRACT.md`
 - `docs/ENGINEERING_PRINCIPLES.md`
 - `docs/TEST_STRATEGY.md`
 

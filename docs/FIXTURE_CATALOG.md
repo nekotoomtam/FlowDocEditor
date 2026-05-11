@@ -11,8 +11,8 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 24 core test files / 308 core tests
-- 9 app test files / 97 app tests
+- 26 core test files / 321 core tests
+- 9 app test files / 101 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 `docs/TEST_STRATEGY.md` as the current coverage snapshot until the suite changes.
@@ -41,9 +41,11 @@ Product fixture names should stay visible in test descriptions, such as
 ### Document Model And Operations
 
 - `packages/core/src/binding/index.test.ts`
+- `packages/core/src/dataSnapshot/index.test.ts`
 - `packages/core/src/document/normalize.test.ts`
 - `packages/core/src/document/operations.test.ts`
 - `packages/core/src/fieldRegistry/index.test.ts`
+- `packages/core/src/readiness/index.test.ts`
 
 Protects scalar field binding, authored document validity, normalization
 defaults, table grid operations, and operation-level invariants. Operation
@@ -51,9 +53,13 @@ coverage includes table row/column insertion, deletion cleanup, width
 preservation, header-row clamping, last-row/last-column guards, and inline
 `fieldRef` insertion in body and table-cell paragraphs. Field registry coverage
 collects body/table fieldRef usages and validates duplicate keys, missing
-definitions, and non-inline field targets. Current binding coverage
-intentionally locks scalar `fieldRef` replacement only; repeat and nested
-binding remain deferred.
+definitions, and non-inline field targets. Data snapshot coverage validates
+scalar values, readiness warnings, invalid value types, enum options, and
+unsupported image/collection values. Binding coverage locks scalar `fieldRef`
+replacement from legacy nested data and from flat `DataSnapshotV1` values,
+including snapshot fallback and invalid-value fallback behavior. Readiness
+coverage combines registry issues and document-scoped snapshot issues for
+non-blocking editor feedback; repeat and nested binding remain deferred.
 
 ### Text Measurement
 
@@ -121,7 +127,9 @@ normalize/validate behavior, invalid JSON, unsupported versions, invalid
 package structure, package/document id agreement, current `localStorage` key
 behavior, JSON package serialization, safe package filenames, and import status
 messages. It also covers inline `fieldRef` package round-tripping, legacy raw
-document migration into `FlowDocPackage v1`, and idempotent package v1 migration.
+document migration into `FlowDocPackage v1`, idempotent package v1 migration,
+proposal-aligned package v2 parsing, v2 registry warning propagation, and v2
+registry warning import status, and v2 registry hard-error rejection.
 Real-font drift coverage loads
 `public/fonts/THSarabun.ttf` into Chromium canvas and fontkit, then checks
 representative Thai width parity and no `comparePagination` drift for a Thai
@@ -132,10 +140,11 @@ typing, undo/redo, flicker, and table panel workflows.
 
 - `scripts/editor-smoke.mjs`
 
-Protects the default `/editor` load path with a real browser, a deterministic
-localStorage document fixture, paragraph inline edit commit, undo/redo, table
-cell selection, the property-panel title, and table-cell row/column
-insert/delete controls. It starts its own Next dev server on port `4010` unless
+Protects the default `/editor` load path with a real browser, deterministic
+localStorage document fixtures, paragraph inline edit commit, undo/redo, table
+cell selection, the property-panel title, table-cell row/column insert/delete
+controls, and Fill mode readiness warning/clear behavior for a required used
+field. It starts its own Next dev server on port `4010` unless
 `SMOKE_BASE_URL` is provided.
 
 This is intentionally a focused workflow smoke, not a fixture catalog for every

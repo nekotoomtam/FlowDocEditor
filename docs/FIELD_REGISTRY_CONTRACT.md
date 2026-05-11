@@ -176,12 +176,19 @@ FlowDocPackage v2
   -> package metadata
   -> document: DocumentNode
   -> fields: FieldRegistryV1
-  -> data snapshot (deferred)
+  -> data snapshot (contract implemented; package persistence deferred)
   -> key history (deferred)
 ```
 
 Adding `fields` to a package is a package migration decision, not a
 `DocumentNode` schema change.
+
+The current package v2 proposal in `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`
+recommends making package-level `fields` the first required new v2 layer, while
+leaving data snapshots and key history optional package members until their
+runtime and UX contracts are ready.
+
+Data snapshot value rules live in `docs/DATA_SNAPSHOT_CONTRACT.md`.
 
 ## Test Expectations
 
@@ -194,6 +201,7 @@ Field registry changes should cover:
 - missing definitions produce warnings, not binding failures
 - `image` and `collection` registry definitions cannot be inline field targets
 - sample editor palette definitions stay compatible with the core registry
+- readiness reports combine registry issues with document-scoped snapshot issues
   definition shape
 
 Current coverage lives in:

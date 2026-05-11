@@ -88,6 +88,36 @@ function makeSmokeDocument() {
   }
 }
 
+function makeFillReadinessDocument() {
+  const paragraphNode = paragraph("fill-p1", "")
+  paragraphNode.children = [
+    { id: "fill-t1", type: "text", text: "Customer: " },
+    { id: "fill-f1", type: "fieldRef", key: "customer.name", label: "Customer", fallback: "pending" },
+  ]
+
+  return {
+    version: 1,
+    document: {
+      id: "fill-readiness-doc",
+      meta: { title: "Fill Readiness" },
+      sections: [{
+        id: "fill-section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+        },
+        bodyRootId: "fill-body",
+        nodes: {
+          "fill-body": { id: "fill-body", type: "body", props: {}, childIds: [paragraphNode.id] },
+          [paragraphNode.id]: paragraphNode,
+        },
+      }],
+    },
+  }
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -208,6 +238,13 @@ async function expectPropertyPanelTitle(page, expectedTitle) {
   }, expectedTitle, { timeout: 3000 })
 }
 
+function collectPageErrors(page, consoleErrors, pageErrors) {
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text())
+  })
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+}
+
 async function waitForServer(url, server, timeoutMs = 60000) {
   const startedAt = Date.now()
   let lastError = null
@@ -275,10 +312,7 @@ async function run() {
     const consoleErrors = []
     const pageErrors = []
 
-    page.on("console", (message) => {
-      if (message.type() === "error") consoleErrors.push(message.text())
-    })
-    page.on("pageerror", (error) => pageErrors.push(error.message))
+    collectPageErrors(page, consoleErrors, pageErrors)
 
     await page.addInitScript(({ key, doc }) => {
       window.localStorage.clear()
@@ -354,6 +388,36 @@ async function run() {
     await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
     await waitForVisibleTableCellCount(page, 6)
     await expectNoLayoutError(page)
+
+    const fillPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    collectPageErrors(fillPage, consoleErrors, pageErrors)
+    await fillPage.addInitScript(({ key, doc }) => {
+      window.localStorage.clear()
+      window.localStorage.setItem(key, JSON.stringify(doc))
+    }, { key: STORAGE_KEY, doc: makeFillReadinessDocument() })
+    await fillPage.goto(baseUrl, { waitUntil: "domcontentloaded" })
+    await fillPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
+    await fillPage.getByRole("button", { name: "Fill" }).click()
+    const readiness = fillPage.getByTestId("filling-readiness")
+    await readiness.waitFor({ state: "visible", timeout: 5000 })
+    const readinessText = await readiness.textContent()
+    assert(
+      readinessText?.includes("customer.name") && readinessText.includes("required field"),
+      `expected fill readiness warning for customer.name, got: ${readinessText}`,
+    )
+    await fillPage.getByLabel(/Customer name/).fill("Acme Co")
+    await fillPage.waitForFunction(
+      () => !document.querySelector('[data-testid="filling-readiness"]'),
+      null,
+      { timeout: 5000 },
+    )
+    await fillPage.waitForFunction(
+      () => document.body.textContent?.includes("Customer: Acme Co"),
+      null,
+      { timeout: 5000 },
+    )
+    await expectNoLayoutError(fillPage)
+    await fillPage.close()
 
     assert(pageErrors.length === 0, `page errors during smoke:\n${pageErrors.join("\n")}`)
     assert(consoleErrors.length === 0, `console errors during smoke:\n${consoleErrors.join("\n")}`)

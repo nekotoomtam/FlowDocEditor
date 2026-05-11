@@ -1,4 +1,4 @@
-import type { FieldDefinitionV1 } from "@/fieldRegistry"
+import type { FieldDefinitionV1, FieldRegistryV1 } from "@/fieldRegistry"
 
 export interface EditorFieldDefinition extends FieldDefinitionV1 {
   group?: string
@@ -10,3 +10,8 @@ export const SAMPLE_FIELD_REGISTRY: EditorFieldDefinition[] = [
   { key: "document.date", label: "Document date", fieldType: "date", required: true, group: "Document" },
   { key: "invoice.total", label: "Invoice total", fieldType: "number", group: "Invoice" },
 ]
+
+export const SAMPLE_FIELD_REGISTRY_V1: FieldRegistryV1 = {
+  version: 1,
+  fields: SAMPLE_FIELD_REGISTRY,
+}

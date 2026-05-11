@@ -6,7 +6,10 @@
  * TODO: repeat region, resolver, composite key สำหรับ diff
  */
 
-import type { DocumentNode, LayoutNode, ParagraphNode, TableNode } from "../schema"
+import type { DataSnapshotIssue, DataSnapshotV1, FieldScalarValue } from "../dataSnapshot"
+import { validateDataSnapshot } from "../dataSnapshot"
+import type { FieldRegistryV1 } from "../fieldRegistry"
+import type { DocumentNode, FieldRefInline, LayoutNode, ParagraphNode, TableNode } from "../schema"
 
 // ─── Field Registry ───────────────────────────────────────────────────────────
 
@@ -65,6 +68,16 @@ export interface BindingContext {
   }
 }
 
+export interface SnapshotBindingContext {
+  registry: FieldRegistryV1
+  snapshot: DataSnapshotV1
+}
+
+export interface SnapshotBindingResult {
+  doc: DocumentNode
+  issues: DataSnapshotIssue[]
+}
+
 // resolve scalar field จาก path เช่น "customer.name"
 export function resolveFieldValue(path: string, context: BindingContext): string {
   const parts = path.split(".")
@@ -91,36 +104,59 @@ export function resolveFieldValue(path: string, context: BindingContext): string
   return value != null ? String(value) : ""
 }
 
-function bindParagraph(node: ParagraphNode, context: BindingContext): ParagraphNode {
+type FieldRefValueResolver = (fieldRef: FieldRefInline) => string
+type FieldRefFallbackResolver = (fieldRef: FieldRefInline) => string
+
+function formatSnapshotValue(value: FieldScalarValue | undefined): string {
+  return value == null ? "" : String(value)
+}
+
+function bindParagraphWithResolver(
+  node: ParagraphNode,
+  resolveValue: FieldRefValueResolver,
+  resolveFallback: FieldRefFallbackResolver,
+): ParagraphNode {
   return {
     ...node,
     children: node.children.map((child) => {
       if (child.type !== "fieldRef") return child
-      const value = resolveFieldValue(child.key, context)
+      const value = resolveValue(child)
       return {
         id: child.id,
         type: "text" as const,
-        text: value.length > 0 ? value : child.fallback ?? "",
+        text: value.length > 0 ? value : resolveFallback(child),
       }
     }),
   }
 }
 
-function bindTable(table: TableNode, context: BindingContext): TableNode {
+function bindTableWithResolver(
+  table: TableNode,
+  resolveValue: FieldRefValueResolver,
+  resolveFallback: FieldRefFallbackResolver,
+): TableNode {
   const nodes: TableNode["nodes"] = {}
   Object.entries(table.nodes).forEach(([nodeId, node]) => {
-    nodes[nodeId] = node.type === "paragraph" ? bindParagraph(node, context) : node
+    nodes[nodeId] = node.type === "paragraph" ? bindParagraphWithResolver(node, resolveValue, resolveFallback) : node
   })
   return { ...table, nodes }
 }
 
-function bindLayoutNode(node: LayoutNode, context: BindingContext): LayoutNode {
-  if (node.type === "paragraph") return bindParagraph(node, context)
-  if (node.type === "table") return bindTable(node as unknown as TableNode, context) as unknown as LayoutNode
+function bindLayoutNodeWithResolver(
+  node: LayoutNode,
+  resolveValue: FieldRefValueResolver,
+  resolveFallback: FieldRefFallbackResolver,
+): LayoutNode {
+  if (node.type === "paragraph") return bindParagraphWithResolver(node, resolveValue, resolveFallback)
+  if (node.type === "table") return bindTableWithResolver(node as unknown as TableNode, resolveValue, resolveFallback) as unknown as LayoutNode
   return node
 }
 
-export function bindDocument(template: DocumentNode, context: BindingContext): DocumentNode {
+function bindDocumentWithResolver(
+  template: DocumentNode,
+  resolveValue: FieldRefValueResolver,
+  resolveFallback: FieldRefFallbackResolver,
+): DocumentNode {
   return {
     ...template,
     document: {
@@ -128,10 +164,40 @@ export function bindDocument(template: DocumentNode, context: BindingContext): D
       sections: template.document.sections.map((section) => {
         const nodes: Record<string, LayoutNode> = {}
         Object.entries(section.nodes).forEach(([nodeId, node]) => {
-          nodes[nodeId] = bindLayoutNode(node, context)
+          nodes[nodeId] = bindLayoutNodeWithResolver(node, resolveValue, resolveFallback)
         })
         return { ...section, nodes }
       }),
     },
+  }
+}
+
+export function bindDocument(template: DocumentNode, context: BindingContext): DocumentNode {
+  return bindDocumentWithResolver(
+    template,
+    (fieldRef) => resolveFieldValue(fieldRef.key, context),
+    (fieldRef) => fieldRef.fallback ?? "",
+  )
+}
+
+export function bindDocumentWithSnapshot(
+  template: DocumentNode,
+  context: SnapshotBindingContext,
+): SnapshotBindingResult {
+  const validation = validateDataSnapshot(context.snapshot, context.registry)
+  const fieldDefinitions = new Map(context.registry.fields.map((field) => [field.key, field]))
+  const invalidValueKeys = new Set(validation.issues
+    .filter((issue) => issue.severity === "error")
+    .map((issue) => issue.key))
+
+  return {
+    doc: bindDocumentWithResolver(
+      template,
+      (fieldRef) => invalidValueKeys.has(fieldRef.key)
+        ? ""
+        : formatSnapshotValue(context.snapshot.values[fieldRef.key]),
+      (fieldRef) => fieldRef.fallback ?? fieldDefinitions.get(fieldRef.key)?.fallback ?? "",
+    ),
+    issues: validation.issues,
   }
 }

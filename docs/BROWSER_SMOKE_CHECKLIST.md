@@ -35,7 +35,8 @@ validates a current browser behavior.
 ## Automated Smoke
 
 Run the automated editor smoke when the change touches the default editor load,
-paragraph inline editing, undo/redo, table selection, or the property panel:
+paragraph inline editing, undo/redo, table selection, fill readiness, or the
+property panel:
 
 - Windows PowerShell: `npm.cmd run smoke:editor`
 - Non-Windows: `npm run smoke:editor`
@@ -54,6 +55,8 @@ document into `localStorage`, tolerates either legacy raw `DocumentNode` or
   without a layout error
 - table-cell property-panel row insert/delete updates authored row count
   without a layout error
+- Fill mode shows a required-field readiness warning for an empty used field
+  and clears the warning after the value is filled
 
 Use `SMOKE_BASE_URL=http://localhost:<port>/editor npm run smoke:editor` when
 you intentionally want to run against an already-started server. Use

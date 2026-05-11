@@ -9,6 +9,9 @@ migrations, template persistence, or document package metadata.
 For field-key identity and registry validation rules, also read
 `docs/FIELD_REGISTRY_CONTRACT.md`.
 
+For the proposed next package shape, read
+`docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md`.
+
 ## Decision
 
 FlowDocEditor uses a document-first package envelope for persisted editor JSON:
@@ -22,6 +25,11 @@ FlowDocPackage v1
 Core layout, pagination, API export, and renderers still consume `DocumentNode`
 or `PaginatedDocument`. The package is an app/file boundary, not a layout engine
 input.
+
+Current write format is still `FlowDocPackage v1`. The parser can also read the
+proposal-aligned `FlowDocPackage v2` shape for compatibility tests, but
+localStorage saves and JSON exports still write v1 until v2 migration is
+explicitly enabled.
 
 ## Shape
 
@@ -65,6 +73,7 @@ document-first.
 Persistence/import must:
 
 - accept `FlowDocPackage v1`
+- accept proposal-aligned `FlowDocPackage v2` for parser compatibility
 - accept legacy raw `DocumentNode v1`
 - normalize the document before editor state receives it
 - validate the normalized document with `assertDocument`
@@ -76,7 +85,7 @@ Persistence/import must:
 
 Legacy raw `DocumentNode v1` import exists for compatibility with older saved
 files and test fixtures. New localStorage saves and JSON exports should write
-`FlowDocPackage v1`.
+`FlowDocPackage v1` until the v2 migration is intentionally activated.
 
 ## Ownership
 
@@ -142,6 +151,8 @@ The editor should:
 - show concise import/export status in the toolbar
 - report invalid JSON, unsupported versions, invalid packages, and invalid
   documents as distinct import failures
+- surface package v2 registry readiness warnings in the import success status
+  without blocking the file from opening
 
 PDF/DOCX export still sends a valid `DocumentNode` through:
 
@@ -175,6 +186,8 @@ Current implementation:
 - `migratePersistedDocumentPackage(...)`
 - wraps legacy raw `DocumentNode v1` into `FlowDocPackage v1`
 - canonicalizes `FlowDocPackage v1`
+- parses proposal-aligned `FlowDocPackage v2` without making it the default
+  write format
 - stays idempotent for existing `FlowDocPackage v1`
 
 Until a new package version exists, migration is intentionally small. It should
@@ -184,11 +197,18 @@ The field registry contract already exists for validation and future package
 planning. Persisting a registry in JSON remains a future package version
 decision.
 
+The current v2 proposal recommends adding required package-level `fields` first,
+while leaving `data` and `history` as optional/deferred layers.
+
 ## Test Expectations
 
 Persistence/package changes should cover:
 
 - package parse success
+- package v2 parse success
+- package v2 registry warning propagation
+- package v2 registry warning import status
+- package v2 registry hard-error rejection
 - legacy raw document import
 - package serialize/export shape
 - legacy raw document -> package migration
