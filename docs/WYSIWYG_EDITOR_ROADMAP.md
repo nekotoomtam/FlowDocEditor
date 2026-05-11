@@ -54,6 +54,13 @@ Define the WYSIWYG data contract before adding a custom caret.
 This is the key foundation for caret, hit testing, selection, and cross-page
 editing.
 
+Initial internal helper:
+
+- `src/app/editor/_components/wysiwygCaretMapping.ts`
+- This helper is not wired into default editor interaction yet.
+- It exists so caret mapping behavior can be tested before custom caret UX is
+  enabled.
+
 Define:
 
 - paragraph offset: UTF-16 offset into the full paragraph text.

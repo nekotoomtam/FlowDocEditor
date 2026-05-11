@@ -20,6 +20,43 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Start Internal WYSIWYG Caret Mapping Contract
+
+Goal: Begin Stage 1-2 of the WYSIWYG track with an internal caret mapping
+contract that can be tested without changing the default editor UX.
+
+Completed:
+
+- Added `src/app/editor/_components/wysiwygCaretMapping.ts` as an internal
+  helper for WYSIWYG caret mapping.
+- Defined tested mapping primitives for:
+  - grapheme-safe caret candidates from `PaginatedLine` segments
+  - paragraph offset to page-local caret position
+  - page-local point to paragraph offset
+  - split-fragment boundary selection across pages
+- Kept the helper segment-driven and page-local; it does not store geometry in
+  `DocumentNode` and is not wired into default editor interaction yet.
+- Updated the WYSIWYG roadmap with the internal helper location and opt-in note.
+
+Files changed:
+
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/wysiwygCaretMapping.ts`
+- `src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+
+Notes:
+
+- This is still not a custom caret implementation. It is the contract layer that
+  future collapsed caret and hit testing work can consume.
+
 ### Document WYSIWYG Roadmap And Narrow Pointer Lock
 
 Goal: Lock the future WYSIWYG direction in docs while fixing the failed active
