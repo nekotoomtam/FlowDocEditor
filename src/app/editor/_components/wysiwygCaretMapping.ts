@@ -34,6 +34,18 @@ export interface WysiwygCollapsedCaretOverlay {
   y2: number
 }
 
+export interface WysiwygSelectionOverlayRect {
+  pageIndex: number
+  fragmentIndex?: number
+  lineIndex: number
+  startOffset: number
+  endOffset: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 type LineRange = {
   line: PaginatedLine
   lineIndex: number
@@ -316,4 +328,57 @@ export function resolveParagraphCollapsedCaretOverlay(
 ): WysiwygCollapsedCaretOverlay | null {
   const candidate = resolveParagraphCaretPosition(paginated, nodeId, offset, options)
   return candidate ? collapsedCaretOverlayFromCandidate(candidate) : null
+}
+
+export function resolveSelectionOverlayRectsInFragment(
+  fragment: PageFragment,
+  anchorOffset: number,
+  focusOffset: number,
+  options: WysiwygCaretMappingOptions = {},
+): WysiwygSelectionOverlayRect[] {
+  const startOffset = Math.min(anchorOffset, focusOffset)
+  const endOffset = Math.max(anchorOffset, focusOffset)
+  if (startOffset === endOffset) return []
+
+  const rects: WysiwygSelectionOverlayRect[] = []
+  for (const range of getLineRanges(fragment)) {
+    const start = Math.max(startOffset, range.start)
+    const end = Math.min(endOffset, range.end)
+    if (end <= start) continue
+
+    const candidates = getWysiwygCaretCandidatesForLine(fragment, range.line, range.lineIndex, options)
+    const startCandidate = nearestCandidate(candidates, start)
+    const endCandidate = nearestCandidate(candidates, end)
+    if (!startCandidate || !endCandidate) continue
+
+    const x = Math.min(startCandidate.x, endCandidate.x)
+    const width = Math.abs(endCandidate.x - startCandidate.x)
+    if (width <= 0) continue
+
+    rects.push({
+      pageIndex: fragment.pageIndex,
+      fragmentIndex: fragment.fragmentIndex,
+      lineIndex: range.lineIndex,
+      startOffset: startCandidate.offset,
+      endOffset: endCandidate.offset,
+      x,
+      y: range.line.y,
+      width,
+      height: range.line.height,
+    })
+  }
+
+  return rects
+}
+
+export function resolveParagraphSelectionOverlayRects(
+  paginated: PaginatedDocument,
+  nodeId: string,
+  anchorOffset: number,
+  focusOffset: number,
+  options: WysiwygCaretMappingOptions = {},
+): WysiwygSelectionOverlayRect[] {
+  return paragraphFragments(paginated, nodeId).flatMap((fragment) =>
+    resolveSelectionOverlayRectsInFragment(fragment, anchorOffset, focusOffset, options),
+  )
 }

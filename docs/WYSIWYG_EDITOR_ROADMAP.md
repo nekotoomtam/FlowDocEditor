@@ -120,6 +120,13 @@ Initial activation:
 
 Draw selection highlight from paragraph offset ranges.
 
+Initial internal helper:
+
+- `resolveSelectionOverlayRectsInFragment(...)`
+- `resolveParagraphSelectionOverlayRects(...)`
+- These helpers return page-local highlight rectangles, but drag selection,
+  clipboard behavior, and visible editor highlights are still deferred.
+
 - Start with a single-page paragraph.
 - Then support multi-line within a paragraph.
 - Then support split fragments across pages.

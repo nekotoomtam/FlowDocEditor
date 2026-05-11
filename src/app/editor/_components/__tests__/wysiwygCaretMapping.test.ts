@@ -8,6 +8,8 @@ import {
   resolveCollapsedCaretOverlayInFragment,
   resolveParagraphCollapsedCaretOverlay,
   resolveParagraphCaretPosition,
+  resolveParagraphSelectionOverlayRects,
+  resolveSelectionOverlayRectsInFragment,
 } from "../wysiwygCaretMapping"
 
 function makeLine(overrides: Partial<PaginatedLine> = {}): PaginatedLine {
@@ -300,5 +302,167 @@ describe("WYSIWYG caret mapping contract", () => {
       x2: 30,
       y2: 56,
     })
+  })
+
+  it("resolves single-line selection overlay geometry", () => {
+    const fragment = makeFragment({
+      lines: [makeLine({
+        text: "abcd",
+        width: 40,
+        segments: [{
+          kind: "word",
+          text: "abcd",
+          start: 0,
+          end: 4,
+          x: 0,
+          width: 40,
+          breakableAfter: false,
+        }],
+      })],
+    })
+
+    const rects = resolveSelectionOverlayRectsInFragment(fragment, 1, 3, { textMeasurer: fixedWidthMeasurer })
+
+    expect(rects).toEqual([{
+      pageIndex: 0,
+      fragmentIndex: 0,
+      lineIndex: 0,
+      startOffset: 1,
+      endOffset: 3,
+      x: 20,
+      y: 20,
+      width: 20,
+      height: 12,
+    }])
+  })
+
+  it("resolves multi-line selection overlay geometry inside one fragment", () => {
+    const fragment = makeFragment({
+      lines: [
+        makeLine({
+          text: "abcd",
+          y: 20,
+          width: 40,
+          segments: [{
+            kind: "word",
+            text: "abcd",
+            start: 0,
+            end: 4,
+            x: 0,
+            width: 40,
+            breakableAfter: false,
+          }],
+        }),
+        makeLine({
+          text: "efgh",
+          y: 34,
+          width: 40,
+          segments: [{
+            kind: "word",
+            text: "efgh",
+            start: 4,
+            end: 8,
+            x: 0,
+            width: 40,
+            breakableAfter: false,
+          }],
+        }),
+      ],
+    })
+
+    const rects = resolveSelectionOverlayRectsInFragment(fragment, 2, 6, { textMeasurer: fixedWidthMeasurer })
+
+    expect(rects).toEqual([
+      {
+        pageIndex: 0,
+        fragmentIndex: 0,
+        lineIndex: 0,
+        startOffset: 2,
+        endOffset: 4,
+        x: 30,
+        y: 20,
+        width: 20,
+        height: 12,
+      },
+      {
+        pageIndex: 0,
+        fragmentIndex: 0,
+        lineIndex: 1,
+        startOffset: 4,
+        endOffset: 6,
+        x: 10,
+        y: 34,
+        width: 20,
+        height: 12,
+      },
+    ])
+  })
+
+  it("resolves selection overlay geometry across split paragraph fragments", () => {
+    const first = makeFragment({
+      pageIndex: 0,
+      fragmentIndex: 0,
+      lines: [makeLine({
+        text: "abcd",
+        x: 10,
+        y: 20,
+        width: 40,
+        segments: [{
+          kind: "word",
+          text: "abcd",
+          start: 0,
+          end: 4,
+          x: 0,
+          width: 40,
+          breakableAfter: false,
+        }],
+      })],
+    })
+    const second = makeFragment({
+      pageIndex: 1,
+      fragmentIndex: 1,
+      lines: [makeLine({
+        text: "efgh",
+        x: 30,
+        y: 40,
+        width: 40,
+        segments: [{
+          kind: "word",
+          text: "efgh",
+          start: 4,
+          end: 8,
+          x: 0,
+          width: 40,
+          breakableAfter: false,
+        }],
+      })],
+    })
+
+    const rects = resolveParagraphSelectionOverlayRects(makeDoc([first, second]), "p1", 2, 6, { textMeasurer: fixedWidthMeasurer })
+
+    expect(rects).toEqual([
+      {
+        pageIndex: 0,
+        fragmentIndex: 0,
+        lineIndex: 0,
+        startOffset: 2,
+        endOffset: 4,
+        x: 30,
+        y: 20,
+        width: 20,
+        height: 12,
+      },
+      {
+        pageIndex: 1,
+        fragmentIndex: 1,
+        lineIndex: 0,
+        startOffset: 4,
+        endOffset: 6,
+        x: 30,
+        y: 40,
+        width: 20,
+        height: 12,
+      },
+    ])
   })
 })

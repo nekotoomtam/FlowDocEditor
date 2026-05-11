@@ -20,6 +20,37 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Add Internal Selection Overlay Geometry
+
+Goal: Continue Stage 5 as an internal geometry contract for selection
+highlights without enabling visible selection UI or clipboard behavior.
+
+Completed:
+
+- Added selection overlay rectangle helpers to `wysiwygCaretMapping.ts`.
+- Covered single-line, multi-line, and split-fragment paragraph selection
+  geometry in focused tests.
+- Updated the WYSIWYG roadmap to mark selection overlay geometry as internal
+  only, with drag selection and clipboard behavior still deferred.
+
+Files changed:
+
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WORK_LOG.md`
+- `src/app/editor/_components/wysiwygCaretMapping.ts`
+- `src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+- `npm.cmd test`
+
+Notes:
+
+- This does not render visible selection highlights and does not change native
+  textarea selection behavior.
+
 ### Activate WYSIWYG Point-To-Offset Hit Testing
 
 Goal: Start Stage 4 by routing paragraph pointer hit testing through the new
