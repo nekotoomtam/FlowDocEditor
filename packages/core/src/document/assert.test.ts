@@ -45,6 +45,29 @@ function tableDoc(table: TableNode): DocumentNode {
   }
 }
 
+function bodyDoc(nodes: Record<string, LayoutNode>, childIds: string[]): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+        },
+        bodyRootId: "body",
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds },
+          ...nodes,
+        },
+      }],
+    },
+  }
+}
+
 function cell(id: string, childId: string, props: TableCellNode["props"] = {}): TableCellNode {
   return { id, type: "table-cell", props, childIds: [childId] }
 }
@@ -116,5 +139,13 @@ describe("assertDocument table invariants", () => {
 
     expect(() => assertDocument(tableDoc(table))).toThrow(DocumentAssertionError)
     expect(() => assertDocument(tableDoc(table))).toThrow("headerRowCount cannot exceed table row count")
+  })
+
+  it("allows authored toc blocks used by report fixtures", () => {
+    const doc = bodyDoc({
+      toc: { id: "toc", type: "toc", props: { title: "สารบัญ" } },
+    }, ["toc"])
+
+    expect(() => assertDocument(doc)).not.toThrow()
   })
 })

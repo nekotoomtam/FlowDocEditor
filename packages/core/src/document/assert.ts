@@ -273,8 +273,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
 
       // Tree law enforcement
       if (node.type === "body") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "table") {
-          fail(childPath, `body child must be paragraph, row, spacer, or table — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "table" && child.type !== "toc") {
+          fail(childPath, `body child must be paragraph, row, spacer, table, or toc — got "${child.type}"`)
         }
       }
 
@@ -289,8 +289,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
       }
 
       if (node.type === "stack") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "table") {
-          fail(childPath, `stack child must be paragraph, row, spacer, or table — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "table" && child.type !== "toc") {
+          fail(childPath, `stack child must be paragraph, row, spacer, table, or toc — got "${child.type}"`)
         }
       }
 

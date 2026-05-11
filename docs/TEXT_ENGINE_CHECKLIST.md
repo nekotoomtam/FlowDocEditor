@@ -87,7 +87,7 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
   - `/api/export` now also sets `X-FlowDoc-Font: fallback` header when font is
     missing, matching paginate route behavior. Previously export fell back silently
     with no observable signal to the caller.
-- [x] Add drift fixtures for Thai/page-boundary cases (Level 1 — mock measurers).
+- [x] Add drift fixtures for Thai/page-boundary cases.
   - Covered by the "Thai-specific and near-boundary" describe block in
     `drift.test.ts`:
     - Thai + English mixed text crosses line boundary (browser 1 line, server 2 lines).
@@ -96,8 +96,17 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
     - Thai + digits mixture drifts at line boundary.
   - Tests use mock measurers (browser=narrower, server=wider) consistent with existing drift tests.
     No real font needed; all cases are deterministic.
-  - Level 2 (real fontkit + real default font with `it.skipIf`) deferred until font is
-    reliably available in CI or specific Thai layout regressions are observed in production.
+  - Level 2 real-font coverage is now covered by
+    `src/app/editor/_components/__tests__/realFontDrift.test.ts`:
+    - loads runtime `public/fonts/THSarabun.ttf` into Chromium canvas and
+      fontkit from the same font bytes.
+    - checks representative Thai/mixed/long-token width parity within a
+      sub-point tolerance.
+    - paginates a representative Thai document through browser-canvas metrics
+      and server fontkit metrics, then asserts `comparePagination` reports no
+      line, page-break, continuation, or geometry drift.
+    - skips only when the runtime font file or Playwright Chromium runtime is
+      unavailable.
 - [x] Separate preview drift from authoritative failure.
   - Server/export `assertPaginatedDocument` failure returns HTTP 500 and blocks export;
     already done in `/api/paginate` and `/api/export`.

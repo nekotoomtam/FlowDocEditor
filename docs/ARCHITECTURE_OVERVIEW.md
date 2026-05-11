@@ -31,6 +31,7 @@ Location:
 - `src/app/editor/_components/PropertyPanel.tsx`
 - `src/app/editor/_components/comparePagination.ts`
 - `src/app/editor/_components/browserTextMeasurer.ts`
+- `src/app/editor/_components/documentPersistence.ts`
 
 Responsibilities:
 
@@ -40,6 +41,9 @@ Responsibilities:
 - provide fast browser-measured preview during interaction
 - reconcile to server/API pagination for authoritative layout status
 - expose document operations through UI controls
+- persist/import/export editor JSON as document-first `FlowDocPackage v1`
+- parse, normalize, and validate package documents before they enter editor
+  state, while still accepting legacy raw `DocumentNode v1` imports
 
 Non-responsibilities:
 
@@ -217,6 +221,20 @@ Editor document + format
 - `selectedNodeId`: selected authored node
 - `drag`, resize, and margin interaction state
 - inline edit state and transaction snapshot
+
+Persistent editor JSON is now document-first `FlowDocPackage v1`:
+
+```txt
+FlowDocPackage v1
+  -> package metadata
+  -> document: DocumentNode v1
+```
+
+The editor unwraps the package before editing. Core layout, pagination, API
+export, and renderers continue to consume `DocumentNode` / `PaginatedDocument`.
+This foundation intentionally does not include field history, reviewer
+workflow, or binding data yet; those are higher layers that can be added around
+the package later.
 
 Meaningful edits should pass through reducer actions and core operations. UI
 components should not manually mutate document structure.

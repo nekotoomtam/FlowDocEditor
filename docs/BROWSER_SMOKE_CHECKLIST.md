@@ -32,6 +32,33 @@ validates a current browser behavior.
 - Keep the browser scenario small. The goal is to check the main user-facing
   risk, not to retest the whole application.
 
+## Automated Smoke
+
+Run the automated editor smoke when the change touches the default editor load,
+paragraph inline editing, undo/redo, table selection, or the property panel:
+
+- Windows PowerShell: `npm.cmd run smoke:editor`
+- Non-Windows: `npm run smoke:editor`
+
+The script starts an isolated Next dev server on port `4010`, loads a fixture
+document into `localStorage`, tolerates either legacy raw `DocumentNode` or
+`FlowDocPackage v1` storage after autosave, then verifies:
+
+- editor shell, toolbar, canvas, and first page render
+- no unexpected layout error badge is visible
+- paragraph inline edit commits multiline text
+- undo and redo restore the expected paragraph text
+- clicking inside a table cell selects the parent `table-cell` and opens that
+  property panel
+
+Use `SMOKE_BASE_URL=http://localhost:<port>/editor npm run smoke:editor` when
+you intentionally want to run against an already-started server. Use
+`SMOKE_PORT=<port>` when port `4010` is unavailable.
+
+This automated smoke is still focused coverage. It does not replace manual
+checks for perceived flicker, scroll feel, drag interactions, export artifacts,
+or PDF/editor visual parity.
+
 ## Smoke Sets
 
 ### Load And Status

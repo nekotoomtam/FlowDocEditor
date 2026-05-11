@@ -163,9 +163,10 @@ Choose the smallest verification that protects the changed layer.
   - move any layout measurement, pagination, or schema interpretation back to
     core pagination/API before merging
 
-Current automated coverage includes PDF/DOCX smoke and multi-section DOCX
-structure tests. Missing coverage includes pixel-level PDF/editor parity and
-deeper DOCX semantic style checks.
+Current automated coverage includes API route contract smoke, PDF/DOCX smoke,
+product PDF page-count parity smoke, product DOCX table-row structure smoke,
+and multi-section DOCX structure tests. Missing coverage includes pixel-level
+PDF/editor parity and deeper DOCX semantic style checks.
 
 ## Deferred Work
 

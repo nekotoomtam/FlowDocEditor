@@ -315,6 +315,10 @@ gaps.
 - [x] `customs-basic-table`: 2-page table, repeated header, page footer.
   - Covered by `product fixture — customs-basic-table` in
     `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
+- [x] `customs-page-count-golden`: exact customs table page count, repeated
+  header count, footer page numbers, and fixed column geometry.
+  - Covered by `product fixture — customs-page-count-golden` in
+    `packages/core/src/pagination/__tests__/productGolden.test.ts`.
 - [x] `customs-rowspan-boundary`: rowspan group near page bottom.
   - Covered by `product fixture — customs-rowspan-boundary` in
     `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
@@ -325,6 +329,10 @@ gaps.
 - [x] `report-cover-toc-body`: cover, TOC, body restart at page 1.
   - Covered by `product fixture — report-cover-toc-body` in
     `packages/core/src/renderer/__tests__/multiSection.test.ts`.
+- [x] `report-page-count-golden`: exact cover/TOC/body page counts, restarted
+  body footer page numbers, and long paragraph continuation ranges.
+  - Covered by `product fixture — report-page-count-golden` in
+    `packages/core/src/pagination/__tests__/productGolden.test.ts`.
 - [x] `report-long-thai-paragraph`: Thai paragraph split across pages.
   - Covered by `product fixture — report-long-thai-paragraph` in
     `packages/core/src/pagination/__tests__/paginator.test.ts`.
@@ -340,11 +348,13 @@ gaps.
 | Requirement | Fixture/Test | Coverage Level |
 |---|---|---|
 | Customs multi-page table, repeated header, footer page number | `customs-basic-table` / `tablePagination.test.ts` | Structural pagination |
+| Customs exact page count, repeated header count, footer page numbers, fixed column geometry | `customs-page-count-golden` / `productGolden.test.ts` | Product pagination golden |
 | Customs rowspan group near page boundary | `customs-rowspan-boundary` / `tablePagination.test.ts` | Structural pagination |
 | Customs breakable uneven row without duplicated short cells and with line-slice metadata | `customs-breakable-row-uneven-cells` + table-cell metadata tests / `tablePagination.test.ts` | Structural pagination |
 | Customs table column insert/delete preserves total table width | table operation width tests / `tablePagination.test.ts` | Structural operation |
 | Customs table cell can be selected and edited from the canvas | browser table-cell property-panel check | Manual editor UX |
 | Report cover + TOC + body restart numbering | `report-cover-toc-body` / `multiSection.test.ts` | Structural pagination |
+| Report exact cover/TOC/body page counts, restarted footer page numbers, long paragraph continuation ranges | `report-page-count-golden` / `productGolden.test.ts` | Product pagination golden |
 | Report long Thai paragraph split | `report-long-thai-paragraph` / `paginator.test.ts` | Structural pagination |
 | Report heading stays with next paragraph | `report-keep-with-next` / `keepWithNext.test.ts` | Structural pagination |
 | Row/column paragraph currently remains atomic with the row | `rowStack.test.ts` | Structural pagination |

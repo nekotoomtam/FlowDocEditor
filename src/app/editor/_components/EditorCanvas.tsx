@@ -225,6 +225,8 @@ function PageView({
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
     <svg
       ref={(el) => setPageRef(pageKey, el)}
+      data-testid="editor-page"
+      data-page-index={page.index}
       width={W} height={H}
       overflow="visible"
       style={{ border: "1px solid #d1d5db", background: "white", display: "block" }}
@@ -365,6 +367,10 @@ function PageView({
         return (
           <g
             key={fragmentKey}
+            data-testid="editor-fragment"
+            data-node-id={f.nodeId}
+            data-node-type={f.nodeType}
+            data-page-index={f.pageIndex}
             onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
@@ -628,7 +634,7 @@ export function EditorCanvas({
   }, [autoFitScale, onScaleChange, pageWidth])
 
   return (
-    <div ref={containerRef} style={{ flex: 1, overflow: "auto", padding: 24, background: "#f3f4f6" }}>
+    <div ref={containerRef} data-testid="editor-canvas" style={{ flex: 1, overflow: "auto", padding: 24, background: "#f3f4f6" }}>
       <div style={{ minWidth: scaledPageWidth + 96 }}>
         {sections.map((section, si) => (
           <div key={section.sectionId ?? si} style={{ margin: "0 auto 32px", width: scaledPageWidth }}>

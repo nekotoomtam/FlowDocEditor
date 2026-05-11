@@ -26,6 +26,7 @@ import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import { comparePagination } from "./comparePagination"
+import { loadDocumentFromStorage, parsePersistedDocument, saveDocumentToStorage, serializeDocumentPackage } from "./documentPersistence"
 import type { DriftReport } from "./comparePagination"
 import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
 import { decideInlineEditStart, shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
@@ -152,22 +153,13 @@ type EditorAction =
   | { type: "MERGE_PARAGRAPH"; nodeId: string; history?: HistoryEntry }
   | { type: "CLEAR_MERGE_RESULT" }
 
-// ─── Persistence ─────────────────────────────────────────────────────────────
-
-const STORAGE_KEY = "flowdoc_document"
-
 function saveToStorage(doc: DocumentNode): void {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(doc)) } catch { /* full / disabled */ }
+  saveDocumentToStorage(localStorage, doc)
 }
 
 function loadFromStorage(): DocumentNode | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (parsed?.version === 1 && Array.isArray(parsed?.document?.sections)) return parsed as DocumentNode
-    return null
-  } catch { return null }
+  const result = loadDocumentFromStorage(localStorage)
+  return result.ok ? result.doc : null
 }
 
 function paginate(doc: DocumentNode): PaginatedDocument {
@@ -755,10 +747,10 @@ export default function EditorShell() {
     finalizeInlineEditBeforeAction()
     const doc = docRef.current
     const title = doc.document.meta?.title ?? "document"
-    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" })
+    const blob = new Blob([serializeDocumentPackage(doc)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
-    a.href = url; a.download = `${title}.json`
+    a.href = url; a.download = `${title}.flowdoc.json`
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 100)
   }, [finalizeInlineEditBeforeAction])
@@ -769,9 +761,9 @@ export default function EditorShell() {
     const reader = new FileReader()
     reader.onload = (ev) => {
       try {
-        const parsed = JSON.parse(ev.target?.result as string)
-        if (parsed?.version === 1 && Array.isArray(parsed?.document?.sections)) {
-          const doc = parsed as DocumentNode
+        const result = parsePersistedDocument(ev.target?.result as string)
+        if (result.ok) {
+          const doc = result.doc
           resetInlineEditStateForDocumentReplace()
           dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
         }
@@ -1539,6 +1531,7 @@ export default function EditorShell() {
   return (
     <div
       ref={editorRootRef}
+      data-testid="editor-shell"
       style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -1547,7 +1540,7 @@ export default function EditorShell() {
       tabIndex={-1}
     >
       {/* Toolbar */}
-      <div style={{ padding: "10px 20px", background: "white", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+      <div data-testid="editor-toolbar" style={{ padding: "10px 20px", background: "white", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <span style={{ fontSize: 13, fontWeight: "bold", color: "#111827" }}>FlowDoc Editor</span>
         {/* Undo / Redo */}
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -1664,7 +1657,7 @@ export default function EditorShell() {
             </span>
           )}
           {layoutError && (
-            <span title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help" }}>
+            <span data-testid="layout-error-badge" title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help" }}>
               ⚠ layout error
             </span>
           )}

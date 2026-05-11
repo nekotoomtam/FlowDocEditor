@@ -108,7 +108,7 @@ export function PropertyPanel({ doc, selectedNodeId, onUpdateProps, onUpdateText
   return (
     <div style={{ background: "white", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {/* Header */}
-      <div style={{ padding: "8px 14px", fontSize: 10, fontWeight: "bold", color: "#9ca3af", borderBottom: "1px solid #f3f4f6", background: "#fafafa", textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0 }}>
+      <div data-testid="property-panel-title" style={{ padding: "8px 14px", fontSize: 10, fontWeight: "bold", color: "#9ca3af", borderBottom: "1px solid #f3f4f6", background: "#fafafa", textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0 }}>
         {node.type}
       </div>
 

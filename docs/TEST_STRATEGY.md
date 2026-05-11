@@ -16,6 +16,22 @@ output. Tests should protect both:
 
 ## Test Levels
 
+### Level 0: API Route Contract Smoke
+
+Use for export or pagination route boundary changes.
+
+Protects:
+
+- invalid JSON and invalid format responses
+- authored document validation before pagination
+- asserted paginated JSON from `/api/paginate`
+- PDF/DOCX response headers and readable artifact bytes from `/api/export`
+
+Typical command:
+
+- focused app API route test
+- full app test command when route behavior changes
+
 ### Level 1: Schema, Normalize, And Operation Tests
 
 Use for document model and core operation changes.
@@ -27,6 +43,8 @@ Protects:
 - paragraph split/merge behavior
 - authored prop normalization
 - no invalid documents from operations
+- document-first package persistence/import paths normalize before entering
+  editor state
 
 Typical commands:
 
@@ -62,8 +80,10 @@ Protects:
 
 - renderers accept the expected fragment types
 - PDF generation does not throw and emits a PDF header
+- product PDF page count matches the authoritative paginated output
 - DOCX generation does not throw and emits a ZIP header
 - multi-section structure remains serializable
+- product DOCX table structure is present in generated XML
 
 Renderer smoke tests do not prove pixel-perfect output. PDF/editor visual parity
 and DOCX semantic style checks are separate future coverage.
@@ -90,6 +110,8 @@ Use for editor UX changes.
 
 Detailed editor interaction expectations live in `docs/EDITOR_UX_CONTRACT.md`.
 Focused manual/browser steps live in `docs/BROWSER_SMOKE_CHECKLIST.md`.
+The first automated browser smoke lives in `scripts/editor-smoke.mjs` and runs
+with `npm.cmd run smoke:editor` on Windows PowerShell.
 
 Protects what automated unit tests often miss:
 
@@ -133,13 +155,14 @@ pass.
 |---|---|
 | Docs only | `git diff --check` |
 | UI copy or minor panel wiring | type-check; browser check if interaction changed |
-| Editor interaction behavior | type-check; focused app tests if available; browser smoke |
-| Editor state race or reconciliation | type-check; focused app tests if available; browser smoke using the editor state race set |
+| Editor interaction behavior | type-check; focused app tests if available; `npm.cmd run smoke:editor`; manual browser smoke for interaction not covered by the script |
+| Editor state race or reconciliation | type-check; focused app tests if available; `npm.cmd run smoke:editor`; manual browser smoke using the editor state race set |
+| Persistence or JSON import | focused persistence tests; type-check; browser smoke if editor load/import/export behavior changed |
 | Core document operation | focused core test; full test command for meaningful behavior risk |
 | Text measurement or line breaking | focused text/layout tests; full test command; update text docs |
 | Pagination/page-break behavior | focused pagination test; full test command; update cross-page/checklist docs |
 | Table editing or table pagination | focused table pagination/operation tests; full test command; browser check for editor UX; update table contract/checklist |
-| Renderer/export behavior | focused renderer tests; export smoke; document accepted fidelity limits |
+| Renderer/export behavior | focused renderer tests; API route contract smoke if route behavior changed; document accepted fidelity limits |
 | Product scenario change | update `docs/PRODUCT_SCENARIOS.md`; add or update fixture coverage |
 
 ## Definition Of Done
@@ -159,8 +182,9 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  20 core test files / 285 core tests, plus 2 app test files / 21 app tests.
-- Product scenarios have executable fixtures for the main customs/report cases.
+  23 core test files / 295 core tests, plus 9 app test files / 91 app tests.
+- Product scenarios have executable fixtures for the main customs/report cases,
+  including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
 - Binding has focused scalar `fieldRef` contract coverage for missing values,
   fallbacks, table-cell paragraphs, non-mutation, and non-strict registry
@@ -169,14 +193,25 @@ Current strengths:
   spacer-containing cells, padded cells, tall repeated headers, and continuation
   line ranges.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage.
+- Product export golden smoke protects PDF page-count parity for customs/report
+  fixtures and DOCX table row structure for the customs fixture.
+- API route contract smoke protects `/api/paginate` and `/api/export` status,
+  headers, and artifact readability.
+- Document package persistence coverage protects `FlowDocPackage v1`,
+  legacy raw `DocumentNode v1` import, localStorage save/load, JSON package
+  serialization, normalize, and validation behavior.
 - App-level tests cover drift and editor helper behavior.
-- Browser checks are being used for editor feel where automation coverage is
-  still light.
+- Real-font Thai drift coverage compares Chromium canvas measurement and
+  fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.
+- Automated browser smoke now protects default editor load, paragraph inline
+  edit commit, undo/redo, table-cell selection, and the property-panel title.
+- Manual browser checks are still used for editor feel where automation
+  coverage is light.
 
 Known gaps:
 
 - No visual regression suite for PDF/editor parity yet.
-- No automated browser regression suite for key editor workflows yet.
+- No broad automated browser regression suite for every key editor workflow yet.
 - DOCX semantic style coverage is still limited.
 - Some editor UX qualities, such as flicker or perceived smoothness, still rely
   on manual/browser smoke checks.
@@ -211,6 +246,9 @@ Avoid:
 - App tests only:
   - Windows PowerShell: `npm.cmd run test:app`
   - Non-Windows: `npm run test:app`
+- Automated editor smoke:
+  - Windows PowerShell: `npm.cmd run smoke:editor`
+  - Non-Windows: `npm run smoke:editor`
 - Core tests only:
   - Windows PowerShell: `npm.cmd run test -w packages/core`
   - Non-Windows: `npm run test -w packages/core`

@@ -20,6 +20,325 @@ Each entry should include:
 
 ## 2026-05-11
 
+### Adopt Document-First FlowDocPackage V1
+
+Goal: Apply the product decision to choose the package/envelope direction while
+keeping this implementation focused on the document foundation only.
+
+Completed:
+
+- Added document-first `FlowDocPackage v1` support in editor persistence.
+- Kept core editing/layout/export APIs working with `DocumentNode`; the package
+  is the persisted/import/export JSON shape, not the layout engine input.
+- Changed localStorage save to store a package with `packageVersion: 1`,
+  `kind: "document"`, package metadata, and the underlying `DocumentNode`.
+- Changed JSON export to emit a package and download as `*.flowdoc.json`.
+- Kept legacy raw `DocumentNode v1` import/load support so existing saved JSON
+  and smoke fixtures still work.
+- Updated the automated editor smoke script so its localStorage assertions can
+  read either legacy raw documents or `FlowDocPackage v1` after autosave.
+- Added package parser tests for package JSON, legacy raw document JSON,
+  unsupported document/package versions, invalid package shape, invalid
+  document structure, localStorage behavior, and JSON package serialization.
+- Updated architecture, fixture catalog, and test strategy docs to document the
+  new document-first package boundary.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `scripts/editor-smoke.mjs`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This intentionally does not add field registry, data versions, key-based
+  history, reviewer workflow, or binding-data persistence yet. Those remain
+  higher layers that can be built on top of the package foundation.
+
+### Add Automated Editor Browser Smoke
+
+Goal: Start Phase 1 of the stability roadmap by turning the most important
+manual editor smoke path into a repeatable browser check.
+
+Completed:
+
+- Added Playwright as a dev dependency and installed the Chromium browser
+  runtime for local smoke execution.
+- Added `npm.cmd run smoke:editor` / `npm run smoke:editor`.
+- Added `scripts/editor-smoke.mjs`, which starts an isolated Next dev server on
+  port `4010`, seeds a deterministic editor document in `localStorage`, and
+  checks the real `/editor` route through Chromium.
+- Covered editor load/status, paragraph multiline inline edit commit,
+  undo/redo, and table-cell selection into the property panel.
+- Added stable `data-testid` hooks for the editor shell, toolbar, canvas,
+  page/fragments, layout error badge, and property-panel title.
+- Updated the browser smoke checklist, test strategy, and fixture catalog so
+  future sessions know what the automated smoke covers and what still requires
+  manual inspection.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `scripts/editor-smoke.mjs`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run smoke:editor`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- The smoke is deliberately focused coverage. It does not replace visual
+  regression, PDF/editor parity checks, drag/resize interaction checks, or
+  manual review for perceived flicker.
+- The script uses `localhost` by default because Next.js 16 dev resources block
+  the `127.0.0.1` origin unless it is explicitly allowed in Next config.
+
+### Add Real-Font Thai Drift Fixtures
+
+Goal: Start Phase 2 by checking the actual runtime Thai font path, not only
+mock browser/server width differences.
+
+Completed:
+
+- Added `realFontDrift.test.ts` under the app component tests.
+- Loaded `public/fonts/THSarabun.ttf` into both Chromium canvas and the
+  server-side fontkit measurer from the same font bytes.
+- Added representative width parity coverage for Thai, mixed Thai/English,
+  digits, long Thai tokens, and long ASCII text.
+- Added a browser-canvas pagination helper that fills a synchronous measurement
+  cache from Chromium, allowing the existing core paginator to run unchanged.
+- Compared browser-canvas pagination and server fontkit pagination through
+  `comparePagination`, asserting no line-count, page-break, continuation, or
+  geometry drift for a representative Thai document.
+- Updated fixture/test strategy/text-engine docs to move real-font Thai drift
+  out of the known-gap bucket.
+
+Files changed:
+
+- `src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- The test skips when either the runtime font file or Playwright Chromium
+  runtime is unavailable. When both are present, it exercises the real browser
+  canvas and real fontkit paths.
+- This is still not visual regression. It locks text measurement and pagination
+  drift for the real Thai font before broader PDF/editor parity work.
+
+### Add Product Export Golden Smoke
+
+Goal: Start Phase 3 by checking product fixtures through renderer output
+without brittle binary snapshots.
+
+Completed:
+
+- Added `productExportGolden.test.ts` under core renderer tests.
+- Rebuilt the customs and report product fixtures in the renderer layer, then
+  paginated them with the server-style stack: `public/fonts/THSarabun.ttf`,
+  `createFontkitMeasurer`, and `thaiWordBreaker`.
+- Rendered customs and report fixtures through `PdfRenderer` with a real Thai
+  `FontProvider`, then loaded the generated PDF with `pdf-lib` to verify page
+  count parity with authoritative pagination.
+- Preserved pre-render customs table invariants in the export smoke: 3 pages,
+  repeated header rows, 130 body rows, and fixed column geometry.
+- Rendered the customs fixture through `DocxRenderer` and inspected
+  `word/document.xml` with `JSZip` to verify generated table-row structure
+  matches the paginated table rows.
+- Updated fixture catalog, test strategy, and export renderer contract to mark
+  product export smoke coverage as present while keeping visual regression
+  clearly deferred.
+
+Files changed:
+
+- `packages/core/src/renderer/__tests__/productExportGolden.test.ts`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/productExportGolden.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- The test intentionally avoids binary PDF/DOCX snapshots. It checks stable
+  artifact properties: PDF page count and DOCX XML row structure.
+- This still does not prove pixel-level PDF/editor visual parity.
+
+### Add API Export/Paginate Contract Smoke
+
+Goal: Start Phase 4 by protecting the actual Next route boundary for
+pagination and export, not only the core renderer classes.
+
+Completed:
+
+- Added direct route tests for `src/app/api/paginate/route.ts` and
+  `src/app/api/export/route.ts`.
+- Covered `/api/paginate` success with asserted `PaginatedDocument` JSON.
+- Covered invalid JSON rejection for `/api/paginate`.
+- Covered invalid export format rejection for `/api/export`.
+- Covered `/api/export` PDF success headers, `%PDF` bytes, and page readability
+  through `pdf-lib`.
+- Covered `/api/export` DOCX success headers, `PK` ZIP bytes, and editable
+  `word/document.xml` readability through `JSZip`.
+- Updated fixture catalog, test strategy, and export renderer contract to note
+  API route contract smoke coverage.
+
+Files changed:
+
+- `src/app/api/__tests__/exportPaginate.test.ts`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/api/__tests__/exportPaginate.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- These are direct route-function tests. They do not start a Next dev server.
+- The tests intentionally stay at the API boundary: status, headers, asserted
+  JSON, and readable artifact bytes. Deep product page/table semantics remain
+  in core renderer/product golden tests.
+
+### Add Version-1 Document Persistence Guard
+
+Goal: Start Phase 5 conservatively by hardening localStorage and JSON import
+without changing the persisted document format.
+
+Completed:
+
+- Added `documentPersistence.ts` for the editor.
+- Centralized version-1 document parsing for localStorage and JSON import.
+- Kept the existing raw `DocumentNode` storage format and `flowdoc_document`
+  key.
+- Normalized persisted/imported documents before they enter editor state.
+- Validated normalized documents with `assertDocument`, rejecting invalid JSON,
+  unsupported versions, and structurally invalid documents.
+- Updated `EditorShell` to use the shared persistence helper for save, load, and
+  import.
+- Added focused app tests for parse/normalize, invalid JSON, unsupported
+  version, invalid structure, and localStorage key behavior.
+- Updated architecture, fixture catalog, and test strategy docs.
+
+Files changed:
+
+- `src/app/editor/_components/documentPersistence.ts`
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `git diff --check`
+
+Notes:
+
+- This was the conservative guard before the package direction was chosen. The
+  later `FlowDocPackage v1` entry keeps the same validation guard while moving
+  persisted/editor JSON to a document-first package envelope.
+
+### Add Product Pagination Golden Fixtures
+
+Goal: Read the documentation set first, then add fixture coverage that aligns
+with the documented product scenarios and test strategy.
+
+Completed:
+
+- Read the docs index, product scenarios, fixture catalog, test strategy,
+  cross-page/page-fragmentation/export contracts, table contract, text reflow
+  plan, and recent work log themes.
+- Added `product fixture — customs-page-count-golden` to lock the customs table
+  page count, repeated header count, footer page numbers, and fixed column
+  geometry.
+- Added `product fixture — report-page-count-golden` to lock cover/TOC/body
+  page counts, body footer restart numbers, and long paragraph continuation
+  ranges.
+- Updated `assertDocument` so authored `toc` blocks are accepted in body/stack
+  positions, matching the existing product fixtures and renderer/API contract
+  direction.
+- Updated fixture/test documentation with the new fixture ownership and current
+  test inventory.
+
+Files changed:
+
+- `docs/FIXTURE_CATALOG.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `packages/core/src/document/assert.ts`
+- `packages/core/src/document/assert.test.ts`
+- `packages/core/src/pagination/__tests__/productGolden.test.ts`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/productGolden.test.ts`
+- `npm.cmd run test -w packages/core -- src/document/assert.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/multiSection.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This intentionally does not add pixel-level PDF/editor visual regression.
+  The docs still mark that as future work; this change freezes the
+  renderer-facing `PaginatedDocument` baseline first.
+
 ### Add Internal WYSIWYG Text Interaction Policy
 
 Goal: Continue Stage 6 with pure IME, clipboard, keyboard, accessibility, and
