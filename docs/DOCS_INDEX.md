@@ -113,7 +113,7 @@ Start with:
 
 - `docs/FLOWDOC_PACKAGE_CONTRACT.md`
 - `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md` when planning registry, data, history,
-  or migration changes beyond package v1
+  or migration changes beyond the package v2 baseline
 - `docs/FIELD_REGISTRY_CONTRACT.md` when the change touches field keys,
   registry shape, data snapshots, or future history
 - `docs/DATA_SNAPSHOT_CONTRACT.md` when the change touches field values,
@@ -122,7 +122,7 @@ Start with:
 - `docs/ENGINEERING_PRINCIPLES.md`
 - `docs/TEST_STRATEGY.md`
 
-Persisted/editor JSON should use `FlowDocPackage v1`. Core layout, pagination,
+Persisted/editor JSON should use `FlowDocPackage v2`. Core layout, pagination,
 API export, and renderers should continue to consume `DocumentNode` /
 `PaginatedDocument`.
 

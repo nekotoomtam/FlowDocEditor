@@ -126,14 +126,13 @@ checks document-first `FlowDocPackage v1`, proposal-aligned
 `FlowDocPackage v2`, legacy raw `DocumentNode v1` import, normalize/validate
 behavior, invalid JSON, unsupported versions, invalid package structure,
 package/document id agreement, current `localStorage` key behavior,
-localStorage package v2 save/load, v2 field registry preservation, JSON package
-serialization as v1, explicit package v2 JSON serialization with field registry
-preservation, safe package filenames including the transition v2 suffix, and
-import status messages. It also covers inline `fieldRef` package
-round-tripping, legacy raw document migration into `FlowDocPackage v1`,
-idempotent package v1 migration, legacy/package v1 in-memory migration to
-package v2, package v2 migration idempotence, v2 registry warning propagation,
-v2 registry warning import status, and v2 registry hard-error rejection.
+localStorage package v2 save/load, v2 field registry preservation, default
+JSON package serialization as v2, field-registry-preserving package v2 export,
+safe package filenames, and import status messages. It also covers inline
+`fieldRef` package round-tripping, legacy raw document migration into the
+current `FlowDocPackage v2`, legacy package v1 migration to package v2,
+package v2 migration idempotence, v2 registry warning propagation, v2 registry
+warning import status, and v2 registry hard-error rejection.
 Real-font drift coverage loads
 `public/fonts/THSarabun.ttf` into Chromium canvas and fontkit, then checks
 representative Thai width parity and no `comparePagination` drift for a Thai

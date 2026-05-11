@@ -37,8 +37,7 @@ import {
   makeFlowDocFileName,
   parsePersistedDocument,
   saveDocumentToStorage,
-  serializeDocumentPackage,
-  serializeDocumentPackageV2,
+  serializeDocumentPackageWithFields,
 } from "./documentPersistence"
 import type { DriftReport } from "./comparePagination"
 import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
@@ -770,23 +769,10 @@ export default function EditorShell() {
     finalizeInlineEditBeforeAction()
     const doc = docRef.current
     const title = doc.document.meta?.title ?? "document"
-    const blob = new Blob([serializeDocumentPackage(doc)], { type: "application/json" })
+    const blob = new Blob([serializeDocumentPackageWithFields(doc, packageFieldRegistry)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url; a.download = makeFlowDocFileName(title)
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 100)
-    setDocumentIoStatus({ type: "info", message: "Saved FlowDoc package JSON." })
-  }, [finalizeInlineEditBeforeAction])
-
-  const handleExportJsonV2 = useCallback(() => {
-    finalizeInlineEditBeforeAction()
-    const doc = docRef.current
-    const title = doc.document.meta?.title ?? "document"
-    const blob = new Blob([serializeDocumentPackageV2(doc, packageFieldRegistry)], { type: "application/json" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url; a.download = makeFlowDocFileName(title, "v2")
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 100)
     setDocumentIoStatus({ type: "info", message: "Saved FlowDoc package v2 JSON." })
@@ -1691,11 +1677,6 @@ export default function EditorShell() {
           <button onClick={handleExportJson}
             style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
             Save JSON
-          </button>
-          <button onClick={handleExportJsonV2}
-            title="Save package v2 JSON"
-            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
-            Save v2
           </button>
         </div>
 

@@ -11,9 +11,10 @@ import type { DocumentNode } from "@/schema"
 
 export const STORAGE_KEY = "flowdoc_document"
 export const CURRENT_DOCUMENT_VERSION = 1
-export const CURRENT_PACKAGE_VERSION = 1
-export const CURRENT_STORAGE_PACKAGE_VERSION = 2
-export const SUPPORTED_PACKAGE_VERSIONS = [1, 2] as const
+export const LEGACY_PACKAGE_VERSION = 1
+export const CURRENT_PACKAGE_VERSION = 2
+export const CURRENT_STORAGE_PACKAGE_VERSION = CURRENT_PACKAGE_VERSION
+export const SUPPORTED_PACKAGE_VERSIONS = [LEGACY_PACKAGE_VERSION, CURRENT_PACKAGE_VERSION] as const
 
 export interface FlowDocPackageV1 {
   packageVersion: 1
@@ -64,12 +65,10 @@ export type DocumentParseResult =
   | { ok: false; reason: DocumentParseFailureReason }
 
 export type DocumentPackageMigrationResult =
-  | { ok: true; package: FlowDocPackage; source: "package" | "legacy-document"; fieldRegistryIssues?: FieldRegistryIssue[] }
-  | { ok: false; reason: DocumentParseFailureReason }
-
-export type DocumentPackageV2MigrationResult =
   | { ok: true; package: FlowDocPackageV2; source: "package" | "legacy-document"; fieldRegistryIssues: FieldRegistryIssue[] }
   | { ok: false; reason: DocumentParseFailureReason }
+
+export type DocumentPackageV2MigrationResult = DocumentPackageMigrationResult
 
 export type DocumentStorageResult =
   | { ok: true }
@@ -80,8 +79,6 @@ export interface DocumentStorageSaveOptions {
   fields?: FieldRegistryV1
   now?: string
 }
-
-export type FlowDocExportFormat = "v1" | "v2"
 
 export function documentParseFailureMessage(reason: DocumentParseFailureReason): string {
   switch (reason) {
@@ -113,7 +110,7 @@ export function documentImportSuccessMessage(
   return `${baseMessage} ${warningCount} field warning${warningCount === 1 ? "" : "s"}.`
 }
 
-export function makeFlowDocFileName(title: string | null | undefined, format: FlowDocExportFormat = "v1"): string {
+export function makeFlowDocFileName(title: string | null | undefined): string {
   const base = (title ?? "document")
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
     .replace(/\s+/g, "-")
@@ -121,7 +118,7 @@ export function makeFlowDocFileName(title: string | null | undefined, format: Fl
     .replace(/^[-.]+/g, "")
     .trim()
   const safeBase = base.length > 0 ? base : "document"
-  return `${safeBase}${format === "v2" ? ".v2" : ""}.flowdoc.json`
+  return `${safeBase}.flowdoc.json`
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -193,10 +190,10 @@ function parseDocumentValue(value: unknown): Extract<DocumentParseResult, { ok: 
   }
 }
 
-export function createDocumentPackage(doc: DocumentNode, now = new Date().toISOString()): FlowDocPackageV1 {
+export function createLegacyDocumentPackage(doc: DocumentNode, now = new Date().toISOString()): FlowDocPackageV1 {
   const title = doc.document.meta?.title ?? "Untitled"
   return {
-    packageVersion: CURRENT_PACKAGE_VERSION,
+    packageVersion: LEGACY_PACKAGE_VERSION,
     kind: "document",
     id: doc.document.id,
     meta: {
@@ -323,12 +320,7 @@ function parsePersistedValue(value: unknown): DocumentParseResult {
 function migratePersistedValue(value: unknown, now?: string): DocumentPackageMigrationResult {
   const result = parsePersistedValue(value)
   if (!result.ok) return result
-  return {
-    ok: true,
-    package: result.package ?? createDocumentPackage(result.doc, now),
-    source: result.source,
-    fieldRegistryIssues: result.fieldRegistryIssues,
-  }
+  return migrateParseResultToPackageV2(result, now)
 }
 
 function migrateParseResultToPackageV2(
@@ -344,7 +336,7 @@ function migrateParseResultToPackageV2(
     }
   }
 
-  const currentPackage = result.package ?? createDocumentPackage(result.doc, now)
+  const currentPackage = result.package ?? createLegacyDocumentPackage(result.doc, now)
   const fields = createEmptyFieldRegistry()
   const fieldRegistryValidation = validateFieldRegistryReferences(currentPackage.document, fields)
   return {
@@ -363,14 +355,12 @@ function migrateParseResultToPackageV2(
 }
 
 export function parsePersistedDocument(raw: string | null | undefined): DocumentParseResult {
-  const result = migratePersistedDocumentPackage(raw)
-  if (!result.ok) return result
-  return {
-    ok: true,
-    doc: result.package.document,
-    source: result.source,
-    package: result.package,
-    fieldRegistryIssues: result.fieldRegistryIssues,
+  if (raw == null || raw.trim() === "") return { ok: false, reason: "empty" }
+
+  try {
+    return parsePersistedValue(JSON.parse(raw))
+  } catch {
+    return { ok: false, reason: "invalid-json" }
   }
 }
 
@@ -426,9 +416,13 @@ export function saveDocumentToStorage(
 }
 
 export function serializeDocumentPackage(doc: DocumentNode): string {
-  return JSON.stringify(createDocumentPackage(doc), null, 2)
+  return JSON.stringify(createDocumentPackageV2(doc), null, 2)
 }
 
-export function serializeDocumentPackageV2(doc: DocumentNode, fields: FieldRegistryV1): string {
+export function serializeDocumentPackageWithFields(doc: DocumentNode, fields: FieldRegistryV1): string {
   return JSON.stringify(createDocumentPackageV2(doc, fields), null, 2)
+}
+
+export function serializeLegacyDocumentPackage(doc: DocumentNode): string {
+  return JSON.stringify(createLegacyDocumentPackage(doc), null, 2)
 }

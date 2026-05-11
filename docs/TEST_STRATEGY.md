@@ -233,15 +233,15 @@ Current strengths:
   headers, and artifact readability.
 - Document package persistence coverage protects `FlowDocPackage v1`,
   proposal-aligned `FlowDocPackage v2`, legacy raw `DocumentNode v1` import,
-  localStorage package v2 save/load, JSON package v1 serialization,
+  localStorage package v2 save/load, default JSON package v2 serialization,
   package/document identity agreement, normalize, and validation behavior, safe
   filename generation, import status messages, raw-document migration, package
   v1 idempotent migration, and inline `fieldRef` round-tripping. It also covers
-  localStorage field registry preservation, explicit package v2 JSON export
-  serialization with field registry preservation, legacy/package v1 in-memory
-  migration to package v2, package v2 migration idempotence, v2 registry
-  warning propagation, v2 registry warning import status, and v2 registry
-  hard-error rejection while default JSON export remains v1.
+  localStorage field registry preservation, package v2 JSON export
+  serialization with field registry preservation, legacy/package v1 migration
+  to package v2, package v2 migration idempotence, v2 registry warning
+  propagation, v2 registry warning import status, and v2 registry hard-error
+  rejection.
 - App-level tests cover drift and editor helper behavior.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.

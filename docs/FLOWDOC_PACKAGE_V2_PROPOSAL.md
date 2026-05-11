@@ -1,14 +1,14 @@
 # FlowDoc Package V2 Proposal
 
-This proposal describes the intended package v2 shape for FlowDocEditor. It is
-implemented for localStorage and available as an explicit transition export,
-but default JSON export still uses package v1.
+This proposal describes the package v2 shape for FlowDocEditor. It is now the
+canonical write format for localStorage autosave and default JSON export.
 
-Current default JSON export remains:
+Current default JSON export writes:
 
 ```txt
-FlowDocPackage v1
+FlowDocPackage v2
   -> document: DocumentNode v1
+  -> fields: FieldRegistryV1
 ```
 
 Current localStorage autosave writes:
@@ -19,17 +19,14 @@ FlowDocPackage v2
   -> fields: FieldRegistryV1
 ```
 
-Current explicit v2 export writes the same package v2 envelope and uses a
-`.v2.flowdoc.json` filename suffix.
-
 Current implementation status:
 
 - parser compatibility for proposal-aligned package v2 exists
 - in-memory migration from legacy raw documents/package v1 to package v2 exists
 - localStorage saves write package v2
-- default JSON export still writes package v1
-- explicit transition JSON export can write package v2
-- package v2 is active for localStorage and optional export
+- default JSON export writes package v2
+- package v1 export is no longer exposed in the toolbar
+- package v2 is active for localStorage and JSON export
 - scalar data snapshot validation exists outside package persistence
 - snapshot binding can resolve a temporary preview document from
   `DocumentNode + FieldRegistryV1 + DataSnapshotV1`
@@ -59,7 +56,6 @@ It should not turn the document model into workflow state.
 
 This proposal does not implement:
 
-- default JSON export switch to v2
 - submitted data storage
 - key history UI
 - reviewer comments
@@ -258,10 +254,9 @@ Legacy raw `DocumentNode v1` migration to v2 should:
 
 ## Import And Export Policy
 
-When package v2 becomes active beyond localStorage:
+Now that package v2 is active beyond localStorage:
 
-- default JSON exports may write package v2 after a separate activation
-  decision
+- default JSON exports write package v2
 - imports should accept v2, v1, and legacy raw `DocumentNode v1`
 - v1 imports should migrate to v2 in memory
 - localStorage migration is explicit and tested
@@ -304,8 +299,6 @@ When implementation begins, v2 work should cover:
 
 These are intentionally deferred until the next phase needs them:
 
-- whether export JSON should switch to v2 at the same time as localStorage
-- when to remove or demote package v1 JSON export after the v2 transition
 - whether missing registry definitions should remain warnings forever or become
   blocking in a template publish mode
 - how to represent nested data and collection/repeat values
@@ -317,9 +310,9 @@ These are intentionally deferred until the next phase needs them:
 
 Phase C added parser compatibility without migrating runtime storage. The next
 slices added data snapshot validation, snapshot binding/readiness feedback, an
-in-memory package v1/raw-document -> package v2 migration helper, and package
-v2 localStorage autosave activation. The current transition slice adds explicit
-package v2 JSON export while keeping default JSON export on v1.
+in-memory package v1/raw-document -> package v2 migration helper, package v2
+localStorage autosave activation, a short explicit v2 export transition, and
+finally the default JSON export switch to package v2.
 
 Completed Phase C slice:
 
@@ -339,25 +332,25 @@ Completed migration-helper slice:
 Completed localStorage activation slice:
 
 - save localStorage as package v2
-- keep JSON export writing package v1
 - preserve the active package field registry during autosave
 - preserve imported package v2 field registries in Fill mode/readiness
 - use the sample editor registry for new documents and legacy/package v1 input
 
-Completed v2 transition export slice:
+Completed v2 transition/default export slices:
 
 - add explicit package v2 JSON export
 - preserve the active field registry in exported package v2 files
-- keep default `Save JSON` writing package v1
-- use `.v2.flowdoc.json` filenames for transition package v2 downloads
+- make default `Save JSON` write package v2
+- remove the temporary visible `Save v2` toolbar action
+- keep package v1 as import/migration compatibility only
 
 Recommended next implementation phase:
 
-- decide when default JSON export should switch to package v2
-- remove or demote package v1 export shortly after v2 default export is proven
+- decide whether package v2 should persist a `data` snapshot layer next
+- decide whether registry-readiness warnings should remain non-blocking or be
+  promoted in a publish/template validation mode
 
 Still not done:
 
-- JSON export switch to v2
 - data snapshot package persistence
 - key history implementation

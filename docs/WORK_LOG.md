@@ -5568,3 +5568,43 @@ Verification:
 - `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
 - `npm.cmd run type-check`
 - `npm.cmd test`
+
+---
+
+### Make Package V2 The Default JSON Export
+
+Goal: Finish the short package-v2 transition by making the visible JSON export
+path write the same canonical package shape as localStorage.
+
+Completed:
+
+- Changed `CURRENT_PACKAGE_VERSION` to `2` and kept package v1 under an explicit
+  legacy package constant/helper.
+- Made `migratePersistedDocumentPackage(...)` return package v2 for legacy raw
+  documents and package v1 input, while keeping `parsePersistedDocument(...)`
+  parse-only so legacy/raw imports can still be identified by the editor.
+- Changed the toolbar `Save JSON` action to write package v2 with the active
+  field registry and removed the temporary visible `Save v2` action.
+- Kept package v1 as import/migration compatibility only.
+- Updated package contract, proposal, fixture, smoke, docs-index, and test
+  strategy notes to describe package v2 as the current persisted/editor JSON
+  format.
+- Updated persistence tests so default JSON export, localStorage, migration,
+  and field-registry-preserving export coverage all point at package v2.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check` passed with only LF-to-CRLF working-copy warnings.
+
+Notes:
+
+- The first app-suite run hit a 10-second Chromium launch timeout in
+  `realFontDrift.test.ts`; the focused real-font test and the repeated app
+  suite both passed.

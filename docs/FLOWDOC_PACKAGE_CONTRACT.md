@@ -14,11 +14,13 @@ For the proposed next package shape, read
 
 ## Decision
 
-FlowDocEditor uses a document-first package envelope for persisted editor JSON:
+FlowDocEditor uses a document-first package envelope for persisted editor JSON.
+The current canonical write format is `FlowDocPackage v2`:
 
 ```txt
-FlowDocPackage v1
+FlowDocPackage v2
   -> package metadata
+  -> fields: FieldRegistryV1
   -> document: DocumentNode v1
 ```
 
@@ -26,22 +28,23 @@ Core layout, pagination, API export, and renderers still consume `DocumentNode`
 or `PaginatedDocument`. The package is an app/file boundary, not a layout engine
 input.
 
-Current write behavior is intentionally split:
+Current write behavior:
 
 - localStorage autosave writes `FlowDocPackage v2`
-- default JSON export still writes `FlowDocPackage v1`
-- transition JSON export can explicitly write `FlowDocPackage v2`
+- default JSON export writes `FlowDocPackage v2`
+- package v1 remains an import/migration compatibility format only
 
 The parser accepts `FlowDocPackage v2`, `FlowDocPackage v1`, and legacy raw
 `DocumentNode v1`.
 
 ## Shape
 
-`FlowDocPackage v1` currently contains only document-layer data:
+`FlowDocPackage v2` contains document-layer data plus the field registry needed
+to understand inline `fieldRef` keys:
 
 ```ts
-interface FlowDocPackageV1 {
-  packageVersion: 1
+interface FlowDocPackageV2 {
+  packageVersion: 2
   kind: "document"
   id: string
   meta: {
@@ -50,6 +53,10 @@ interface FlowDocPackageV1 {
     updatedAt: string
   }
   document: DocumentNode
+  fields: FieldRegistryV1
+  data?: unknown
+  history?: unknown
+  migrations?: unknown
 }
 ```
 
@@ -58,8 +65,7 @@ Current implementation:
 - `src/app/editor/_components/documentPersistence.ts`
 - storage key: `flowdoc_document`
 - localStorage package version: `2`
-- default JSON export package version: `1`
-- transition JSON export package version: `2`
+- default JSON export package version: `2`
 - JSON export extension: `.flowdoc.json`
 
 ## Identity Rules
@@ -90,10 +96,9 @@ Persistence/import must:
 - reject invalid package identity or shape
 - reject invalid document structure
 
-Legacy raw `DocumentNode v1` import exists for compatibility with older saved
-files and test fixtures. New localStorage saves should write `FlowDocPackage
-v2`; default JSON exports should continue writing `FlowDocPackage v1` while
-the explicit v2 export option proves file-level compatibility.
+Legacy raw `DocumentNode v1` and `FlowDocPackage v1` import exist for
+compatibility with older saved files and test fixtures. New localStorage saves
+and JSON exports should write `FlowDocPackage v2`.
 
 ## Ownership
 
@@ -122,9 +127,9 @@ the explicit v2 export option proves file-level compatibility.
 - measured geometry
 - resolved page context
 
-## Forbidden In V1
+## Forbidden In Package Persistence
 
-Do not store these in `FlowDocPackage v1`:
+Do not store these in `FlowDocPackage`:
 
 - `PaginatedDocument`
 - page fragments or line geometry
@@ -138,7 +143,6 @@ Do not store these in `FlowDocPackage v1`:
 
 Do not store these yet:
 
-- field registry
 - submitted field data
 - data versions
 - key-based history
@@ -150,16 +154,12 @@ the document/editor base is stable.
 
 ## Export Rules
 
-Default JSON export from the editor writes `FlowDocPackage v1`. The transition
-`Save v2` action writes `FlowDocPackage v2` with the active field registry and
-uses a `.v2.flowdoc.json` filename suffix. This dual export state should be
-short-lived; package v2 is the target canonical package format.
+Default JSON export from the editor writes `FlowDocPackage v2` with the active
+field registry. Package v1 JSON export is no longer exposed in the toolbar.
 
 The editor should:
 
 - use the `.flowdoc.json` extension for package downloads
-- use `.v2.flowdoc.json` for explicit package v2 downloads during the
-  transition
 - derive a safe filename from the document title
 - show concise import/export status in the toolbar
 - report invalid JSON, unsupported versions, invalid packages, and invalid
@@ -197,11 +197,11 @@ unknown JSON
 Current implementation:
 
 - `migratePersistedDocumentPackage(...)`
-- wraps legacy raw `DocumentNode v1` into `FlowDocPackage v1` for the generic
-  migration path
-- canonicalizes `FlowDocPackage v1`
+- migrates legacy raw `DocumentNode v1` into `FlowDocPackage v2` for the
+  generic migration path
+- migrates `FlowDocPackage v1` into `FlowDocPackage v2`
 - parses proposal-aligned `FlowDocPackage v2`
-- stays idempotent for existing `FlowDocPackage v1`
+- stays idempotent for existing `FlowDocPackage v2`
 - `migratePersistedDocumentPackageToV2(...)`
 - migrates legacy raw documents and package v1 into an in-memory
   `FlowDocPackage v2` with an empty `FieldRegistryV1`
@@ -210,13 +210,11 @@ Current implementation:
 - keeps existing package v2 input idempotent while preserving optional
   `data`, `history`, and `migrations` members
 
-Runtime localStorage autosave now uses package v2 and preserves the active
-field registry. Default JSON export still uses package v1, while explicit v2
-export can preserve the active field registry in a downloaded file.
+Runtime localStorage autosave and default JSON export now use package v2 and
+preserve the active field registry.
 
-The field registry contract already exists for validation and future package
-planning. Persisting a registry in JSON remains a future package version
-decision.
+The field registry contract already exists for validation and package planning.
+Persisting a registry in JSON is part of the current package v2 baseline.
 
 The current v2 proposal recommends adding required package-level `fields` first,
 while leaving `data` and `history` as optional/deferred layers.
@@ -234,8 +232,7 @@ Persistence/package changes should cover:
 - package serialize/export shape
 - localStorage package v2 save/load
 - localStorage package v2 field registry preservation
-- explicit package v2 JSON export with field registry preservation
-- default package v1 JSON export remains available during transition
+- default package v2 JSON export with field registry preservation
 - legacy raw document -> package migration
 - package v1 idempotent migration
 - legacy raw document -> package v2 in-memory migration

@@ -197,8 +197,8 @@ Use when editor UI changes how export, font fallback, or authoritative
 pagination status is presented.
 
 - Trigger or inspect the affected export/status path.
-- For package export changes, check both `Save JSON` and the transition
-  `Save v2` action when both are visible.
+- For package export changes, confirm `Save JSON` writes the current package
+  shape and preserves the active registry when the scenario uses fields.
 - Confirm any failure or fallback is visible and not silent.
 - Confirm editor preview remains usable after the status update.
 
