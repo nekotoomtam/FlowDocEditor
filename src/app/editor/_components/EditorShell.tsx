@@ -628,6 +628,7 @@ export default function EditorShell() {
     caretIndex: inlineEditCaretIndex,
     pageIndex: inlineEditPageIndex,
     isDocumentVisualReady: inlineEditDocumentVisualReady,
+    isVisualLocked: inlineEditVisualLocked,
     nodeIdRef: inlineEditNodeIdRef,
     draftVersionRef: inlineEditDraftVersionRef,
     markVisualFresh: markInlineEditVisualFresh,
@@ -869,10 +870,18 @@ export default function EditorShell() {
 
   useEffect(() => {
     if (!inlineEditNodeId || inlineEditCaretIndex === null) return
+    if (inlineEditVisualLocked || !inlineEditDocumentVisualReady) return
     const nextPageIndex = findWysiwygPageIndexInFragmentRanges(inlineEditFragmentRanges, inlineEditCaretIndex)
     if (nextPageIndex === null || nextPageIndex === inlineEditPageIndex) return
     setInlineEditPageIndex(nextPageIndex)
-  }, [inlineEditCaretIndex, inlineEditFragmentRanges, inlineEditNodeId, inlineEditPageIndex])
+  }, [
+    inlineEditCaretIndex,
+    inlineEditDocumentVisualReady,
+    inlineEditFragmentRanges,
+    inlineEditNodeId,
+    inlineEditPageIndex,
+    inlineEditVisualLocked,
+  ])
 
   // Inline edit contract:
   // - While editing, the textarea owns input/caret events for the active paragraph.

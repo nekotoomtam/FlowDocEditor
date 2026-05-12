@@ -36,8 +36,10 @@ describe("ParagraphTextSurface continuation editing", () => {
     const state = getContinuationEditState("Hello world", makeFragment({ continuesFrom: false }), 6)
 
     expect(state.continuationCharStart).toBeNull()
+    expect(state.continuationCharEnd).toBeNull()
     expect(state.preText).toBe("")
     expect(state.editText).toBe("Hello world")
+    expect(state.postText).toBe("")
     expect(state.adjustedInitialCaret).toBe(6)
   })
 
@@ -57,9 +59,34 @@ describe("ParagraphTextSurface continuation editing", () => {
     const state = getContinuationEditState("Hello world", fragment, 8)
 
     expect(state.continuationCharStart).toBe(6)
+    expect(state.continuationCharEnd).toBe(11)
     expect(state.preText).toBe("Hello ")
     expect(state.editText).toBe("world")
+    expect(state.postText).toBe("")
     expect(state.adjustedInitialCaret).toBe(2)
+  })
+
+  it("uses only the current first-fragment text when the paragraph continues", () => {
+    const fragment = makeFragment({
+      isContinued: true,
+      lines: [{
+        text: "Hello",
+        x: 0,
+        y: 0,
+        width: 50,
+        height: 12,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+    })
+
+    const state = getContinuationEditState("Hello world", fragment, 11)
+
+    expect(state.continuationCharStart).toBe(0)
+    expect(state.continuationCharEnd).toBe(5)
+    expect(state.preText).toBe("")
+    expect(state.editText).toBe("Hello")
+    expect(state.postText).toBe(" world")
+    expect(state.adjustedInitialCaret).toBe(5)
   })
 
   it("clamps a continuation caret before the fragment start to zero", () => {
@@ -102,8 +129,10 @@ describe("ParagraphTextSurface continuation editing", () => {
     const state = getContinuationEditState("Hello world", makeFragment({ continuesFrom: true }), 4)
 
     expect(state.continuationCharStart).toBeNull()
+    expect(state.continuationCharEnd).toBeNull()
     expect(state.preText).toBe("")
     expect(state.editText).toBe("Hello world")
+    expect(state.postText).toBe("")
     expect(state.adjustedInitialCaret).toBe(4)
   })
 
@@ -113,7 +142,7 @@ describe("ParagraphTextSurface continuation editing", () => {
   })
 
   it("splits continuation edit text at the absolute caret offset", () => {
-    const input = buildSplitEditInput("Hello ", "wide world", 4, 4)
+    const input = buildSplitEditInput("Hello ", "wide", 4, 4, " world")
 
     expect(input.text).toBe("Hello wide world")
     expect(input.splitIndex).toBe("Hello wide".length)
@@ -141,10 +170,10 @@ describe("ParagraphTextSurface continuation editing", () => {
   })
 
   it("backspaces across a continuation boundary without merging paragraphs", () => {
-    const input = buildContinuationBackspaceInput("Hello ", "world")
+    const input = buildContinuationBackspaceInput("Hello ", "wide", " world")
 
     expect(input).toEqual({
-      text: "Helloworld",
+      text: "Hellowide world",
       caretIndex: "Hello".length,
     })
   })
@@ -162,7 +191,7 @@ describe("ParagraphTextSurface continuation editing", () => {
     expect(buildContinuationBackspaceInput("", "Hello")).toBeNull()
   })
 
-  it("keys inline edit slices by stable fragment identity and continuation start", () => {
+  it("keys inline edit slices by stable fragment identity and slice start", () => {
     const fragment = makeFragment({ fragmentIndex: 1, lineStart: 4, lineEnd: 6 })
 
     expect(buildInlineEditSliceKey(fragment, 25)).toBe(buildInlineEditSliceKey({ ...fragment, lineEnd: 8 }, 25))
@@ -190,8 +219,9 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(inlineEditTextareaTextColor(true)).toBe("transparent")
   })
 
-  it("uses document visual only for fresh collapsed non-composition editing", () => {
+  it("uses document visual for fresh collapsed editing or range selection with an overlay", () => {
     expect(shouldUseInlineEditDocumentVisual(true, true, true, false)).toBe(true)
+    expect(shouldUseInlineEditDocumentVisual(true, true, false, false, true)).toBe(true)
     expect(shouldUseInlineEditDocumentVisual(true, false, true, false)).toBe(false)
     expect(shouldUseInlineEditDocumentVisual(true, true, false, false)).toBe(false)
     expect(shouldUseInlineEditDocumentVisual(true, true, true, true)).toBe(false)
@@ -248,6 +278,21 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       isComposing: false,
       hasCustomCaret: true,
     }).fallbackReason).toBe("range-selection")
+    expect(getInlineEditVisualMode({
+      isEditing: true,
+      isVisualFresh: true,
+      isSelectionCollapsed: false,
+      isComposing: false,
+      hasCustomCaret: false,
+      hasSelectionOverlay: true,
+    })).toMatchObject({
+      useDocumentVisual: true,
+      useCustomCaret: false,
+      fallbackReason: null,
+      textareaTextColor: "transparent",
+      textareaCaretColor: "transparent",
+      textareaOutline: "none",
+    })
     expect(getInlineEditVisualMode({
       isEditing: true,
       isVisualFresh: true,

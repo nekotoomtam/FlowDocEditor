@@ -23,7 +23,7 @@ export interface InlineEditCommitPayload extends InlineEditTransaction {
 
 export type InlineEditEndReason = "blur" | "keyboard"
 export const STALE_INLINE_EDIT_VISUAL_VERSION = -1
-export const INLINE_EDIT_VISUAL_TYPING_LOCK_MS = 120
+export const INLINE_EDIT_VISUAL_TYPING_LOCK_MS = 750
 
 export function isInlineEditVisualFresh(
   nodeId: string | null,
@@ -210,6 +210,7 @@ export function useInlineEditSession({
     if (beforeText == null) return
 
     resetVisualFreshness()
+    markVisualFresh(0)
     transactionRef.current = {
       nodeId: nextNodeId,
       beforeDoc,
@@ -226,6 +227,7 @@ export function useInlineEditSession({
     getCurrentDoc,
     getCurrentPaginated,
     getParagraphText,
+    markVisualFresh,
     resetVisualFreshness,
     selectNode,
     setActiveNodeId,
@@ -241,9 +243,8 @@ export function useInlineEditSession({
 
   const userInteraction = useCallback((changedNodeId: string) => {
     if (nodeIdRef.current !== changedNodeId) return
-    // The visual layer remains owned by paginated document rendering; this hook
-    // only records that the active input session is still current.
-  }, [])
+    lockDocumentVisualForTyping()
+  }, [lockDocumentVisualForTyping])
 
   const caretChange = useCallback((changedNodeId: string, nextCaretIndex: number | null) => {
     if (nodeIdRef.current !== changedNodeId) return
@@ -281,6 +282,7 @@ export function useInlineEditSession({
       beforeText,
     }
     resetVisualFreshness()
+    markVisualFresh(0)
     setActiveNodeId(nextNodeId)
     setCaretIndex(nextCaretIndex)
     setPageIndex(null)
@@ -288,6 +290,7 @@ export function useInlineEditSession({
     cancelPendingEnd,
     getCurrentDoc,
     getParagraphText,
+    markVisualFresh,
     paginatePreviewDoc,
     resetVisualFreshness,
     setActiveNodeId,

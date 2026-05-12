@@ -216,10 +216,11 @@ export function getInlineEditSelectionSnapshot(
 export function getInlineEditInputSnapshot(
   textarea: InlineEditTextareaLike,
   preText: string,
+  postText = "",
 ): InlineEditInputSnapshot {
   const selection = getInlineEditSelectionSnapshot(textarea, preText)
   return {
-    text: preText + textarea.value,
+    text: preText + textarea.value + postText,
     caretOffset: selection.focusOffset,
     selection,
     isSelectionCollapsed: selection.isCollapsed,

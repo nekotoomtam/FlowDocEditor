@@ -64,12 +64,18 @@ Users should be able to:
   as soon as browser pagination catches up to the active draft. The textarea may
   be visible only as a short stale-frame fallback, or for composition/IME states
   that are not yet safe to render through the paginated layer.
+- The active typing lock should start from keyboard interaction before native
+  textarea input lands, not only after React observes the input event, so a
+  normal typing burst does not insert characters into a transparent textarea
+  before the fallback layer appears.
 - When the active draft has fresh SVG lines and the textarea selection is
   collapsed, the editor should draw the collapsed caret from paginated line
-  geometry and hide the native textarea caret. If the custom caret cannot be
-  resolved, range selection is active, or composition is active, the editor
-  should fall back to visible textarea text/native caret until dedicated
-  overlays exist.
+  geometry and hide the native textarea caret.
+- When a single active fragment has fresh SVG lines and range-selection geometry
+  can be resolved, drag/range selection may stay in document-visual mode and
+  draw SVG highlight rectangles from paragraph offsets. If the custom caret or
+  selection overlay cannot be resolved, or composition is active, the editor
+  should fall back to visible textarea text/native caret.
 - Programmatic focus/selection on edit entry should not force the visible
   textarea layer. `onSelect` may update caret state without changing the visual
   owner.
@@ -81,14 +87,21 @@ Users should be able to:
   `PaginatedDocument`.
 - Full browser/server pagination should reconcile after edit settles or exits.
 - Continuation fragments need extra care: only the clicked fragment should enter
-  edit mode, and continuation text/caret offsets must remain slice-aware.
+  edit mode, and continuation text/caret offsets must remain slice-aware. The
+  active textarea must hold only the current fragment text slice when line
+  segment ranges are available, while preserving stable prefix/suffix context
+  so edits reconstruct the full paragraph without duplicating text.
 - Active textarea instances must be keyed by their fragment slice identity, not
   only paragraph id, so remounted continuation slices do not reuse stale DOM
-  values with a new `preText` prefix.
+  values with a new `preText` prefix. Slice context should remain stable while
+  the same textarea is active, even if browser pagination updates line ends
+  during a typing burst.
 - When segment offsets are available, the active inline textarea may move to the
   paginated fragment/page containing the current caret. The caret index remains
   UTF-16 text-offset based and must not become page geometry stored in
-  `DocumentNode`.
+  `DocumentNode`. Relocation should wait while the active typing visual lock is
+  held or the document visual is stale so keystrokes are not delivered into a
+  remounting textarea.
 - Caret movement without text changes should update editor caret state without
   dispatching a document draft update.
 - Blur from remounting/repositioning the active inline textarea should not
@@ -217,8 +230,9 @@ The browser check does not replace core tests. It protects human-facing feel.
 - DOCX may reflow after opening and is not an exact editor/PDF visual match.
 - The first live inline pagination slice improves visual continuity before blur,
   and active textarea page tracking now follows segment offsets when available.
-  Continuation-slice Enter/Backspace mapping is covered, but cross-fragment text
-  selection and fully caret-perfect WYSIWYG editing remain deferred.
+  Continuation-slice typing, Enter/Backspace mapping, and same-fragment drag
+  selection overlays are covered, but cross-fragment text selection and fully
+  caret-perfect WYSIWYG editing remain deferred.
 
 Accepted limitations should be documented and should not become invisible
 regressions.

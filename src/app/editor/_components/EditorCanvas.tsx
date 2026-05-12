@@ -375,6 +375,10 @@ function PageView({
             data-node-id={f.nodeId}
             data-node-type={f.nodeType}
             data-page-index={f.pageIndex}
+            data-fragment-index={f.fragmentIndex ?? undefined}
+            data-line-start={f.lineStart ?? undefined}
+            data-line-end={f.lineEnd ?? undefined}
+            data-parent-node-id={f.parentNodeId ?? undefined}
             onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()

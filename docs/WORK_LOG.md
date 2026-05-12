@@ -20,6 +20,77 @@ Each entry should include:
 
 ## 2026-05-12
 
+### Add Slice-Aware WYSIWYG Selection Foundation
+
+Goal: Address the reported WYSIWYG blockers without changing document schema,
+paginator/export ownership, or making textarea layout authoritative.
+
+Completed:
+
+- Made inline edit textarea values slice-aware for both first and continuation
+  fragments. When a paragraph spans pages, the active textarea now holds only
+  the active fragment text slice and reconstructs the full paragraph with stable
+  prefix/suffix context.
+- Stabilized slice context across active textarea renders so browser pagination
+  updates cannot duplicate or garble text during a typing burst.
+- Marked edit start as visually fresh for the current draft snapshot, allowing
+  document-visual mode on entry when geometry is available.
+- Started the active typing visual lock from key interaction before native
+  textarea input lands, and lengthened the lock for human-speed typing so the
+  editor does not switch to transparent SVG visuals between ordinary
+  keystrokes.
+- Deferred active textarea page relocation while the typing visual lock is held
+  or the document visual is stale, avoiding remounts while keystrokes are still
+  being delivered.
+- Added same-fragment drag selection support by mapping pointer positions to
+  WYSIWYG paragraph offsets and drawing SVG selection overlays from existing
+  paginated line geometry.
+- Added editor fragment debug data attributes for smoke assertions without
+  changing authored document data.
+- Extended automated editor smoke coverage for stack paragraph visual parity,
+  table-cell visual contract, drag selection overlay, slice-bounded
+  continuation textareas, visible marker uniqueness, undo/redo, and continuation
+  boundary Backspace.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/useInlineEditSession.ts`
+- `src/app/editor/_components/wysiwygTextInteraction.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts`
+- `scripts/editor-smoke.mjs`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/inlineEditCaret.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts`
+- `npm.cmd run type-check`
+- `SMOKE_BASE_URL=http://localhost:4000/editor npm.cmd run smoke:editor`
+- `npm.cmd test`
+- Human-speed Playwright probe on `http://localhost:4000/editor`: typed enough
+  text at 130ms per character to wrap to three visible lines; textarea value
+  stayed correct and visible during typing, then handed off to document visual
+  after the idle window.
+
+Notes:
+
+- This intentionally does not change `DocumentNode`, core pagination policy,
+  export behavior, server pagination, clipboard/cut handling, IME hardening, or
+  cross-fragment selection. Cross-fragment selection remains deferred.
+- The isolated smoke server could not start because another Next dev server was
+  already running for this worktree. The same smoke suite was run successfully
+  against the existing `http://localhost:4000/editor` server.
+
+---
+
 ### Stabilize Inline Edit Input Bridge
 
 Goal: Make the current hybrid inline editor more predictable during typing

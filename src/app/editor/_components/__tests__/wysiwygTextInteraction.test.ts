@@ -124,6 +124,21 @@ describe("inline edit input policy", () => {
     })
   })
 
+  it("reconstructs full paragraph text when the bridge edits only a fragment slice", () => {
+    const snapshot = getInlineEditInputSnapshot({
+      value: "wide",
+      selectionStart: 4,
+      selectionEnd: 4,
+      selectionDirection: "none",
+    }, "Hello ", " world")
+
+    expect(snapshot).toMatchObject({
+      text: "Hello wide world",
+      caretOffset: "Hello wide".length,
+      isSelectionCollapsed: true,
+    })
+  })
+
   it("preserves backward textarea selection direction in full paragraph offsets", () => {
     const snapshot = getInlineEditSelectionSnapshot({
       value: "world",

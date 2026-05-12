@@ -39,6 +39,19 @@ function paragraph(id, text) {
 function makeSmokeDocument() {
   const p1 = paragraph("smoke-p1", "Smoke paragraph baseline")
   const thai = paragraph("smoke-thai-p1", "ภาษาไทยเริ่มต้น")
+  const stackParagraph = paragraph("smoke-stack-p1", "Stack paragraph baseline")
+  const stack = {
+    id: "smoke-stack",
+    type: "stack",
+    props: { widthShare: 100, minHeight: pt(24) },
+    childIds: [stackParagraph.id],
+  }
+  const row = {
+    id: "smoke-row",
+    type: "row",
+    props: {},
+    childIds: [stack.id],
+  }
   const tableNodes = {}
   const rowIds = []
 
@@ -80,9 +93,12 @@ function makeSmokeDocument() {
         },
         bodyRootId: "smoke-body",
         nodes: {
-          "smoke-body": { id: "smoke-body", type: "body", props: {}, childIds: [p1.id, thai.id, table.id] },
+          "smoke-body": { id: "smoke-body", type: "body", props: {}, childIds: [p1.id, thai.id, row.id, table.id] },
           [p1.id]: p1,
           [thai.id]: thai,
+          [row.id]: row,
+          [stack.id]: stack,
+          [stackParagraph.id]: stackParagraph,
           [table.id]: table,
         },
       }],
@@ -276,28 +292,50 @@ async function expectInlineEditVisualContract(page, nodeId) {
 }
 
 async function waitForStoredParagraphText(page, nodeId, expectedText) {
-  await page.waitForFunction(
-    ({ key, nodeId, expectedText }) => {
-      const raw = window.localStorage.getItem(key)
-      if (!raw) return false
-      const parsed = JSON.parse(raw)
-      const doc = parsed?.kind === "document" && (parsed?.packageVersion === 1 || parsed?.packageVersion === 2)
-        ? parsed.document
-        : parsed
-      for (const section of doc.document.sections) {
-        const node = section.nodes[nodeId]
-        if (node?.type === "paragraph") {
-          return node.children
-            .filter((child) => child.type === "text")
-            .map((child) => child.text)
-            .join("") === expectedText
+  try {
+    await page.waitForFunction(
+      ({ key, nodeId, expectedText }) => {
+        const raw = window.localStorage.getItem(key)
+        if (!raw) return false
+        const parsed = JSON.parse(raw)
+        const doc = parsed?.kind === "document" && (parsed?.packageVersion === 1 || parsed?.packageVersion === 2)
+          ? parsed.document
+          : parsed
+        for (const section of doc.document.sections) {
+          const node = section.nodes[nodeId]
+          if (node?.type === "paragraph") {
+            return node.children
+              .filter((child) => child.type === "text")
+              .map((child) => child.text)
+              .join("") === expectedText
+          }
         }
-      }
-      return false
-    },
-    { key: STORAGE_KEY, nodeId, expectedText },
-    { timeout: 5000 },
-  )
+        return false
+      },
+      { key: STORAGE_KEY, nodeId, expectedText },
+      { timeout: 5000 },
+    )
+  } catch (error) {
+    const actualText = await readStoredParagraphText(page, nodeId)
+    const expectedMarkerIndex = expectedText.indexOf("FlowDocContinuationMarker")
+    const actualMarkerIndex = actualText?.indexOf("FlowDocContinuationMarker") ?? -1
+    const expectedAroundMarker = expectedMarkerIndex >= 0
+      ? expectedText.slice(Math.max(0, expectedMarkerIndex - 80), expectedMarkerIndex + 120)
+      : ""
+    const actualAroundMarker = actualMarkerIndex >= 0 && actualText
+      ? actualText.slice(Math.max(0, actualMarkerIndex - 80), actualMarkerIndex + 120)
+      : ""
+    const actualAddedIndex = actualText?.indexOf("Added from") ?? -1
+    const actualAroundAdded = actualAddedIndex >= 0 && actualText
+      ? actualText.slice(Math.max(0, actualAddedIndex - 80), actualAddedIndex + 220)
+      : ""
+    throw new Error(
+      `expected stored paragraph ${nodeId} text length ${expectedText.length}, got ${actualText?.length ?? "null"}; ` +
+      `expected tail ${JSON.stringify(expectedText.slice(-120))}, got tail ${JSON.stringify(actualText?.slice(-120) ?? null)}; ` +
+      `expected marker@${expectedMarkerIndex} ${JSON.stringify(expectedAroundMarker)}, got marker@${actualMarkerIndex} ${JSON.stringify(actualAroundMarker)}; ` +
+      `actual Added@${actualAddedIndex} ${JSON.stringify(actualAroundAdded)}: ${error.message}`,
+    )
+  }
 }
 
 async function readStoredParagraphText(page, nodeId) {
@@ -331,6 +369,113 @@ async function waitForParagraphFragmentCountAtLeast(page, nodeId, expectedMinCou
     { selector, expectedMinCount },
     { timeout: 10000 },
   )
+}
+
+async function readParagraphFragmentSnapshot(page, nodeId) {
+  return page.evaluate((nodeId) => {
+    const selector = `[data-testid="editor-fragment"][data-node-id="${nodeId}"]`
+    return Array.from(document.querySelectorAll(selector)).map((fragment) => ({
+      pageIndex: Number(fragment.getAttribute("data-page-index") ?? "0"),
+      fragmentIndex: fragment.getAttribute("data-fragment-index"),
+      lineStart: fragment.getAttribute("data-line-start"),
+      lineEnd: fragment.getAttribute("data-line-end"),
+      parentNodeId: fragment.getAttribute("data-parent-node-id"),
+      textLines: Array.from(fragment.querySelectorAll("text"))
+        .map((node) => node.textContent ?? "")
+        .filter((text) => text.trim().length > 0),
+    }))
+  }, nodeId)
+}
+
+async function waitForStableParagraphSnapshot(page, nodeId, timeout = 5000) {
+  const deadline = Date.now() + timeout
+  let previous = null
+  let stableCount = 0
+
+  while (Date.now() < deadline) {
+    const snapshot = await readParagraphFragmentSnapshot(page, nodeId)
+    const serialized = JSON.stringify(snapshot)
+    if (serialized === previous) {
+      stableCount += 1
+      if (stableCount >= 3) return snapshot
+    } else {
+      previous = serialized
+      stableCount = 0
+    }
+    await page.waitForTimeout(100)
+  }
+
+  throw new Error(`paragraph ${nodeId} did not reach a stable visible snapshot`)
+}
+
+function countOccurrences(text, marker) {
+  return text.split(marker).length - 1
+}
+
+async function expectVisibleParagraphMarkerOnce(page, nodeId, marker) {
+  const snapshot = await waitForStableParagraphSnapshot(page, nodeId)
+  const visibleText = snapshot.flatMap((fragment) => fragment.textLines).join(" ")
+  assert(
+    countOccurrences(visibleText, marker) === 1,
+    `expected visible paragraph ${nodeId} to contain marker ${marker} exactly once, got: ${visibleText}`,
+  )
+  return snapshot
+}
+
+async function expectInlineEditSliceMatchesTextarea(page, nodeId, expected) {
+  const selector = `textarea[data-inline-edit-node-id="${nodeId}"]`
+  const slice = await page.locator(selector).evaluate((textarea) => ({
+    start: Number(textarea.dataset.inlineEditSliceStart ?? "0"),
+    end: Number(textarea.dataset.inlineEditSliceEnd ?? "0"),
+    valueLength: textarea.value.length,
+  }))
+  assert(Number.isFinite(slice.start) && Number.isFinite(slice.end), `expected finite slice for ${nodeId}`)
+  assert(slice.end >= slice.start, `expected slice end >= start for ${nodeId}, got ${slice.start}-${slice.end}`)
+  assert(
+    slice.valueLength === slice.end - slice.start,
+    `expected textarea slice length to match value for ${nodeId}, got value ${slice.valueLength} and slice ${slice.start}-${slice.end}`,
+  )
+  if (expected?.maxEndExclusive != null) {
+    assert(
+      slice.end < expected.maxEndExclusive,
+      `expected slice end below ${expected.maxEndExclusive} for ${nodeId}, got ${slice.end}`,
+    )
+  }
+  if (expected?.minStart != null) {
+    assert(
+      slice.start >= expected.minStart,
+      `expected slice start at least ${expected.minStart} for ${nodeId}, got ${slice.start}`,
+    )
+  }
+  return slice
+}
+
+async function expectInlineSelectionOverlay(page, nodeId) {
+  try {
+    await page.waitForFunction((nodeId) => {
+      const textarea = document.querySelector(`textarea[data-inline-edit-node-id="${nodeId}"]`)
+      if (!(textarea instanceof HTMLTextAreaElement)) return false
+      const hasSelection = textarea.selectionEnd > textarea.selectionStart
+      const hasOverlay = document.querySelectorAll(
+        `[data-testid="editor-fragment"][data-node-id="${nodeId}"] [data-wysiwyg-selection="true"]`,
+      ).length > 0
+      return hasSelection && hasOverlay && textarea.dataset.inlineEditVisualMode === "document"
+    }, nodeId, { timeout: 5000 })
+  } catch (error) {
+    const state = await page.evaluate((nodeId) => {
+      const textarea = document.querySelector(`textarea[data-inline-edit-node-id="${nodeId}"]`)
+      return {
+        selectionStart: textarea instanceof HTMLTextAreaElement ? textarea.selectionStart : null,
+        selectionEnd: textarea instanceof HTMLTextAreaElement ? textarea.selectionEnd : null,
+        visualMode: textarea instanceof HTMLTextAreaElement ? textarea.dataset.inlineEditVisualMode ?? null : null,
+        fallbackReason: textarea instanceof HTMLTextAreaElement ? textarea.dataset.inlineEditFallbackReason ?? null : null,
+        overlayCount: document.querySelectorAll(
+          `[data-testid="editor-fragment"][data-node-id="${nodeId}"] [data-wysiwyg-selection="true"]`,
+        ).length,
+      }
+    }, nodeId)
+    throw new Error(`expected inline selection overlay for ${nodeId}, got ${JSON.stringify(state)}: ${error.message}`)
+  }
 }
 
 async function expectActiveInlineTextarea(page, nodeId) {
@@ -632,6 +777,24 @@ async function run() {
     await waitForStoredParagraphText(page, "smoke-p1", editedText)
     await expectNoLayoutError(page)
 
+    await paragraphFragment.dblclick()
+    await textarea.waitFor({ state: "visible", timeout: 5000 })
+    await expectInlineEditVisualContract(page, "smoke-p1")
+    const selectionBox = await textarea.boundingBox()
+    assert(selectionBox, "expected body paragraph textarea box for drag selection")
+    await page.mouse.move(selectionBox.x + 16, selectionBox.y + Math.min(18, selectionBox.height / 2))
+    await page.mouse.down()
+    await page.mouse.move(selectionBox.x + Math.min(selectionBox.width - 16, 240), selectionBox.y + Math.min(18, selectionBox.height / 2), { steps: 8 })
+    await page.mouse.up()
+    await expectInlineSelectionOverlay(page, "smoke-p1")
+    await expectInlineEditVisualMode(page, "smoke-p1", {
+      mode: "document",
+      fallbackReason: null,
+      outlineStyle: "none",
+    })
+    await textarea.press("Escape")
+    await waitForStoredParagraphText(page, "smoke-p1", editedText)
+
     const thaiEditedText = "ทดสอบภาษาไทย ก้าวหน้า ไม้เอกไม้โท และ emoji 👩‍💻"
     const thaiFragment = page.locator('[data-testid="editor-fragment"][data-node-id="smoke-thai-p1"]')
     assert(await thaiFragment.count() === 1, "expected one Thai smoke paragraph fragment")
@@ -652,11 +815,34 @@ async function run() {
     await waitForStoredParagraphText(page, "smoke-thai-p1", thaiEditedText)
     await expectNoLayoutError(page)
 
+    const stackMarker = "FlowDocStackMarker"
+    const stackEditedText = `Stack paragraph ${"wraps inside a row stack without textarea layout drift. ".repeat(4)}${stackMarker}`
+    const stackParagraph = page.locator('[data-testid="editor-fragment"][data-node-id="smoke-stack-p1"]')
+    assert(await stackParagraph.count() === 1, "expected one stack paragraph fragment")
+    const stackBefore = await readParagraphFragmentSnapshot(page, "smoke-stack-p1")
+    assert(stackBefore[0]?.parentNodeId === "smoke-stack", `expected stack paragraph parent, got ${stackBefore[0]?.parentNodeId}`)
+    await stackParagraph.dblclick()
+    const stackTextarea = page.locator('textarea[data-inline-edit-node-id="smoke-stack-p1"]')
+    await stackTextarea.waitFor({ state: "visible", timeout: 5000 })
+    await expectInlineEditVisualContract(page, "smoke-stack-p1")
+    await stackTextarea.fill(stackEditedText)
+    await expectInlineEditVisualMode(page, "smoke-stack-p1", {
+      mode: "document",
+      fallbackReason: null,
+      outlineStyle: "none",
+    })
+    const stackAfter = await expectVisibleParagraphMarkerOnce(page, "smoke-stack-p1", stackMarker)
+    assert(stackAfter[0]?.parentNodeId === "smoke-stack", `expected edited stack paragraph parent, got ${stackAfter[0]?.parentNodeId}`)
+    await stackTextarea.press("Escape")
+    await waitForStoredParagraphText(page, "smoke-stack-p1", stackEditedText)
+    await expectNoLayoutError(page)
+
     const tableParagraph = page.locator('[data-testid="editor-fragment"][data-node-id="smoke-table-p1-1"]')
     assert(await tableParagraph.count() === 1, "expected one table-cell paragraph fragment")
     await tableParagraph.dblclick()
     const tableTextarea = page.locator('textarea[data-inline-edit-node-id="smoke-table-p1-1"]')
     await tableTextarea.waitFor({ state: "visible", timeout: 5000 })
+    await expectInlineEditVisualContract(page, "smoke-table-p1-1")
     await tableTextarea.evaluate((el) => {
       el.focus()
       el.setSelectionRange(0, 0)
@@ -785,6 +971,9 @@ async function run() {
     await firstContinuationFragment.dblclick()
     const pageTrackingTextarea = continuationPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
     await pageTrackingTextarea.waitFor({ state: "visible", timeout: 5000 })
+    const firstTrackingSlice = await expectInlineEditSliceMatchesTextarea(continuationPage, "wysiwyg-continuation-p1", {
+      maxEndExclusive: CONTINUATION_PARAGRAPH_TEXT.length,
+    })
     assert(
       await pageTrackingTextarea.getAttribute("data-wysiwyg-inline-edit-enabled") === "true",
       "expected WYSIWYG inline edit foundation to be enabled by the smoke server flag",
@@ -794,17 +983,23 @@ async function run() {
       el.setSelectionRange(el.value.length, el.value.length)
     })
     await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
-    const pageTrackingAppend = " Added from the first fragment so caret tracking must relocate the active textarea while browser pagination reflows.".repeat(4)
+    const pageTrackingMarker = "FlowDocContinuationMarker"
+    const pageTrackingAppend = `${" Added from the first fragment so caret tracking must relocate the active textarea while browser pagination reflows.".repeat(4)} ${pageTrackingMarker}.`
     await continuationPage.keyboard.type(pageTrackingAppend, { delay: 1 })
     await waitForActiveInlineTextareaSliceStartAtLeast(continuationPage, "wysiwyg-continuation-p1", 1)
+    await expectInlineEditSliceMatchesTextarea(continuationPage, "wysiwyg-continuation-p1")
     await expectNoLayoutError(continuationPage)
     await continuationPage.keyboard.press("Escape")
-    const continuationTrackedText = `${CONTINUATION_PARAGRAPH_TEXT}${pageTrackingAppend}`
+    const continuationTrackedText = CONTINUATION_PARAGRAPH_TEXT.slice(0, firstTrackingSlice.end) +
+      pageTrackingAppend +
+      CONTINUATION_PARAGRAPH_TEXT.slice(firstTrackingSlice.end)
     await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", continuationTrackedText)
+    await expectVisibleParagraphMarkerOnce(continuationPage, "wysiwyg-continuation-p1", pageTrackingMarker)
     await continuationPage.getByRole("button", { name: "Undo" }).click()
     await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
     await continuationPage.getByRole("button", { name: "Redo" }).click()
     await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", continuationTrackedText)
+    await expectVisibleParagraphMarkerOnce(continuationPage, "wysiwyg-continuation-p1", pageTrackingMarker)
     await continuationPage.getByRole("button", { name: "Undo" }).click()
     await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
     await continuationPage.close()
@@ -826,6 +1021,10 @@ async function run() {
     await continuationTextarea.waitFor({ state: "visible", timeout: 5000 })
     const continuationSliceStart = Number(await continuationTextarea.getAttribute("data-inline-edit-slice-start"))
     assert(continuationSliceStart > 0, `expected continuation slice start > 0, got ${continuationSliceStart}`)
+    const continuationEditSlice = await expectInlineEditSliceMatchesTextarea(continuationBoundaryPage, "wysiwyg-continuation-p1", {
+      minStart: 1,
+      maxEndExclusive: CONTINUATION_PARAGRAPH_TEXT.length,
+    })
     assert(
       await continuationTextarea.getAttribute("data-wysiwyg-inline-edit-enabled") === "true",
       "expected WYSIWYG inline edit foundation to be enabled in smoke dev mode",
@@ -843,7 +1042,9 @@ async function run() {
     await expectActiveInlineTextarea(continuationBoundaryPage, "wysiwyg-continuation-p1")
     await expectNoLayoutError(continuationBoundaryPage)
     await continuationBoundaryPage.keyboard.press("Escape")
-    const continuationEditedText = `${CONTINUATION_PARAGRAPH_TEXT}${continuationAppend}`
+    const continuationEditedText = CONTINUATION_PARAGRAPH_TEXT.slice(0, continuationEditSlice.end) +
+      continuationAppend +
+      CONTINUATION_PARAGRAPH_TEXT.slice(continuationEditSlice.end)
     await waitForStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1", continuationEditedText)
     await continuationBoundaryPage.getByRole("button", { name: "Undo" }).click()
     await waitForStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)

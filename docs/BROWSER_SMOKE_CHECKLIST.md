@@ -51,12 +51,16 @@ documents into `localStorage`, explicitly enables
 - editor shell, toolbar, canvas, and first page render
 - no unexpected layout error badge is visible
 - paragraph inline edit commits multiline text
+- same-fragment drag selection produces a visible WYSIWYG selection overlay
+- stack paragraph inline edit keeps document-visual layout parity while typing
 - Thai paragraph inline edit keeps composition/IME fallback visible and commits
   Thai text with combining marks and emoji
+- table-cell paragraph inline edit exposes the guarded visual contract
 - continuation-fragment inline edit can start from a three-fragment paragraph,
-  relocate the active textarea when caret tracking moves across pages, type
-  across browser reflow, stay focused, undo/redo as one edit session, and
-  Backspace across the continuation boundary
+  keep textarea values bounded to fragment slices, relocate the active textarea
+  when caret tracking moves across pages after typing settles, type across
+  browser reflow without duplicate/garbled visible text, stay focused, undo/redo
+  as one edit session, and Backspace across the continuation boundary
 - fieldRef paragraphs do not enter plain textarea inline edit
 - table-cell paragraph Backspace at the true start does not call body-paragraph
   merge or corrupt the table
@@ -114,8 +118,11 @@ changes.
   visible as fallback instead of making text disappear.
 - Confirm the collapsed custom caret appears when SVG geometry is fresh,
   selection is collapsed, and composition is inactive.
-- Confirm missing caret geometry, range selection, or composition falls back to
-  visible textarea text/native caret rather than leaving invisible input state.
+- Confirm same-fragment range selection draws a visible SVG selection overlay
+  when geometry is available.
+- Confirm missing caret geometry, missing selection geometry, or composition
+  falls back to visible textarea text/native caret rather than leaving invisible
+  input state.
 - Confirm entering edit without typing may use the fresh SVG visual layer, while
   autofocus/programmatic selection alone does not force visible textarea mode.
 - Confirm a second click inside the active textarea to place the caret does not
@@ -173,9 +180,13 @@ metadata.
 - Enter edit on the intended fragment.
 - Confirm only the clicked fragment enters edit mode.
 - Confirm continuation text and caret offsets remain slice-aware.
+- Confirm the active textarea value is bounded to the active fragment slice and
+  full paragraph reconstruction preserves the prefix and suffix without
+  duplicate or garbled text.
 - For caret-following changes, type across a fragment boundary and backspace
   back across it; confirm the active textarea follows the caret page when
-  segment offsets are available.
+  segment offsets are available, after the active typing burst is no longer
+  locked.
 - For continuation key handling changes, press Enter inside a continuation
   fragment and confirm the split happens at the intended full-paragraph offset.
 - Backspace at the start of a continuation fragment should delete across the

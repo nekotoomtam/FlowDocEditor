@@ -30,12 +30,14 @@ missing-geometry fallback, and stale browser pagination guards before the track
 can be described as trusted default behavior.
 
 Current automated smoke coverage now exercises plain paragraph visual fallback,
-Thai/composition fallback, fieldRef paragraph non-editability, table-cell
-boundary Backspace, and continuation-fragment editing with page-tracking
-textarea relocation, focus, undo/redo, and boundary Backspace. The smoke script
-starts its isolated dev server with the WYSIWYG flag enabled. This is a
-stability gate foundation, not a claim that selection overlay, clipboard
-hardening, or full IME/accessibility behavior is complete.
+same-fragment drag selection overlay, stack paragraph edit visual parity,
+Thai/composition fallback, fieldRef paragraph non-editability, table-cell visual
+contract and boundary Backspace, and continuation-fragment editing with
+slice-aware text reconstruction, page-tracking textarea relocation, focus,
+undo/redo, and boundary Backspace. The smoke script starts its isolated dev
+server with the WYSIWYG flag enabled. This is a stability gate foundation, not
+a claim that cross-fragment selection, clipboard hardening, or full
+IME/accessibility behavior is complete.
 
 ## Guardrails
 
@@ -157,11 +159,13 @@ Initial internal helper:
 
 - `resolveSelectionOverlayRectsInFragment(...)`
 - `resolveParagraphSelectionOverlayRects(...)`
-- These helpers return page-local highlight rectangles, but drag selection,
-  clipboard behavior, and visible editor highlights are still deferred.
+- These helpers return page-local highlight rectangles. The editor now uses
+  them for same-fragment drag selection while the textarea remains the focused
+  input bridge. Clipboard behavior and cross-fragment visible selection remain
+  deferred.
 
-- Start with a single-page paragraph.
-- Then support multi-line within a paragraph.
+- Start with a single active fragment.
+- Then support multi-line within that fragment.
 - Then support split fragments across pages.
 - Keep clipboard/cut behavior conservative until the highlight model is stable.
 

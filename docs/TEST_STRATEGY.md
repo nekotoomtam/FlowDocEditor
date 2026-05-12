@@ -203,7 +203,7 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  26 core test files / 324 core tests, plus 12 app test files / 119 app tests.
+  26 core test files / 324 core tests, plus 12 app test files / 123 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases,
   including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
@@ -243,17 +243,22 @@ Current strengths:
   rejection, legacy/package v1 migration to package v2, package v2 migration
   idempotence, v2 registry warning propagation, v2 registry warning import
   status, and v2 registry hard-error rejection.
-- App-level tests cover drift and editor helper behavior.
+- App-level tests cover drift and editor helper behavior, including
+  continuation-slice text reconstruction and WYSIWYG visual-mode selection
+  decisions.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.
 - Automated browser smoke now protects default editor load, paragraph inline
-  edit commit, undo/redo, Thai/composition fallback, table-cell selection, the
-  property-panel title, table-cell row/column insert/delete controls,
-  table-cell boundary Backspace, fieldRef paragraph non-editability, and opt-in
-  WYSIWYG continuation-fragment editing with three-fragment pagination,
-  page-tracking textarea relocation, focus, undo/redo, and boundary Backspace,
-  plus Fill mode package v2 data snapshot autosave, active package-registry
-  field palette loading, and property-panel fieldRef inspection/editing.
+  edit commit, undo/redo, same-fragment WYSIWYG drag selection overlay,
+  stack-paragraph visual parity, Thai/composition fallback, table-cell
+  selection, the property-panel title, table-cell visual contract,
+  table-cell row/column insert/delete controls, table-cell boundary Backspace,
+  fieldRef paragraph non-editability, and opt-in WYSIWYG
+  continuation-fragment editing with three-fragment pagination, slice-bounded
+  textarea values, page-tracking textarea relocation after typing settles,
+  focus, undo/redo, and boundary Backspace, plus Fill mode package v2 data
+  snapshot autosave, active package-registry field palette loading, and
+  property-panel fieldRef inspection/editing.
 - Manual browser checks are still used for editor feel where automation
   coverage is light.
 

@@ -5,8 +5,13 @@ import type { TextMeasurer } from "@/layout"
 import type { DocumentNode, ParagraphNode, TableNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily } from "@/font-registry"
-import { resolveCollapsedCaretOverlayInFragment } from "./wysiwygCaretMapping"
+import {
+  resolveCollapsedCaretOverlayInFragment,
+  resolveCaretOffsetFromPointInFragment,
+  resolveSelectionOverlayRectsInFragment,
+} from "./wysiwygCaretMapping"
 import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
+import type { InlineEditSelectionSnapshot } from "./wysiwygTextInteraction"
 
 interface Props {
   fragment: PageFragment
@@ -30,8 +35,10 @@ interface Props {
 
 export interface ContinuationEditState {
   continuationCharStart: number | null
+  continuationCharEnd: number | null
   editText: string
   preText: string
+  postText: string
   adjustedInitialCaret: number | null
 }
 
@@ -71,8 +78,11 @@ export function shouldUseInlineEditDocumentVisual(
   isVisualFresh: boolean,
   isSelectionCollapsed: boolean,
   isComposing: boolean,
+  hasSelectionOverlay = false,
 ): boolean {
-  return shouldUseInlineEditSvgVisual(isEditing, isVisualFresh) && isSelectionCollapsed && !isComposing
+  return shouldUseInlineEditSvgVisual(isEditing, isVisualFresh) &&
+    !isComposing &&
+    (isSelectionCollapsed || hasSelectionOverlay)
 }
 
 export function inlineEditTextareaTextColor(useSvgVisual: boolean): string {
@@ -100,32 +110,36 @@ export function getInlineEditVisualMode(input: {
   isSelectionCollapsed: boolean
   isComposing: boolean
   hasCustomCaret: boolean
+  hasSelectionOverlay?: boolean
   isWysiwygEnabled?: boolean
 }): InlineEditVisualMode {
   const isWysiwygEnabled = input.isWysiwygEnabled ?? true
+  const hasSelectionOverlay = input.hasSelectionOverlay ?? false
   const canUseDocumentVisual = isWysiwygEnabled && shouldUseInlineEditDocumentVisual(
     input.isEditing,
     input.isVisualFresh,
     input.isSelectionCollapsed,
     input.isComposing,
+    hasSelectionOverlay,
   )
-  const useDocumentVisual = shouldUseInlineEditDocumentLayer(canUseDocumentVisual, input.hasCustomCaret)
-  const useCustomCaret = canUseDocumentVisual && input.hasCustomCaret
+  const hasRequiredOverlay = input.isSelectionCollapsed ? input.hasCustomCaret : hasSelectionOverlay
+  const useDocumentVisual = shouldUseInlineEditDocumentLayer(canUseDocumentVisual, hasRequiredOverlay)
+  const useCustomCaret = canUseDocumentVisual && input.isSelectionCollapsed && input.hasCustomCaret
   let fallbackReason: InlineEditVisualFallbackReason | null = null
 
   if (!input.isEditing) fallbackReason = "not-editing"
   else if (!isWysiwygEnabled) fallbackReason = "wysiwyg-disabled"
   else if (input.isComposing) fallbackReason = "composition"
   else if (!input.isVisualFresh) fallbackReason = "stale-visual"
-  else if (!input.isSelectionCollapsed) fallbackReason = "range-selection"
-  else if (!input.hasCustomCaret) fallbackReason = "missing-caret-geometry"
+  else if (!input.isSelectionCollapsed && !hasSelectionOverlay) fallbackReason = "range-selection"
+  else if (input.isSelectionCollapsed && !input.hasCustomCaret) fallbackReason = "missing-caret-geometry"
 
   return {
     useDocumentVisual,
     useCustomCaret,
     fallbackReason: useDocumentVisual ? null : fallbackReason,
     textareaTextColor: inlineEditTextareaTextColor(useDocumentVisual),
-    textareaCaretColor: inlineEditTextareaCaretColor(useCustomCaret),
+    textareaCaretColor: inlineEditTextareaCaretColor(useDocumentVisual),
     textareaOutline: inlineEditTextareaOutline(useDocumentVisual),
     textareaOutlineOffset: useDocumentVisual ? 0 : -2,
   }
@@ -185,7 +199,10 @@ function isParagraphInsideTableCell(
   return false
 }
 
-export function buildInlineEditSliceKey(fragment: PageFragment, continuationCharStart: number | null): string {
+export function buildInlineEditSliceKey(
+  fragment: PageFragment,
+  continuationCharStart: number | null,
+): string {
   const fragmentPart = fragment.fragmentIndex ?? fragment.lineStart ?? "x"
   return `${fragment.nodeId}:${fragment.pageIndex}:${fragmentPart}:${continuationCharStart ?? 0}`
 }
@@ -201,21 +218,34 @@ export function shouldUseNativeTableCellBoundaryBackspace(
   return isTableCellParagraph && preText.length === 0
 }
 
+function getFragmentTextRange(fragment: PageFragment, fullTextLength: number): { start: number; end: number } | null {
+  const segments = (fragment.lines ?? []).flatMap((line) => line.segments ?? [])
+  if (segments.length === 0) return null
+
+  const start = Math.max(0, Math.min(fullTextLength, Math.min(...segments.map((segment) => segment.start))))
+  const end = Math.max(start, Math.min(fullTextLength, Math.max(...segments.map((segment) => segment.end))))
+  return { start, end }
+}
+
 export function getContinuationEditState(
   fullText: string,
   fragment: PageFragment,
   initialCaretIndex: number | null,
 ): ContinuationEditState {
-  const continuationCharStart: number | null = fragment.continuesFrom === true
-    ? (fragment.lines?.[0]?.segments?.[0]?.start ?? null)
+  const shouldSliceToFragment = fragment.continuesFrom === true || fragment.isContinued === true
+  const fragmentRange = shouldSliceToFragment ? getFragmentTextRange(fragment, fullText.length) : null
+  const sliceStart = fragmentRange?.start ?? 0
+  const sliceEnd = fragmentRange?.end ?? fullText.length
+  const continuationCharStart: number | null = fragmentRange ? sliceStart : null
+  const continuationCharEnd: number | null = fragmentRange ? sliceEnd : null
+  const editText = fullText.slice(sliceStart, sliceEnd)
+  const preText = fullText.slice(0, sliceStart)
+  const postText = fullText.slice(sliceEnd)
+  const adjustedInitialCaret = initialCaretIndex !== null
+    ? Math.min(editText.length, Math.max(0, initialCaretIndex - sliceStart))
     : null
-  const editText = continuationCharStart !== null ? fullText.slice(continuationCharStart) : fullText
-  const preText = continuationCharStart !== null ? fullText.slice(0, continuationCharStart) : ""
-  const adjustedInitialCaret = (continuationCharStart !== null && initialCaretIndex !== null)
-    ? Math.max(0, initialCaretIndex - continuationCharStart)
-    : initialCaretIndex
 
-  return { continuationCharStart, editText, preText, adjustedInitialCaret }
+  return { continuationCharStart, continuationCharEnd, editText, preText, postText, adjustedInitialCaret }
 }
 
 export function absoluteInlineEditIndex(preText: string, localIndex: number | null | undefined, fallback: number): number {
@@ -264,6 +294,7 @@ export function buildSplitEditInput(
   editText: string,
   selectionStart: number,
   selectionEnd: number,
+  postText = "",
 ): SplitEditInput {
   const rawStart = Math.max(0, Math.min(selectionStart, editText.length))
   const rawEnd = Math.max(rawStart, Math.min(selectionEnd, editText.length))
@@ -279,7 +310,7 @@ export function buildSplitEditInput(
   const start = Math.max(0, Math.min(fullStart - preText.length, editText.length))
   const end = Math.max(start, Math.min(fullEnd - preText.length, editText.length))
   const nextEditText = editText.slice(0, start) + editText.slice(end)
-  const text = preText + nextEditText
+  const text = preText + nextEditText + postText
   return {
     text,
     splitIndex: snapToGraphemeBoundary(text, Math.min(preText.length + start, text.length)),
@@ -289,11 +320,12 @@ export function buildSplitEditInput(
 export function buildContinuationBackspaceInput(
   preText: string,
   editText: string,
+  postText = "",
 ): { text: string; caretIndex: number } | null {
   if (preText.length === 0) return null
   const deleteFrom = previousGraphemeBoundary(preText, preText.length)
   return {
-    text: preText.slice(0, deleteFrom) + editText,
+    text: preText.slice(0, deleteFrom) + editText + postText,
     caretIndex: deleteFrom,
   }
 }
@@ -456,6 +488,28 @@ function renderCollapsedCaret(
   )
 }
 
+function renderSelectionOverlay(
+  fragment: PageFragment,
+  pageKey: string,
+  scale: number,
+  rects: ReturnType<typeof resolveSelectionOverlayRectsInFragment>,
+) {
+  return rects.map((rect) => (
+    <rect
+      key={`selection-${fragment.nodeId}-${rect.lineIndex}-${rect.startOffset}-${rect.endOffset}`}
+      data-wysiwyg-selection="true"
+      x={rect.x * scale}
+      y={rect.y * scale}
+      width={Math.max(rect.width * scale, 1)}
+      height={rect.height * scale}
+      fill="#93c5fd"
+      opacity={0.55}
+      clipPath={`url(#cp-${pageKey}-${fragment.nodeId})`}
+      style={{ pointerEvents: "none" }}
+    />
+  ))
+}
+
 export function ParagraphTextSurface({
   fragment,
   doc,
@@ -476,7 +530,10 @@ export function ParagraphTextSurface({
   onMergeParagraph,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const pointerSelectionAnchorRef = useRef<number | null>(null)
+  const sliceContextRef = useRef<(ContinuationEditState & { editSliceKey: string }) | null>(null)
   const [isSelectionCollapsed, setIsSelectionCollapsed] = useState(true)
+  const [selectionSnapshot, setSelectionSnapshot] = useState<InlineEditSelectionSnapshot | null>(null)
   const [isComposing, setIsComposing] = useState(false)
   const renderProps = fragment.renderProps
   const editHeight = Math.max(fragment.height * scale, 1)
@@ -494,26 +551,64 @@ export function ParagraphTextSurface({
   // inside SVG foreignObject with overflow:hidden).
   const fullText = getEditableParagraphText(doc, fragment.nodeId)
   const canPlainTextEdit = fullText !== null
+  const nextEditState = getContinuationEditState(fullText ?? "", fragment, initialCaretIndex)
+  const editSliceKey = buildInlineEditSliceKey(
+    fragment,
+    nextEditState.continuationCharStart,
+  )
+  if (sliceContextRef.current?.editSliceKey !== editSliceKey) {
+    sliceContextRef.current = { ...nextEditState, editSliceKey }
+  }
   const {
     continuationCharStart,
+    continuationCharEnd,
     editText,
     preText,
+    postText,
     adjustedInitialCaret,
-  } = getContinuationEditState(fullText ?? "", fragment, initialCaretIndex)
-  const editSliceKey = buildInlineEditSliceKey(fragment, continuationCharStart)
+  } = sliceContextRef.current
   const isTableCellParagraph = isParagraphInsideTableCell(doc, fragment.nodeId, fragment.parentNodeId)
   const isCurrentEditSlice = useCallback((el: HTMLTextAreaElement) => (
     el.dataset.inlineEditSliceKey === editSliceKey
   ), [editSliceKey])
   const updateCaret = useCallback((el: HTMLTextAreaElement) => {
     if (!isCurrentEditSlice(el)) return
-    const snapshot = getInlineEditInputSnapshot(el, preText)
+    const snapshot = getInlineEditInputSnapshot(el, preText, postText)
     setIsSelectionCollapsed(snapshot.isSelectionCollapsed)
+    setSelectionSnapshot(snapshot.selection)
     onCaretChange(fragment.nodeId, snapshot.caretOffset)
-  }, [fragment.nodeId, isCurrentEditSlice, onCaretChange, preText])
+  }, [fragment.nodeId, isCurrentEditSlice, onCaretChange, postText, preText])
   const markUserEditInteraction = useCallback(() => {
     onUserEditInteraction(fragment.nodeId)
   }, [fragment.nodeId, onUserEditInteraction])
+  const resolveLocalOffsetFromPointer = useCallback((event: React.PointerEvent<HTMLTextAreaElement>): number | null => {
+    const el = event.currentTarget
+    const rect = el.getBoundingClientRect()
+    const point = {
+      x: fragment.x + (event.clientX - rect.left - EDIT_CHROME_X) / scale,
+      y: fragment.y + (event.clientY - rect.top - EDIT_CHROME_Y) / scale,
+    }
+    const candidate = resolveCaretOffsetFromPointInFragment(fragment, point, { textMeasurer })
+    if (!candidate) return null
+    return Math.max(0, Math.min(editText.length, candidate.offset - preText.length))
+  }, [editText.length, fragment, preText.length, scale, textMeasurer])
+
+  const setTextareaPointerSelection = useCallback((
+    el: HTMLTextAreaElement,
+    anchor: number,
+    focus: number,
+  ) => {
+    const start = Math.min(anchor, focus)
+    const end = Math.max(anchor, focus)
+    const direction = focus < anchor ? "backward" : "forward"
+    el.setSelectionRange(start, end, start === end ? "none" : direction)
+    updateCaret(el)
+  }, [updateCaret])
+
+  useEffect(() => {
+    setIsSelectionCollapsed(true)
+    setSelectionSnapshot(null)
+  }, [editSliceKey])
 
   const editPreview = useMemo(() => {
     if (!isEditing) return null
@@ -521,23 +616,35 @@ export function ParagraphTextSurface({
   }, [fragment.height, fragment.lines, isEditing])
   const editPreviewHeight = (editPreview?.height ?? 0) * scale
   const activeEditHeight = Math.max(editHeight, minimumEditHeight, editPreviewHeight)
+  const selectionOverlayRects = useMemo(() => {
+    if (!selectionSnapshot || selectionSnapshot.isCollapsed) return []
+    return resolveSelectionOverlayRectsInFragment(
+      fragment,
+      selectionSnapshot.anchorOffset,
+      selectionSnapshot.focusOffset,
+      { textMeasurer },
+    )
+  }, [fragment, selectionSnapshot, textMeasurer])
+  const hasSelectionOverlay = selectionOverlayRects.length > 0
   const canUseDocumentVisual = wysiwygInlineEditEnabled && shouldUseInlineEditDocumentVisual(
     isEditing,
     isVisualFresh,
     isSelectionCollapsed,
     isComposing,
+    hasSelectionOverlay,
   )
   const customCaret = useMemo(() => (
-    canUseDocumentVisual
+    canUseDocumentVisual && isSelectionCollapsed
       ? renderCollapsedCaret(fragment, pageKey, scale, initialCaretIndex, textMeasurer)
       : null
-  ), [canUseDocumentVisual, fragment, initialCaretIndex, pageKey, scale, textMeasurer])
+  ), [canUseDocumentVisual, fragment, initialCaretIndex, isSelectionCollapsed, pageKey, scale, textMeasurer])
   const visualMode = getInlineEditVisualMode({
     isEditing,
     isVisualFresh,
     isSelectionCollapsed,
     isComposing,
     hasCustomCaret: customCaret !== null,
+    hasSelectionOverlay,
     isWysiwygEnabled: wysiwygInlineEditEnabled,
   })
   // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
@@ -572,6 +679,7 @@ export function ParagraphTextSurface({
   if (isEditing && canPlainTextEdit) {
     return (
       <>
+        {visualMode.useDocumentVisual && renderSelectionOverlay(fragment, pageKey, scale, selectionOverlayRects)}
         {visualMode.useDocumentVisual && fragment.lines?.map((line, index) =>
           renderLine(line, index, fragment, renderProps, pageKey, scale),
         )}
@@ -619,8 +727,9 @@ export function ParagraphTextSurface({
               const el = event.currentTarget
               if (!isCurrentEditSlice(el)) return
               markUserEditInteraction()
-              const snapshot = getInlineEditInputSnapshot(el, preText)
+              const snapshot = getInlineEditInputSnapshot(el, preText, postText)
               setIsSelectionCollapsed(snapshot.isSelectionCollapsed)
+              setSelectionSnapshot(snapshot.selection)
               syncTextareaHeight(el)
               onChange(fragment.nodeId, snapshot.text, snapshot.caretOffset)
             }}
@@ -662,14 +771,14 @@ export function ParagraphTextSurface({
                 event.preventDefault()
                 const selectionStart = el.selectionStart ?? el.value.length
                 const selectionEnd = el.selectionEnd ?? selectionStart
-                const input = buildSplitEditInput(preText, el.value, selectionStart, selectionEnd)
+                const input = buildSplitEditInput(preText, el.value, selectionStart, selectionEnd, postText)
                 onChange(fragment.nodeId, input.text, input.splitIndex)
                 onSplitParagraph(fragment.nodeId, input.splitIndex)
                 return
               }
 
               if (decision.action === "merge-or-boundary-backspace") {
-                const continuationBackspace = buildContinuationBackspaceInput(preText, el.value)
+                const continuationBackspace = buildContinuationBackspaceInput(preText, el.value, postText)
                 if (continuationBackspace) {
                   event.preventDefault()
                   onChange(fragment.nodeId, continuationBackspace.text, continuationBackspace.caretIndex)
@@ -678,7 +787,7 @@ export function ParagraphTextSurface({
 
                 if (shouldUseNativeTableCellBoundaryBackspace(isTableCellParagraph, preText)) return
                 event.preventDefault()
-                onChange(fragment.nodeId, el.value, 0)
+                onChange(fragment.nodeId, preText + el.value + postText, 0)
                 onMergeParagraph(fragment.nodeId)
               }
             }}
@@ -689,6 +798,31 @@ export function ParagraphTextSurface({
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => {
               event.stopPropagation()
+              if (!wysiwygInlineEditEnabled || isComposing || event.button !== 0) return
+              const offset = resolveLocalOffsetFromPointer(event)
+              if (offset === null) return
+              event.preventDefault()
+              pointerSelectionAnchorRef.current = offset
+              event.currentTarget.focus()
+              event.currentTarget.setPointerCapture?.(event.pointerId)
+              setTextareaPointerSelection(event.currentTarget, offset, offset)
+            }}
+            onPointerMove={(event) => {
+              if (pointerSelectionAnchorRef.current === null || (event.buttons & 1) === 0) return
+              const offset = resolveLocalOffsetFromPointer(event)
+              if (offset === null) return
+              event.preventDefault()
+              event.stopPropagation()
+              setTextareaPointerSelection(event.currentTarget, pointerSelectionAnchorRef.current, offset)
+            }}
+            onPointerUp={(event) => {
+              if (pointerSelectionAnchorRef.current === null) return
+              event.stopPropagation()
+              event.currentTarget.releasePointerCapture?.(event.pointerId)
+              pointerSelectionAnchorRef.current = null
+            }}
+            onPointerCancel={() => {
+              pointerSelectionAnchorRef.current = null
             }}
             onCompositionStart={() => {
               setIsComposing(true)
@@ -701,6 +835,7 @@ export function ParagraphTextSurface({
             data-inline-edit-node-id={fragment.nodeId}
             data-inline-edit-slice-key={editSliceKey}
             data-inline-edit-slice-start={continuationCharStart ?? 0}
+            data-inline-edit-slice-end={continuationCharEnd ?? (fullText ?? "").length}
             data-wysiwyg-inline-edit-enabled={wysiwygInlineEditEnabled ? "true" : "false"}
             data-inline-edit-visual-mode={visualMode.useDocumentVisual ? "document" : "textarea"}
             data-inline-edit-fallback-reason={visualMode.fallbackReason ?? undefined}
