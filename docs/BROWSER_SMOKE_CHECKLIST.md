@@ -60,6 +60,7 @@ documents into `localStorage`, then verifies:
 - filled values are autosaved as package v2 `data.values`
 - a package v2 custom registry appears in the Field palette and selected
   fieldRef details appear in the property panel
+- property-panel fieldRef label/fallback edits autosave back into package v2
 
 Use `SMOKE_BASE_URL=http://localhost:<port>/editor npm run smoke:editor` when
 you intentionally want to run against an already-started server. Use

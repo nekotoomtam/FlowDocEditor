@@ -1,6 +1,7 @@
 import type { DocumentNode, FieldRefInline, LayoutNode, TableNode, TableRowNode, TableCellNode, ParagraphNode, TocNode } from "@/schema"
 import { pt } from "@/schema"
 import { isPlainTextParagraph } from "@/document"
+import type { FieldRefInlineChanges } from "@/document"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 
 type DocNode = LayoutNode | TableRowNode | TableCellNode
@@ -18,6 +19,7 @@ interface Props {
   selectedNodeId: string | null
   onUpdateProps: (nodeId: string, changes: Record<string, unknown>) => void
   onUpdateText: (nodeId: string, text: string) => void
+  onUpdateFieldRef: (fieldRefId: string, changes: FieldRefInlineChanges) => void
   onDelete: (nodeId: string) => void
   tableOps: TableOps
 }
@@ -76,7 +78,20 @@ function getParagraphFieldRefs(node: ParagraphNode): FieldRefInline[] {
   return node.children.filter((child): child is FieldRefInline => child.type === "fieldRef")
 }
 
-function FieldReferenceList({ refs, registry }: { refs: FieldRefInline[]; registry: FieldRegistryV1 }) {
+function optionalTextValue(value: string): string | undefined {
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+function FieldReferenceList({
+  refs,
+  registry,
+  onUpdateFieldRef,
+}: {
+  refs: FieldRefInline[]
+  registry: FieldRegistryV1
+  onUpdateFieldRef: (fieldRefId: string, changes: FieldRefInlineChanges) => void
+}) {
   if (refs.length === 0) return null
   const definitions = new Map(registry.fields.map((field) => [field.key, field]))
 
@@ -110,13 +125,33 @@ function FieldReferenceList({ refs, registry }: { refs: FieldRefInline[]; regist
               </span>
             </div>
             <div title={fieldRef.key} style={{ fontSize: 9, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {fieldRef.key}
+              key: {fieldRef.key}
             </div>
-            {(fieldRef.fallback ?? definition?.fallback) && (
+            {definition && (
               <div style={{ fontSize: 9, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                fallback: {fieldRef.fallback ?? definition?.fallback}
+                type: {definition.fieldType}{definition.required ? " required" : ""}
               </div>
             )}
+            <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <span style={{ fontSize: 9, color: "#9ca3af" }}>Label</span>
+              <input
+                data-testid="field-ref-label-input"
+                value={fieldRef.label ?? ""}
+                placeholder={definition?.label ?? fieldRef.key}
+                onChange={(e) => onUpdateFieldRef(fieldRef.id, { label: optionalTextValue(e.target.value) })}
+                style={{ ...input, fontSize: 10, padding: "3px 5px" }}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <span style={{ fontSize: 9, color: "#9ca3af" }}>Fallback</span>
+              <input
+                data-testid="field-ref-fallback-input"
+                value={fieldRef.fallback ?? ""}
+                placeholder={definition?.fallback ?? ""}
+                onChange={(e) => onUpdateFieldRef(fieldRef.id, { fallback: optionalTextValue(e.target.value) })}
+                style={{ ...input, fontSize: 10, padding: "3px 5px" }}
+              />
+            </label>
           </div>
         )
       })}
@@ -145,7 +180,7 @@ const btnDanger: React.CSSProperties = {
 
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
-export function PropertyPanel({ doc, registry, selectedNodeId, onUpdateProps, onUpdateText, onDelete, tableOps }: Props) {
+export function PropertyPanel({ doc, registry, selectedNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onDelete, tableOps }: Props) {
   if (!selectedNodeId) {
     return (
       <div style={{ background: "white", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px 0" }}>
@@ -193,7 +228,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, onUpdateProps, on
                   }}
                 />
               </div>
-              <FieldReferenceList refs={fieldRefs} registry={registry} />
+              <FieldReferenceList refs={fieldRefs} registry={registry} onUpdateFieldRef={onUpdateFieldRef} />
               <div style={{ display: "flex", gap: 6 }}>
                 <div style={{ flex: 1 }}>
                   <label style={label}>Font size (pt)</label>
@@ -436,7 +471,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, onUpdateProps, on
                   />
                 </div>
               )}
-              <FieldReferenceList refs={fieldRefs} registry={registry} />
+              <FieldReferenceList refs={fieldRefs} registry={registry} onUpdateFieldRef={onUpdateFieldRef} />
               <div style={{ display: "flex", gap: 6 }}>
                 <div style={{ flex: 1 }}>
                   <label style={label}>Padding</label>

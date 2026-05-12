@@ -1,4 +1,4 @@
-import type { DocumentNode, LayoutNode, ParagraphNode, TableNode, TableRowNode, TableCellNode, TextRun } from "../schema"
+import type { DocumentNode, FieldRefInline, LayoutNode, ParagraphNode, TableNode, TableRowNode, TableCellNode, TextRun } from "../schema"
 import { pt } from "../schema"
 import type { DragSource, PlacementOperation } from "../placement/types"
 import {
@@ -22,6 +22,11 @@ type Nodes = Record<string, LayoutNode>
 interface ParentInfo {
   parentId: string
   index: number
+}
+
+export interface FieldRefInlineChanges {
+  label?: string
+  fallback?: string
 }
 
 // ─── Tree Helpers ──────────────────────────────────────────────────────────────
@@ -62,6 +67,29 @@ function replaceWithSingleTextRun(node: ParagraphNode, text: string): ParagraphN
   const firstRun = node.children.find((child) => child.type === "text")
   if (!firstRun) return node
   return { ...node, children: [{ ...firstRun, text }] }
+}
+
+function updateFieldRefInParagraph(
+  node: ParagraphNode,
+  fieldRefId: string,
+  changes: FieldRefInlineChanges,
+): ParagraphNode | null {
+  let changed = false
+  const children = node.children.map((child) => {
+    if (child.type !== "fieldRef" || child.id !== fieldRefId) return child
+    changed = true
+    const next: FieldRefInline = { ...child }
+    if (Object.prototype.hasOwnProperty.call(changes, "label")) {
+      if (changes.label == null || changes.label === "") delete next.label
+      else next.label = changes.label
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, "fallback")) {
+      if (changes.fallback == null || changes.fallback === "") delete next.fallback
+      else next.fallback = changes.fallback
+    }
+    return next
+  })
+  return changed ? { ...node, children } : null
 }
 
 // ─── Width Share Helpers ───────────────────────────────────────────────────────
@@ -467,6 +495,41 @@ export function updateParagraphText(
         i === si ? { ...s, nodes: newNodes } : s,
       )
       return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
+export function updateFieldRefInline(
+  doc: DocumentNode,
+  fieldRefId: string,
+  changes: FieldRefInlineChanges,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    for (const [nodeId, node] of Object.entries(section.nodes)) {
+      if (node.type === "paragraph") {
+        const updated = updateFieldRefInParagraph(node, fieldRefId, changes)
+        if (!updated) continue
+        const newSections = doc.document.sections.map((s, i) =>
+          i === si ? { ...s, nodes: { ...s.nodes, [nodeId]: updated } } : s,
+        )
+        return { ...doc, document: { ...doc.document, sections: newSections } }
+      }
+
+      if (node.type !== "table") continue
+      const table = node as unknown as TableNode
+      for (const [innerId, inner] of Object.entries(table.nodes)) {
+        if (inner.type !== "paragraph") continue
+        const updated = updateFieldRefInParagraph(inner, fieldRefId, changes)
+        if (!updated) continue
+        const newTable = { ...table, nodes: { ...table.nodes, [innerId]: updated } }
+        const newNodes = { ...section.nodes, [nodeId]: newTable as unknown as LayoutNode }
+        const newSections = doc.document.sections.map((s, i) =>
+          i === si ? { ...s, nodes: newNodes } : s,
+        )
+        return { ...doc, document: { ...doc.document, sections: newSections } }
+      }
     }
   }
   return doc

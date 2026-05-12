@@ -10,6 +10,7 @@ import {
   removeTableColumn,
   removeTableRow,
   splitParagraphAtIndex,
+  updateFieldRefInline,
   updateParagraphText,
 } from "./operations"
 
@@ -242,6 +243,69 @@ describe("paragraph text operations", () => {
 })
 
 describe("field reference operations", () => {
+  it("updates fieldRef label and fallback without changing its key", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Customer: " },
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer", fallback: "-" },
+    ])
+    const updated = updateFieldRefInline(makeDoc({ p1: p }, ["p1"]), "f1", {
+      label: "Client",
+      fallback: "pending",
+    })
+    const paragraph = updated.document.sections[0].nodes.p1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.children[1]).toMatchObject({
+      id: "f1",
+      type: "fieldRef",
+      key: "customer.name",
+      label: "Client",
+      fallback: "pending",
+    })
+  })
+
+  it("clears optional fieldRef label and fallback without removing the fieldRef", () => {
+    const p = makeParagraph("p1", [
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer", fallback: "-" },
+    ])
+    const updated = updateFieldRefInline(makeDoc({ p1: p }, ["p1"]), "f1", {
+      label: "",
+      fallback: "",
+    })
+    const paragraph = updated.document.sections[0].nodes.p1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.children[0]).toEqual({
+      id: "f1",
+      type: "fieldRef",
+      key: "customer.name",
+    })
+  })
+
+  it("updates fieldRef metadata inside a table-cell paragraph", () => {
+    const p = makeParagraph("p1", [
+      { id: "f1", type: "fieldRef", key: "line.sku", label: "SKU", fallback: "N/A" },
+    ])
+    const updated = updateFieldRefInline(makeTableDoc(p), "f1", { label: "Item SKU" })
+    const table = updated.document.sections[0].nodes.table as unknown as TableNode
+    const paragraph = table.nodes.p1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.children[0]).toMatchObject({
+      id: "f1",
+      type: "fieldRef",
+      key: "line.sku",
+      label: "Item SKU",
+      fallback: "N/A",
+    })
+  })
+
   it("inserts a fieldRef inline into a body paragraph without flattening text runs", () => {
     const p = makeParagraph("p1", [
       { id: "t1", type: "text", text: "Customer: " },

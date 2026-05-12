@@ -4,7 +4,8 @@ import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "r
 import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, DEFAULT_STACK_MIN_HEIGHT, isPlainTextParagraph, normalizeDocument } from "@/document"
-import { applyPlacementOperation, updateNodeProps, updateParagraphText, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
+import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
+import type { FieldRefInlineChanges } from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
@@ -145,6 +146,7 @@ type EditorAction =
   | { type: "SELECT_NODE"; nodeId: string | null }
   | { type: "UPDATE_PROPS"; nodeId: string; changes: Record<string, unknown> }
   | { type: "UPDATE_TEXT"; nodeId: string; text: string }
+  | { type: "UPDATE_FIELD_REF"; fieldRefId: string; changes: FieldRefInlineChanges }
   | { type: "UPDATE_INLINE_TEXT_DRAFT"; nodeId: string; text: string }
   | { type: "COMMIT_INLINE_TEXT_EDIT"; nodeId: string; beforeDoc: DocumentNode; beforePaginated: PaginatedDocument; beforeText: string; afterPaginated: PaginatedDocument }
   | { type: "DELETE_NODE"; nodeId: string }
@@ -263,6 +265,8 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, updateNodeProps(state.doc, action.nodeId, action.changes))
     case "UPDATE_TEXT":
       return pushDoc(state, updateParagraphText(state.doc, action.nodeId, action.text))
+    case "UPDATE_FIELD_REF":
+      return pushDoc(state, updateFieldRefInline(state.doc, action.fieldRefId, action.changes))
     case "UPDATE_INLINE_TEXT_DRAFT":
       return setDocWithoutHistory(state, updateParagraphText(state.doc, action.nodeId, action.text))
     case "COMMIT_INLINE_TEXT_EDIT": {
@@ -1805,6 +1809,7 @@ export default function EditorShell() {
                 selectedNodeId={state.selectedNodeId}
                 onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
                 onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
+                onUpdateFieldRef={(fieldRefId, changes) => dispatch({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
                 onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
                 tableOps={{
                   addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),

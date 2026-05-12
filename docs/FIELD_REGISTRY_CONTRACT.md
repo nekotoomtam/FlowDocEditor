@@ -144,6 +144,10 @@ The editor should:
 - preserve the selected field key/label/fallback when a field is placed into a
   paragraph or table-cell paragraph
 - show selected paragraph/table-cell `fieldRef` details in the property panel
+- allow document-safe edits to inline `fieldRef.label` and
+  `fieldRef.fallback`
+- keep `fieldRef.key` and registry `fieldType` read-only in the property panel
+  until key rename/type-change migrations are designed
 - keep missing registry definitions as non-blocking readiness warnings for now
 - avoid adding registry type, value, history, or validation state into
   `fieldRef`

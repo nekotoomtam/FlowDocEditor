@@ -305,6 +305,40 @@ async function waitForStoredSnapshotValue(page, keyName, expectedValue) {
   )
 }
 
+async function waitForStoredFieldRefMetadata(page, fieldRefId, expected) {
+  await page.waitForFunction(
+    ({ storageKey, fieldRefId, expected }) => {
+      const raw = window.localStorage.getItem(storageKey)
+      if (!raw) return false
+      const parsed = JSON.parse(raw)
+      const doc = parsed?.kind === "document" && parsed?.packageVersion === 2
+        ? parsed.document
+        : parsed
+      for (const section of doc.document.sections) {
+        for (const node of Object.values(section.nodes)) {
+          const paragraphs = []
+          if (node?.type === "paragraph") paragraphs.push(node)
+          if (node?.type === "table") {
+            for (const inner of Object.values(node.nodes)) {
+              if (inner?.type === "paragraph") paragraphs.push(inner)
+            }
+          }
+          for (const paragraph of paragraphs) {
+            const fieldRef = paragraph.children.find((child) => child.type === "fieldRef" && child.id === fieldRefId)
+            if (!fieldRef) continue
+            return fieldRef.key === expected.key &&
+              fieldRef.label === expected.label &&
+              fieldRef.fallback === expected.fallback
+          }
+        }
+      }
+      return false
+    },
+    { storageKey: STORAGE_KEY, fieldRefId, expected },
+    { timeout: 5000 },
+  )
+}
+
 async function expectPropertyPanelTitle(page, expectedTitle) {
   const panelTitle = page.getByTestId("property-panel-title")
   await panelTitle.waitFor({ state: "visible", timeout: 5000 })
@@ -517,6 +551,13 @@ async function run() {
       fieldRefText?.includes("Project code") && fieldRefText.includes("project.code") && fieldRefText.includes("text"),
       `expected property panel field reference details, got: ${fieldRefText}`,
     )
+    await registryPage.getByTestId("field-ref-label-input").fill("Project ID")
+    await registryPage.getByTestId("field-ref-fallback-input").fill("Unassigned")
+    await waitForStoredFieldRefMetadata(registryPage, "registry-f1", {
+      key: "project.code",
+      label: "Project ID",
+      fallback: "Unassigned",
+    })
     await expectNoLayoutError(registryPage)
     await registryPage.close()
 

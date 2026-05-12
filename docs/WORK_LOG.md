@@ -5633,6 +5633,38 @@ Verification:
 - `npm.cmd run smoke:editor`
 - `git diff --check` passed with only LF-to-CRLF working-copy warnings.
 
+---
+
+### Add Document-Safe FieldRef Metadata Editing
+
+Goal: Finish the small field authoring ergonomics slice before returning focus
+to the main document editor experience.
+
+Completed:
+
+- Added `updateFieldRefInline(...)` to core document operations so inline
+  fieldRef metadata edits pass through the same reducer/history path as other
+  document mutations.
+- Allowed property-panel edits for inline `fieldRef.label` and
+  `fieldRef.fallback` in selected paragraphs and table-cell paragraphs.
+- Kept fieldRef key and registry field type read-only to avoid premature key
+  rename/type-change workflow decisions.
+- Added focused core operation tests for body paragraphs, table-cell
+  paragraphs, and clearing optional label/fallback.
+- Extended editor smoke to edit fieldRef label/fallback and verify package v2
+  autosaves the updated metadata.
+- Updated field registry, package proposal, fixture, smoke, and test-strategy
+  docs.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- `npm.cmd run smoke:editor`
+- `git diff --check` passed with only LF-to-CRLF working-copy warnings.
+
 Notes:
 
 - The first app-suite run hit a 10-second Chromium launch timeout in

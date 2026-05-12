@@ -370,9 +370,11 @@ Completed field placement foundation slice:
 - keep sample registry fallback for new documents and legacy/package v1 inputs
 - show selected paragraph/table-cell fieldRef key, label, fallback, and registry
   status in the property panel
+- allow property-panel edits to inline fieldRef label/fallback while keeping key
+  and registry type read-only
 - keep missing registry definitions as non-blocking readiness warnings
 - extend browser smoke to cover custom package registries in the palette and
-  fieldRef property inspection
+  fieldRef property inspection/editing
 
 Recommended next implementation phase:
 

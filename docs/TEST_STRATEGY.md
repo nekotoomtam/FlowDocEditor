@@ -250,7 +250,7 @@ Current strengths:
   edit commit, undo/redo, table-cell selection, the property-panel title, and
   table-cell row/column insert/delete controls, plus Fill mode package v2 data
   snapshot autosave, active package-registry field palette loading, and
-  property-panel fieldRef inspection.
+  property-panel fieldRef inspection/editing.
 - Manual browser checks are still used for editor feel where automation
   coverage is light.
 
