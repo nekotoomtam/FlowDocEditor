@@ -1,19 +1,48 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { existsSync, readFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import path from "node:path"
-import { chromium, type Browser, type Page } from "playwright"
 import { defaultWordBreaker, type TextMeasurer } from "@/layout"
 import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { paginateDocument, type PaginatedDocument } from "@/pagination"
 import { pt, type DocumentNode, type LayoutNode, type ParagraphNode } from "@/schema"
 import { comparePagination } from "../comparePagination"
 
+interface Browser {
+  newPage(): Promise<Page>
+  close(): Promise<void>
+}
+
+interface Page {
+  evaluate<TArg, TResult>(
+    callback: (arg: TArg) => TResult | Promise<TResult>,
+    arg: TArg,
+  ): Promise<TResult>
+  setContent(html: string): Promise<void>
+}
+
+interface ChromiumRuntime {
+  executablePath(): string
+  launch(options: { headless: boolean }): Promise<Browser>
+}
+
 const FONT_FAMILY = "FlowDocRealFontDrift"
 const FONT_PATH = path.join(process.cwd(), "public", "fonts", "THSarabun.ttf")
 const WIDTH_KEY_SEPARATOR = "\u0000"
+const chromium = loadOptionalChromium()
 const CAN_RUN_REAL_FONT_DRIFT = existsSync(FONT_PATH) && chromiumExecutableExists()
 
+function loadOptionalChromium(): ChromiumRuntime | null {
+  try {
+    const require = createRequire(import.meta.url)
+    return (require("playwright") as { chromium?: ChromiumRuntime }).chromium ?? null
+  } catch {
+    return null
+  }
+}
+
 function chromiumExecutableExists(): boolean {
+  if (!chromium) return false
   try {
     return existsSync(chromium.executablePath())
   } catch {
@@ -52,7 +81,7 @@ function makeCachedBrowserMeasurer(widths: Map<string, number>, missing: Set<str
 
 async function measureBrowserWidths(page: Page, requests: Array<{ fontSize: number; text: string }>): Promise<Map<string, number>> {
   const rows = await page.evaluate(
-    ({ family, requests }) => {
+    ({ family, requests }: { family: string; requests: Array<{ fontSize: number; text: string }> }) => {
       const canvas = document.querySelector<HTMLCanvasElement>("#measure")!
       const context = canvas.getContext("2d")!
       return requests.map(({ fontSize, text }) => {
@@ -142,6 +171,7 @@ describe.skipIf(!CAN_RUN_REAL_FONT_DRIFT)("real-font Thai browser/server drift",
 
   beforeAll(async () => {
     fontBuffer = readFileSync(FONT_PATH)
+    if (!chromium) throw new Error("playwright chromium runtime is unavailable")
     browser = await chromium.launch({ headless: true })
     page = await browser.newPage()
 
@@ -155,7 +185,7 @@ describe.skipIf(!CAN_RUN_REAL_FONT_DRIFT)("real-font Thai browser/server drift",
       </style>
       <canvas id="measure"></canvas>
     `)
-    await page.evaluate(async (family) => {
+    await page.evaluate(async (family: string) => {
       await document.fonts.load(`12px "${family}"`)
       await document.fonts.ready
     }, FONT_FAMILY)

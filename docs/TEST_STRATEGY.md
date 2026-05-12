@@ -247,7 +247,9 @@ Current strengths:
   continuation-slice text reconstruction and WYSIWYG visual-mode selection
   decisions.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
-  fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.
+  fontkit measurement using the runtime `public/fonts/THSarabun.ttf` when the
+  Playwright runtime is installed locally; otherwise the focused drift test
+  skips while preserving type-check coverage.
 - Automated browser smoke now protects default editor load, paragraph inline
   edit commit, undo/redo, same-fragment WYSIWYG drag selection overlay,
   stack-paragraph visual parity, Thai/composition fallback, table-cell

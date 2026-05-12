@@ -18,6 +18,59 @@ Each entry should include:
 
 ---
 
+## 2026-05-13
+
+### Clean Stage 4A Verification Baseline
+
+Goal: Start the next WYSIWYG text-engine stage by removing verification noise
+before adding selection, clipboard, or IME behavior, while keeping the Stage 3
+stress fixture in the baseline.
+
+Completed:
+
+- Changed the real-font drift test to load Playwright's Chromium runtime
+  optionally, so `npm.cmd run type-check` no longer fails when local
+  `node_modules/playwright` is unavailable.
+- Kept the real-font drift coverage intact for environments that do have the
+  runtime: the test still launches Chromium and compares canvas measurement
+  with fontkit when `public/fonts/THSarabun.ttf` and Playwright are available.
+- Re-ran the Stage 3 heavy/stress baseline alongside the real-font drift test.
+- Restored the declared Playwright package into local `node_modules` with
+  `npm.cmd install`, then ran the automated editor smoke successfully.
+
+Files changed:
+
+- `src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/inlineEditBlur.test.ts src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/layoutReconciliation.test.ts src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `npm.cmd run test -w packages/core -- src/layout/__tests__/measure.test.ts src/pagination/__tests__/paginator.test.ts src/pagination/__tests__/tablePagination.test.ts src/pagination/__tests__/rowStack.test.ts`
+- `npm.cmd test`
+- `git diff --check`
+- `npm.cmd run smoke:editor`
+
+Notes:
+
+- Before restoring dependencies, `npm.cmd run smoke:editor` failed because
+  `node_modules/playwright` was missing. After `npm.cmd install`, Playwright
+  resolved as `1.59.1`, the real-font drift test ran and passed locally, and
+  the isolated editor smoke passed.
+- A smoke run against the already-running `localhost:4000` text-engine dev
+  server failed because that server intentionally did not match the smoke
+  script's legacy-inline-edit expectations. The successful run let the smoke
+  script start its own isolated server.
+- This is a verification-baseline patch only. It intentionally does not change
+  editor runtime behavior, document schema, pagination semantics, export,
+  selection, clipboard, or IME behavior.
+
+---
+
 ## 2026-05-12
 
 ### Add WYSIWYG Text Engine Draft Pagination
