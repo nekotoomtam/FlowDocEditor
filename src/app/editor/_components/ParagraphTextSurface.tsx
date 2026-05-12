@@ -38,6 +38,23 @@ interface SplitEditInput {
   splitIndex: number
 }
 
+export type InlineEditVisualFallbackReason =
+  | "not-editing"
+  | "stale-visual"
+  | "range-selection"
+  | "composition"
+  | "missing-caret-geometry"
+
+export interface InlineEditVisualMode {
+  useDocumentVisual: boolean
+  useCustomCaret: boolean
+  fallbackReason: InlineEditVisualFallbackReason | null
+  textareaTextColor: string
+  textareaCaretColor: string
+  textareaOutline: string
+  textareaOutlineOffset: number
+}
+
 const EDIT_CHROME_X = 3
 const EDIT_CHROME_Y = 3
 const INLINE_EDIT_TEXT_COLOR = "#1e40af"
@@ -63,11 +80,49 @@ export function inlineEditTextareaCaretColor(useCustomCaret: boolean): string {
   return useCustomCaret ? "transparent" : INLINE_EDIT_TEXT_COLOR
 }
 
+export function inlineEditTextareaOutline(useDocumentVisual: boolean): string {
+  return useDocumentVisual ? "none" : "2px solid #2563eb"
+}
+
 export function shouldUseInlineEditDocumentLayer(
   canUseDocumentVisual: boolean,
   hasCustomCaret: boolean,
 ): boolean {
   return canUseDocumentVisual && hasCustomCaret
+}
+
+export function getInlineEditVisualMode(input: {
+  isEditing: boolean
+  isVisualFresh: boolean
+  isSelectionCollapsed: boolean
+  isComposing: boolean
+  hasCustomCaret: boolean
+}): InlineEditVisualMode {
+  const canUseDocumentVisual = shouldUseInlineEditDocumentVisual(
+    input.isEditing,
+    input.isVisualFresh,
+    input.isSelectionCollapsed,
+    input.isComposing,
+  )
+  const useDocumentVisual = shouldUseInlineEditDocumentLayer(canUseDocumentVisual, input.hasCustomCaret)
+  const useCustomCaret = canUseDocumentVisual && input.hasCustomCaret
+  let fallbackReason: InlineEditVisualFallbackReason | null = null
+
+  if (!input.isEditing) fallbackReason = "not-editing"
+  else if (!input.isVisualFresh) fallbackReason = "stale-visual"
+  else if (!input.isSelectionCollapsed) fallbackReason = "range-selection"
+  else if (input.isComposing) fallbackReason = "composition"
+  else if (!input.hasCustomCaret) fallbackReason = "missing-caret-geometry"
+
+  return {
+    useDocumentVisual,
+    useCustomCaret,
+    fallbackReason: useDocumentVisual ? null : fallbackReason,
+    textareaTextColor: inlineEditTextareaTextColor(useDocumentVisual),
+    textareaCaretColor: inlineEditTextareaCaretColor(useCustomCaret),
+    textareaOutline: inlineEditTextareaOutline(useDocumentVisual),
+    textareaOutlineOffset: useDocumentVisual ? 0 : -2,
+  }
 }
 
 function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
@@ -469,10 +524,13 @@ export function ParagraphTextSurface({
       ? renderCollapsedCaret(fragment, pageKey, scale, initialCaretIndex, textMeasurer)
       : null
   ), [canUseDocumentVisual, fragment, initialCaretIndex, pageKey, scale, textMeasurer])
-  const useCustomCaret = customCaret !== null
-  const useDocumentVisual = shouldUseInlineEditDocumentLayer(canUseDocumentVisual, useCustomCaret)
-  const textareaTextColor = inlineEditTextareaTextColor(useDocumentVisual)
-  const textareaCaretColor = inlineEditTextareaCaretColor(useCustomCaret)
+  const visualMode = getInlineEditVisualMode({
+    isEditing,
+    isVisualFresh,
+    isSelectionCollapsed,
+    isComposing,
+    hasCustomCaret: customCaret !== null,
+  })
   // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
   // Matching padding cancels that expansion so textarea content starts at the
   // same paragraph origin as SVG lines instead of drifting by the chrome size.
@@ -505,7 +563,7 @@ export function ParagraphTextSurface({
   if (isEditing && canPlainTextEdit) {
     return (
       <>
-        {useDocumentVisual && fragment.lines?.map((line, index) =>
+        {visualMode.useDocumentVisual && fragment.lines?.map((line, index) =>
           renderLine(line, index, fragment, renderProps, pageKey, scale),
         )}
         {showTextSegments && renderSegmentDebug(fragment.lines, fragment, renderProps, scale)}
@@ -529,21 +587,21 @@ export function ParagraphTextSurface({
               height: "100%",
               background: "transparent",
               border: "none",
-              outline: "2px solid #2563eb",
-              outlineOffset: -2,
               borderRadius: 2,
               display: "block",
               fontFamily: resolveFontCssFamily(renderProps?.fontFamilyKey),
               fontSize,
               lineHeight: `${lineHeight}px`,
               textAlign: textAlignForParagraph(renderProps?.align),
-              color: textareaTextColor,
-              caretColor: textareaCaretColor,
+              color: visualMode.textareaTextColor,
+              caretColor: visualMode.textareaCaretColor,
               resize: "none",
               overflow: "hidden",
               padding: textareaPadding,
               margin: 0,
               boxSizing: "border-box",
+              outline: visualMode.textareaOutline,
+              outlineOffset: visualMode.textareaOutlineOffset,
               whiteSpace: "pre-wrap",
               overflowWrap: "break-word",
               wordBreak: "normal",
@@ -624,6 +682,8 @@ export function ParagraphTextSurface({
             data-inline-edit-node-id={fragment.nodeId}
             data-inline-edit-slice-key={editSliceKey}
             data-inline-edit-slice-start={continuationCharStart ?? 0}
+            data-inline-edit-visual-mode={visualMode.useDocumentVisual ? "document" : "textarea"}
+            data-inline-edit-fallback-reason={visualMode.fallbackReason ?? undefined}
           />
         </foreignObject>
         {customCaret}

@@ -5,7 +5,9 @@ import {
   buildInlineEditSliceKey,
   buildSplitEditInput,
   getContinuationEditState,
+  getInlineEditVisualMode,
   inlineEditTextareaCaretColor,
+  inlineEditTextareaOutline,
   inlineEditTextareaTextColor,
   shouldUseInlineEditDocumentLayer,
   shouldUseInlineEditDocumentVisual,
@@ -204,5 +206,66 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
   it("hides the native textarea caret only when a custom caret is available", () => {
     expect(inlineEditTextareaCaretColor(false)).toBe("#1e40af")
     expect(inlineEditTextareaCaretColor(true)).toBe("transparent")
+  })
+
+  it("removes textarea chrome when document visual and custom caret are active", () => {
+    const mode = getInlineEditVisualMode({
+      isEditing: true,
+      isVisualFresh: true,
+      isSelectionCollapsed: true,
+      isComposing: false,
+      hasCustomCaret: true,
+    })
+
+    expect(mode).toMatchObject({
+      useDocumentVisual: true,
+      useCustomCaret: true,
+      fallbackReason: null,
+      textareaTextColor: "transparent",
+      textareaCaretColor: "transparent",
+      textareaOutline: "none",
+      textareaOutlineOffset: 0,
+    })
+  })
+
+  it("keeps textarea visible with an explicit fallback reason when visual mode is unsafe", () => {
+    expect(getInlineEditVisualMode({
+      isEditing: true,
+      isVisualFresh: false,
+      isSelectionCollapsed: true,
+      isComposing: false,
+      hasCustomCaret: true,
+    })).toMatchObject({
+      useDocumentVisual: false,
+      fallbackReason: "stale-visual",
+      textareaTextColor: "#1e40af",
+      textareaOutline: "2px solid #2563eb",
+    })
+    expect(getInlineEditVisualMode({
+      isEditing: true,
+      isVisualFresh: true,
+      isSelectionCollapsed: false,
+      isComposing: false,
+      hasCustomCaret: true,
+    }).fallbackReason).toBe("range-selection")
+    expect(getInlineEditVisualMode({
+      isEditing: true,
+      isVisualFresh: true,
+      isSelectionCollapsed: true,
+      isComposing: true,
+      hasCustomCaret: true,
+    }).fallbackReason).toBe("composition")
+    expect(getInlineEditVisualMode({
+      isEditing: true,
+      isVisualFresh: true,
+      isSelectionCollapsed: true,
+      isComposing: false,
+      hasCustomCaret: false,
+    }).fallbackReason).toBe("missing-caret-geometry")
+  })
+
+  it("keeps the existing textarea outline helper for fallback mode", () => {
+    expect(inlineEditTextareaOutline(false)).toBe("2px solid #2563eb")
+    expect(inlineEditTextareaOutline(true)).toBe("none")
   })
 })
