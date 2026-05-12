@@ -15,6 +15,7 @@ interface Props {
   textMeasurer?: TextMeasurer
   isEditing: boolean
   isVisualFresh: boolean
+  wysiwygInlineEditEnabled: boolean
   showTextSegments: boolean
   initialCaretIndex: number | null
   onChange: (nodeId: string, text: string, caretIndex: number | null) => void
@@ -43,6 +44,7 @@ export type InlineEditVisualFallbackReason =
   | "stale-visual"
   | "range-selection"
   | "composition"
+  | "wysiwyg-disabled"
   | "missing-caret-geometry"
 
 export interface InlineEditVisualMode {
@@ -97,8 +99,10 @@ export function getInlineEditVisualMode(input: {
   isSelectionCollapsed: boolean
   isComposing: boolean
   hasCustomCaret: boolean
+  isWysiwygEnabled?: boolean
 }): InlineEditVisualMode {
-  const canUseDocumentVisual = shouldUseInlineEditDocumentVisual(
+  const isWysiwygEnabled = input.isWysiwygEnabled ?? true
+  const canUseDocumentVisual = isWysiwygEnabled && shouldUseInlineEditDocumentVisual(
     input.isEditing,
     input.isVisualFresh,
     input.isSelectionCollapsed,
@@ -109,9 +113,10 @@ export function getInlineEditVisualMode(input: {
   let fallbackReason: InlineEditVisualFallbackReason | null = null
 
   if (!input.isEditing) fallbackReason = "not-editing"
+  else if (!isWysiwygEnabled) fallbackReason = "wysiwyg-disabled"
+  else if (input.isComposing) fallbackReason = "composition"
   else if (!input.isVisualFresh) fallbackReason = "stale-visual"
   else if (!input.isSelectionCollapsed) fallbackReason = "range-selection"
-  else if (input.isComposing) fallbackReason = "composition"
   else if (!input.hasCustomCaret) fallbackReason = "missing-caret-geometry"
 
   return {
@@ -458,6 +463,7 @@ export function ParagraphTextSurface({
   textMeasurer,
   isEditing,
   isVisualFresh,
+  wysiwygInlineEditEnabled,
   showTextSegments,
   initialCaretIndex,
   onChange,
@@ -513,7 +519,7 @@ export function ParagraphTextSurface({
   }, [fragment.height, fragment.lines, isEditing])
   const editPreviewHeight = (editPreview?.height ?? 0) * scale
   const activeEditHeight = Math.max(editHeight, minimumEditHeight, editPreviewHeight)
-  const canUseDocumentVisual = shouldUseInlineEditDocumentVisual(
+  const canUseDocumentVisual = wysiwygInlineEditEnabled && shouldUseInlineEditDocumentVisual(
     isEditing,
     isVisualFresh,
     isSelectionCollapsed,
@@ -530,6 +536,7 @@ export function ParagraphTextSurface({
     isSelectionCollapsed,
     isComposing,
     hasCustomCaret: customCaret !== null,
+    isWysiwygEnabled: wysiwygInlineEditEnabled,
   })
   // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
   // Matching padding cancels that expansion so textarea content starts at the
@@ -682,6 +689,7 @@ export function ParagraphTextSurface({
             data-inline-edit-node-id={fragment.nodeId}
             data-inline-edit-slice-key={editSliceKey}
             data-inline-edit-slice-start={continuationCharStart ?? 0}
+            data-wysiwyg-inline-edit-enabled={wysiwygInlineEditEnabled ? "true" : "false"}
             data-inline-edit-visual-mode={visualMode.useDocumentVisual ? "document" : "textarea"}
             data-inline-edit-fallback-reason={visualMode.fallbackReason ?? undefined}
           />

@@ -1,7 +1,9 @@
 # WYSIWYG Editor Roadmap
 
-This document describes the future WYSIWYG inline editing track. It is a staged
-plan, not the default editing behavior yet.
+This document describes the WYSIWYG inline editing track. It is a staged plan:
+some collapsed-caret and hit-testing foundation now runs in the default editor
+for plain paragraphs, but the track is still treated as guarded/experimental
+until its stability gates pass.
 
 The goal is to move from the current textarea-assisted hybrid editor toward an
 editor where text, caret, and selection are drawn from the same paginated visual
@@ -13,7 +15,24 @@ model as normal document rendering.
 - `draftText` is input truth while an inline edit session is active.
 - The textarea is an input device and fallback surface, not the layout source.
 - Server pagination remains authoritative for settled/export layout.
-- The WYSIWYG track must stay opt-in/internal until its stability gates pass.
+- Any WYSIWYG behavior enabled in the default editor must remain treated as
+  guarded/experimental until its stability gates pass.
+
+## Current Stability Status
+
+The default editor has an experimental collapsed-caret and point-to-offset
+foundation for plain paragraph inline editing. This is not a production-stable
+WYSIWYG default yet. Stability gates must cover continuation fragments,
+textarea remount/blur behavior, undo history, IME/composition fallback,
+missing-geometry fallback, and stale browser pagination guards before the track
+can be described as trusted default behavior.
+
+Current automated smoke coverage now exercises plain paragraph visual fallback,
+Thai/composition fallback, fieldRef paragraph non-editability, table-cell
+boundary Backspace, and continuation-fragment editing with focus, undo/redo,
+and boundary Backspace. This is a stability gate foundation, not a claim that
+selection overlay, clipboard hardening, or full IME/accessibility behavior is
+complete.
 
 ## Guardrails
 
@@ -57,9 +76,9 @@ editing.
 Initial internal helper:
 
 - `src/app/editor/_components/wysiwygCaretMapping.ts`
-- This helper is not wired into default editor interaction yet.
-- It exists so caret mapping behavior can be tested before custom caret UX is
-  enabled.
+- This helper now backs the collapsed caret and plain-paragraph point-to-offset
+  activation in the default editor, while broader WYSIWYG behavior remains
+  guarded by the stability gates above.
 
 Define:
 

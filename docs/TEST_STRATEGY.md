@@ -203,7 +203,7 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  26 core test files / 321 core tests, plus 9 app test files / 106 app tests.
+  26 core test files / 324 core tests, plus 12 app test files / 120 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases,
   including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
@@ -231,9 +231,9 @@ Current strengths:
   fixtures and DOCX table row structure for the customs fixture.
 - API route contract smoke protects `/api/paginate` and `/api/export` status,
   headers, and artifact readability.
-- Document package persistence coverage protects `FlowDocPackage v1`,
-  proposal-aligned `FlowDocPackage v2`, legacy raw `DocumentNode v1` import,
-  localStorage package v2 save/load, default JSON package v2 serialization,
+- Document package persistence coverage protects current `FlowDocPackage v2`
+  writes, legacy `FlowDocPackage v1` import, legacy raw `DocumentNode v1`
+  import, localStorage package v2 save/load, default JSON package v2 serialization,
   package/document identity agreement, normalize, and validation behavior, safe
   filename generation, import status messages, raw-document migration, package
   v1 idempotent migration, and inline `fieldRef` round-tripping. It also covers
@@ -247,10 +247,12 @@ Current strengths:
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf`.
 - Automated browser smoke now protects default editor load, paragraph inline
-  edit commit, undo/redo, table-cell selection, the property-panel title, and
-  table-cell row/column insert/delete controls, plus Fill mode package v2 data
-  snapshot autosave, active package-registry field palette loading, and
-  property-panel fieldRef inspection/editing.
+  edit commit, undo/redo, Thai/composition fallback, table-cell selection, the
+  property-panel title, table-cell row/column insert/delete controls,
+  table-cell boundary Backspace, fieldRef paragraph non-editability, and
+  continuation-fragment editing with focus, undo/redo, and boundary Backspace,
+  plus Fill mode package v2 data snapshot autosave, active package-registry
+  field palette loading, and property-panel fieldRef inspection/editing.
 - Manual browser checks are still used for editor feel where automation
   coverage is light.
 

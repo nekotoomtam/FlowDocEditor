@@ -1,7 +1,10 @@
-# FlowDoc Package V2 Proposal
+# FlowDoc Package V2 Evolution Notes
 
-This proposal describes the package v2 shape for FlowDocEditor. It is now the
-canonical write format for localStorage autosave and default JSON export.
+This document started as the package v2 proposal. The v2 baseline is now
+implemented and is the canonical write format for localStorage autosave and
+default JSON export. Keep this file as the evolution note for the current v2
+shape plus deferred layers such as key history, migrations, repeat data, and
+review workflows.
 
 Current default JSON export writes:
 
@@ -23,7 +26,7 @@ FlowDocPackage v2
 
 Current implementation status:
 
-- parser compatibility for proposal-aligned package v2 exists
+- current package v2 parser compatibility exists
 - in-memory migration from legacy raw documents/package v1 to package v2 exists
 - localStorage saves write package v2
 - default JSON export writes package v2
@@ -58,7 +61,7 @@ It should not turn the document model into workflow state.
 
 ## Non-Goals
 
-This proposal does not implement:
+The current package v2 baseline does not implement:
 
 - submitted/reviewer data workflows
 - key history UI
@@ -68,7 +71,7 @@ This proposal does not implement:
 
 Those remain later phases.
 
-## Proposed Shape
+## Current Baseline Shape
 
 ```ts
 interface FlowDocPackageV2 {
@@ -210,7 +213,7 @@ not replace the package/document identity.
 | Package version, title, timestamps | `FlowDocPackage` |
 | Field definitions | `FlowDocPackage.fields` |
 | Authored sections, paragraphs, tables, fieldRefs | `DocumentNode` |
-| Current field values | future `FlowDocPackage.data` |
+| Current scalar field values | optional `FlowDocPackage.data` |
 | Key change log | future `FlowDocPackage.history` |
 | Computed page/line geometry | `PaginatedDocument` |
 | Selection, caret, hover, drag, undo stack | editor runtime state |
@@ -229,7 +232,7 @@ unknown JSON
   -> editor receives DocumentNode
 ```
 
-The proposed v2 migration path should become:
+The current v2 migration path is:
 
 ```txt
 unknown JSON
@@ -287,7 +290,7 @@ publish/export later, but they should be visible and recoverable.
 
 ## Test Expectations
 
-When implementation begins, v2 work should cover:
+Package v2 coverage should keep protecting:
 
 - parse package v2 success
 - reject unsupported package versions
@@ -327,7 +330,8 @@ Completed Phase C slice:
 
 - add package-level v2 types near the persistence boundary
 - add parser tests for package v2 shape
-- keep export/localStorage writing v1
+- the initial parser compatibility phase left export/localStorage on v1 at
+  first; later completed slices switched both current write paths to v2
 - use field registry validation helpers from Phase A
 
 Completed migration-helper slice:

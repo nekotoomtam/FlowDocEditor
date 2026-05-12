@@ -43,6 +43,7 @@ import {
 import type { DriftReport } from "./comparePagination"
 import { resolveSamePreviewOptimisticLayout, type LayoutStatus, type OptimisticLayoutSnapshot } from "./layoutReconciliation"
 import { findWysiwygPageIndexInFragmentRanges, getWysiwygParagraphFragmentRanges } from "./wysiwygCaretMapping"
+import { WYSIWYG_INLINE_EDIT_ENABLED } from "./wysiwygInlineEditConfig"
 import { useInlineEditSession } from "./useInlineEditSession"
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -1639,6 +1640,7 @@ export default function EditorShell() {
           showTextSegments={showTextSegments}
           showDrift={showDrift}
           driftMap={driftReport?.driftMap ?? null}
+          wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
         />
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>
           {isTemplateMode ? (

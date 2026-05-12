@@ -47,6 +47,13 @@ documents into `localStorage`, then verifies:
 - editor shell, toolbar, canvas, and first page render
 - no unexpected layout error badge is visible
 - paragraph inline edit commits multiline text
+- Thai paragraph inline edit keeps composition/IME fallback visible and commits
+  Thai text with combining marks and emoji
+- continuation-fragment inline edit can type across browser reflow, stay focused,
+  undo/redo as one edit session, and Backspace across the continuation boundary
+- fieldRef paragraphs do not enter plain textarea inline edit
+- table-cell paragraph Backspace at the true start does not call body-paragraph
+  merge or corrupt the table
 - autosave writes `FlowDocPackage v2` to localStorage
 - undo and redo restore the expected paragraph text
 - clicking inside a table cell selects the parent `table-cell` and opens that

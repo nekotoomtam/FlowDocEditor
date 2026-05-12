@@ -5703,3 +5703,57 @@ Verification:
 - `npm.cmd test`
 - `npm.cmd run smoke:editor`
 - `git diff --check` passed with only LF-to-CRLF working-copy warnings.
+
+---
+
+### Align Package V2 And WYSIWYG Documentation Status
+
+Goal: Remove stale wording that made package v2 look like a future proposal and
+made the WYSIWYG default-editor status ambiguous.
+
+Completed:
+
+- Updated architecture docs to describe current editor JSON writes as
+  `FlowDocPackage v2`, with legacy package v1/raw document import
+  compatibility.
+- Reframed the package v2 proposal doc as current v2 evolution notes plus
+  deferred layers.
+- Updated package/test/fixture wording so package v2 is the current persisted
+  format and package v1 is legacy compatibility.
+- Clarified the WYSIWYG roadmap: collapsed-caret and hit-testing foundations
+  are enabled for default plain paragraph editing, but the track remains
+  guarded/experimental until stability gates pass.
+
+Verification:
+
+- `git diff --check`
+
+---
+
+### Add WYSIWYG Stability Gate Smoke Coverage
+
+Goal: Keep WYSIWYG inline editing guarded while expanding real browser evidence
+for the fragile default-editor paths.
+
+Completed:
+
+- Added a WYSIWYG inline edit enablement guard that defaults on outside
+  production and off by default in production unless explicitly enabled.
+- Made new inline edit sessions start with stale visual freshness until browser
+  pagination marks the current draft snapshot fresh.
+- Kept composition fallback higher priority than stale visual fallback so IME
+  states clearly use visible native textarea behavior.
+- Extended automated editor smoke for Thai/composition fallback, fieldRef
+  paragraph non-editability, table-cell boundary Backspace, continuation
+  fragment editing, focus-preserving reflow, undo/redo, and continuation
+  boundary Backspace.
+- Updated smoke/test/fixture/WYSIWYG docs with the new stability gate coverage
+  and current suite counts.
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts`
+- `npm.cmd run smoke:editor`
+- `npm.cmd test`
+- `git diff --check`

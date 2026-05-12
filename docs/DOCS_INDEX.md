@@ -29,7 +29,7 @@ contract, then inspect the code and tests near the change.
 | Engineering boundaries and principles | `docs/ENGINEERING_PRINCIPLES.md` |
 | Test levels and Definition of Done | `docs/TEST_STRATEGY.md` |
 | Persisted/editor JSON package contract | `docs/FLOWDOC_PACKAGE_CONTRACT.md` |
-| Future package v2 proposal | `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md` |
+| Package v2 evolution and deferred layers | `docs/FLOWDOC_PACKAGE_V2_PROPOSAL.md` |
 | Field registry and key rules | `docs/FIELD_REGISTRY_CONTRACT.md` |
 | Field value data snapshots | `docs/DATA_SNAPSHOT_CONTRACT.md` |
 | Browser/manual editor smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |

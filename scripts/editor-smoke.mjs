@@ -38,6 +38,7 @@ function paragraph(id, text) {
 
 function makeSmokeDocument() {
   const p1 = paragraph("smoke-p1", "Smoke paragraph baseline")
+  const thai = paragraph("smoke-thai-p1", "ภาษาไทยเริ่มต้น")
   const tableNodes = {}
   const rowIds = []
 
@@ -79,9 +80,45 @@ function makeSmokeDocument() {
         },
         bodyRootId: "smoke-body",
         nodes: {
-          "smoke-body": { id: "smoke-body", type: "body", props: {}, childIds: [p1.id, table.id] },
+          "smoke-body": { id: "smoke-body", type: "body", props: {}, childIds: [p1.id, thai.id, table.id] },
           [p1.id]: p1,
+          [thai.id]: thai,
           [table.id]: table,
+        },
+      }],
+    },
+  }
+}
+
+const CONTINUATION_PARAGRAPH_TEXT = Array.from({ length: 95 }, (_, index) =>
+  `Continuation stability sentence ${index + 1} keeps enough measured words to cross page boundaries safely.`,
+).join(" ")
+
+function makeContinuationDocument() {
+  const longParagraph = paragraph("wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
+
+  return {
+    version: 1,
+    document: {
+      id: "wysiwyg-continuation-doc",
+      meta: { title: "WYSIWYG Continuation Smoke" },
+      sections: [{
+        id: "wysiwyg-continuation-section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+        },
+        bodyRootId: "wysiwyg-continuation-body",
+        nodes: {
+          "wysiwyg-continuation-body": {
+            id: "wysiwyg-continuation-body",
+            type: "body",
+            props: {},
+            childIds: [longParagraph.id],
+          },
+          [longParagraph.id]: longParagraph,
         },
       }],
     },
@@ -259,6 +296,51 @@ async function waitForStoredParagraphText(page, nodeId, expectedText) {
       return false
     },
     { key: STORAGE_KEY, nodeId, expectedText },
+    { timeout: 5000 },
+  )
+}
+
+async function readStoredParagraphText(page, nodeId) {
+  return page.evaluate(
+    ({ key, nodeId }) => {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      const doc = parsed?.kind === "document" && (parsed?.packageVersion === 1 || parsed?.packageVersion === 2)
+        ? parsed.document
+        : parsed
+      for (const section of doc.document.sections) {
+        const node = section.nodes[nodeId]
+        if (node?.type === "paragraph") {
+          return node.children
+            .filter((child) => child.type === "text")
+            .map((child) => child.text)
+            .join("")
+        }
+      }
+      return null
+    },
+    { key: STORAGE_KEY, nodeId },
+  )
+}
+
+async function waitForParagraphFragmentCountAtLeast(page, nodeId, expectedMinCount) {
+  const selector = `[data-testid="editor-fragment"][data-node-id="${nodeId}"]`
+  await page.waitForFunction(
+    ({ selector, expectedMinCount }) => document.querySelectorAll(selector).length >= expectedMinCount,
+    { selector, expectedMinCount },
+    { timeout: 10000 },
+  )
+}
+
+async function expectActiveInlineTextarea(page, nodeId) {
+  await page.waitForFunction(
+    (nodeId) => {
+      const active = document.activeElement
+      return active instanceof HTMLTextAreaElement &&
+        active.dataset.inlineEditNodeId === nodeId
+    },
+    nodeId,
     { timeout: 5000 },
   )
 }
@@ -531,8 +613,40 @@ async function run() {
     await waitForStoredParagraphText(page, "smoke-p1", editedText)
     await expectNoLayoutError(page)
 
+    const thaiEditedText = "ทดสอบภาษาไทย ก้าวหน้า ไม้เอกไม้โท และ emoji 👩‍💻"
+    const thaiFragment = page.locator('[data-testid="editor-fragment"][data-node-id="smoke-thai-p1"]')
+    assert(await thaiFragment.count() === 1, "expected one Thai smoke paragraph fragment")
+    await thaiFragment.dblclick()
+    const thaiTextarea = page.locator('textarea[data-inline-edit-node-id="smoke-thai-p1"]')
+    await thaiTextarea.waitFor({ state: "visible", timeout: 5000 })
+    await expectInlineEditVisualContract(page, "smoke-thai-p1")
+    await thaiTextarea.dispatchEvent("compositionstart")
+    await expectInlineEditVisualMode(page, "smoke-thai-p1", {
+      mode: "textarea",
+      fallbackReason: "composition",
+      outlineStyle: "solid",
+    })
+    await thaiTextarea.dispatchEvent("compositionend")
+    await thaiTextarea.fill(thaiEditedText)
+    await expectInlineEditVisualContract(page, "smoke-thai-p1")
+    await thaiTextarea.press("Escape")
+    await waitForStoredParagraphText(page, "smoke-thai-p1", thaiEditedText)
+    await expectNoLayoutError(page)
+
     const tableParagraph = page.locator('[data-testid="editor-fragment"][data-node-id="smoke-table-p1-1"]')
     assert(await tableParagraph.count() === 1, "expected one table-cell paragraph fragment")
+    await tableParagraph.dblclick()
+    const tableTextarea = page.locator('textarea[data-inline-edit-node-id="smoke-table-p1-1"]')
+    await tableTextarea.waitFor({ state: "visible", timeout: 5000 })
+    await tableTextarea.evaluate((el) => {
+      el.focus()
+      el.setSelectionRange(0, 0)
+    })
+    await tableTextarea.press("Backspace")
+    await tableTextarea.press("Escape")
+    await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
+    await expectNoLayoutError(page)
+
     await tableParagraph.click()
 
     await expectPropertyPanelTitle(page, "table-cell")
@@ -613,6 +727,12 @@ async function run() {
     await registryPage.getByTestId("field-palette-item").filter({ hasText: "Project code" }).first().waitFor({ state: "visible", timeout: 5000 })
     const registryParagraph = registryPage.locator('[data-testid="editor-fragment"][data-node-id="registry-p1"]')
     assert(await registryParagraph.count() === 1, "expected one registry field paragraph fragment")
+    await registryParagraph.dblclick()
+    await registryPage.waitForTimeout(250)
+    assert(
+      await registryPage.locator('textarea[data-inline-edit-node-id="registry-p1"]').count() === 0,
+      "fieldRef paragraph must not enter textarea inline edit",
+    )
     await registryParagraph.click()
     const fieldRefs = registryPage.getByTestId("property-field-refs")
     await fieldRefs.waitFor({ state: "visible", timeout: 5000 })
@@ -630,6 +750,75 @@ async function run() {
     })
     await expectNoLayoutError(registryPage)
     await registryPage.close()
+
+    const continuationPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    collectPageErrors(continuationPage, consoleErrors, pageErrors)
+    await continuationPage.addInitScript(({ key, doc }) => {
+      window.localStorage.clear()
+      window.localStorage.setItem(key, JSON.stringify(doc))
+    }, { key: STORAGE_KEY, doc: makeContinuationDocument() })
+    await continuationPage.goto(baseUrl, { waitUntil: "domcontentloaded" })
+    await continuationPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
+    await waitForParagraphFragmentCountAtLeast(continuationPage, "wysiwyg-continuation-p1", 2)
+    const continuationFragments = continuationPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]')
+    const continuationFragment = continuationFragments.nth(1)
+    await continuationFragment.scrollIntoViewIfNeeded()
+    await continuationFragment.dblclick()
+    const continuationTextarea = continuationPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
+    await continuationTextarea.waitFor({ state: "visible", timeout: 5000 })
+    const continuationSliceStart = Number(await continuationTextarea.getAttribute("data-inline-edit-slice-start"))
+    assert(continuationSliceStart > 0, `expected continuation slice start > 0, got ${continuationSliceStart}`)
+    assert(
+      await continuationTextarea.getAttribute("data-wysiwyg-inline-edit-enabled") === "true",
+      "expected WYSIWYG inline edit foundation to be enabled in smoke dev mode",
+    )
+    await expectInlineEditVisualContract(continuationPage, "wysiwyg-continuation-p1")
+    const continuationLocalEnd = await continuationTextarea.evaluate((el) => {
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+      return el.value.length
+    })
+    assert(continuationLocalEnd > 0, "expected continuation textarea to contain suffix text")
+    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
+    const continuationAppend = " Added live continuation text while the browser preview is allowed to reflow."
+    await continuationPage.keyboard.type(continuationAppend, { delay: 1 })
+    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
+    await expectNoLayoutError(continuationPage)
+    await continuationPage.keyboard.press("Escape")
+    const continuationEditedText = `${CONTINUATION_PARAGRAPH_TEXT}${continuationAppend}`
+    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", continuationEditedText)
+    await continuationPage.getByRole("button", { name: "Undo" }).click()
+    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
+    await continuationPage.getByRole("button", { name: "Redo" }).click()
+    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", continuationEditedText)
+
+    await waitForParagraphFragmentCountAtLeast(continuationPage, "wysiwyg-continuation-p1", 2)
+    const boundaryFragment = continuationPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]').nth(1)
+    await boundaryFragment.scrollIntoViewIfNeeded()
+    await boundaryFragment.click()
+    const boundaryTextarea = continuationPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
+    await boundaryTextarea.waitFor({ state: "visible", timeout: 5000 })
+    const boundarySliceStart = Number(await boundaryTextarea.getAttribute("data-inline-edit-slice-start"))
+    assert(boundarySliceStart > 0, `expected boundary slice start > 0, got ${boundarySliceStart}`)
+    const beforeBoundaryText = await readStoredParagraphText(continuationPage, "wysiwyg-continuation-p1")
+    assert(beforeBoundaryText, "expected stored continuation text before boundary backspace")
+    const expectedBoundaryText = beforeBoundaryText.slice(0, boundarySliceStart - 1) + beforeBoundaryText.slice(boundarySliceStart)
+    const boundarySelection = await boundaryTextarea.evaluate((el) => {
+      el.focus()
+      el.setSelectionRange(0, 0)
+      return { start: el.selectionStart, end: el.selectionEnd }
+    })
+    assert(
+      boundarySelection.start === 0 && boundarySelection.end === 0,
+      `expected continuation boundary selection at 0, got ${boundarySelection.start}-${boundarySelection.end}`,
+    )
+    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
+    await continuationPage.keyboard.press("Backspace")
+    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
+    await continuationPage.keyboard.press("Escape")
+    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", expectedBoundaryText)
+    await expectNoLayoutError(continuationPage)
+    await continuationPage.close()
 
     assert(pageErrors.length === 0, `page errors during smoke:\n${pageErrors.join("\n")}`)
     assert(consoleErrors.length === 0, `console errors during smoke:\n${consoleErrors.join("\n")}`)

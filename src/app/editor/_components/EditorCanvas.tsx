@@ -49,6 +49,7 @@ function caretIndexFromPointer(
   event: React.PointerEvent | React.MouseEvent,
   scale: number,
   textMeasurer: TextMeasurer,
+  useWysiwygMapping: boolean,
 ): number | null {
   const svg = (event.currentTarget as SVGGElement).ownerSVGElement
   const lines = fragment.lines ?? []
@@ -57,8 +58,10 @@ function caretIndexFromPointer(
   const rect = svg.getBoundingClientRect()
   const docX = (event.clientX - rect.left) / scale
   const docY = (event.clientY - rect.top) / scale
-  const mappedCaret = resolveCaretOffsetFromPointInFragment(fragment, { x: docX, y: docY }, { textMeasurer })
-  if (mappedCaret) return mappedCaret.offset
+  if (useWysiwygMapping) {
+    const mappedCaret = resolveCaretOffsetFromPointInFragment(fragment, { x: docX, y: docY }, { textMeasurer })
+    if (mappedCaret) return mappedCaret.offset
+  }
 
   const directLineIndex = lines.findIndex((line) => docY >= line.y && docY <= line.y + line.height)
   const lineIndex = directLineIndex >= 0
@@ -180,7 +183,7 @@ function PageView({
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
-  sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap,
+  sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
@@ -189,6 +192,7 @@ function PageView({
   showTextSegments: boolean
   showDrift: boolean
   driftMap: Map<string, FragmentDrift> | null
+  wysiwygInlineEditEnabled: boolean
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
   inlineEditPageIndex: number | null
@@ -378,7 +382,9 @@ function PageView({
                   ? {
                       type: "inline-edit" as const,
                       nodeId: f.nodeId,
-                      caretIndex: caretIndexFromPointer(f, e, scale, textMeasurer),
+                      caretIndex: wysiwygInlineEditEnabled
+                        ? caretIndexFromPointer(f, e, scale, textMeasurer, true)
+                        : null,
                       pageIndex: f.pageIndex,
                     }
                   : undefined
@@ -391,7 +397,13 @@ function PageView({
                 e.stopPropagation()
                 const paragraphId = f.nodeType === "table-cell" ? findFirstParagraphInCell(doc, f.nodeId) : f.nodeId
                 if (!paragraphId || !canInlineEditParagraph(doc, paragraphId)) return
-                onInlineEditStart(paragraphId, f.nodeType === "paragraph" ? caretIndexFromPointer(f, e, scale, textMeasurer) : null, f.pageIndex)
+                onInlineEditStart(
+                  paragraphId,
+                  f.nodeType === "paragraph" && wysiwygInlineEditEnabled
+                    ? caretIndexFromPointer(f, e, scale, textMeasurer, true)
+                    : null,
+                  f.pageIndex,
+                )
               }
               : undefined}
             style={{ cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default" }}
@@ -467,6 +479,7 @@ function PageView({
                 textMeasurer={textMeasurer}
                 isEditing={isInlineEditing}
                 isVisualFresh={isInlineEditing && inlineEditVisualFresh}
+                wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
                 showTextSegments={showTextSegments}
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
@@ -605,6 +618,7 @@ interface Props {
   showTextSegments: boolean
   showDrift: boolean
   driftMap: Map<string, FragmentDrift> | null
+  wysiwygInlineEditEnabled: boolean
 }
 
 export function EditorCanvas({
@@ -613,6 +627,7 @@ export function EditorCanvas({
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
+  wysiwygInlineEditEnabled,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
@@ -675,6 +690,7 @@ export function EditorCanvas({
                   showTextSegments={showTextSegments}
                   showDrift={showDrift}
                   driftMap={driftMap}
+                  wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
                 />
               </div>
             ))}

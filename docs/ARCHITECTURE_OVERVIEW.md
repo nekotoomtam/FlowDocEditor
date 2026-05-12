@@ -41,9 +41,10 @@ Responsibilities:
 - provide fast browser-measured preview during interaction
 - reconcile to server/API pagination for authoritative layout status
 - expose document operations through UI controls
-- persist/import/export editor JSON as document-first `FlowDocPackage v1`
+- persist/import/export editor JSON as document-first `FlowDocPackage v2`
 - parse, normalize, and validate package documents before they enter editor
-  state, while still accepting legacy raw `DocumentNode v1` imports
+  state, while still accepting legacy `FlowDocPackage v1` and raw
+  `DocumentNode v1` imports
 
 Non-responsibilities:
 

@@ -257,11 +257,30 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     }).fallbackReason).toBe("composition")
     expect(getInlineEditVisualMode({
       isEditing: true,
+      isVisualFresh: false,
+      isSelectionCollapsed: true,
+      isComposing: true,
+      hasCustomCaret: true,
+    }).fallbackReason).toBe("composition")
+    expect(getInlineEditVisualMode({
+      isEditing: true,
       isVisualFresh: true,
       isSelectionCollapsed: true,
       isComposing: false,
       hasCustomCaret: false,
     }).fallbackReason).toBe("missing-caret-geometry")
+    expect(getInlineEditVisualMode({
+      isEditing: true,
+      isVisualFresh: true,
+      isSelectionCollapsed: true,
+      isComposing: false,
+      hasCustomCaret: true,
+      isWysiwygEnabled: false,
+    })).toMatchObject({
+      useDocumentVisual: false,
+      fallbackReason: "wysiwyg-disabled",
+      textareaTextColor: "#1e40af",
+    })
   })
 
   it("keeps the existing textarea outline helper for fallback mode", () => {

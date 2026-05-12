@@ -22,6 +22,7 @@ export interface InlineEditCommitPayload extends InlineEditTransaction {
 }
 
 export type InlineEditEndReason = "blur" | "keyboard"
+export const STALE_INLINE_EDIT_VISUAL_VERSION = -1
 
 export function isInlineEditVisualFresh(
   nodeId: string | null,
@@ -81,9 +82,9 @@ export function useInlineEditSession({
 
   const resetVisualFreshness = useCallback(() => {
     draftVersionRef.current = 0
-    visualVersionRef.current = 0
+    visualVersionRef.current = STALE_INLINE_EDIT_VISUAL_VERSION
     setDraftVersion(0)
-    setVisualVersion(0)
+    setVisualVersion(STALE_INLINE_EDIT_VISUAL_VERSION)
   }, [])
 
   const markDraftChanged = useCallback(() => {

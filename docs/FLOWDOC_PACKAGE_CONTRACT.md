@@ -90,7 +90,7 @@ document-first.
 Persistence/import must:
 
 - accept `FlowDocPackage v1`
-- accept proposal-aligned `FlowDocPackage v2` for parser compatibility
+- accept current `FlowDocPackage v2`
 - accept legacy raw `DocumentNode v1`
 - normalize the document before editor state receives it
 - validate the normalized document with `assertDocument`
@@ -207,7 +207,7 @@ Current implementation:
 - migrates legacy raw `DocumentNode v1` into `FlowDocPackage v2` for the
   generic migration path
 - migrates `FlowDocPackage v1` into `FlowDocPackage v2`
-- parses proposal-aligned `FlowDocPackage v2`
+- parses current `FlowDocPackage v2`
 - stays idempotent for existing `FlowDocPackage v2`
 - `migratePersistedDocumentPackageToV2(...)`
 - migrates legacy raw documents and package v1 into an in-memory

@@ -11,8 +11,8 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 26 core test files / 321 core tests
-- 9 app test files / 106 app tests
+- 26 core test files / 324 core tests
+- 12 app test files / 120 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 `docs/TEST_STRATEGY.md` as the current coverage snapshot until the suite changes.
@@ -112,9 +112,12 @@ PDF page-count parity, and product DOCX table row structure.
 - `src/app/editor/_components/__tests__/documentPersistence.test.ts`
 - `src/app/editor/_components/__tests__/inlineEditBlur.test.ts`
 - `src/app/editor/_components/__tests__/inlineEditCaret.test.ts`
+- `src/app/editor/_components/__tests__/layoutReconciliation.test.ts`
 - `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
 - `src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `src/app/editor/_components/__tests__/useInlineEditSession.test.ts`
 - `src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts`
 - `src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts`
 
 Protects API route validation/render contracts, document package persistence,
@@ -122,8 +125,8 @@ drift comparison, inline edit lifecycle and continuation helpers, paragraph
 text surface policy, WYSIWYG caret mapping, and internal text interaction
 policy. API smoke coverage checks `/api/paginate` asserted JSON output plus
 `/api/export` PDF/DOCX headers and artifact readability. Persistence coverage
-checks document-first `FlowDocPackage v1`, proposal-aligned
-`FlowDocPackage v2`, legacy raw `DocumentNode v1` import, normalize/validate
+checks current `FlowDocPackage v2` writes, legacy `FlowDocPackage v1` import,
+legacy raw `DocumentNode v1` import, normalize/validate
 behavior, invalid JSON, unsupported versions, invalid package structure,
 package/document id agreement, current `localStorage` key behavior,
 localStorage package v2 save/load, v2 field registry preservation, default
@@ -135,6 +138,9 @@ document migration into the current `FlowDocPackage v2`, legacy package v1
 migration to package v2, package v2 migration idempotence, v2 registry warning
 propagation, v2 registry warning import status, and v2 registry hard-error
 rejection.
+Inline-edit session coverage locks visual freshness and transaction helper
+rules. WYSIWYG inline-edit config coverage keeps the experimental visual path
+enabled by default outside production and disabled by default in production.
 Real-font drift coverage loads
 `public/fonts/THSarabun.ttf` into Chromium canvas and fontkit, then checks
 representative Thai width parity and no `comparePagination` drift for a Thai
@@ -146,9 +152,12 @@ typing, undo/redo, flicker, and table panel workflows.
 - `scripts/editor-smoke.mjs`
 
 Protects the default `/editor` load path with a real browser, deterministic
-localStorage document fixtures, paragraph inline edit commit, undo/redo, table
-cell selection, the property-panel title, table-cell row/column insert/delete
-controls, localStorage package v2 autosave, Fill mode readiness warning/clear
+localStorage document fixtures, paragraph inline edit commit, undo/redo, Thai
+composition fallback, table cell selection, the property-panel title,
+table-cell row/column insert/delete controls, table-cell boundary Backspace,
+fieldRef paragraph non-editability, continuation-fragment editing with
+focus-preserving reflow and undo/redo, localStorage package v2 autosave, Fill
+mode readiness warning/clear
 behavior for a required used field, package v2 data snapshot autosave for
 filled values, active package-registry field palette loading, and property-panel
 fieldRef inspection/editing for selected document fields. It starts its own
