@@ -1,3 +1,11 @@
+## Purpose
+
+This is the concise role reference for Codex sessions. For detailed ownership,
+multi-agent division of work, routing rules, and handoff requirements, see
+[`AGENT_OPERATING_MODEL.md`](./AGENT_OPERATING_MODEL.md).
+
+---
+
 ## Role: Design Reviewer
 
 Use when the task is architectural, risky, or unclear.

@@ -9,9 +9,10 @@ For a new Codex/agent session:
 1. `AGENTS.md`
 2. `docs/DOCS_INDEX.md`
 3. `docs/agent/CODEX_ROLES.md`
-4. `docs/agent/REVIEW_GATE.md` when reviewing or accepting work
-5. The task-specific contract below
-6. `docs/WORK_LOG_RECENT.md` only when recent implementation context is needed
+4. `docs/agent/AGENT_OPERATING_MODEL.md` when task ownership, role routing, or multi-agent work is unclear
+5. `docs/agent/REVIEW_GATE.md` when reviewing or accepting work
+6. The task-specific contract below
+7. `docs/WORK_LOG_RECENT.md` only when recent implementation context is needed
 
 For a quick bug fix, read only enough to avoid contradicting the relevant contract, then inspect the code and tests near the change.
 
@@ -21,6 +22,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 |---|---|
 | Agent operating rules | `AGENTS.md` |
 | Agent roles/modes | `docs/agent/CODEX_ROLES.md` |
+| Detailed agent ownership and work division | `docs/agent/AGENT_OPERATING_MODEL.md` |
 | Per-task handoff template | `docs/agent/TASK_HANDOFF.md` |
 | Pass/fail review standard | `docs/agent/REVIEW_GATE.md` |
 | Product north star and long-term direction | `docs/PRODUCT_DIRECTION.md` |
@@ -47,10 +49,13 @@ Start with:
 
 - `AGENTS.md`
 - `docs/agent/CODEX_ROLES.md`
+- `docs/agent/AGENT_OPERATING_MODEL.md`
 - `docs/agent/TASK_HANDOFF.md`
 - `docs/agent/REVIEW_GATE.md`
 
 Use the handoff template to define the task mode, scope, out-of-scope items, expected output, and definition of done.
+Use the operating model when assigning responsibilities across lead, reviewer,
+implementer, regression, test, docs, or multi-agent lanes.
 
 ### WYSIWYG / Inline Editing Work
 

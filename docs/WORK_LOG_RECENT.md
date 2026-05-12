@@ -22,6 +22,102 @@ Each entry should include:
 
 ---
 
+## 2026-05-12
+
+### Stabilize Inline Edit Input Bridge
+
+Goal: Make the current hybrid inline editor more predictable during typing
+while keeping textarea fallback available and avoiding document/schema/layout
+rewrite scope.
+
+Completed:
+
+- Routed inline textarea key decisions and full-text/caret snapshots through
+  `wysiwygTextInteraction` so paragraph editing has one shared input bridge
+  policy.
+- Aligned plain Enter classification with the current editor contract: native
+  multiline textarea behavior remains the default, and structural paragraph
+  split is available only as an explicit future mode.
+- Added a short document-visual typing lock to `useInlineEditSession` so fresh
+  browser pagination does not immediately reclaim the visible layer during an
+  active typing burst.
+- Kept the existing stale-visual fallback path: textarea text remains visible
+  when paginated visual output is not ready for the active draft.
+- Added focused tests for Enter policy, textarea snapshot conversion, and visual
+  readiness while the typing lock is active.
+
+Files changed:
+
+- `src/app/editor/_components/wysiwygTextInteraction.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/useInlineEditSession.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts`
+- `src/app/editor/_components/__tests__/useInlineEditSession.test.ts`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/inlineEditBlur.test.ts src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+- `npm.cmd test`
+
+Notes:
+
+- This intentionally does not enable WYSIWYG by default, change
+  `DocumentNode`, replace textarea with hidden-input editing, add selection
+  overlays, change pagination/export behavior, or claim full IME/clipboard
+  hardening.
+- Manual in-app browser probing confirmed the default textarea fallback path can
+  enter inline edit, show typed text, exit without a layout error, and clean up
+  the active textarea. A manual WYSIWYG-flag browser perception pass was not
+  completed; the automated editor smoke script remains the WYSIWYG-flag browser
+  coverage for this patch.
+- Post-test status: user manual testing found this round is not acceptable as a
+  stable WYSIWYG result. Reported blockers are paragraph edit layout drift in
+  non-body containers, odd cross-page continuation behavior when typing across a
+  page boundary, and unavailable drag text selection. Treat this as
+  FAIL/BLOCKER and move to the staged real-WYSIWYG plan rather than continuing
+  to polish the hybrid textarea layout as the final path.
+
+---
+
+### Add Agent Operating Model
+
+Goal: Create a detailed role and responsibility model for Codex and other
+project agents without changing runtime behavior.
+
+Completed:
+
+- Added `docs/agent/AGENT_OPERATING_MODEL.md` as the detailed operating model
+  for lead, reviewer, implementer, regression, test, docs, and multi-agent
+  work division.
+- Linked the new operating model from `docs/agent/CODEX_ROLES.md` so the
+  existing concise role list remains the quick reference.
+- Updated `docs/DOCS_INDEX.md` so future sessions can find the detailed agent
+  ownership and routing guidance.
+
+Files changed:
+
+- `docs/agent/AGENT_OPERATING_MODEL.md`
+- `docs/agent/CODEX_ROLES.md`
+- `docs/DOCS_INDEX.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `git diff --check`
+
+Notes:
+
+- This is documentation-only. It intentionally does not change runtime code,
+  editor behavior, layout behavior, tests, or product decision authority.
+
+---
+
 ## 2026-05-11
 
 ### Adopt Document-First FlowDocPackage V1

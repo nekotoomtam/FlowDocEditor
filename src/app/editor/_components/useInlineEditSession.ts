@@ -23,6 +23,7 @@ export interface InlineEditCommitPayload extends InlineEditTransaction {
 
 export type InlineEditEndReason = "blur" | "keyboard"
 export const STALE_INLINE_EDIT_VISUAL_VERSION = -1
+export const INLINE_EDIT_VISUAL_TYPING_LOCK_MS = 120
 
 export function isInlineEditVisualFresh(
   nodeId: string | null,
@@ -30,6 +31,15 @@ export function isInlineEditVisualFresh(
   visualVersion: number,
 ): boolean {
   return nodeId === null || visualVersion >= draftVersion
+}
+
+export function isInlineEditDocumentVisualReady(
+  nodeId: string | null,
+  draftVersion: number,
+  visualVersion: number,
+  isVisualLocked: boolean,
+): boolean {
+  return isInlineEditVisualFresh(nodeId, draftVersion, visualVersion) && !isVisualLocked
 }
 
 interface UseInlineEditSessionOptions {
@@ -58,10 +68,12 @@ export function useInlineEditSession({
   const [pageIndex, setPageIndexState] = useState<number | null>(null)
   const [draftVersion, setDraftVersion] = useState(0)
   const [visualVersion, setVisualVersion] = useState(0)
+  const [isVisualLocked, setIsVisualLocked] = useState(false)
 
   const nodeIdRef = useRef<string | null>(null)
   const transactionRef = useRef<InlineEditTransaction | null>(null)
   const endFrameRef = useRef<number | null>(null)
+  const visualLockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const draftVersionRef = useRef(0)
   const visualVersionRef = useRef(0)
 
@@ -78,6 +90,21 @@ export function useInlineEditSession({
     if (endFrameRef.current === null || typeof cancelAnimationFrame === "undefined") return
     cancelAnimationFrame(endFrameRef.current)
     endFrameRef.current = null
+  }, [])
+
+  const clearVisualLock = useCallback(() => {
+    if (visualLockTimerRef.current) clearTimeout(visualLockTimerRef.current)
+    visualLockTimerRef.current = null
+    setIsVisualLocked(false)
+  }, [])
+
+  const lockDocumentVisualForTyping = useCallback(() => {
+    setIsVisualLocked(true)
+    if (visualLockTimerRef.current) clearTimeout(visualLockTimerRef.current)
+    visualLockTimerRef.current = setTimeout(() => {
+      visualLockTimerRef.current = null
+      setIsVisualLocked(false)
+    }, INLINE_EDIT_VISUAL_TYPING_LOCK_MS)
   }, [])
 
   const resetVisualFreshness = useCallback(() => {
@@ -103,8 +130,9 @@ export function useInlineEditSession({
     setActiveNodeId(null)
     setCaretIndex(null)
     setPageIndex(null)
+    clearVisualLock()
     resetVisualFreshness()
-  }, [resetVisualFreshness, setActiveNodeId, setPageIndex])
+  }, [clearVisualLock, resetVisualFreshness, setActiveNodeId, setPageIndex])
 
   const finalizeBeforeAction = useCallback((): boolean => {
     cancelPendingEnd()
@@ -127,7 +155,10 @@ export function useInlineEditSession({
     clearSessionState()
   }, [cancelPendingEnd, clearSessionState])
 
-  useEffect(() => cancelPendingEnd, [cancelPendingEnd])
+  useEffect(() => () => {
+    cancelPendingEnd()
+    clearVisualLock()
+  }, [cancelPendingEnd, clearVisualLock])
 
   const end = useCallback((blurredNodeId?: string, reason: InlineEditEndReason = "keyboard") => {
     if (reason !== "blur") {
@@ -203,9 +234,10 @@ export function useInlineEditSession({
 
   const change = useCallback((changedNodeId: string, text: string, nextCaretIndex: number | null) => {
     markDraftChanged()
+    lockDocumentVisualForTyping()
     setCaretIndex(nextCaretIndex)
     updateInlineTextDraft(changedNodeId, text)
-  }, [markDraftChanged, updateInlineTextDraft])
+  }, [lockDocumentVisualForTyping, markDraftChanged, updateInlineTextDraft])
 
   const userInteraction = useCallback((changedNodeId: string) => {
     if (nodeIdRef.current !== changedNodeId) return
@@ -270,6 +302,8 @@ export function useInlineEditSession({
     draftVersion,
     visualVersion,
     isVisualFresh: isInlineEditVisualFresh(nodeId, draftVersion, visualVersion),
+    isDocumentVisualReady: isInlineEditDocumentVisualReady(nodeId, draftVersion, visualVersion, isVisualLocked),
+    isVisualLocked,
     nodeIdRef,
     draftVersionRef,
     visualVersionRef,

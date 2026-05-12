@@ -6,6 +6,7 @@ import type { DocumentNode, ParagraphNode, TableNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily } from "@/font-registry"
 import { resolveCollapsedCaretOverlayInFragment } from "./wysiwygCaretMapping"
+import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
 
 interface Props {
   fragment: PageFragment
@@ -506,8 +507,9 @@ export function ParagraphTextSurface({
   ), [editSliceKey])
   const updateCaret = useCallback((el: HTMLTextAreaElement) => {
     if (!isCurrentEditSlice(el)) return
-    setIsSelectionCollapsed((el.selectionStart ?? 0) === (el.selectionEnd ?? 0))
-    onCaretChange(fragment.nodeId, absoluteInlineEditIndex(preText, el.selectionStart, el.value.length))
+    const snapshot = getInlineEditInputSnapshot(el, preText)
+    setIsSelectionCollapsed(snapshot.isSelectionCollapsed)
+    onCaretChange(fragment.nodeId, snapshot.caretOffset)
   }, [fragment.nodeId, isCurrentEditSlice, onCaretChange, preText])
   const markUserEditInteraction = useCallback(() => {
     onUserEditInteraction(fragment.nodeId)
@@ -617,10 +619,10 @@ export function ParagraphTextSurface({
               const el = event.currentTarget
               if (!isCurrentEditSlice(el)) return
               markUserEditInteraction()
-              setIsSelectionCollapsed((el.selectionStart ?? 0) === (el.selectionEnd ?? 0))
-              const caretIndex = absoluteInlineEditIndex(preText, el.selectionStart, el.value.length)
+              const snapshot = getInlineEditInputSnapshot(el, preText)
+              setIsSelectionCollapsed(snapshot.isSelectionCollapsed)
               syncTextareaHeight(el)
-              onChange(fragment.nodeId, preText + el.value, caretIndex)
+              onChange(fragment.nodeId, snapshot.text, snapshot.caretOffset)
             }}
             onSelect={(event) => {
               const el = event.currentTarget
@@ -634,15 +636,29 @@ export function ParagraphTextSurface({
               const el = event.currentTarget
               if (!isCurrentEditSlice(el)) return
               markUserEditInteraction()
-              if (event.nativeEvent.isComposing) return
-              if (event.key === "Escape") {
+              const decision = classifyInlineEditKey({
+                key: event.key,
+                shiftKey: event.shiftKey,
+                ctrlKey: event.ctrlKey,
+                altKey: event.altKey,
+                metaKey: event.metaKey,
+                isComposing: event.nativeEvent.isComposing,
+                selectionStart: el.selectionStart,
+                selectionEnd: el.selectionEnd,
+                valueLength: el.value.length,
+              }, {
+                plainEnterBehavior: shouldUseNativeInlineEditEnter() ? "native" : "split-paragraph",
+              })
+
+              if (decision.action === "native") return
+
+              if (decision.action === "end-edit") {
                 event.preventDefault()
                 onEndEdit(fragment.nodeId, "keyboard")
                 return
               }
 
-              if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-                if (shouldUseNativeInlineEditEnter()) return
+              if (decision.action === "split-paragraph") {
                 event.preventDefault()
                 const selectionStart = el.selectionStart ?? el.value.length
                 const selectionEnd = el.selectionEnd ?? selectionStart
@@ -652,11 +668,7 @@ export function ParagraphTextSurface({
                 return
               }
 
-              if (event.key === "Backspace" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-                const selectionStart = el.selectionStart ?? el.value.length
-                const selectionEnd = el.selectionEnd ?? selectionStart
-                if (selectionStart !== 0 || selectionEnd !== 0) return
-
+              if (decision.action === "merge-or-boundary-backspace") {
                 const continuationBackspace = buildContinuationBackspaceInput(preText, el.value)
                 if (continuationBackspace) {
                   event.preventDefault()

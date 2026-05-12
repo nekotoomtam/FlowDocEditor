@@ -33,6 +33,8 @@ export interface WysiwygTextReplacement {
   selection: NormalizedWysiwygTextRange
 }
 
+export type InlineEditPlainEnterBehavior = "native" | "split-paragraph"
+
 export type InlineEditKeyDecision =
   | { action: "native" }
   | { action: "end-edit"; reason: "escape" }
@@ -49,6 +51,10 @@ export interface InlineEditKeyEventLike {
   selectionStart?: number | null
   selectionEnd?: number | null
   valueLength?: number
+}
+
+export interface InlineEditKeyOptions {
+  plainEnterBehavior?: InlineEditPlainEnterBehavior
 }
 
 export type InlineEditClipboardType = "copy" | "cut" | "paste"
@@ -69,6 +75,13 @@ export interface InlineEditTextareaLike {
 export interface InlineEditSelectionSnapshot extends NormalizedWysiwygTextRange {
   localAnchorOffset: number
   localFocusOffset: number
+}
+
+export interface InlineEditInputSnapshot {
+  text: string
+  caretOffset: number
+  selection: InlineEditSelectionSnapshot
+  isSelectionCollapsed: boolean
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -139,13 +152,18 @@ function hasPlainKeyModifiers(event: InlineEditKeyEventLike): boolean {
   return !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
 }
 
-export function classifyInlineEditKey(event: InlineEditKeyEventLike): InlineEditKeyDecision {
+export function classifyInlineEditKey(
+  event: InlineEditKeyEventLike,
+  options: InlineEditKeyOptions = {},
+): InlineEditKeyDecision {
   if (event.isComposing) return { action: "native" }
 
   if (event.key === "Escape") return { action: "end-edit", reason: "escape" }
 
   if (event.key === "Enter" && hasPlainKeyModifiers(event)) {
-    return { action: "split-paragraph" }
+    return options.plainEnterBehavior === "split-paragraph"
+      ? { action: "split-paragraph" }
+      : { action: "native" }
   }
 
   if (event.key === "Backspace" && hasPlainKeyModifiers(event)) {
@@ -192,5 +210,18 @@ export function getInlineEditSelectionSnapshot(
     direction: textarea.selectionDirection ?? range.direction,
     localAnchorOffset: localRange.anchorOffset,
     localFocusOffset: localRange.focusOffset,
+  }
+}
+
+export function getInlineEditInputSnapshot(
+  textarea: InlineEditTextareaLike,
+  preText: string,
+): InlineEditInputSnapshot {
+  const selection = getInlineEditSelectionSnapshot(textarea, preText)
+  return {
+    text: preText + textarea.value,
+    caretOffset: selection.focusOffset,
+    selection,
+    isSelectionCollapsed: selection.isCollapsed,
   }
 }

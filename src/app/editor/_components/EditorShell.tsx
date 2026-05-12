@@ -627,7 +627,7 @@ export default function EditorShell() {
     nodeId: inlineEditNodeId,
     caretIndex: inlineEditCaretIndex,
     pageIndex: inlineEditPageIndex,
-    isVisualFresh: inlineEditVisualFresh,
+    isDocumentVisualReady: inlineEditDocumentVisualReady,
     nodeIdRef: inlineEditNodeIdRef,
     draftVersionRef: inlineEditDraftVersionRef,
     markVisualFresh: markInlineEditVisualFresh,
@@ -1614,7 +1614,7 @@ export default function EditorShell() {
           selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
           isLayoutLoading={isLayoutLoading}
           textMeasurer={editorTextMeasurer}
-          inlineEditVisualFresh={isTemplateMode ? inlineEditVisualFresh : true}
+          inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
           inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
           inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
           inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}

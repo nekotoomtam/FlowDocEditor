@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   classifyInlineEditKey,
+  getInlineEditInputSnapshot,
   getInlineEditClipboardPolicy,
   getInlineEditSelectionSnapshot,
   getWysiwygNativeFallbackReasons,
@@ -44,9 +45,10 @@ describe("inline edit input policy", () => {
     expect(classifyInlineEditKey({ key: "Backspace", isComposing: true, selectionStart: 0, selectionEnd: 0 })).toEqual({ action: "native" })
   })
 
-  it("classifies current custom keyboard paths without changing native shortcuts", () => {
+  it("keeps multiline Enter native by default while allowing an explicit structural split mode", () => {
     expect(classifyInlineEditKey({ key: "Escape" })).toEqual({ action: "end-edit", reason: "escape" })
-    expect(classifyInlineEditKey({ key: "Enter" })).toEqual({ action: "split-paragraph" })
+    expect(classifyInlineEditKey({ key: "Enter" })).toEqual({ action: "native" })
+    expect(classifyInlineEditKey({ key: "Enter" }, { plainEnterBehavior: "split-paragraph" })).toEqual({ action: "split-paragraph" })
     expect(classifyInlineEditKey({ key: "Enter", shiftKey: true })).toEqual({ action: "native" })
     expect(classifyInlineEditKey({ key: "z", ctrlKey: true })).toEqual({ action: "native" })
   })
@@ -98,6 +100,27 @@ describe("inline edit input policy", () => {
       localAnchorOffset: 1,
       localFocusOffset: 4,
       direction: "forward",
+    })
+  })
+
+  it("captures textarea input as bridge text plus full-paragraph caret state", () => {
+    const snapshot = getInlineEditInputSnapshot({
+      value: "world",
+      selectionStart: 2,
+      selectionEnd: 2,
+      selectionDirection: "none",
+    }, "Hello ")
+
+    expect(snapshot).toMatchObject({
+      text: "Hello world",
+      caretOffset: 8,
+      isSelectionCollapsed: true,
+      selection: {
+        anchorOffset: 8,
+        focusOffset: 8,
+        localAnchorOffset: 2,
+        localFocusOffset: 2,
+      },
     })
   })
 
