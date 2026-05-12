@@ -146,6 +146,29 @@ changes.
 - Confirm the paragraph returns to the same visible layout after redo.
 - Watch for flicker, jump, unwanted scroll, or text disappearing.
 
+### WYSIWYG Text Engine Stage 3 Stress
+
+Use before closing the FlowDoc-owned Stage 3 text-engine lane.
+
+- Start the editor with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`.
+- Open `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`.
+- Confirm `data-editor-test-scenario="wysiwyg-stage3-boundary"` on the editor
+  shell.
+- Confirm the target paragraph `stage3-boundary-target` starts as one fragment.
+- Click the target paragraph and confirm `data-wysiwyg-input-bridge="true"` is
+  present while `textarea[data-inline-edit-node-id]` is absent.
+- Use real keypresses on the bridge, not clipboard-backed `fill()` / `type()`.
+- Press End, then enough Enter/text keys to overflow the target across the page
+  boundary. Confirm the target has at least two fragments, the marker is
+  visible, and no layout error badge appears.
+- Backspace the inserted marker/newlines until the target returns to one
+  fragment. Confirm the marker is gone and no inline textarea appears.
+- Type a small marker, exit edit, then Undo and Redo. Confirm the marker
+  disappears and returns with no layout error.
+
+This fixture is dev/test-only and intentionally should not autosave over the
+user's normal localStorage document.
+
 ### Editor State Race And Reconciliation
 
 Use when changes touch `EditorShell` document state, `previewDoc`,

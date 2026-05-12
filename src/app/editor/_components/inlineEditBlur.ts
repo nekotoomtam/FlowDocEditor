@@ -8,6 +8,10 @@ export function shouldFinalizeInlineEditBlur(
   return focusedInlineEditNodeId !== blurredNodeId
 }
 
+export function getFocusedInlineEditNodeId(activeElement: Element | null): string | null {
+  return activeElement?.getAttribute("data-inline-edit-node-id") ?? null
+}
+
 export type InlineEditStartDecision = "start" | "continue-current" | "finalize-previous"
 
 export function decideInlineEditStart(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { decideInlineEditStart, shouldFinalizeInlineEditBlur } from "../inlineEditBlur"
+import { decideInlineEditStart, getFocusedInlineEditNodeId, shouldFinalizeInlineEditBlur } from "../inlineEditBlur"
 
 describe("shouldFinalizeInlineEditBlur", () => {
   it("ignores blur when focus moved to the remounted textarea for the same node", () => {
@@ -16,6 +16,25 @@ describe("shouldFinalizeInlineEditBlur", () => {
 
   it("finalizes when the blurred node is unknown", () => {
     expect(shouldFinalizeInlineEditBlur(null, "p1", null)).toBe(true)
+  })
+})
+
+describe("getFocusedInlineEditNodeId", () => {
+  it("reads inline edit identity from any focused element with the data attribute", () => {
+    const active = {
+      getAttribute: (name: string) => name === "data-inline-edit-node-id" ? "p1" : null,
+    } as Element
+
+    expect(getFocusedInlineEditNodeId(active)).toBe("p1")
+  })
+
+  it("returns null when the focused element is not an inline edit surface", () => {
+    const active = {
+      getAttribute: () => null,
+    } as unknown as Element
+
+    expect(getFocusedInlineEditNodeId(active)).toBe(null)
+    expect(getFocusedInlineEditNodeId(null)).toBe(null)
   })
 })
 

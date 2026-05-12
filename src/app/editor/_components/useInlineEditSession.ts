@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { DocumentNode } from "@/schema"
 import type { PaginatedDocument } from "@/pagination"
-import { decideInlineEditStart, shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
+import { decideInlineEditStart, getFocusedInlineEditNodeId, shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
 
 export interface InlineEditTransaction {
   nodeId: string
@@ -177,8 +177,8 @@ export function useInlineEditSession({
       endFrameRef.current = requestAnimationFrame(() => {
         endFrameRef.current = null
         const active = document.activeElement
-        const focusedNodeId = active instanceof HTMLTextAreaElement
-          ? active.dataset.inlineEditNodeId ?? null
+        const focusedNodeId = active instanceof Element
+          ? getFocusedInlineEditNodeId(active)
           : null
         if (!shouldFinalizeInlineEditBlur(nodeIdToCheck, nodeIdRef.current, focusedNodeId)) return
         finalizeBeforeAction()

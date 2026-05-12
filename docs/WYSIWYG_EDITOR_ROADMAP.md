@@ -5,6 +5,11 @@ some collapsed-caret and hit-testing foundation exists for plain paragraphs,
 but it is opt-in behind `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT` and remains
 guarded/experimental until its stability gates pass.
 
+For the FlowDoc-owned text editing restart, read
+`docs/WYSIWYG_TEXT_ENGINE_PLAN.md` as the active implementation plan. This
+roadmap remains useful for existing hybrid behavior, caret mapping history, and
+textarea-assisted guardrails.
+
 The goal is to move from the current textarea-assisted hybrid editor toward an
 editor where text, caret, and selection are drawn from the same paginated visual
 model as normal document rendering.

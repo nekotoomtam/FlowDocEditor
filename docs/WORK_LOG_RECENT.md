@@ -24,6 +24,99 @@ Each entry should include:
 
 ## 2026-05-12
 
+### Add WYSIWYG Text Engine Draft Pagination
+
+Goal: Continue Stage 3 of the FlowDoc-owned WYSIWYG text engine by letting
+page-boundary paragraph drafts render from draft paginated geometry without
+making textarea layout authoritative or committing document text on each
+keypress.
+
+Completed:
+
+- Added a normalized draft preview document helper for active WYSIWYG text
+  drafts.
+- Added hard-page-boundary draft pagination scheduling with generation guards,
+  draft-version checks, caret page tracking, and optimistic paginated preview
+  updates.
+- Added a deterministic Stage 3 stress scenario, available in dev/test mode via
+  `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`, that seeds a target
+  paragraph near a page boundary with dense downstream content.
+- Disabled autosave while a dev/test scenario is active so stress runs do not
+  persist over the user's normal editor localStorage document.
+- Let eligible continuation paragraph fragments render through the
+  WYSIWYG text layer when draft pagination is active.
+- Kept same-page hard-local edits on the local height patch path, and kept
+  table-cell paragraphs on the guarded fallback path.
+- Added a hidden `contentEditable` non-textarea input bridge inside the SVG
+  text-engine layer, with native keyboard/input listeners, so browser keyboard
+  events reach the FlowDoc text draft handler while SVG lines remain the
+  visual/layout truth.
+- Extended the inline-edit blur guard so remounting from a textarea to the
+  text-engine SVG textbox, or between text-engine fragments, does not finalize
+  the edit when focus lands on a replacement surface for the same paragraph.
+- Updated the active WYSIWYG text engine plan to reflect that
+  hard-page-boundary edits now queue debounced draft pagination instead of
+  remaining detect-only.
+
+Files changed:
+
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/inlineEditBlur.ts`
+- `src/app/editor/_components/useInlineEditSession.ts`
+- `src/app/editor/_components/wysiwygDraftPreview.ts`
+- `src/app/editor/_components/wysiwygStage3StressScenarios.ts`
+- `src/app/editor/_components/__tests__/inlineEditBlur.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/inlineEditBlur.test.ts src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/layoutReconciliation.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/inlineEditBlur.test.ts src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/layoutReconciliation.test.ts src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- `npm.cmd run test -w packages/core -- src/layout/__tests__/measure.test.ts src/pagination/__tests__/paginator.test.ts src/pagination/__tests__/tablePagination.test.ts src/pagination/__tests__/rowStack.test.ts`
+- `git diff --check`
+- Browser smoke on `http://localhost:4000/editor` with
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1`,
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`, and
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_PERF_TRACE=1` confirmed the editor loaded,
+  flags were true, no layout error badge appeared, clicking a body paragraph
+  opened the text-engine layer, no inline textarea was mounted, and the hidden
+  input bridge was present.
+- 2026-05-13 browser keypress recheck on the same flagged server confirmed
+  short text entry through the bridge (`ZX9`) updated the SVG text-engine layer,
+  no inline textarea was mounted, and no layout error appeared. A longer
+  keypress sequence wrapped the active paragraph from 3 to 5 SVG text lines,
+  kept the bridge active, and still showed no layout error.
+- 2026-05-13 Stage 3 stress browser smoke on
+  `/editor?flowdocTestScenario=wysiwyg-stage3-boundary` confirmed the target
+  paragraph started as one fragment, real bridge keypresses moved it to two
+  fragments across the page boundary, Backspace shrank it back to one fragment,
+  no inline textarea mounted, no layout error appeared, and commit/Undo/Redo
+  restored the typed marker.
+
+Notes:
+
+- `npm.cmd run type-check` is still blocked by the pre-existing
+  `realFontDrift.test.ts` missing `playwright` package and implicit-any errors.
+  No new type-check error remains from this patch.
+- `npm.cmd run smoke:editor` is blocked by the same missing `playwright`
+  package. Browser automation also exposed local tooling limits:
+  `localhost:4011` was blocked, Chrome extension navigation to localhost was
+  blocked, some in-app browser tabs timed out at the CDP layer after reload,
+  and `locator.type()` / `locator.fill()` require a virtual clipboard that was
+  unavailable in this session. Real browser `press()` key events did work
+  against the non-textarea bridge. The successful browser portion used an
+  outside-sandbox dev server on `localhost:4000`.
+- This intentionally does not change `DocumentNode` schema, server/API
+  pagination ownership, export behavior, undo transaction policy, IME/clipboard
+  hardening, or table-cell WYSIWYG editing.
+
+---
+
 ### Add Slice-Aware WYSIWYG Selection Foundation
 
 Goal: Address the reported WYSIWYG blockers without changing document schema,

@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
 import {
   absoluteInlineEditIndex,
   buildContinuationBackspaceInput,
   buildInlineEditSliceKey,
   buildSplitEditInput,
+  ParagraphTextSurface,
+  buildWysiwygDraftParagraphLayout,
+  buildWysiwygDraftParagraphLines,
   getContinuationEditState,
   getInlineEditVisualMode,
   inlineEditTextareaCaretColor,
@@ -14,8 +19,11 @@ import {
   shouldUseNativeInlineEditEnter,
   shouldUseNativeTableCellBoundaryBackspace,
   shouldUseInlineEditSvgVisual,
+  shouldUseWysiwygTextEngineLayer,
 } from "../ParagraphTextSurface"
 import type { PageFragment } from "@/pagination"
+import type { DocumentNode, ParagraphNode } from "@/schema"
+import type { TextMeasurer } from "@/layout"
 
 function makeFragment(overrides: Partial<PageFragment> = {}): PageFragment {
   return {
@@ -29,6 +37,54 @@ function makeFragment(overrides: Partial<PageFragment> = {}): PageFragment {
     lines: [],
     ...overrides,
   }
+}
+
+function makeDoc(text = "Hello"): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 72, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 72, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["p1"] },
+          p1: {
+            id: "p1",
+            type: "paragraph",
+            props: {
+              align: "left",
+              fontSize: { value: 12, unit: "pt" },
+              fontFamilyKey: "default",
+              lineHeight: 1,
+              spacingBefore: { value: 0, unit: "pt" },
+              spacingAfter: { value: 0, unit: "pt" },
+              textIndent: { value: 0, unit: "pt" },
+              indentLeft: { value: 0, unit: "pt" },
+              indentRight: { value: 0, unit: "pt" },
+            },
+            children: [{ id: "p1-text", type: "text", text }],
+          },
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
+const fixedMeasurer: TextMeasurer = {
+  measureText: (text) => ({ width: text.length * 10 }),
+  measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => fontSize * lineHeightRatio,
 }
 
 describe("ParagraphTextSurface continuation editing", () => {
@@ -331,5 +387,325 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
   it("keeps the existing textarea outline helper for fallback mode", () => {
     expect(inlineEditTextareaOutline(false)).toBe("2px solid #2563eb")
     expect(inlineEditTextareaOutline(true)).toBe("none")
+  })
+
+  it("enables the text-engine edit layer only when the flagged visual snapshot is fresh", () => {
+    expect(shouldUseWysiwygTextEngineLayer({
+      enabled: true,
+      isEditing: true,
+      canPlainTextEdit: true,
+      isVisualFresh: true,
+    })).toBe(true)
+    expect(shouldUseWysiwygTextEngineLayer({
+      enabled: false,
+      isEditing: true,
+      canPlainTextEdit: true,
+      isVisualFresh: true,
+    })).toBe(false)
+    expect(shouldUseWysiwygTextEngineLayer({
+      enabled: true,
+      isEditing: true,
+      canPlainTextEdit: true,
+      isVisualFresh: false,
+    })).toBe(false)
+    expect(shouldUseWysiwygTextEngineLayer({
+      enabled: true,
+      isEditing: true,
+      canPlainTextEdit: true,
+      isVisualFresh: true,
+      supportsLocalDraftLayout: false,
+    })).toBe(false)
+  })
+
+  it("renders the flagged text-engine edit lane from document lines without textarea markup", () => {
+    const fragment = makeFragment({
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("Hello"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      showTextSegments: false,
+      initialCaretIndex: 5,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
+    expect(markup).toContain("data-wysiwyg-caret=\"true\"")
+    expect(markup).toContain("Hello")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("does not use the text-engine lane for continuation fragments", () => {
+    const fragment = makeFragment({
+      continuesFrom: true,
+      lineStart: 1,
+      lineEnd: 2,
+      lines: [{
+        text: "world",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "world", start: 6, end: 11, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("Hello world"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      showTextSegments: false,
+      initialCaretIndex: 8,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+
+    expect(markup).not.toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).toContain("<textarea")
+  })
+
+  it("uses the text-engine lane for continuation fragments after draft pagination", () => {
+    const fragment = makeFragment({
+      continuesFrom: true,
+      lineStart: 1,
+      lineEnd: 2,
+      lines: [{
+        text: "world",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "world", start: 6, end: 11, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("Hello world"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Hello world",
+      wysiwygTextCaretOffset: 8,
+      wysiwygTextDraftPaginationActive: true,
+      showTextSegments: false,
+      initialCaretIndex: 8,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"soft\"")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("marks local draft layout as hard-page-boundary when it grows past page content", () => {
+    const fragment = makeFragment({
+      y: 20,
+      width: 200,
+      height: 12,
+      lines: [{
+        text: "A",
+        x: 10,
+        y: 20,
+        width: 10,
+        height: 12,
+        segments: [{ kind: "word", text: "A", start: 0, end: 1, x: 0, width: 10, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("A"),
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 30,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "A\nB",
+      wysiwygTextCaretOffset: 3,
+      showTextSegments: false,
+      initialCaretIndex: 1,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
+    expect(markup).toContain("A")
+    expect(markup).toContain("B")
+  })
+
+  it("can render text-engine draft text from local paragraph measurement", () => {
+    const doc = makeDoc("Hello")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({
+      width: 200,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 12,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const draftLines = buildWysiwygDraftParagraphLines(fragment, paragraph, "Hello!", fixedMeasurer)
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Hello!",
+      wysiwygTextCaretOffset: 6,
+      showTextSegments: false,
+      initialCaretIndex: 5,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(draftLines?.[0].text).toBe("Hello!")
+    expect(markup).toContain("Hello!")
+    expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("builds draft layout with paginator line positioning and measured height", () => {
+    const doc = makeDoc("A\nBC")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    paragraph.props.align = "center"
+    paragraph.props.spacingBefore = { value: 2, unit: "pt" }
+    paragraph.props.spacingAfter = { value: 3, unit: "pt" }
+    const fragment = makeFragment({ x: 10, y: 20, width: 80 })
+
+    const layout = buildWysiwygDraftParagraphLayout(fragment, paragraph, "A\nBC", fixedMeasurer)
+
+    expect(layout?.height).toBe(29)
+    expect(layout?.lines.map((line) => line.text)).toEqual(["A", "BC"])
+    expect(layout?.lines.map((line) => line.y)).toEqual([22, 34])
+    expect(layout?.lines.map((line) => line.x)).toEqual([45, 40])
+  })
+
+  it("does not collapse continuation fragments into one local draft layout", () => {
+    const doc = makeDoc("Hello world")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({ continuesFrom: true, lineStart: 1, lineEnd: 2 })
+
+    expect(buildWysiwygDraftParagraphLayout(fragment, paragraph, "Hello world!", fixedMeasurer)).toBeNull()
   })
 })

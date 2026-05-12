@@ -102,7 +102,7 @@ function justifySegments(
   })
 }
 
-function buildPaginatedLines(
+export function buildPaginatedLines(
   lines: MeasuredLine[],
   fragmentX: number,
   fragmentY: number,

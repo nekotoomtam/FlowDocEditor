@@ -11,6 +11,7 @@ import type { FragmentDrift } from "./comparePagination"
 import { getRowGeometry } from "@/placement/geometry"
 import { ParagraphTextSurface } from "./ParagraphTextSurface"
 import { resolveCaretOffsetFromPointInFragment } from "./wysiwygCaretMapping"
+import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -184,6 +185,7 @@ function PageView({
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
+  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, onWysiwygTextDraftChange, onWysiwygTextReflowDecision,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
@@ -193,6 +195,12 @@ function PageView({
   showDrift: boolean
   driftMap: Map<string, FragmentDrift> | null
   wysiwygInlineEditEnabled: boolean
+  wysiwygTextEngineEnabled: boolean
+  wysiwygTextDraftNodeId: string | null
+  wysiwygTextDraftText: string | null
+  wysiwygTextCaretOffset: number | null
+  wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
+  wysiwygTextDraftPaginationActive: boolean
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
   inlineEditPageIndex: number | null
@@ -200,10 +208,12 @@ function PageView({
   onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
   onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
   onInlineEditUserInteraction: (nodeId: string) => void
-  onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
+  onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
+  onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
+  onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
   pageKey: string; setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
@@ -224,6 +234,7 @@ function PageView({
   useEffect(() => {
     if (inlineEditNodeId == null) editFragmentRef.current = null
   }, [inlineEditNodeId])
+  const wysiwygCaretMappingEnabled = wysiwygInlineEditEnabled || wysiwygTextEngineEnabled
 
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
@@ -386,7 +397,7 @@ function PageView({
                   ? {
                       type: "inline-edit" as const,
                       nodeId: f.nodeId,
-                      caretIndex: wysiwygInlineEditEnabled
+                      caretIndex: wysiwygCaretMappingEnabled
                         ? caretIndexFromPointer(f, e, scale, textMeasurer, true)
                         : null,
                       pageIndex: f.pageIndex,
@@ -403,7 +414,7 @@ function PageView({
                 if (!paragraphId || !canInlineEditParagraph(doc, paragraphId)) return
                 onInlineEditStart(
                   paragraphId,
-                  f.nodeType === "paragraph" && wysiwygInlineEditEnabled
+                  f.nodeType === "paragraph" && wysiwygCaretMappingEnabled
                     ? caretIndexFromPointer(f, e, scale, textMeasurer, true)
                     : null,
                   f.pageIndex,
@@ -480,10 +491,16 @@ function PageView({
                 doc={doc}
                 pageKey={pageKey}
                 scale={scale}
+                pageContentBottom={page.contentBox.y + page.contentBox.height}
                 textMeasurer={textMeasurer}
                 isEditing={isInlineEditing}
                 isVisualFresh={isInlineEditing && inlineEditVisualFresh}
                 wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
+                wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
+                wysiwygTextDraftText={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextDraftText : null}
+                wysiwygTextCaretOffset={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextCaretOffset : null}
+                wysiwygTextSelection={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextSelection : null}
+                wysiwygTextDraftPaginationActive={wysiwygTextDraftNodeId === f.nodeId && wysiwygTextDraftPaginationActive}
                 showTextSegments={showTextSegments}
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
@@ -493,6 +510,8 @@ function PageView({
                 onEndEdit={onInlineEditEnd}
                 onSplitParagraph={onSplitParagraph}
                 onMergeParagraph={onMergeParagraph}
+                onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+                onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
               />
             )}
           </g>
@@ -606,7 +625,7 @@ interface Props {
   onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
   onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
   onInlineEditUserInteraction: (nodeId: string) => void
-  onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
+  onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
@@ -623,6 +642,14 @@ interface Props {
   showDrift: boolean
   driftMap: Map<string, FragmentDrift> | null
   wysiwygInlineEditEnabled: boolean
+  wysiwygTextEngineEnabled: boolean
+  wysiwygTextDraftNodeId: string | null
+  wysiwygTextDraftText: string | null
+  wysiwygTextCaretOffset: number | null
+  wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
+  wysiwygTextDraftPaginationActive: boolean
+  onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
+  onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
 }
 
 export function EditorCanvas({
@@ -632,6 +659,14 @@ export function EditorCanvas({
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
+  wysiwygTextEngineEnabled,
+  wysiwygTextDraftNodeId,
+  wysiwygTextDraftText,
+  wysiwygTextCaretOffset,
+  wysiwygTextSelection,
+  wysiwygTextDraftPaginationActive,
+  onWysiwygTextDraftChange,
+  onWysiwygTextReflowDecision,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
@@ -695,6 +730,14 @@ export function EditorCanvas({
                   showDrift={showDrift}
                   driftMap={driftMap}
                   wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
+                  wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
+                  wysiwygTextDraftNodeId={wysiwygTextDraftNodeId}
+                  wysiwygTextDraftText={wysiwygTextDraftText}
+                  wysiwygTextCaretOffset={wysiwygTextCaretOffset}
+                  wysiwygTextSelection={wysiwygTextSelection}
+                  wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive}
+                  onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+                  onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
                 />
               </div>
             ))}

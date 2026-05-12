@@ -3,7 +3,7 @@
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
 import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
-import { assertDocument, createDefaultDocument, DEFAULT_STACK_MIN_HEIGHT, isPlainTextParagraph, normalizeDocument } from "@/document"
+import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
 import type { FieldRefInlineChanges } from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
@@ -43,8 +43,27 @@ import {
 import type { DriftReport } from "./comparePagination"
 import { resolveSamePreviewOptimisticLayout, type LayoutStatus, type OptimisticLayoutSnapshot } from "./layoutReconciliation"
 import { findWysiwygPageIndexInFragmentRanges, getWysiwygParagraphFragmentRanges } from "./wysiwygCaretMapping"
-import { WYSIWYG_INLINE_EDIT_ENABLED } from "./wysiwygInlineEditConfig"
+import {
+  WYSIWYG_INLINE_EDIT_ENABLED,
+  WYSIWYG_PERF_TRACE_ENABLED,
+  WYSIWYG_TEXT_ENGINE_ENABLED,
+} from "./wysiwygInlineEditConfig"
+import {
+  finishWysiwygPerfSpan,
+  startWysiwygPerfSpan,
+  summarizePaginatedForWysiwygPerf,
+} from "./wysiwygPerformance"
+import {
+  buildWysiwygTextDraftPreviewDocument,
+  countWysiwygTextDraftFragments,
+} from "./wysiwygDraftPreview"
+import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
+import { resolveEditorTestScenarioFromLocation } from "./wysiwygStage3StressScenarios"
+import { isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
+import { commitWysiwygTextEditState, getPlainParagraphTextFromDocument } from "./wysiwygTextCommit"
 import { useInlineEditSession } from "./useInlineEditSession"
+import { useWysiwygTextSession } from "./useWysiwygTextSession"
+import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +146,7 @@ const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
 const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 0
+const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 80
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
@@ -143,9 +163,10 @@ type EditorAction =
   | { type: "UPDATE_FIELD_REF"; fieldRefId: string; changes: FieldRefInlineChanges }
   | { type: "UPDATE_INLINE_TEXT_DRAFT"; nodeId: string; text: string }
   | { type: "COMMIT_INLINE_TEXT_EDIT"; nodeId: string; beforeDoc: DocumentNode; beforePaginated: PaginatedDocument; beforeText: string; afterPaginated: PaginatedDocument }
+  | { type: "COMMIT_WYSIWYG_TEXT_EDIT"; nodeId: string; text: string; beforeText: string; history?: HistoryEntry; afterPaginated: PaginatedDocument }
   | { type: "DELETE_NODE"; nodeId: string }
   | { type: "SET_PAGINATED"; paginated: PaginatedDocument }
-  | { type: "SET_INLINE_EDIT_HEIGHT"; nodeId: string; pageIndex: number | null; height: number }
+  | { type: "SET_INLINE_EDIT_HEIGHT"; nodeId: string; pageIndex: number | null; height: number; reflow?: WysiwygTextReflowDecision }
   | { type: "UNDO" }
   | { type: "REDO" }
   | { type: "TABLE_ADD_ROW"; tableId: string; afterIndex?: number }
@@ -225,8 +246,8 @@ function setDocWithoutHistory(state: EditorState, newDoc: DocumentNode): EditorS
   return { ...state, doc: normalizedDoc }
 }
 
-function createInitialEditorState(): EditorState {
-  const initialDoc = normalizeDocument(loadFromStorage() ?? createDefaultDocument("Untitled"))
+function createInitialEditorState(initialDocOverride?: DocumentNode | null): EditorState {
+  const initialDoc = normalizeDocument(initialDocOverride ?? loadFromStorage() ?? createDefaultDocument("Untitled"))
   return {
     past: [],
     doc: initialDoc,
@@ -275,6 +296,9 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         past: [...state.past.slice(-(MAX_HISTORY - 1)), { doc: action.beforeDoc, paginated: action.beforePaginated }],
         future: [],
       }
+    }
+    case "COMMIT_WYSIWYG_TEXT_EDIT": {
+      return commitWysiwygTextEditState(state, action, MAX_HISTORY)
     }
     case "DELETE_NODE":
       return { ...pushDoc(state, deleteNode(state.doc, action.nodeId)), selectedNodeId: null }
@@ -402,10 +426,7 @@ function findParagraphNode(doc: DocumentNode, nodeId: string) {
 }
 
 function getParagraphTextFromDoc(doc: DocumentNode, nodeId: string): string | null {
-  const node = findParagraphNode(doc, nodeId)
-  if (!node) return null
-  if (!isPlainTextParagraph(node)) return null
-  return node.children.map((child) => child.type === "text" ? child.text : "").join("")
+  return getPlainParagraphTextFromDocument(doc, nodeId)
 }
 
 function findParagraphFragment(paginated: PaginatedDocument, nodeId: string, pageIndex?: number | null): PageFragment | null {
@@ -421,163 +442,25 @@ function findParagraphFragment(paginated: PaginatedDocument, nodeId: string, pag
   return null
 }
 
-function resizeFragmentHeightAndShift(
-  paginated: PaginatedDocument,
-  doc: DocumentNode,
-  nodeId: string,
-  height: number,
-  pageIndex?: number | null,
-): PaginatedDocument {
-  let targetPageIndex: number | null = null
-  let targetY: number | null = null
-  let delta = 0
-
-  for (const section of paginated.sections) {
-    for (const page of section.pages) {
-      const fragment = page.fragments.find((f) =>
-        f.nodeId === nodeId &&
-        f.nodeType === "paragraph" &&
-        (pageIndex == null || f.pageIndex === pageIndex)
-      )
-      if (!fragment) continue
-      targetPageIndex = page.index
-      targetY = fragment.y
-      delta = height - fragment.height
-      break
-    }
-    if (targetY !== null) break
-  }
-
-  if (targetPageIndex === null || targetY === null || Math.abs(delta) < 0.5) return paginated
-
-  return {
-    ...paginated,
-    sections: paginated.sections.map((section) => ({
-      ...section,
-      pages: section.pages.map((page) => {
-        if (page.index !== targetPageIndex) return page
-
-        const target = page.fragments.find((f) =>
-          f.nodeId === nodeId &&
-          f.nodeType === "paragraph" &&
-          (pageIndex == null || f.pageIndex === pageIndex)
-        )
-        const byId = new Map(page.fragments.map((fragment) => [fragment.nodeId, fragment]))
-
-        const isDescendantOf = (fragment: PageFragment, ancestorId: string): boolean => {
-          let parentId = fragment.parentNodeId
-          while (parentId) {
-            if (parentId === ancestorId) return true
-            parentId = byId.get(parentId)?.parentNodeId
-          }
-          return false
-        }
-
-        const stackAncestor = target?.parentNodeId ? byId.get(target.parentNodeId) : null
-        const rowAncestor = stackAncestor?.parentNodeId ? byId.get(stackAncestor.parentNodeId) : null
-
-        if (target && stackAncestor?.nodeType === "stack" && rowAncestor?.nodeType === "row") {
-          const isLaterInEditedStack = (fragment: PageFragment): boolean => (
-            fragment.nodeId !== target.nodeId &&
-            fragment.y > target.y &&
-            isDescendantOf(fragment, stackAncestor.nodeId)
-          )
-          const adjustedY = (fragment: PageFragment): number => (
-            isLaterInEditedStack(fragment) ? fragment.y + delta : fragment.y
-          )
-          const rowNode = doc.document.sections
-            .map((docSection) => docSection.nodes[rowAncestor.nodeId])
-            .find((node) => node?.type === "row")
-          const rowMinHeight = rowNode?.type === "row" ? Math.max(0, rowNode.props.minHeight ?? 0) : 0
-          const stackFragments = page.fragments.filter((fragment) =>
-            fragment.parentNodeId === rowAncestor.nodeId &&
-            fragment.nodeType === "stack"
-          )
-
-          const stackHeight = (stack: PageFragment): number => {
-            const stackNode = doc.document.sections
-              .map((docSection) => docSection.nodes[stack.nodeId])
-              .find((node) => node?.type === "stack")
-            const stackMinHeight = stackNode?.type === "stack"
-              ? Math.max(DEFAULT_STACK_MIN_HEIGHT, stackNode.props.minHeight ?? 0)
-              : DEFAULT_STACK_MIN_HEIGHT
-            const contentBottom = page.fragments.reduce((bottom, fragment) => {
-              if (!isDescendantOf(fragment, stack.nodeId)) return bottom
-              const fragmentHeight = fragment.nodeId === nodeId ? height : fragment.height
-              return Math.max(bottom, adjustedY(fragment) + fragmentHeight)
-            }, stack.y)
-            return Math.max(stackMinHeight, contentBottom - stack.y)
-          }
-
-          const nextRowHeight = Math.max(rowMinHeight, ...stackFragments.map(stackHeight))
-          const rowDelta = nextRowHeight - rowAncestor.height
-          const rowBottom = rowAncestor.y + rowAncestor.height
-
-          return {
-            ...page,
-            fragments: page.fragments.map((fragment) => {
-              const isTarget = fragment.nodeId === nodeId &&
-                fragment.nodeType === "paragraph" &&
-                (pageIndex == null || fragment.pageIndex === pageIndex)
-              const isRow = fragment.nodeId === rowAncestor.nodeId && fragment.nodeType === "row"
-              const isRowStack = fragment.parentNodeId === rowAncestor.nodeId && fragment.nodeType === "stack"
-              const isInsideRow = isDescendantOf(fragment, rowAncestor.nodeId)
-              const shouldShiftBelowRow = !isRow && !isInsideRow && fragment.y >= rowBottom - 0.5
-              const shouldShiftInsideStack = isLaterInEditedStack(fragment)
-
-              if (isTarget) return { ...fragment, height }
-              if (isRow || isRowStack) return { ...fragment, height: nextRowHeight }
-              if (shouldShiftInsideStack && Math.abs(delta) >= 0.5) {
-                return {
-                  ...fragment,
-                  y: fragment.y + delta,
-                  lines: fragment.lines?.map((line) => ({ ...line, y: line.y + delta })),
-                }
-              }
-              if (!shouldShiftBelowRow || Math.abs(rowDelta) < 0.5) return fragment
-              return {
-                ...fragment,
-                y: fragment.y + rowDelta,
-                lines: fragment.lines?.map((line) => ({ ...line, y: line.y + rowDelta })),
-              }
-            }),
-          }
-        }
-
-        return {
-          ...page,
-          fragments: page.fragments.map((fragment) => {
-            const isTarget = fragment.nodeId === nodeId &&
-              fragment.nodeType === "paragraph" &&
-              (pageIndex == null || fragment.pageIndex === pageIndex)
-            if (isTarget) return { ...fragment, height }
-            if (fragment.y <= targetY) return fragment
-            return {
-              ...fragment,
-              y: fragment.y + delta,
-              lines: fragment.lines?.map((line) => ({ ...line, y: line.y + delta })),
-            }
-          }),
-        }
-      }),
-    })),
-  }
-}
-
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function EditorShell() {
+  const initialTestScenario = useMemo(() => resolveEditorTestScenarioFromLocation(), [])
   const [scale, setScale] = useState(0.6)
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit")
-  const [state, dispatch] = useReducer(reducer, undefined, createInitialEditorState)
+  const [state, dispatch] = useReducer(reducer, initialTestScenario?.document ?? null, createInitialEditorState)
   const editorTextMeasurer = useMemo(() => createBrowserTextMeasurer(), [])
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
   const [mode, setMode] = useState<"template" | "fill">("template")
   const [dataSnapshot, setDataSnapshot] = useState<DataSnapshotV1>(() => (
-    dataSnapshotFromDocumentParseResult(loadDocumentFromStorage(localStorage))
+    initialTestScenario
+      ? createEmptyDataSnapshot()
+      : dataSnapshotFromDocumentParseResult(loadDocumentFromStorage(localStorage))
   ))
   const [packageFieldRegistry, setPackageFieldRegistry] = useState<FieldRegistryV1>(() => (
-    fieldRegistryFromDocumentParseResult(loadDocumentFromStorage(localStorage))
+    initialTestScenario
+      ? SAMPLE_FIELD_REGISTRY_V1
+      : fieldRegistryFromDocumentParseResult(loadDocumentFromStorage(localStorage))
   ))
   const isTemplateMode = mode === "template"
   const resolvePreviewDoc = useCallback((doc: DocumentNode) => (
@@ -614,6 +497,8 @@ export default function EditorShell() {
   const docRef = useRef(state.doc)
   const paginatedRef = useRef(state.paginated)
   const wasInlineEditingRef = useRef(false)
+  const wysiwygDraftPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wysiwygDraftPaginationGenerationRef = useRef(0)
 
   useEffect(() => { docRef.current = state.doc }, [state.doc])
   useEffect(() => { paginatedRef.current = state.paginated })
@@ -633,10 +518,10 @@ export default function EditorShell() {
     draftVersionRef: inlineEditDraftVersionRef,
     markVisualFresh: markInlineEditVisualFresh,
     setPageIndex: setInlineEditPageIndex,
-    finalizeBeforeAction: finalizeInlineEditBeforeAction,
+    finalizeBeforeAction: finalizeLegacyInlineEditBeforeAction,
     resetForDocumentReplace: resetInlineEditStateForDocumentReplace,
-    end: handleInlineEditEnd,
-    start: handleInlineEditStart,
+    end: endInlineEditSession,
+    start: startInlineEditSession,
     change: handleInlineEditChange,
     userInteraction: handleInlineEditUserInteraction,
     caretChange: handleInlineEditCaretChange,
@@ -649,13 +534,210 @@ export default function EditorShell() {
     getParagraphText: getParagraphTextFromDoc,
     paginatePreviewDoc,
     selectNode: (nodeId) => dispatch({ type: "SELECT_NODE", nodeId }),
-    updateInlineTextDraft: (nodeId, text) => dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text }),
+    updateInlineTextDraft: (nodeId, text) => {
+      const startedAt = startWysiwygPerfSpan()
+      dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-draft-update", startedAt, {
+        nodeId,
+        textLength: text.length,
+      })
+    },
     commitInlineTextEdit: (payload) => dispatch({ type: "COMMIT_INLINE_TEXT_EDIT", ...payload }),
     setPaginated: (paginated) => dispatch({ type: "SET_PAGINATED", paginated }),
   })
 
+  const {
+    state: wysiwygTextSessionState,
+    start: startWysiwygTextSession,
+    changeDraft: changeWysiwygTextDraft,
+    moveCaret: moveWysiwygTextCaret,
+    end: endWysiwygTextSession,
+  } = useWysiwygTextSession({
+    enabled: WYSIWYG_TEXT_ENGINE_ENABLED,
+    getParagraphText: (nodeId) => getParagraphTextFromDoc(docRef.current, nodeId),
+  })
+  const wysiwygTextSessionStateRef = useRef(wysiwygTextSessionState)
+  const [wysiwygDraftPaginationNodeId, setWysiwygDraftPaginationNodeId] = useState<string | null>(null)
+  useEffect(() => { wysiwygTextSessionStateRef.current = wysiwygTextSessionState }, [wysiwygTextSessionState])
+
+  const clearWysiwygDraftPagination = useCallback(() => {
+    if (wysiwygDraftPaginationDebounceRef.current) clearTimeout(wysiwygDraftPaginationDebounceRef.current)
+    wysiwygDraftPaginationDebounceRef.current = null
+    wysiwygDraftPaginationGenerationRef.current += 1
+    setWysiwygDraftPaginationNodeId(null)
+  }, [])
+  useEffect(() => () => {
+    if (wysiwygDraftPaginationDebounceRef.current) clearTimeout(wysiwygDraftPaginationDebounceRef.current)
+  }, [])
+
+  const scheduleWysiwygDraftPagination = useCallback((nodeId: string) => {
+    if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
+    if (wysiwygDraftPaginationDebounceRef.current) clearTimeout(wysiwygDraftPaginationDebounceRef.current)
+    const generation = ++wysiwygDraftPaginationGenerationRef.current
+    wysiwygDraftPaginationDebounceRef.current = setTimeout(() => {
+      if (generation !== wysiwygDraftPaginationGenerationRef.current) return
+      const session = wysiwygTextSessionStateRef.current
+      if (session.nodeId !== nodeId) return
+      const draftDoc = buildWysiwygTextDraftPreviewDocument({
+        doc: docRef.current,
+        nodeId,
+        draftText: session.draftText,
+      })
+      try {
+        assertDocument(draftDoc)
+      } catch (error) {
+        console.error("WYSIWYG draft pagination produced invalid document:", error)
+        return
+      }
+      const startedAt = startWysiwygPerfSpan()
+      const paginated = paginatePreviewDoc(draftDoc)
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
+        nodeId,
+        draftVersion: session.dirtyVersion,
+        ...summarizePaginatedForWysiwygPerf(paginated),
+      })
+      if (generation !== wysiwygDraftPaginationGenerationRef.current) return
+      const nextSession = wysiwygTextSessionStateRef.current
+      if (nextSession.nodeId !== nodeId || nextSession.dirtyVersion !== session.dirtyVersion) {
+        scheduleWysiwygDraftPagination(nodeId)
+        return
+      }
+      const ranges = getWysiwygParagraphFragmentRanges(paginated, nodeId)
+      const nextPageIndex = nextSession.caretOffset == null
+        ? null
+        : findWysiwygPageIndexInFragmentRanges(ranges, nextSession.caretOffset)
+      if (nextPageIndex !== null) {
+        setInlineEditPageIndex(nextPageIndex)
+      }
+      paginatedRef.current = paginated
+      optimisticLayoutRef.current = { doc: draftDoc, paginated }
+      setWysiwygDraftPaginationNodeId(countWysiwygTextDraftFragments(paginated, nodeId) > 1 ? nodeId : null)
+      dispatch({ type: "SET_PAGINATED", paginated })
+      markInlineEditVisualFresh(inlineEditDraftVersionRef.current)
+    }, WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS)
+  }, [
+    inlineEditDraftVersionRef,
+    markInlineEditVisualFresh,
+    paginatePreviewDoc,
+    setInlineEditPageIndex,
+  ])
+
+  const finalizeWysiwygTextSessionBeforeAction = useCallback((): boolean => {
+    const session = wysiwygTextSessionState
+    if (!WYSIWYG_TEXT_ENGINE_ENABLED || !session.nodeId) return false
+    const afterDoc = normalizeDocument(updateParagraphText(docRef.current, session.nodeId, session.draftText))
+    try {
+      assertDocument(afterDoc)
+    } catch (error) {
+      console.error("WYSIWYG text finalize produced invalid document:", error)
+      return false
+    }
+    const afterPaginated = paginatePreviewDoc(afterDoc)
+    const history = consumeInlineEditHistory(session.nodeId)
+    docRef.current = afterDoc
+    paginatedRef.current = afterPaginated
+    dispatch({
+      type: "COMMIT_WYSIWYG_TEXT_EDIT",
+      nodeId: session.nodeId,
+      text: session.draftText,
+      beforeText: session.baseText,
+      history,
+      afterPaginated,
+    })
+    clearWysiwygDraftPagination()
+    endWysiwygTextSession()
+    resetInlineEditStateForDocumentReplace()
+    return true
+  }, [
+    clearWysiwygDraftPagination,
+    consumeInlineEditHistory,
+    endWysiwygTextSession,
+    paginatePreviewDoc,
+    resetInlineEditStateForDocumentReplace,
+    wysiwygTextSessionState,
+  ])
+
+  const finalizeInlineEditBeforeAction = useCallback((): boolean => {
+    if (finalizeWysiwygTextSessionBeforeAction()) return true
+    return finalizeLegacyInlineEditBeforeAction()
+  }, [finalizeLegacyInlineEditBeforeAction, finalizeWysiwygTextSessionBeforeAction])
+
+  const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null) => {
+    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionState.nodeId && wysiwygTextSessionState.nodeId !== nodeId) {
+      finalizeInlineEditBeforeAction()
+    }
+    startInlineEditSession(nodeId, caretIndex, pageIndex)
+    if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
+    if (!isWysiwygTextEngineFragmentEligible({
+      doc: docRef.current,
+      paginated: paginatedRef.current,
+      nodeId,
+      pageIndex,
+    })) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
+      return
+    }
+    if (wysiwygTextSessionState.nodeId === nodeId) {
+      moveWysiwygTextCaret(caretIndex)
+      return
+    }
+    startWysiwygTextSession(nodeId, caretIndex, pageIndex)
+  }, [
+    clearWysiwygDraftPagination,
+    finalizeInlineEditBeforeAction,
+    endWysiwygTextSession,
+    moveWysiwygTextCaret,
+    startInlineEditSession,
+    startWysiwygTextSession,
+    wysiwygTextSessionState.nodeId,
+  ])
+
+  const handleInlineEditEnd = useCallback((nodeId?: string, reason: "blur" | "keyboard" = "keyboard") => {
+    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionState.nodeId && (!nodeId || nodeId === wysiwygTextSessionState.nodeId)) {
+      finalizeInlineEditBeforeAction()
+      return
+    }
+    endInlineEditSession(nodeId, reason)
+  }, [endInlineEditSession, finalizeInlineEditBeforeAction, wysiwygTextSessionState.nodeId])
+
+  const handleWysiwygTextDraftChange = useCallback((nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => {
+    if (wysiwygTextSessionState.nodeId !== nodeId) return
+    if (text === wysiwygTextSessionState.draftText) {
+      moveWysiwygTextCaret(caretIndex, selection)
+    } else {
+      changeWysiwygTextDraft({ text, caretOffset: caretIndex, selection })
+    }
+    handleInlineEditCaretChange(nodeId, caretIndex)
+    if (wysiwygDraftPaginationNodeId === nodeId) {
+      scheduleWysiwygDraftPagination(nodeId)
+    }
+  }, [
+    changeWysiwygTextDraft,
+    handleInlineEditCaretChange,
+    moveWysiwygTextCaret,
+    scheduleWysiwygDraftPagination,
+    wysiwygTextSessionState.draftText,
+    wysiwygTextSessionState.nodeId,
+    wysiwygDraftPaginationNodeId,
+  ])
+
+  const handleInlineEditHeightPreviewChange = useCallback((nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => {
+    handleInlineEditHeightChange(nodeId, height, pageIndex)
+    if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionState.nodeId !== nodeId) return
+    if (reflow && !reflow.shouldPatchSamePageHeight) return
+    dispatch({ type: "SET_INLINE_EDIT_HEIGHT", nodeId, height, pageIndex, reflow })
+  }, [handleInlineEditHeightChange, wysiwygTextSessionState.nodeId])
+
+  const handleWysiwygTextReflowDecision = useCallback((nodeId: string, reflow: WysiwygTextReflowDecision) => {
+    if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionState.nodeId !== nodeId) return
+    if (!reflow.shouldQueueSettledPagination) return
+    scheduleWysiwygDraftPagination(nodeId)
+  }, [scheduleWysiwygDraftPagination, wysiwygTextSessionState.nodeId])
+
   // ─── Auto-save ───────────────────────────────────────────────────────────────
   useEffect(() => {
+    if (initialTestScenario) return
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(() => {
       saveToStorage(state.doc, packageFieldRegistry, dataSnapshot)
@@ -663,7 +745,7 @@ export default function EditorShell() {
     }, 500)
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataSnapshot, packageFieldRegistry, state.doc])
+  }, [dataSnapshot, initialTestScenario, packageFieldRegistry, state.doc])
 
   const handleExport = useCallback(async (format: "pdf" | "docx") => {
     finalizeInlineEditBeforeAction()
@@ -724,6 +806,8 @@ export default function EditorShell() {
       if (result.ok) {
         const doc = result.doc
         resetInlineEditStateForDocumentReplace()
+        clearWysiwygDraftPagination()
+        endWysiwygTextSession()
         setPackageFieldRegistry(fieldRegistryFromDocumentParseResult(result))
         setDataSnapshot(dataSnapshotFromDocumentParseResult(result))
         dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
@@ -737,16 +821,18 @@ export default function EditorShell() {
     }
     reader.readAsText(file)
     e.target.value = ""
-  }, [paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
+  }, [clearWysiwygDraftPagination, endWysiwygTextSession, paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
 
   const handleNewDocument = useCallback(() => {
     if (!confirm("สร้างเอกสารใหม่? history จะถูกล้าง")) return
     const doc = createDefaultDocument("Untitled")
     resetInlineEditStateForDocumentReplace()
+    clearWysiwygDraftPagination()
+    endWysiwygTextSession()
     setPackageFieldRegistry(SAMPLE_FIELD_REGISTRY_V1)
     setDataSnapshot(createEmptyDataSnapshot())
     dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
-  }, [paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
+  }, [clearWysiwygDraftPagination, endWysiwygTextSession, paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
 
   const handleCanvasScaleChange = useCallback((nextScale: number) => {
     setScale(clampScale(nextScale))
@@ -893,7 +979,11 @@ export default function EditorShell() {
     const wasInlineEditing = wasInlineEditingRef.current
     wasInlineEditingRef.current = inlineEditNodeId !== null
     if (!wasInlineEditing || inlineEditNodeId !== null) return
+    const startedAt = startWysiwygPerfSpan()
     const paginated = paginateDocument(previewDoc, editorTextMeasurer)
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-exit-pagination", startedAt, {
+      ...summarizePaginatedForWysiwygPerf(paginated),
+    })
     optimisticLayoutRef.current = { doc: previewDoc, paginated }
     dispatch({ type: "SET_PAGINATED", paginated })
   }, [editorTextMeasurer, inlineEditNodeId, previewDoc])
@@ -936,7 +1026,13 @@ export default function EditorShell() {
       : false
     if (isSplitParagraph) return
 
+    const startedAt = startWysiwygPerfSpan()
     const measured = measureParagraph(paraNode, fragment.width, editorTextMeasurer)
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "active-paragraph-measure", startedAt, {
+      nodeId: inlineEditNodeId,
+      pageIndex: inlineEditPageIndex,
+      lineCount: measured.lines.length,
+    })
     const newLineCount = measured.lines.length
 
     if (prevEditNodeIdRef.current !== inlineEditNodeId) {
@@ -965,7 +1061,13 @@ export default function EditorShell() {
     interactiveDebounceRef.current = setTimeout(() => {
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
+      const startedAt = startWysiwygPerfSpan()
       const paginated = paginateDocument(previewDoc, editorTextMeasurer)
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
+        nodeId: inlineEditNodeIdAtSchedule ?? undefined,
+        draftVersion: inlineEditDraftVersionAtSchedule,
+        ...summarizePaginatedForWysiwygPerf(paginated),
+      })
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
       optimisticLayoutRef.current = { doc: previewDoc, paginated }
@@ -1426,6 +1528,9 @@ export default function EditorShell() {
     <div
       ref={editorRootRef}
       data-testid="editor-shell"
+      data-editor-test-scenario={initialTestScenario?.id ?? undefined}
+      data-wysiwyg-text-engine-enabled={WYSIWYG_TEXT_ENGINE_ENABLED ? "true" : "false"}
+      data-wysiwyg-perf-trace-enabled={WYSIWYG_PERF_TRACE_ENABLED ? "true" : "false"}
       style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -1631,7 +1736,7 @@ export default function EditorShell() {
           onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
           onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
           onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
-          onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightChange : () => undefined}
+          onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightPreviewChange : () => undefined}
           onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
           onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
           onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
@@ -1650,6 +1755,14 @@ export default function EditorShell() {
           showDrift={showDrift}
           driftMap={driftReport?.driftMap ?? null}
           wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
+          wysiwygTextEngineEnabled={WYSIWYG_TEXT_ENGINE_ENABLED}
+          wysiwygTextDraftNodeId={wysiwygTextSessionState.nodeId}
+          wysiwygTextDraftText={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.draftText : null}
+          wysiwygTextCaretOffset={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.caretOffset : null}
+          wysiwygTextSelection={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
+          wysiwygTextDraftPaginationActive={wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
+          onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
+          onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
         />
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>
           {isTemplateMode ? (

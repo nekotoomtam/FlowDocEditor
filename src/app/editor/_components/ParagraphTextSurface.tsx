@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { isPlainTextParagraph } from "@/document"
-import { snapToGraphemeBoundary } from "@/layout"
+import { measureParagraph, snapToGraphemeBoundary } from "@/layout"
 import type { TextMeasurer } from "@/layout"
+import { buildPaginatedLines } from "@/pagination"
 import type { DocumentNode, ParagraphNode, TableNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily } from "@/font-registry"
@@ -12,25 +13,37 @@ import {
 } from "./wysiwygCaretMapping"
 import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
 import type { InlineEditSelectionSnapshot } from "./wysiwygTextInteraction"
+import { applyWysiwygTextInputKey, applyWysiwygTextInputText } from "./useWysiwygTextSession"
+import type { WysiwygTextSelection } from "./useWysiwygTextSession"
+import { classifyWysiwygTextReflow } from "./wysiwygReflow"
+import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 
 interface Props {
   fragment: PageFragment
   doc: DocumentNode
   pageKey: string
   scale: number
+  pageContentBottom?: number | null
   textMeasurer?: TextMeasurer
   isEditing: boolean
   isVisualFresh: boolean
   wysiwygInlineEditEnabled: boolean
+  wysiwygTextEngineEnabled: boolean
+  wysiwygTextDraftText?: string | null
+  wysiwygTextCaretOffset?: number | null
+  wysiwygTextSelection?: WysiwygTextSelection | null
+  wysiwygTextDraftPaginationActive?: boolean
   showTextSegments: boolean
   initialCaretIndex: number | null
   onChange: (nodeId: string, text: string, caretIndex: number | null) => void
   onCaretChange: (nodeId: string, caretIndex: number | null) => void
   onUserEditInteraction: (nodeId: string) => void
-  onHeightChange: (nodeId: string, height: number, pageIndex: number | null) => void
+  onHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onEndEdit: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
+  onWysiwygTextDraftChange?: (nodeId: string, text: string, caretIndex: number | null, selection?: WysiwygTextSelection | null) => void
+  onWysiwygTextReflowDecision?: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
 }
 
 export interface ContinuationEditState {
@@ -143,6 +156,20 @@ export function getInlineEditVisualMode(input: {
     textareaOutline: inlineEditTextareaOutline(useDocumentVisual),
     textareaOutlineOffset: useDocumentVisual ? 0 : -2,
   }
+}
+
+export function shouldUseWysiwygTextEngineLayer(input: {
+  enabled: boolean
+  isEditing: boolean
+  canPlainTextEdit: boolean
+  isVisualFresh: boolean
+  supportsLocalDraftLayout?: boolean
+}): boolean {
+  return input.enabled &&
+    input.isEditing &&
+    input.canPlainTextEdit &&
+    input.isVisualFresh &&
+    (input.supportsLocalDraftLayout ?? true)
 }
 
 function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
@@ -510,15 +537,363 @@ function renderSelectionOverlay(
   ))
 }
 
+function paragraphWithDraftText(node: ParagraphNode, draftText: string): ParagraphNode | null {
+  if (!isPlainTextParagraph(node)) return null
+  const firstRun = node.children[0]
+  if (!firstRun) return null
+  return {
+    ...node,
+    children: [{ ...firstRun, text: draftText }],
+  }
+}
+
+export interface WysiwygDraftParagraphLayout {
+  lines: PaginatedLine[]
+  height: number
+}
+
+export function buildWysiwygDraftParagraphLayout(
+  fragment: PageFragment,
+  node: ParagraphNode,
+  draftText: string,
+  textMeasurer: TextMeasurer,
+): WysiwygDraftParagraphLayout | null {
+  if (fragment.continuesFrom || fragment.isContinued) return null
+  const draftNode = paragraphWithDraftText(node, draftText)
+  if (!draftNode) return null
+  const measured = measureParagraph(draftNode, fragment.width, textMeasurer)
+  return {
+    lines: buildPaginatedLines(
+      measured.lines,
+      fragment.x,
+      fragment.y,
+      measured.spacingBefore,
+      node.props.align,
+      fragment.width,
+      true,
+    ),
+    height: measured.totalHeight,
+  }
+}
+
+export function buildWysiwygDraftParagraphLines(
+  fragment: PageFragment,
+  node: ParagraphNode,
+  draftText: string,
+  textMeasurer: TextMeasurer,
+): PaginatedLine[] | null {
+  return buildWysiwygDraftParagraphLayout(fragment, node, draftText, textMeasurer)?.lines ?? null
+}
+
+interface WysiwygTextLayerProps {
+  fragment: PageFragment
+  lines?: PaginatedLine[]
+  renderProps: ParagraphRenderProps | undefined
+  pageKey: string
+  scale: number
+  textMeasurer?: TextMeasurer
+  caretIndex: number | null
+  selection?: WysiwygTextSelection | null
+  draftText?: string | null
+  onDraftChange?: (nodeId: string, text: string, caretIndex: number | null, selection?: WysiwygTextSelection | null) => void
+  onEndEdit?: (nodeId: string, reason?: "blur" | "keyboard") => void
+  showTextSegments: boolean
+  selectionOverlayRects?: ReturnType<typeof resolveSelectionOverlayRectsInFragment>
+  reflowKind?: WysiwygTextReflowDecision["kind"]
+}
+
+export function WysiwygTextLayer({
+  fragment,
+  lines,
+  renderProps,
+  pageKey,
+  scale,
+  textMeasurer,
+  caretIndex,
+  selection,
+  draftText,
+  onDraftChange,
+  onEndEdit,
+  showTextSegments,
+  selectionOverlayRects = [],
+  reflowKind,
+}: WysiwygTextLayerProps) {
+  const layerRef = useRef<SVGGElement | null>(null)
+  const inputBridgeRef = useRef<HTMLDivElement | null>(null)
+  const draftStateRef = useRef<{
+    text: string
+    caretOffset: number | null
+    selection: WysiwygTextSelection | null | undefined
+  }>({
+    text: draftText ?? "",
+    caretOffset: caretIndex,
+    selection,
+  })
+  const visualFragment = useMemo(() => (
+    lines ? { ...fragment, lines } : fragment
+  ), [fragment, lines])
+
+  useEffect(() => {
+    draftStateRef.current = {
+      text: draftText ?? "",
+      caretOffset: caretIndex,
+      selection,
+    }
+  }, [caretIndex, draftText, selection])
+
+  useEffect(() => {
+    inputBridgeRef.current?.focus()
+  }, [fragment.nodeId])
+
+  const applyDraftChange = useCallback((change: ReturnType<typeof applyWysiwygTextInputKey>) => {
+    if (!change || !onDraftChange) return false
+    draftStateRef.current = {
+      text: change.text,
+      caretOffset: change.caretOffset ?? null,
+      selection: change.selection ?? null,
+    }
+    onDraftChange(fragment.nodeId, change.text, change.caretOffset ?? null, change.selection ?? null)
+    return true
+  }, [fragment.nodeId, onDraftChange])
+
+  const applyTextInput = useCallback((insertedText: string) => {
+    if (!insertedText || !onDraftChange) return false
+    const current = draftStateRef.current
+    return applyDraftChange(applyWysiwygTextInputText(
+      current.text,
+      current.caretOffset,
+      insertedText,
+      current.selection,
+    ))
+  }, [applyDraftChange, onDraftChange])
+
+  const applyKeyInput = useCallback((input: {
+    key: string
+    shiftKey?: boolean
+    altKey?: boolean
+    ctrlKey?: boolean
+    metaKey?: boolean
+    isComposing?: boolean
+  }) => {
+    if (!onDraftChange) return false
+    const current = draftStateRef.current
+    return applyDraftChange(applyWysiwygTextInputKey(current.text, current.caretOffset, input, current.selection))
+  }, [applyDraftChange, onDraftChange])
+
+  useEffect(() => {
+    const input = inputBridgeRef.current
+    if (!input) return
+
+    const clearBridgeText = () => {
+      input.textContent = ""
+    }
+
+    const handleNativeKeyDown = (event: KeyboardEvent) => {
+      event.stopPropagation()
+      if (event.key === "Escape") {
+        event.preventDefault()
+        onEndEdit?.(fragment.nodeId, "keyboard")
+        return
+      }
+      if (!applyKeyInput({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        isComposing: event.isComposing,
+      })) return
+      event.preventDefault()
+    }
+
+    const handleNativeBeforeInput = (event: InputEvent) => {
+      if (event.isComposing) return
+      let handled = false
+      if (event.inputType === "insertText" && event.data) {
+        handled = applyTextInput(event.data)
+      } else if (event.inputType === "insertLineBreak" || event.inputType === "insertParagraph") {
+        handled = applyKeyInput({ key: "Enter" })
+      } else if (event.inputType === "deleteContentBackward") {
+        handled = applyKeyInput({ key: "Backspace" })
+      } else if (event.inputType === "deleteContentForward") {
+        handled = applyKeyInput({ key: "Delete" })
+      }
+      if (!handled) return
+      event.preventDefault()
+      clearBridgeText()
+    }
+
+    const handleNativeInput = () => {
+      const insertedText = input.textContent ?? ""
+      clearBridgeText()
+      applyTextInput(insertedText)
+    }
+
+    input.addEventListener("keydown", handleNativeKeyDown)
+    input.addEventListener("beforeinput", handleNativeBeforeInput)
+    input.addEventListener("input", handleNativeInput)
+    return () => {
+      input.removeEventListener("keydown", handleNativeKeyDown)
+      input.removeEventListener("beforeinput", handleNativeBeforeInput)
+      input.removeEventListener("input", handleNativeInput)
+    }
+  }, [applyKeyInput, applyTextInput, fragment.nodeId, onEndEdit])
+
+  const handlePointerDown = useCallback((event: React.PointerEvent<SVGGElement>) => {
+    event.stopPropagation()
+    event.preventDefault()
+    inputBridgeRef.current?.focus()
+    if (!onDraftChange || draftText == null) return
+    const svg = event.currentTarget.ownerSVGElement
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const point = {
+      x: (event.clientX - rect.left) / scale,
+      y: (event.clientY - rect.top) / scale,
+    }
+    const mappedCaret = resolveCaretOffsetFromPointInFragment(visualFragment, point, { textMeasurer })
+    if (!mappedCaret) return
+    onDraftChange(fragment.nodeId, draftText, mappedCaret.offset, {
+      anchorOffset: mappedCaret.offset,
+      focusOffset: mappedCaret.offset,
+    })
+  }, [draftText, fragment.nodeId, onDraftChange, scale, textMeasurer, visualFragment])
+
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<Element>) => {
+    event.stopPropagation()
+    if (event.key === "Escape") {
+      event.preventDefault()
+      onEndEdit?.(fragment.nodeId, "keyboard")
+      return
+    }
+    if (!applyKeyInput({
+      key: event.key,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      isComposing: event.nativeEvent.isComposing,
+    })) return
+    event.preventDefault()
+  }, [applyKeyInput, fragment.nodeId, onEndEdit])
+
+  const handleInputBridgeBeforeInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
+    const nativeEvent = event.nativeEvent as InputEvent
+    if (nativeEvent.isComposing) return
+    let change: ReturnType<typeof applyWysiwygTextInputKey> = null
+    if (nativeEvent.inputType === "insertText" && nativeEvent.data) {
+      if (applyTextInput(nativeEvent.data)) {
+        event.preventDefault()
+        event.currentTarget.textContent = ""
+      }
+      return
+    } else if (nativeEvent.inputType === "insertLineBreak" || nativeEvent.inputType === "insertParagraph") {
+      change = applyWysiwygTextInputKey(
+        draftStateRef.current.text,
+        draftStateRef.current.caretOffset,
+        { key: "Enter" },
+        draftStateRef.current.selection,
+      )
+    } else if (nativeEvent.inputType === "deleteContentBackward") {
+      change = applyWysiwygTextInputKey(
+        draftStateRef.current.text,
+        draftStateRef.current.caretOffset,
+        { key: "Backspace" },
+        draftStateRef.current.selection,
+      )
+    } else if (nativeEvent.inputType === "deleteContentForward") {
+      change = applyWysiwygTextInputKey(
+        draftStateRef.current.text,
+        draftStateRef.current.caretOffset,
+        { key: "Delete" },
+        draftStateRef.current.selection,
+      )
+    }
+    if (!change) return
+    event.preventDefault()
+    applyDraftChange(change)
+    event.currentTarget.textContent = ""
+  }, [applyDraftChange, applyTextInput])
+
+  const handleInputBridgeInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
+    const insertedText = event.currentTarget.textContent ?? ""
+    event.currentTarget.textContent = ""
+    applyTextInput(insertedText)
+  }, [applyTextInput])
+
+  return (
+    <g
+      ref={layerRef}
+      data-wysiwyg-text-engine-layer="true"
+      data-wysiwyg-reflow-kind={reflowKind}
+      data-inline-edit-node-id={fragment.nodeId}
+      data-inline-edit-visual-mode="text-engine"
+      tabIndex={0}
+      focusable="true"
+      role="textbox"
+      aria-multiline="true"
+      onKeyDown={handleKeyDown}
+      onPointerDown={handlePointerDown}
+      onClick={(event) => event.stopPropagation()}
+      onBlur={() => onEndEdit?.(fragment.nodeId, "blur")}
+    >
+      <foreignObject
+        x={fragment.x * scale}
+        y={fragment.y * scale}
+        width={1}
+        height={1}
+        style={{ overflow: "hidden" }}
+      >
+        <div
+          ref={inputBridgeRef}
+          data-wysiwyg-input-bridge="true"
+          data-inline-edit-node-id={fragment.nodeId}
+          contentEditable="plaintext-only"
+          suppressContentEditableWarning
+          onBeforeInput={handleInputBridgeBeforeInput}
+          onInput={handleInputBridgeInput}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+          aria-label="WYSIWYG text input"
+          role="textbox"
+          style={{
+            width: 1,
+            height: 1,
+            opacity: 0,
+            border: 0,
+            padding: 0,
+            margin: 0,
+            outline: "none",
+            background: "transparent",
+            color: "transparent",
+          }}
+        />
+      </foreignObject>
+      {renderSelectionOverlay(visualFragment, pageKey, scale, selectionOverlayRects)}
+      {visualFragment.lines?.map((line, index) =>
+        renderLine(line, index, visualFragment, renderProps, pageKey, scale),
+      )}
+      {showTextSegments && renderSegmentDebug(visualFragment.lines, visualFragment, renderProps, scale)}
+      {renderCollapsedCaret(visualFragment, pageKey, scale, caretIndex, textMeasurer)}
+    </g>
+  )
+}
+
 export function ParagraphTextSurface({
   fragment,
   doc,
   pageKey,
   scale,
+  pageContentBottom,
   textMeasurer,
   isEditing,
   isVisualFresh,
   wysiwygInlineEditEnabled,
+  wysiwygTextEngineEnabled,
+  wysiwygTextDraftText,
+  wysiwygTextCaretOffset,
+  wysiwygTextSelection,
+  wysiwygTextDraftPaginationActive = false,
   showTextSegments,
   initialCaretIndex,
   onChange,
@@ -528,10 +903,14 @@ export function ParagraphTextSurface({
   onEndEdit,
   onSplitParagraph,
   onMergeParagraph,
+  onWysiwygTextDraftChange,
+  onWysiwygTextReflowDecision,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const pointerSelectionAnchorRef = useRef<number | null>(null)
   const sliceContextRef = useRef<(ContinuationEditState & { editSliceKey: string }) | null>(null)
+  const textEngineHeightRequestRef = useRef<string | null>(null)
+  const textEngineReflowRequestRef = useRef<string | null>(null)
   const [isSelectionCollapsed, setIsSelectionCollapsed] = useState(true)
   const [selectionSnapshot, setSelectionSnapshot] = useState<InlineEditSelectionSnapshot | null>(null)
   const [isComposing, setIsComposing] = useState(false)
@@ -550,6 +929,7 @@ export function ParagraphTextSurface({
   // correctly positioned without relying on scroll (which doesn't work reliably
   // inside SVG foreignObject with overflow:hidden).
   const fullText = getEditableParagraphText(doc, fragment.nodeId)
+  const paragraphNode = useMemo(() => findParagraphNode(doc, fragment.nodeId), [doc, fragment.nodeId])
   const canPlainTextEdit = fullText !== null
   const nextEditState = getContinuationEditState(fullText ?? "", fragment, initialCaretIndex)
   const editSliceKey = buildInlineEditSliceKey(
@@ -647,6 +1027,49 @@ export function ParagraphTextSurface({
     hasSelectionOverlay,
     isWysiwygEnabled: wysiwygInlineEditEnabled,
   })
+  const supportsLocalDraftLayout = !fragment.continuesFrom && !fragment.isContinued && !isTableCellParagraph
+  const supportsPaginatedDraftLayout = wysiwygTextDraftPaginationActive && !isTableCellParagraph
+  const useWysiwygTextEngineLayer = shouldUseWysiwygTextEngineLayer({
+    enabled: wysiwygTextEngineEnabled,
+    isEditing,
+    canPlainTextEdit,
+    isVisualFresh,
+    supportsLocalDraftLayout: supportsLocalDraftLayout || supportsPaginatedDraftLayout,
+  })
+  const textEngineDraftText = wysiwygTextDraftText ?? fullText
+  const textEngineCaretOffset = wysiwygTextCaretOffset ?? initialCaretIndex
+  const textEngineDraftLayout = useMemo(() => {
+    if (!supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null
+    return buildWysiwygDraftParagraphLayout(fragment, paragraphNode, textEngineDraftText, textMeasurer)
+  }, [fragment, paragraphNode, supportsLocalDraftLayout, textEngineDraftText, textMeasurer, useWysiwygTextEngineLayer])
+  const textEngineDraftLines = textEngineDraftLayout?.lines ?? null
+  const textEngineReflowDecision = useMemo(() => (
+    classifyWysiwygTextReflow({
+      fragment,
+      draftLines: textEngineDraftLines ?? (supportsPaginatedDraftLayout ? fragment.lines : null),
+      draftHeight: textEngineDraftLayout?.height ?? (supportsPaginatedDraftLayout ? fragment.height : null),
+      pageContentBottom,
+      supportsLocalDraftLayout: supportsLocalDraftLayout || supportsPaginatedDraftLayout,
+    })
+  ), [
+    fragment,
+    pageContentBottom,
+    supportsLocalDraftLayout,
+    supportsPaginatedDraftLayout,
+    textEngineDraftLayout?.height,
+    textEngineDraftLines,
+  ])
+  const textEngineSelectionOverlayRects = useMemo(() => {
+    if (!useWysiwygTextEngineLayer || !wysiwygTextSelection) return []
+    if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
+    const visualFragment = textEngineDraftLines ? { ...fragment, lines: textEngineDraftLines } : fragment
+    return resolveSelectionOverlayRectsInFragment(
+      visualFragment,
+      wysiwygTextSelection.anchorOffset,
+      wysiwygTextSelection.focusOffset,
+      { textMeasurer },
+    )
+  }, [fragment, textEngineDraftLines, textMeasurer, useWysiwygTextEngineLayer, wysiwygTextSelection])
   // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
   // Matching padding cancels that expansion so textarea content starts at the
   // same paragraph origin as SVG lines instead of drifting by the chrome size.
@@ -676,7 +1099,82 @@ export function ParagraphTextSurface({
     requestAnimationFrame(() => syncTextareaHeight(el))
   }, [editHeight, isEditing, syncTextareaHeight])
 
+  useEffect(() => {
+    if (!useWysiwygTextEngineLayer || !textEngineDraftLayout) {
+      textEngineHeightRequestRef.current = null
+      return
+    }
+    if (!textEngineReflowDecision.shouldPatchSamePageHeight) {
+      textEngineHeightRequestRef.current = null
+      return
+    }
+    const height = Math.max(textEngineDraftLayout.height, minimumEditHeight / scale)
+    const roundedHeight = Math.round(height * 100) / 100
+    const nextKey = `${fragment.nodeId}:${fragment.pageIndex}:${textEngineReflowDecision.kind}:${roundedHeight}`
+    if (textEngineHeightRequestRef.current === nextKey) return
+    textEngineHeightRequestRef.current = nextKey
+    onHeightChange(fragment.nodeId, height, fragment.pageIndex, textEngineReflowDecision)
+  }, [
+    fragment.nodeId,
+    fragment.pageIndex,
+    minimumEditHeight,
+    onHeightChange,
+    scale,
+    textEngineDraftLayout,
+    textEngineReflowDecision,
+    useWysiwygTextEngineLayer,
+  ])
+
+  useEffect(() => {
+    if (!useWysiwygTextEngineLayer) {
+      textEngineReflowRequestRef.current = null
+      return
+    }
+    const nextKey = [
+      fragment.nodeId,
+      fragment.pageIndex,
+      textEngineReflowDecision.kind,
+      textEngineReflowDecision.reason,
+      textEngineDraftLayout?.height ?? "x",
+      textEngineDraftLines?.length ?? "x",
+      textEngineDraftText?.length ?? 0,
+    ].join(":")
+    if (textEngineReflowRequestRef.current === nextKey) return
+    textEngineReflowRequestRef.current = nextKey
+    onWysiwygTextReflowDecision?.(fragment.nodeId, textEngineReflowDecision)
+  }, [
+    fragment.nodeId,
+    fragment.pageIndex,
+    onWysiwygTextReflowDecision,
+    textEngineDraftLayout?.height,
+    textEngineDraftLines?.length,
+    textEngineDraftText,
+    textEngineReflowDecision,
+    useWysiwygTextEngineLayer,
+  ])
+
   if (isEditing && canPlainTextEdit) {
+    if (useWysiwygTextEngineLayer) {
+      return (
+        <WysiwygTextLayer
+          fragment={fragment}
+          lines={textEngineDraftLines ?? undefined}
+          renderProps={renderProps}
+          pageKey={pageKey}
+          scale={scale}
+          textMeasurer={textMeasurer}
+          caretIndex={textEngineCaretOffset}
+          selection={wysiwygTextSelection}
+          draftText={textEngineDraftText}
+          onDraftChange={onWysiwygTextDraftChange}
+          onEndEdit={onEndEdit}
+          showTextSegments={showTextSegments}
+          selectionOverlayRects={textEngineSelectionOverlayRects}
+          reflowKind={textEngineReflowDecision.kind}
+        />
+      )
+    }
+
     return (
       <>
         {visualMode.useDocumentVisual && renderSelectionOverlay(fragment, pageKey, scale, selectionOverlayRects)}
@@ -837,6 +1335,7 @@ export function ParagraphTextSurface({
             data-inline-edit-slice-start={continuationCharStart ?? 0}
             data-inline-edit-slice-end={continuationCharEnd ?? (fullText ?? "").length}
             data-wysiwyg-inline-edit-enabled={wysiwygInlineEditEnabled ? "true" : "false"}
+            data-wysiwyg-text-engine-enabled={wysiwygTextEngineEnabled ? "true" : "false"}
             data-inline-edit-visual-mode={visualMode.useDocumentVisual ? "document" : "textarea"}
             data-inline-edit-fallback-reason={visualMode.fallbackReason ?? undefined}
           />
