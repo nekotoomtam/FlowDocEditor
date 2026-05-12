@@ -41,7 +41,7 @@ import {
   serializeDocumentPackageWithFields,
 } from "./documentPersistence"
 import type { DriftReport } from "./comparePagination"
-import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
+import { findWysiwygPageIndexInFragmentRanges, getWysiwygParagraphFragmentRanges } from "./wysiwygCaretMapping"
 import { useInlineEditSession } from "./useInlineEditSession"
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -861,13 +861,13 @@ export default function EditorShell() {
 
   const inlineEditFragmentRanges = useMemo(() => (
     inlineEditNodeId
-      ? getInlineEditFragmentRanges(state.paginated, inlineEditNodeId)
+      ? getWysiwygParagraphFragmentRanges(state.paginated, inlineEditNodeId)
       : []
   ), [inlineEditNodeId, state.paginated])
 
   useEffect(() => {
     if (!inlineEditNodeId || inlineEditCaretIndex === null) return
-    const nextPageIndex = findInlineEditPageIndexInRanges(inlineEditFragmentRanges, inlineEditCaretIndex)
+    const nextPageIndex = findWysiwygPageIndexInFragmentRanges(inlineEditFragmentRanges, inlineEditCaretIndex)
     if (nextPageIndex === null || nextPageIndex === inlineEditPageIndex) return
     setInlineEditPageIndex(nextPageIndex)
   }, [inlineEditCaretIndex, inlineEditFragmentRanges, inlineEditNodeId, inlineEditPageIndex])

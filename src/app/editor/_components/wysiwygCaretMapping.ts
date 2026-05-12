@@ -46,6 +46,13 @@ export interface WysiwygSelectionOverlayRect {
   height: number
 }
 
+export interface WysiwygParagraphFragmentRange {
+  pageIndex: number
+  fragmentIndex?: number
+  start: number
+  end: number
+}
+
 type LineRange = {
   line: PaginatedLine
   lineIndex: number
@@ -186,7 +193,7 @@ function nearestCandidateByX(
   }, candidates[0])
 }
 
-function paragraphFragments(paginated: PaginatedDocument, nodeId: string): PageFragment[] {
+export function getWysiwygParagraphFragments(paginated: PaginatedDocument, nodeId: string): PageFragment[] {
   const fragments: PageFragment[] = []
   for (const section of paginated.sections) {
     for (const page of section.pages) {
@@ -205,13 +212,63 @@ function paragraphFragments(paginated: PaginatedDocument, nodeId: string): PageF
   })
 }
 
-function fragmentRange(fragment: PageFragment): { start: number; end: number } | null {
+export function getWysiwygFragmentTextRange(fragment: PageFragment): { start: number; end: number } | null {
   const ranges = getLineRanges(fragment)
   if (ranges.length === 0) return null
   return {
     start: Math.min(...ranges.map((range) => range.start)),
     end: Math.max(...ranges.map((range) => range.end)),
   }
+}
+
+export function getWysiwygParagraphFragmentRanges(
+  paginated: PaginatedDocument,
+  nodeId: string,
+): WysiwygParagraphFragmentRange[] {
+  return getWysiwygParagraphFragments(paginated, nodeId)
+    .map((fragment): WysiwygParagraphFragmentRange | null => {
+      const range = getWysiwygFragmentTextRange(fragment)
+      if (!range) return null
+      return {
+        pageIndex: fragment.pageIndex,
+        fragmentIndex: fragment.fragmentIndex,
+        ...range,
+      }
+    })
+    .filter((range): range is WysiwygParagraphFragmentRange => range !== null)
+    .sort((a, b) => {
+      const byStart = a.start - b.start
+      if (byStart !== 0) return byStart
+      return (a.fragmentIndex ?? a.pageIndex) - (b.fragmentIndex ?? b.pageIndex)
+    })
+}
+
+export function findWysiwygPageIndexInFragmentRanges(
+  ranges: WysiwygParagraphFragmentRange[],
+  offset: number | null,
+): number | null {
+  if (offset === null) return null
+  if (ranges.length === 0) return null
+
+  let candidate = ranges[0]
+  for (const range of ranges) {
+    if (offset < range.start) break
+    candidate = range
+    if (offset < range.end) break
+  }
+
+  return candidate.pageIndex
+}
+
+export function findWysiwygPageIndexForOffset(
+  paginated: PaginatedDocument,
+  nodeId: string,
+  offset: number | null,
+): number | null {
+  return findWysiwygPageIndexInFragmentRanges(
+    getWysiwygParagraphFragmentRanges(paginated, nodeId),
+    offset,
+  )
 }
 
 export function getWysiwygCaretCandidatesForLine(
@@ -280,12 +337,12 @@ export function resolveParagraphCaretPosition(
   offset: number,
   options: WysiwygCaretMappingOptions = {},
 ): WysiwygCaretCandidate | null {
-  const fragments = paragraphFragments(paginated, nodeId)
+  const fragments = getWysiwygParagraphFragments(paginated, nodeId)
   if (fragments.length === 0) return null
 
   let fallback: PageFragment | null = fragments[0]
   for (const fragment of fragments) {
-    const range = fragmentRange(fragment)
+    const range = getWysiwygFragmentTextRange(fragment)
     if (!range) continue
     if (offset < range.start) break
     fallback = fragment
@@ -378,7 +435,7 @@ export function resolveParagraphSelectionOverlayRects(
   focusOffset: number,
   options: WysiwygCaretMappingOptions = {},
 ): WysiwygSelectionOverlayRect[] {
-  return paragraphFragments(paginated, nodeId).flatMap((fragment) =>
+  return getWysiwygParagraphFragments(paginated, nodeId).flatMap((fragment) =>
     resolveSelectionOverlayRectsInFragment(fragment, anchorOffset, focusOffset, options),
   )
 }

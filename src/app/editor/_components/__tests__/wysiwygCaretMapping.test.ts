@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest"
 import type { TextMeasurer } from "@/layout"
 import type { PageFragment, PaginatedDocument, PaginatedLine } from "@/pagination"
 import {
+  findWysiwygPageIndexForOffset,
+  findWysiwygPageIndexInFragmentRanges,
+  getWysiwygParagraphFragmentRanges,
   getWysiwygCaretCandidatesForLine,
   resolveCaretOffsetFromPointInFragment,
   resolveCaretPositionInFragment,
@@ -282,6 +285,51 @@ describe("WYSIWYG caret mapping contract", () => {
       x: 30,
       y: 40,
     })
+  })
+
+  it("exposes paragraph fragment ranges as the shared page-index contract", () => {
+    const first = makeFragment({
+      pageIndex: 0,
+      fragmentIndex: 0,
+      lines: [makeLine({
+        text: "Hello",
+        segments: [{
+          kind: "word",
+          text: "Hello",
+          start: 0,
+          end: 5,
+          x: 0,
+          width: 50,
+          breakableAfter: false,
+        }],
+      })],
+    })
+    const second = makeFragment({
+      pageIndex: 1,
+      fragmentIndex: 1,
+      lines: [makeLine({
+        text: "world",
+        segments: [{
+          kind: "word",
+          text: "world",
+          start: 5,
+          end: 10,
+          x: 0,
+          width: 50,
+          breakableAfter: false,
+        }],
+      })],
+    })
+    const paginated = makeDoc([first, second])
+    const ranges = getWysiwygParagraphFragmentRanges(paginated, "p1")
+
+    expect(ranges).toEqual([
+      { pageIndex: 0, fragmentIndex: 0, start: 0, end: 5 },
+      { pageIndex: 1, fragmentIndex: 1, start: 5, end: 10 },
+    ])
+    expect(findWysiwygPageIndexInFragmentRanges(ranges, 4)).toBe(0)
+    expect(findWysiwygPageIndexInFragmentRanges(ranges, 5)).toBe(1)
+    expect(findWysiwygPageIndexForOffset(paginated, "p1", null)).toBeNull()
   })
 
   it("returns null when line segment geometry is unavailable", () => {
