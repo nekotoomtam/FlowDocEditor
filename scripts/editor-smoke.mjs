@@ -174,6 +174,70 @@ async function expectNoLayoutError(page) {
   assert(await badge.count() === 0, "unexpected layout error badge is visible")
 }
 
+async function expectInlineEditVisualMode(page, nodeId, expected) {
+  const selector = `textarea[data-inline-edit-node-id="${nodeId}"]`
+  await page.waitForFunction(
+    ({ selector, mode, fallbackReason }) => {
+      const textarea = document.querySelector(selector)
+      if (!textarea) return false
+      if (textarea.dataset.inlineEditVisualMode !== mode) return false
+      const actualFallback = textarea.dataset.inlineEditFallbackReason ?? null
+      return actualFallback === fallbackReason
+    },
+    { selector, mode: expected.mode, fallbackReason: expected.fallbackReason ?? null },
+    { timeout: expected.timeout ?? 5000 },
+  )
+
+  const visualState = await page.locator(selector).evaluate((textarea) => {
+    const style = window.getComputedStyle(textarea)
+    return {
+      mode: textarea.dataset.inlineEditVisualMode,
+      fallbackReason: textarea.dataset.inlineEditFallbackReason ?? null,
+      outlineStyle: style.outlineStyle,
+    }
+  })
+  assert(
+    visualState.mode === expected.mode,
+    `expected inline edit visual mode ${expected.mode}, got ${visualState.mode}`,
+  )
+  assert(
+    visualState.fallbackReason === (expected.fallbackReason ?? null),
+    `expected inline edit fallback ${expected.fallbackReason ?? null}, got ${visualState.fallbackReason}`,
+  )
+  if (expected.outlineStyle) {
+    assert(
+      visualState.outlineStyle === expected.outlineStyle,
+      `expected inline edit outline style ${expected.outlineStyle}, got ${visualState.outlineStyle}`,
+    )
+  }
+}
+
+async function expectInlineEditVisualContract(page, nodeId) {
+  const selector = `textarea[data-inline-edit-node-id="${nodeId}"]`
+  await page.waitForFunction((selector) => {
+    const textarea = document.querySelector(selector)
+    const mode = textarea?.dataset.inlineEditVisualMode
+    if (mode === "document") return (textarea.dataset.inlineEditFallbackReason ?? null) === null
+    if (mode === "textarea") return Boolean(textarea.dataset.inlineEditFallbackReason)
+    return false
+  }, selector, { timeout: 5000 })
+
+  const visualState = await page.locator(selector).evaluate((textarea) => ({
+    mode: textarea.dataset.inlineEditVisualMode,
+    fallbackReason: textarea.dataset.inlineEditFallbackReason ?? null,
+  }))
+  assert(
+    visualState.mode === "document" || visualState.mode === "textarea",
+    `expected inline edit visual contract mode, got ${visualState.mode}`,
+  )
+  if (visualState.mode === "textarea") {
+    assert(
+      Boolean(visualState.fallbackReason),
+      "expected textarea fallback mode to expose a fallback reason",
+    )
+  }
+}
+
 async function waitForStoredParagraphText(page, nodeId, expectedText) {
   await page.waitForFunction(
     ({ key, nodeId, expectedText }) => {
@@ -448,7 +512,13 @@ async function run() {
 
     const textarea = page.locator('textarea[data-inline-edit-node-id="smoke-p1"]')
     await textarea.waitFor({ state: "visible", timeout: 5000 })
+    await expectInlineEditVisualContract(page, "smoke-p1")
     await textarea.fill(editedText)
+    await expectInlineEditVisualMode(page, "smoke-p1", {
+      mode: "document",
+      fallbackReason: null,
+      outlineStyle: "none",
+    })
     await textarea.press("Escape")
     await waitForStoredParagraphText(page, "smoke-p1", editedText)
     await waitForStoredPackageVersion(page, 2)
