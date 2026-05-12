@@ -42,7 +42,7 @@ import {
 } from "./documentPersistence"
 import type { DriftReport } from "./comparePagination"
 import { findInlineEditPageIndexInRanges, getInlineEditFragmentRanges } from "./inlineEditCaret"
-import { decideInlineEditStart, shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
+import { useInlineEditSession } from "./useInlineEditSession"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -65,13 +65,6 @@ interface PendingDrag {
   clientX: number
   clientY: number
   clickAction?: PendingClickAction
-}
-
-interface InlineEditTransaction {
-  nodeId: string
-  beforeDoc: DocumentNode
-  beforePaginated: PaginatedDocument
-  beforeText: string
 }
 
 interface HistoryEntry {
@@ -617,118 +610,47 @@ export default function EditorShell() {
   const showDriftRef = useRef(showDrift)
   useEffect(() => { showDriftRef.current = showDrift }, [showDrift])
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [inlineEditNodeId, setInlineEditNodeId] = useState<string | null>(null)
-  const [inlineEditCaretIndex, setInlineEditCaretIndex] = useState<number | null>(null)
-  const [inlineEditPageIndex, setInlineEditPageIndex] = useState<number | null>(null)
-  const [inlineEditDraftVersion, setInlineEditDraftVersion] = useState(0)
-  const [inlineEditVisualVersion, setInlineEditVisualVersion] = useState(0)
   const docRef = useRef(state.doc)
-  const inlineEditTransactionRef = useRef<InlineEditTransaction | null>(null)
+  const paginatedRef = useRef(state.paginated)
   const wasInlineEditingRef = useRef(false)
-  const inlineEditEndFrameRef = useRef<number | null>(null)
-  const inlineEditDraftVersionRef = useRef(0)
-  const inlineEditVisualVersionRef = useRef(0)
 
   useEffect(() => { docRef.current = state.doc }, [state.doc])
+  useEffect(() => { paginatedRef.current = state.paginated })
 
   useEffect(() => {
     if (typeof document === "undefined" || !("fonts" in document)) return
     void document.fonts.ready.then(() => setFontReadyVersion((version) => version + 1))
   }, [])
 
-  const cancelPendingInlineEditEnd = useCallback(() => {
-    if (inlineEditEndFrameRef.current === null || typeof cancelAnimationFrame === "undefined") return
-    cancelAnimationFrame(inlineEditEndFrameRef.current)
-    inlineEditEndFrameRef.current = null
-  }, [])
-
-  const resetInlineEditVisualFreshness = useCallback(() => {
-    inlineEditDraftVersionRef.current = 0
-    inlineEditVisualVersionRef.current = 0
-    setInlineEditDraftVersion(0)
-    setInlineEditVisualVersion(0)
-  }, [])
-
-  const markInlineEditDraftChanged = useCallback(() => {
-    const nextVersion = inlineEditDraftVersionRef.current + 1
-    inlineEditDraftVersionRef.current = nextVersion
-    setInlineEditDraftVersion(nextVersion)
-    return nextVersion
-  }, [])
-
-  const markInlineEditVisualFresh = useCallback((version: number) => {
-    inlineEditVisualVersionRef.current = version
-    setInlineEditVisualVersion(version)
-  }, [])
-
-  const finalizeInlineEditBeforeAction = useCallback((): boolean => {
-    cancelPendingInlineEditEnd()
-    const transaction = inlineEditTransactionRef.current
-    if (transaction) {
-      const afterDoc = docRef.current
-      dispatch({
-        type: "COMMIT_INLINE_TEXT_EDIT",
-        nodeId: transaction.nodeId,
-        beforeDoc: transaction.beforeDoc,
-        beforePaginated: transaction.beforePaginated,
-        beforeText: transaction.beforeText,
-        afterPaginated: paginatePreviewDoc(afterDoc),
-      })
-      inlineEditTransactionRef.current = null
-    }
-    setInlineEditNodeId(null)
-    setInlineEditCaretIndex(null)
-    setInlineEditPageIndex(null)
-    resetInlineEditVisualFreshness()
-    return transaction !== null
-  }, [cancelPendingInlineEditEnd, paginatePreviewDoc, resetInlineEditVisualFreshness])
-
-  const resetInlineEditStateForDocumentReplace = useCallback(() => {
-    cancelPendingInlineEditEnd()
-    inlineEditTransactionRef.current = null
-    setInlineEditNodeId(null)
-    setInlineEditCaretIndex(null)
-    setInlineEditPageIndex(null)
-    resetInlineEditVisualFreshness()
-  }, [cancelPendingInlineEditEnd, resetInlineEditVisualFreshness])
-
-  useEffect(() => cancelPendingInlineEditEnd, [cancelPendingInlineEditEnd])
-
-  const handleInlineEditEnd = useCallback((nodeId?: string, reason: "blur" | "keyboard" = "keyboard") => {
-    if (reason !== "blur") {
-      finalizeInlineEditBeforeAction()
-      return
-    }
-
-    const blurredNodeId = nodeId ?? inlineEditNodeIdRef.current
-    if (!blurredNodeId || typeof document === "undefined" || typeof requestAnimationFrame === "undefined") {
-      finalizeInlineEditBeforeAction()
-      return
-    }
-
-    cancelPendingInlineEditEnd()
-    inlineEditEndFrameRef.current = requestAnimationFrame(() => {
-      inlineEditEndFrameRef.current = requestAnimationFrame(() => {
-        inlineEditEndFrameRef.current = null
-        const active = document.activeElement
-        const focusedNodeId = active instanceof HTMLTextAreaElement
-          ? active.dataset.inlineEditNodeId ?? null
-          : null
-        if (!shouldFinalizeInlineEditBlur(blurredNodeId, inlineEditNodeIdRef.current, focusedNodeId)) return
-        finalizeInlineEditBeforeAction()
-      })
-    })
-  }, [cancelPendingInlineEditEnd, finalizeInlineEditBeforeAction])
-
-  const consumeInlineEditHistory = useCallback((nodeId: string): HistoryEntry | undefined => {
-    const transaction = inlineEditTransactionRef.current
-    if (!transaction || transaction.nodeId !== nodeId) return undefined
-    inlineEditTransactionRef.current = null
-    return {
-      doc: transaction.beforeDoc,
-      paginated: transaction.beforePaginated,
-    }
-  }, [])
+  const {
+    nodeId: inlineEditNodeId,
+    caretIndex: inlineEditCaretIndex,
+    pageIndex: inlineEditPageIndex,
+    isVisualFresh: inlineEditVisualFresh,
+    nodeIdRef: inlineEditNodeIdRef,
+    draftVersionRef: inlineEditDraftVersionRef,
+    markVisualFresh: markInlineEditVisualFresh,
+    setPageIndex: setInlineEditPageIndex,
+    finalizeBeforeAction: finalizeInlineEditBeforeAction,
+    resetForDocumentReplace: resetInlineEditStateForDocumentReplace,
+    end: handleInlineEditEnd,
+    start: handleInlineEditStart,
+    change: handleInlineEditChange,
+    userInteraction: handleInlineEditUserInteraction,
+    caretChange: handleInlineEditCaretChange,
+    heightChange: handleInlineEditHeightChange,
+    consumeHistory: consumeInlineEditHistory,
+    startAfterStructuralChange: startInlineEditAfterStructuralChange,
+  } = useInlineEditSession({
+    getCurrentDoc: () => docRef.current,
+    getCurrentPaginated: () => paginatedRef.current,
+    getParagraphText: getParagraphTextFromDoc,
+    paginatePreviewDoc,
+    selectNode: (nodeId) => dispatch({ type: "SELECT_NODE", nodeId }),
+    updateInlineTextDraft: (nodeId, text) => dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text }),
+    commitInlineTextEdit: (payload) => dispatch({ type: "COMMIT_INLINE_TEXT_EDIT", ...payload }),
+    setPaginated: (paginated) => dispatch({ type: "SET_PAGINATED", paginated }),
+  })
 
   // ─── Auto-save ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -824,71 +746,6 @@ export default function EditorShell() {
     dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
   }, [paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
 
-  // ─── Inline editing ───────────────────────────────────────────────────────────
-  const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null) => {
-    const startDecision = decideInlineEditStart(
-      inlineEditNodeIdRef.current,
-      nodeId,
-      inlineEditTransactionRef.current !== null,
-    )
-
-    if (startDecision === "continue-current") {
-      cancelPendingInlineEditEnd()
-      dispatch({ type: "SELECT_NODE", nodeId })
-      setInlineEditCaretIndex(caretIndex)
-      setInlineEditPageIndex(pageIndex)
-      return
-    }
-
-    if (startDecision === "finalize-previous") {
-      finalizeInlineEditBeforeAction()
-    }
-
-    const beforeDoc = docRef.current
-    const beforeText = getParagraphTextFromDoc(beforeDoc, nodeId)
-    if (beforeText == null) return
-    resetInlineEditVisualFreshness()
-    inlineEditTransactionRef.current = {
-      nodeId,
-      beforeDoc,
-      beforePaginated: paginatedRef.current,
-      beforeText,
-    }
-    dispatch({ type: "SELECT_NODE", nodeId })
-    setInlineEditNodeId(nodeId)
-    setInlineEditCaretIndex(caretIndex)
-    setInlineEditPageIndex(pageIndex)
-  }, [cancelPendingInlineEditEnd, finalizeInlineEditBeforeAction, resetInlineEditVisualFreshness])
-
-  const handleInlineEditChange = useCallback((nodeId: string, text: string, caretIndex: number | null) => {
-    markInlineEditDraftChanged()
-    setInlineEditCaretIndex(caretIndex)
-    dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
-  }, [markInlineEditDraftChanged])
-
-  const handleInlineEditUserInteraction = useCallback((nodeId: string) => {
-    if (inlineEditNodeIdRef.current !== nodeId) return
-    // Keep document-rendered SVG as the visual target during active typing.
-    // The textarea remains the input/caret surface and only becomes visible
-    // while the paginated visual snapshot is catching up to the latest draft.
-  }, [])
-
-  const handleInlineEditCaretChange = useCallback((nodeId: string, caretIndex: number | null) => {
-    if (inlineEditNodeIdRef.current !== nodeId) return
-    setInlineEditCaretIndex(caretIndex)
-  }, [])
-
-  const handleInlineEditHeightChange = useCallback((nodeId: string, height: number, pageIndex: number | null) => {
-    // While live inline pagination is active, browser pagination owns visual
-    // page/fragment geometry. The textarea still tracks its own local height,
-    // but dispatching the old same-page shift here would double-apply movement.
-    // Ignore late height callbacks too: after edit end, the final commit already
-    // paginates from the latest document snapshot.
-    if (inlineEditNodeIdRef.current !== nodeId) return
-    void height
-    void pageIndex
-  }, [])
-
   const handleCanvasScaleChange = useCallback((nextScale: number) => {
     setScale(clampScale(nextScale))
   }, [])
@@ -971,25 +828,6 @@ export default function EditorShell() {
     dispatch({ type: "MERGE_PARAGRAPH", nodeId, history })
   }, [consumeInlineEditHistory])
 
-  const startInlineEditAfterStructuralChange = useCallback((nodeId: string, caretIndex: number | null) => {
-    cancelPendingInlineEditEnd()
-    const beforeDoc = docRef.current
-    const beforeText = getParagraphTextFromDoc(beforeDoc, nodeId)
-    if (beforeText == null) return
-    const beforePaginated = paginatePreviewDoc(beforeDoc)
-    dispatch({ type: "SET_PAGINATED", paginated: beforePaginated })
-    inlineEditTransactionRef.current = {
-      nodeId,
-      beforeDoc,
-      beforePaginated,
-      beforeText,
-    }
-    resetInlineEditVisualFreshness()
-    setInlineEditNodeId(nodeId)
-    setInlineEditCaretIndex(caretIndex)
-    setInlineEditPageIndex(null)
-  }, [cancelPendingInlineEditEnd, paginatePreviewDoc, resetInlineEditVisualFreshness])
-
   // Focus the new paragraph after a split
   useEffect(() => {
     if (!state.lastSplitNodeId) return
@@ -1015,12 +853,8 @@ export default function EditorShell() {
   const authoritativeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutVersionRef = useRef(0)
   const browserPaginationGenerationRef = useRef(0)
-  const inlineEditNodeIdRef = useRef(inlineEditNodeId)
-  const paginatedRef = useRef(state.paginated)
   const prevLineCountRef = useRef<number | null>(null)
   const prevEditNodeIdRef = useRef<string | null>(null)
-  useEffect(() => { paginatedRef.current = state.paginated })
-  useEffect(() => { inlineEditNodeIdRef.current = inlineEditNodeId }, [inlineEditNodeId])
   useEffect(() => {
     browserPaginationGenerationRef.current += 1
   }, [inlineEditNodeId])
@@ -1568,9 +1402,6 @@ export default function EditorShell() {
       handleRedo()
     }
   }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, isTemplateMode, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
-
-  const inlineEditVisualFresh = inlineEditNodeId === null ||
-    inlineEditVisualVersion >= inlineEditDraftVersion
 
   return (
     <div
