@@ -345,6 +345,20 @@ async function expectActiveInlineTextarea(page, nodeId) {
   )
 }
 
+async function waitForActiveInlineTextareaSliceStartAtLeast(page, nodeId, expectedMinStart) {
+  await page.waitForFunction(
+    ({ nodeId, expectedMinStart }) => {
+      const active = document.activeElement
+      if (!(active instanceof HTMLTextAreaElement)) return false
+      if (active.dataset.inlineEditNodeId !== nodeId) return false
+      const sliceStart = Number(active.dataset.inlineEditSliceStart ?? "0")
+      return Number.isFinite(sliceStart) && sliceStart >= expectedMinStart
+    },
+    { nodeId, expectedMinStart },
+    { timeout: 10000 },
+  )
+}
+
 async function waitForStoredTableShape(page, tableId, expected) {
   await page.waitForFunction(
     ({ key, tableId, rows, cols, headerRowCount }) => {
@@ -530,7 +544,12 @@ function startNextDevServer() {
     [nextBin, "dev", "--webpack", "--port", String(smokePort)],
     {
       cwd: repoRoot,
-      env: { ...process.env, PORT: String(smokePort), BROWSER: "none" },
+      env: {
+        ...process.env,
+        PORT: String(smokePort),
+        BROWSER: "none",
+        NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT: "1",
+      },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     },
@@ -759,12 +778,51 @@ async function run() {
     }, { key: STORAGE_KEY, doc: makeContinuationDocument() })
     await continuationPage.goto(baseUrl, { waitUntil: "domcontentloaded" })
     await continuationPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
-    await waitForParagraphFragmentCountAtLeast(continuationPage, "wysiwyg-continuation-p1", 2)
+    await waitForParagraphFragmentCountAtLeast(continuationPage, "wysiwyg-continuation-p1", 3)
     const continuationFragments = continuationPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]')
-    const continuationFragment = continuationFragments.nth(1)
+    const firstContinuationFragment = continuationFragments.first()
+    await firstContinuationFragment.scrollIntoViewIfNeeded()
+    await firstContinuationFragment.dblclick()
+    const pageTrackingTextarea = continuationPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
+    await pageTrackingTextarea.waitFor({ state: "visible", timeout: 5000 })
+    assert(
+      await pageTrackingTextarea.getAttribute("data-wysiwyg-inline-edit-enabled") === "true",
+      "expected WYSIWYG inline edit foundation to be enabled by the smoke server flag",
+    )
+    await pageTrackingTextarea.evaluate((el) => {
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
+    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
+    const pageTrackingAppend = " Added from the first fragment so caret tracking must relocate the active textarea while browser pagination reflows.".repeat(4)
+    await continuationPage.keyboard.type(pageTrackingAppend, { delay: 1 })
+    await waitForActiveInlineTextareaSliceStartAtLeast(continuationPage, "wysiwyg-continuation-p1", 1)
+    await expectNoLayoutError(continuationPage)
+    await continuationPage.keyboard.press("Escape")
+    const continuationTrackedText = `${CONTINUATION_PARAGRAPH_TEXT}${pageTrackingAppend}`
+    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", continuationTrackedText)
+    await continuationPage.getByRole("button", { name: "Undo" }).click()
+    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
+    await continuationPage.getByRole("button", { name: "Redo" }).click()
+    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", continuationTrackedText)
+    await continuationPage.getByRole("button", { name: "Undo" }).click()
+    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
+    await continuationPage.close()
+
+    const continuationBoundaryPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    collectPageErrors(continuationBoundaryPage, consoleErrors, pageErrors)
+    await continuationBoundaryPage.addInitScript(({ key, doc }) => {
+      window.localStorage.clear()
+      window.localStorage.setItem(key, JSON.stringify(doc))
+    }, { key: STORAGE_KEY, doc: makeContinuationDocument() })
+    await continuationBoundaryPage.goto(baseUrl, { waitUntil: "domcontentloaded" })
+    await continuationBoundaryPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
+    await waitForParagraphFragmentCountAtLeast(continuationBoundaryPage, "wysiwyg-continuation-p1", 3)
+    const continuationBoundaryFragments = continuationBoundaryPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]')
+    const continuationFragment = continuationBoundaryFragments.nth(1)
     await continuationFragment.scrollIntoViewIfNeeded()
     await continuationFragment.dblclick()
-    const continuationTextarea = continuationPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
+    const continuationTextarea = continuationBoundaryPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
     await continuationTextarea.waitFor({ state: "visible", timeout: 5000 })
     const continuationSliceStart = Number(await continuationTextarea.getAttribute("data-inline-edit-slice-start"))
     assert(continuationSliceStart > 0, `expected continuation slice start > 0, got ${continuationSliceStart}`)
@@ -772,35 +830,35 @@ async function run() {
       await continuationTextarea.getAttribute("data-wysiwyg-inline-edit-enabled") === "true",
       "expected WYSIWYG inline edit foundation to be enabled in smoke dev mode",
     )
-    await expectInlineEditVisualContract(continuationPage, "wysiwyg-continuation-p1")
+    await expectInlineEditVisualContract(continuationBoundaryPage, "wysiwyg-continuation-p1")
     const continuationLocalEnd = await continuationTextarea.evaluate((el) => {
       el.focus()
       el.setSelectionRange(el.value.length, el.value.length)
       return el.value.length
     })
     assert(continuationLocalEnd > 0, "expected continuation textarea to contain suffix text")
-    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
+    await expectActiveInlineTextarea(continuationBoundaryPage, "wysiwyg-continuation-p1")
     const continuationAppend = " Added live continuation text while the browser preview is allowed to reflow."
-    await continuationPage.keyboard.type(continuationAppend, { delay: 1 })
-    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
-    await expectNoLayoutError(continuationPage)
-    await continuationPage.keyboard.press("Escape")
+    await continuationBoundaryPage.keyboard.type(continuationAppend, { delay: 1 })
+    await expectActiveInlineTextarea(continuationBoundaryPage, "wysiwyg-continuation-p1")
+    await expectNoLayoutError(continuationBoundaryPage)
+    await continuationBoundaryPage.keyboard.press("Escape")
     const continuationEditedText = `${CONTINUATION_PARAGRAPH_TEXT}${continuationAppend}`
-    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", continuationEditedText)
-    await continuationPage.getByRole("button", { name: "Undo" }).click()
-    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
-    await continuationPage.getByRole("button", { name: "Redo" }).click()
-    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", continuationEditedText)
+    await waitForStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1", continuationEditedText)
+    await continuationBoundaryPage.getByRole("button", { name: "Undo" }).click()
+    await waitForStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
+    await continuationBoundaryPage.getByRole("button", { name: "Redo" }).click()
+    await waitForStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1", continuationEditedText)
 
-    await waitForParagraphFragmentCountAtLeast(continuationPage, "wysiwyg-continuation-p1", 2)
-    const boundaryFragment = continuationPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]').nth(1)
+    await waitForParagraphFragmentCountAtLeast(continuationBoundaryPage, "wysiwyg-continuation-p1", 3)
+    const boundaryFragment = continuationBoundaryPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]').nth(1)
     await boundaryFragment.scrollIntoViewIfNeeded()
     await boundaryFragment.click()
-    const boundaryTextarea = continuationPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
+    const boundaryTextarea = continuationBoundaryPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
     await boundaryTextarea.waitFor({ state: "visible", timeout: 5000 })
     const boundarySliceStart = Number(await boundaryTextarea.getAttribute("data-inline-edit-slice-start"))
     assert(boundarySliceStart > 0, `expected boundary slice start > 0, got ${boundarySliceStart}`)
-    const beforeBoundaryText = await readStoredParagraphText(continuationPage, "wysiwyg-continuation-p1")
+    const beforeBoundaryText = await readStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1")
     assert(beforeBoundaryText, "expected stored continuation text before boundary backspace")
     const expectedBoundaryText = beforeBoundaryText.slice(0, boundarySliceStart - 1) + beforeBoundaryText.slice(boundarySliceStart)
     const boundarySelection = await boundaryTextarea.evaluate((el) => {
@@ -812,13 +870,13 @@ async function run() {
       boundarySelection.start === 0 && boundarySelection.end === 0,
       `expected continuation boundary selection at 0, got ${boundarySelection.start}-${boundarySelection.end}`,
     )
-    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
-    await continuationPage.keyboard.press("Backspace")
-    await expectActiveInlineTextarea(continuationPage, "wysiwyg-continuation-p1")
-    await continuationPage.keyboard.press("Escape")
-    await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", expectedBoundaryText)
-    await expectNoLayoutError(continuationPage)
-    await continuationPage.close()
+    await expectActiveInlineTextarea(continuationBoundaryPage, "wysiwyg-continuation-p1")
+    await continuationBoundaryPage.keyboard.press("Backspace")
+    await expectActiveInlineTextarea(continuationBoundaryPage, "wysiwyg-continuation-p1")
+    await continuationBoundaryPage.keyboard.press("Escape")
+    await waitForStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1", expectedBoundaryText)
+    await expectNoLayoutError(continuationBoundaryPage)
+    await continuationBoundaryPage.close()
 
     assert(pageErrors.length === 0, `page errors during smoke:\n${pageErrors.join("\n")}`)
     assert(consoleErrors.length === 0, `console errors during smoke:\n${consoleErrors.join("\n")}`)

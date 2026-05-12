@@ -203,7 +203,7 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  26 core test files / 324 core tests, plus 12 app test files / 120 app tests.
+  26 core test files / 324 core tests, plus 12 app test files / 119 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases,
   including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
@@ -249,8 +249,9 @@ Current strengths:
 - Automated browser smoke now protects default editor load, paragraph inline
   edit commit, undo/redo, Thai/composition fallback, table-cell selection, the
   property-panel title, table-cell row/column insert/delete controls,
-  table-cell boundary Backspace, fieldRef paragraph non-editability, and
-  continuation-fragment editing with focus, undo/redo, and boundary Backspace,
+  table-cell boundary Backspace, fieldRef paragraph non-editability, and opt-in
+  WYSIWYG continuation-fragment editing with three-fragment pagination,
+  page-tracking textarea relocation, focus, undo/redo, and boundary Backspace,
   plus Fill mode package v2 data snapshot autosave, active package-registry
   field palette loading, and property-panel fieldRef inspection/editing.
 - Manual browser checks are still used for editor feel where automation

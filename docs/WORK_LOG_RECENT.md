@@ -1743,3 +1743,49 @@ Notes:
   repaired and verified against the pre-smoke text before committing.
 - Phase 1 intentionally improves visual continuity only. Caret-following across
   pages and full continuation-fragment editing remain deferred.
+
+---
+
+### Tighten Experimental WYSIWYG Stability Gate
+
+Goal: Treat the current WYSIWYG inline edit path as opt-in experimental and
+expand browser/runtime evidence without adding selection, clipboard, hidden
+input, or new WYSIWYG stages.
+
+Completed:
+
+- Changed `resolveWysiwygInlineEditEnabled(...)` so the experimental WYSIWYG
+  path is disabled by default in every environment unless
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT` is explicitly enabled.
+- Updated the automated editor smoke server to set
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1`, keeping WYSIWYG coverage
+  deliberate instead of ambient dev behavior.
+- Extended continuation smoke coverage to require a three-fragment paragraph,
+  type from the first fragment until caret/page tracking relocates the active
+  textarea to a continuation slice, preserve focus, and verify undo/redo as one
+  edit session.
+- Kept continuation click/edit and continuation-boundary Backspace as a
+  separate browser fixture page so the smoke reports clearer gate failures.
+- Added a compatibility comment to `inlineEditCaret.ts` clarifying that
+  `wysiwygCaretMapping.ts` is the source of truth.
+- Updated WYSIWYG, browser smoke, fixture catalog, and test-strategy docs to
+  match the opt-in experimental status and current suite counts.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/inlineEditCaret.test.ts`
+- `npm.cmd run smoke:editor`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- A combined browser sequence that performed page-tracking undo/redo and then
+  immediately re-entered a continuation fragment was not stable enough to use
+  as a single smoke gate. The smoke now separates those checks, and that
+  combined runtime scenario remains a follow-up before any production-stable
+  WYSIWYG claim.
+- Production-stable WYSIWYG remains deferred; selection overlay, clipboard
+  model, real OS IME stress, accessibility hardening, and missing-geometry
+  browser mutation checks are not implemented in this slice.

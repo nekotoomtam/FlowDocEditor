@@ -12,7 +12,7 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 Last verified full-suite size:
 
 - 26 core test files / 324 core tests
-- 12 app test files / 120 app tests
+- 12 app test files / 119 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 `docs/TEST_STRATEGY.md` as the current coverage snapshot until the suite changes.
@@ -140,7 +140,7 @@ propagation, v2 registry warning import status, and v2 registry hard-error
 rejection.
 Inline-edit session coverage locks visual freshness and transaction helper
 rules. WYSIWYG inline-edit config coverage keeps the experimental visual path
-enabled by default outside production and disabled by default in production.
+disabled by default in every environment unless the flag is explicitly enabled.
 Real-font drift coverage loads
 `public/fonts/THSarabun.ttf` into Chromium canvas and fontkit, then checks
 representative Thai width parity and no `comparePagination` drift for a Thai
@@ -156,12 +156,14 @@ localStorage document fixtures, paragraph inline edit commit, undo/redo, Thai
 composition fallback, table cell selection, the property-panel title,
 table-cell row/column insert/delete controls, table-cell boundary Backspace,
 fieldRef paragraph non-editability, continuation-fragment editing with
-focus-preserving reflow and undo/redo, localStorage package v2 autosave, Fill
-mode readiness warning/clear
+three-fragment pagination, page-tracking textarea relocation,
+focus-preserving reflow, undo/redo, and boundary Backspace, localStorage
+package v2 autosave, Fill mode readiness warning/clear
 behavior for a required used field, package v2 data snapshot autosave for
 filled values, active package-registry field palette loading, and property-panel
 fieldRef inspection/editing for selected document fields. It starts its own
-Next dev server on port `4010` unless
+Next dev server on port `4010` with WYSIWYG inline editing explicitly enabled
+unless
 `SMOKE_BASE_URL` is provided.
 
 This is intentionally a focused workflow smoke, not a fixture catalog for every

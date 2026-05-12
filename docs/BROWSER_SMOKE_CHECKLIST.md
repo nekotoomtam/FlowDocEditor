@@ -25,6 +25,9 @@ validates a current browser behavior.
 ## Setup
 
 - Open `http://localhost:4000/editor`.
+- WYSIWYG inline editing is opt-in. Set
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1` before starting the app when the
+  smoke intentionally targets the experimental WYSIWYG path.
 - Confirm the editor loads and no unexpected layout error is visible.
 - Be aware that `localStorage` may contain a dirty document from earlier manual
   work. Use the existing document when the bug depends on it; use New or clear
@@ -42,15 +45,18 @@ property panel:
 - Non-Windows: `npm run smoke:editor`
 
 The script starts an isolated Next dev server on port `4010`, loads fixture
-documents into `localStorage`, then verifies:
+documents into `localStorage`, explicitly enables
+`NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1` for that server, then verifies:
 
 - editor shell, toolbar, canvas, and first page render
 - no unexpected layout error badge is visible
 - paragraph inline edit commits multiline text
 - Thai paragraph inline edit keeps composition/IME fallback visible and commits
   Thai text with combining marks and emoji
-- continuation-fragment inline edit can type across browser reflow, stay focused,
-  undo/redo as one edit session, and Backspace across the continuation boundary
+- continuation-fragment inline edit can start from a three-fragment paragraph,
+  relocate the active textarea when caret tracking moves across pages, type
+  across browser reflow, stay focused, undo/redo as one edit session, and
+  Backspace across the continuation boundary
 - fieldRef paragraphs do not enter plain textarea inline edit
 - table-cell paragraph Backspace at the true start does not call body-paragraph
   merge or corrupt the table
@@ -70,8 +76,10 @@ documents into `localStorage`, then verifies:
 - property-panel fieldRef label/fallback edits autosave back into package v2
 
 Use `SMOKE_BASE_URL=http://localhost:<port>/editor npm run smoke:editor` when
-you intentionally want to run against an already-started server. Use
-`SMOKE_PORT=<port>` when port `4010` is unavailable.
+you intentionally want to run against an already-started server. That external
+server must already have `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1` when the
+WYSIWYG smoke assertions are expected to pass. Use `SMOKE_PORT=<port>` when
+port `4010` is unavailable.
 
 This automated smoke is still focused coverage. It does not replace manual
 checks for perceived flicker, scroll feel, drag interactions, export artifacts,

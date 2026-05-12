@@ -1,9 +1,9 @@
 # WYSIWYG Editor Roadmap
 
 This document describes the WYSIWYG inline editing track. It is a staged plan:
-some collapsed-caret and hit-testing foundation now runs in the default editor
-for plain paragraphs, but the track is still treated as guarded/experimental
-until its stability gates pass.
+some collapsed-caret and hit-testing foundation exists for plain paragraphs,
+but it is opt-in behind `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT` and remains
+guarded/experimental until its stability gates pass.
 
 The goal is to move from the current textarea-assisted hybrid editor toward an
 editor where text, caret, and selection are drawn from the same paginated visual
@@ -20,19 +20,22 @@ model as normal document rendering.
 
 ## Current Stability Status
 
-The default editor has an experimental collapsed-caret and point-to-offset
-foundation for plain paragraph inline editing. This is not a production-stable
-WYSIWYG default yet. Stability gates must cover continuation fragments,
+The editor has an opt-in experimental collapsed-caret and point-to-offset
+foundation for plain paragraph inline editing. It is disabled by default unless
+`NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT` is explicitly set to `1`, `true`,
+`on`, or `enabled`. This is not a production-stable WYSIWYG default yet.
+Stability gates must cover continuation fragments,
 textarea remount/blur behavior, undo history, IME/composition fallback,
 missing-geometry fallback, and stale browser pagination guards before the track
 can be described as trusted default behavior.
 
 Current automated smoke coverage now exercises plain paragraph visual fallback,
 Thai/composition fallback, fieldRef paragraph non-editability, table-cell
-boundary Backspace, and continuation-fragment editing with focus, undo/redo,
-and boundary Backspace. This is a stability gate foundation, not a claim that
-selection overlay, clipboard hardening, or full IME/accessibility behavior is
-complete.
+boundary Backspace, and continuation-fragment editing with page-tracking
+textarea relocation, focus, undo/redo, and boundary Backspace. The smoke script
+starts its isolated dev server with the WYSIWYG flag enabled. This is a
+stability gate foundation, not a claim that selection overlay, clipboard
+hardening, or full IME/accessibility behavior is complete.
 
 ## Guardrails
 
@@ -77,8 +80,8 @@ Initial internal helper:
 
 - `src/app/editor/_components/wysiwygCaretMapping.ts`
 - This helper now backs the collapsed caret and plain-paragraph point-to-offset
-  activation in the default editor, while broader WYSIWYG behavior remains
-  guarded by the stability gates above.
+  activation when the WYSIWYG inline edit flag is explicitly enabled, while
+  broader WYSIWYG behavior remains guarded by the stability gates above.
 
 Define:
 
@@ -111,9 +114,9 @@ Initial internal helper:
 - `resolveCollapsedCaretOverlayInFragment(...)`
 - `resolveParagraphCollapsedCaretOverlay(...)`
 - These helpers return page-local line geometry for a collapsed caret.
-- The default editor now renders the collapsed custom caret for plain paragraph
-  inline editing when the active visual snapshot is fresh, the textarea
-  selection is collapsed, and composition is not active.
+- The opt-in WYSIWYG path renders the collapsed custom caret for plain
+  paragraph inline editing when the active visual snapshot is fresh, the
+  textarea selection is collapsed, and composition is not active.
 
 - Use the caret mapping contract for offset to position.
 - Draw an SVG caret over paginated text.
@@ -134,8 +137,8 @@ Initial activation:
 - Pointer hit testing passes the editor browser text measurer into the mapping
   helper so click-to-caret uses the same measurement source as preview
   pagination and custom caret placement.
-- The older line-width ratio fallback remains available when segment geometry
-  is missing.
+- When segment/caret geometry is missing, the editor falls back to visible
+  textarea input rather than using a ratio-based WYSIWYG caret.
 
 - Use point to offset mapping.
 - Start with one paragraph and page-local coordinates.
