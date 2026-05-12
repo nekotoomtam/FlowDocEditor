@@ -41,6 +41,7 @@ import {
   serializeDocumentPackageWithFields,
 } from "./documentPersistence"
 import type { DriftReport } from "./comparePagination"
+import { resolveSamePreviewOptimisticLayout, type LayoutStatus, type OptimisticLayoutSnapshot } from "./layoutReconciliation"
 import { findWysiwygPageIndexInFragmentRanges, getWysiwygParagraphFragmentRanges } from "./wysiwygCaretMapping"
 import { useInlineEditSession } from "./useInlineEditSession"
 
@@ -119,7 +120,6 @@ interface EditorState {
   mergeResult: { prevNodeId: string; caretIndex: number } | null
 }
 
-type LayoutStatus = "authoritative" | "optimistic" | "reconciling"
 type ZoomMode = "fit" | "manual"
 
 const MIN_SCALE = 0.3
@@ -846,13 +846,14 @@ export default function EditorShell() {
 
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
-  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("authoritative")
+  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("server-checked")
   const [fontFallback, setFontFallback] = useState(false)
   const [layoutError, setLayoutError] = useState(false)
   const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const authoritativeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const serverPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutVersionRef = useRef(0)
   const browserPaginationGenerationRef = useRef(0)
+  const optimisticLayoutRef = useRef<OptimisticLayoutSnapshot | null>(null)
   const prevLineCountRef = useRef<number | null>(null)
   const prevEditNodeIdRef = useRef<string | null>(null)
   useEffect(() => {
@@ -882,7 +883,9 @@ export default function EditorShell() {
     const wasInlineEditing = wasInlineEditingRef.current
     wasInlineEditingRef.current = inlineEditNodeId !== null
     if (!wasInlineEditing || inlineEditNodeId !== null) return
-    dispatch({ type: "SET_PAGINATED", paginated: paginateDocument(previewDoc, editorTextMeasurer) })
+    const paginated = paginateDocument(previewDoc, editorTextMeasurer)
+    optimisticLayoutRef.current = { doc: previewDoc, paginated }
+    dispatch({ type: "SET_PAGINATED", paginated })
   }, [editorTextMeasurer, inlineEditNodeId, previewDoc])
 
   // Track the current line count when edit mode starts. This avoids reflowing on
@@ -936,7 +939,7 @@ export default function EditorShell() {
 
   // Full browser pagination — optimistic visual layout. During inline editing
   // this runs against previewDoc so draft text can split across pages before
-  // blur; server/API pagination below remains authoritative for final status.
+  // blur; server/API pagination below remains authoritative for export/drift.
   useEffect(() => {
     if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current)
 
@@ -955,6 +958,7 @@ export default function EditorShell() {
       const paginated = paginateDocument(previewDoc, editorTextMeasurer)
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
+      optimisticLayoutRef.current = { doc: previewDoc, paginated }
       dispatch({ type: "SET_PAGINATED", paginated })
       if (inlineEditDraftVersionAtSchedule !== null) {
         markInlineEditVisualFresh(inlineEditDraftVersionAtSchedule)
@@ -965,7 +969,7 @@ export default function EditorShell() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorTextMeasurer, fontReadyVersion, markInlineEditVisualFresh, previewDoc])
 
-  // Authoritative pagination — server/export layout truth. The editor canvas
+  // Server pagination — export layout truth. The editor canvas
   // keeps the browser preview so normal display and inline editing share the
   // same visual line layout; server output is kept for status/drift/export.
   useEffect(() => {
@@ -973,8 +977,8 @@ export default function EditorShell() {
     let controller: AbortController | null = null
     setLayoutStatus("optimistic")
 
-    if (authoritativeDebounceRef.current) clearTimeout(authoritativeDebounceRef.current)
-    authoritativeDebounceRef.current = setTimeout(() => {
+    if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
+    serverPaginationDebounceRef.current = setTimeout(() => {
       controller = new AbortController()
       setIsLayoutLoading(true)
       setLayoutStatus("reconciling")
@@ -996,7 +1000,12 @@ export default function EditorShell() {
         .then((paginated) => {
           if (layoutVersion !== layoutVersionRef.current) return
           setLayoutError(false)
-          const report = comparePagination(paginatedRef.current, paginated)
+          const optimisticLayout = resolveSamePreviewOptimisticLayout(
+            optimisticLayoutRef.current,
+            previewDoc,
+            paginatedRef.current,
+          )
+          const report = comparePagination(optimisticLayout.paginated, paginated)
           setDriftReport(report)
           if (showDriftRef.current && (report.driftCount > 0 || report.geometryDriftMap.size > 0)) {
             console.group(`[FlowDoc drift] ${report.driftCount}/${report.totalParagraphs} paragraphs differ${report.pageBreakChanged ? " · page break changed" : ""}`)
@@ -1015,12 +1024,12 @@ export default function EditorShell() {
             }
             console.groupEnd()
           }
-          setLayoutStatus("authoritative")
+          setLayoutStatus("server-checked")
         })
         .catch((error) => {
           if (error instanceof DOMException && error.name === "AbortError") return
           if (layoutVersion !== layoutVersionRef.current) return
-          console.error("authoritative pagination failed:", error)
+          console.error("server pagination failed:", error)
           setLayoutStatus("optimistic")
           setLayoutError(true)
         })
@@ -1030,7 +1039,7 @@ export default function EditorShell() {
     }, inlineEditNodeId ? 500 : 120)
 
     return () => {
-      if (authoritativeDebounceRef.current) clearTimeout(authoritativeDebounceRef.current)
+      if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
       controller?.abort()
     }
   }, [previewDoc])
@@ -1536,7 +1545,7 @@ export default function EditorShell() {
               ⚠ layout error
             </span>
           )}
-          {savedAt && !isLayoutLoading && layoutStatus === "authoritative" && (
+          {savedAt && !isLayoutLoading && layoutStatus === "server-checked" && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>
               saved {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </span>
