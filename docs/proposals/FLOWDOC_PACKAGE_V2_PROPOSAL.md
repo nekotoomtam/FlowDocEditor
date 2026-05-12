@@ -1,0 +1,387 @@
+# FlowDoc Package V2 Proposal
+
+This proposal describes the package v2 shape for FlowDocEditor. It is now the
+canonical write format for localStorage autosave and default JSON export.
+
+Current default JSON export writes:
+
+```txt
+FlowDocPackage v2
+  -> document: DocumentNode v1
+  -> fields: FieldRegistryV1
+  -> data?: DataSnapshotV1
+```
+
+Current localStorage autosave writes:
+
+```txt
+FlowDocPackage v2
+  -> document: DocumentNode v1
+  -> fields: FieldRegistryV1
+  -> data?: DataSnapshotV1
+```
+
+Current implementation status:
+
+- parser compatibility for proposal-aligned package v2 exists
+- in-memory migration from legacy raw documents/package v1 to package v2 exists
+- localStorage saves write package v2
+- default JSON export writes package v2
+- package v1 export is no longer exposed in the toolbar
+- package v2 is active for localStorage and JSON export
+- scalar data snapshot validation exists and package v2 can preserve the
+  current document-bound snapshot
+- snapshot binding can resolve a temporary preview document from
+  `DocumentNode + FieldRegistryV1 + DataSnapshotV1`
+- Fill mode can surface non-blocking registry/snapshot readiness issues
+- package v2 registry warnings appear in import success status
+
+The v2 direction added package-level field registry support first, then a
+current scalar data snapshot for document-bound placement. Key history remains
+an explicit follow-up layer.
+
+## Goals
+
+Package v2 should make the document/key foundation strong enough for future
+form-like document workflows.
+
+It should support:
+
+- stable field key identity
+- package-level field registry
+- validation between document `fieldRef.key` values and registry definitions
+- a clear place for current data snapshots
+- a clear future place for key history
+- migration from document-only package v1
+
+It should not turn the document model into workflow state.
+
+## Non-Goals
+
+This proposal does not implement:
+
+- submitted/reviewer data workflows
+- key history UI
+- reviewer comments
+- repeat-region runtime behavior
+- WYSIWYG caret or selection behavior
+
+Those remain later phases.
+
+## Proposed Shape
+
+```ts
+interface FlowDocPackageV2 {
+  packageVersion: 2
+  kind: "document"
+  id: string
+  meta: {
+    title: string
+    createdAt: string
+    updatedAt: string
+  }
+  document: DocumentNode
+  fields: FieldRegistryV1
+  data?: DataSnapshotV1
+  history?: KeyHistoryV1
+  migrations?: PackageMigrationRecord[]
+}
+```
+
+Only `fields` is a required v2 member. `data` is optional and currently stores
+the scalar values needed to restore Fill mode for the same document. `history`
+and `migrations` remain optional/deferred layers.
+
+## Field Registry
+
+`fields` should use the contract in `docs/FIELD_REGISTRY_CONTRACT.md`.
+
+```ts
+interface FieldRegistryV1 {
+  version: 1
+  fields: FieldDefinitionV1[]
+}
+```
+
+Package v2 parse/import should:
+
+- require `fields.version === 1`
+- require unique registry keys
+- validate `document` fieldRefs against the registry
+- treat missing registry definitions as warnings in early v2
+- reject duplicate registry keys as invalid package structure
+- reject inline fieldRefs targeting `image` or `collection`
+
+The early-v2 missing-key policy should remain warning-level so older templates
+or hand-authored files can still open. A later authoring mode may choose to block
+publish/export when warnings remain.
+
+## Data Snapshot Layer
+
+Data snapshots should stay outside `DocumentNode`.
+
+Detailed rules live in `docs/DATA_SNAPSHOT_CONTRACT.md`.
+
+Current shape:
+
+```ts
+type FieldScalarValue = string | number | boolean | null
+
+interface DataSnapshotV1 {
+  version: 1
+  updatedAt: string
+  values: Record<string, FieldScalarValue>
+}
+```
+
+Rules:
+
+- keys in `values` refer to registry keys
+- package v2 import/export may preserve `data?: DataSnapshotV1`
+- missing values use `fieldRef.fallback`, field definition fallback, or empty
+  string depending on the binding policy
+- binding must produce a temporary resolved document
+- binding must not mutate the template document
+- this layer stores only the current scalar snapshot, not history
+- values for `collection` fields need a later repeat-region design
+
+Deferred:
+
+- nested object snapshots
+- collection item identity
+- data-source metadata
+- submitted attachment/image payloads
+- per-field validation errors
+
+## Key History Placeholder
+
+Key history should track data identity, not visual position.
+
+Proposed future shape:
+
+```ts
+interface KeyHistoryEntryV1 {
+  key: string
+  oldValue: FieldScalarValue
+  newValue: FieldScalarValue
+  changedAt: string
+  actor?: string
+  reason?: string
+  documentNodeId?: string
+  fieldRefId?: string
+}
+
+interface KeyHistoryV1 {
+  version: 1
+  entries: KeyHistoryEntryV1[]
+}
+```
+
+Rules:
+
+- `key` is the main identity
+- `documentNodeId` and `fieldRefId` are context, not identity
+- moving a fieldRef should not erase history
+- key rename requires a migration or alias policy before implementation
+
+Deferred:
+
+- key aliases
+- reviewer approval state
+- comments
+- diff grouping
+- repeat-region history
+
+## Identity Rules
+
+For v2, keep the v1 identity rule:
+
+- `package.id === package.document.document.id`
+
+This avoids two competing ids while the package remains document-first.
+
+Future workflow systems may introduce submission/review ids, but those should
+not replace the package/document identity.
+
+## Ownership
+
+| Data | Owner |
+|---|---|
+| Package version, title, timestamps | `FlowDocPackage` |
+| Field definitions | `FlowDocPackage.fields` |
+| Authored sections, paragraphs, tables, fieldRefs | `DocumentNode` |
+| Current field values | future `FlowDocPackage.data` |
+| Key change log | future `FlowDocPackage.history` |
+| Computed page/line geometry | `PaginatedDocument` |
+| Selection, caret, hover, drag, undo stack | editor runtime state |
+| PDF/DOCX bytes | export response, not package JSON |
+
+## Migration Direction
+
+The current migration path is:
+
+```txt
+unknown JSON
+  -> parse JSON
+  -> migrate package/raw document to current FlowDocPackage
+  -> normalize document
+  -> assert document
+  -> editor receives DocumentNode
+```
+
+The proposed v2 migration path should become:
+
+```txt
+unknown JSON
+  -> parse JSON
+  -> migrate package/raw document to FlowDocPackage v2
+  -> normalize document
+  -> assert document
+  -> validate field registry references
+  -> editor receives DocumentNode plus package metadata layers
+```
+
+V1 to v2 migration should:
+
+- preserve package/document id
+- preserve document unchanged except normal existing document normalization
+- create an empty registry: `{ version: 1, fields: [] }`
+- collect fieldRefs and report missing definitions as warnings
+- not invent field definitions silently from fieldRefs unless the user chooses
+  an explicit import repair flow
+- not add data or history
+
+Legacy raw `DocumentNode v1` migration to v2 should:
+
+- wrap the raw document as a package
+- create v2 metadata
+- create an empty registry
+- preserve legacy document compatibility warnings
+
+## Import And Export Policy
+
+Now that package v2 is active beyond localStorage:
+
+- default JSON exports write package v2
+- imports should accept v2, v1, and legacy raw `DocumentNode v1`
+- v1 imports should migrate to v2 in memory
+- localStorage migration is explicit and tested
+- export routes should still receive `DocumentNode`, not the package object
+- PDF/DOCX export should not require package v2 unless it needs registry/data
+  binding for a specific export mode
+
+## Validation Levels
+
+Early v2 should distinguish validity from readiness:
+
+- Package validity: JSON shape, package version, identity, document validity,
+  duplicate registry keys, invalid inline field targets, invalid data snapshot
+  structure
+- Registry readiness: missing definitions for used fieldRefs, unused registry
+  definitions
+- Data readiness: required fields missing values, invalid value type
+- Review readiness: unresolved key changes, missing reviewer approval
+
+Only package validity should block opening a file. Readiness checks can block
+publish/export later, but they should be visible and recoverable.
+
+## Test Expectations
+
+When implementation begins, v2 work should cover:
+
+- parse package v2 success
+- reject unsupported package versions
+- reject duplicate registry keys
+- reject inline image/collection fieldRef targets
+- warn on missing registry definitions
+- migrate v1 package to v2 with empty registry
+- migrate legacy raw document to v2 with empty registry
+- keep package/document id agreement
+- preserve document fieldRefs through migration
+- preserve optional data snapshots through package v2 save/load/export/import
+- keep PDF/DOCX export routes receiving `DocumentNode`
+- keep current binding behavior descriptive until strict readiness checks are
+  intentionally enabled
+
+## Open Decisions
+
+These are intentionally deferred until the next phase needs them:
+
+- whether missing registry definitions should remain warnings forever or become
+  blocking in a template publish mode
+- how to represent nested data and collection/repeat values
+- how key rename aliases should be represented
+- whether key history belongs in the same package file for every workflow, or
+  only in review/submission packages
+
+## Implementation Status And Next Phase
+
+Phase C added parser compatibility without migrating runtime storage. The next
+slices added data snapshot validation, snapshot binding/readiness feedback, an
+in-memory package v1/raw-document -> package v2 migration helper, package v2
+localStorage autosave activation, a short explicit v2 export transition, the
+default JSON export switch to package v2, and document-bound data snapshot
+placement persistence.
+
+Completed Phase C slice:
+
+- add package-level v2 types near the persistence boundary
+- add parser tests for package v2 shape
+- keep export/localStorage writing v1
+- use field registry validation helpers from Phase A
+
+Completed migration-helper slice:
+
+- migrate package v1 to package v2 in memory with an empty registry
+- migrate legacy raw documents to package v2 in memory with an empty registry
+- surface missing field definitions as warnings during v2 migration
+- keep existing package v2 migration idempotent
+- preserve optional package v2 `data`, `history`, and `migrations` members
+
+Completed localStorage activation slice:
+
+- save localStorage as package v2
+- preserve the active package field registry during autosave
+- preserve imported package v2 field registries in Fill mode/readiness
+- use the sample editor registry for new documents and legacy/package v1 input
+
+Completed v2 transition/default export slices:
+
+- add explicit package v2 JSON export
+- preserve the active field registry in exported package v2 files
+- make default `Save JSON` write package v2
+- remove the temporary visible `Save v2` toolbar action
+- keep package v1 as import/migration compatibility only
+
+Completed document-bound data placement slice:
+
+- preserve optional `data?: DataSnapshotV1` in package v2 parse/import
+- save localStorage package v2 with the current Fill mode snapshot
+- export package v2 JSON with the current Fill mode snapshot
+- restore package v2 `data` back into Fill mode on open
+- keep resolved values outside `DocumentNode`
+- reject structurally invalid package data snapshots
+- extend browser smoke to confirm filled values are autosaved in package v2
+
+Completed field placement foundation slice:
+
+- drive the Field palette from the active package registry instead of a fixed
+  sample list
+- keep sample registry fallback for new documents and legacy/package v1 inputs
+- show selected paragraph/table-cell fieldRef key, label, fallback, and registry
+  status in the property panel
+- allow property-panel edits to inline fieldRef label/fallback while keeping key
+  and registry type read-only
+- keep missing registry definitions as non-blocking readiness warnings
+- extend browser smoke to cover custom package registries in the palette and
+  fieldRef property inspection/editing
+
+Recommended next implementation phase:
+
+- decide whether registry-readiness warnings should remain non-blocking or be
+  promoted in a publish/template validation mode
+- continue hardening field authoring ergonomics before adding any history layer
+
+Still not done:
+
+- key history implementation
