@@ -179,6 +179,25 @@ function moveCaretByKey(
   selection?: WysiwygTextSelection | null,
 ): WysiwygTextSessionDraftChange | null {
   const range = selectedRange(text, caret, selection)
+  const focusCaret = clampWysiwygTextOffset(text, selection?.focusOffset) ?? caret
+  if (shiftKey) {
+    let nextFocus: number | null = null
+    if (key === "ArrowLeft") nextFocus = previousGraphemeBoundary(text, focusCaret)
+    else if (key === "ArrowRight") nextFocus = nextGraphemeBoundary(text, focusCaret)
+    else if (key === "Home") nextFocus = 0
+    else if (key === "End") nextFocus = text.length
+    if (nextFocus === null) return null
+
+    return {
+      text,
+      caretOffset: nextFocus,
+      selection: {
+        anchorOffset: clampWysiwygTextOffset(text, selection?.anchorOffset) ?? caret,
+        focusOffset: nextFocus,
+      },
+    }
+  }
+
   let nextCaret: number | null = null
   if (key === "ArrowLeft") nextCaret = range.isCollapsed ? previousGraphemeBoundary(text, caret) : range.start
   else if (key === "ArrowRight") nextCaret = range.isCollapsed ? nextGraphemeBoundary(text, caret) : range.end
@@ -186,13 +205,10 @@ function moveCaretByKey(
   else if (key === "End") nextCaret = text.length
   if (nextCaret === null) return null
 
-  const nextSelection = shiftKey
-    ? { anchorOffset: selection?.anchorOffset ?? caret, focusOffset: nextCaret }
-    : collapsedSelection(nextCaret)
   return {
     text,
     caretOffset: nextCaret,
-    selection: nextSelection,
+    selection: collapsedSelection(nextCaret),
   }
 }
 

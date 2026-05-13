@@ -13,7 +13,7 @@ import {
 } from "./wysiwygCaretMapping"
 import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
 import type { InlineEditSelectionSnapshot } from "./wysiwygTextInteraction"
-import { applyWysiwygTextInputKey, applyWysiwygTextInputText } from "./useWysiwygTextSession"
+import { applyWysiwygTextInputKey, applyWysiwygTextInputText, clampWysiwygTextOffset } from "./useWysiwygTextSession"
 import type { WysiwygTextSelection } from "./useWysiwygTextSession"
 import { classifyWysiwygTextReflow } from "./wysiwygReflow"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
@@ -620,6 +620,7 @@ export function WysiwygTextLayer({
 }: WysiwygTextLayerProps) {
   const layerRef = useRef<SVGGElement | null>(null)
   const inputBridgeRef = useRef<HTMLDivElement | null>(null)
+  const pointerSelectionAnchorRef = useRef<number | null>(null)
   const draftStateRef = useRef<{
     text: string
     caretOffset: number | null
@@ -679,6 +680,33 @@ export function WysiwygTextLayer({
     const current = draftStateRef.current
     return applyDraftChange(applyWysiwygTextInputKey(current.text, current.caretOffset, input, current.selection))
   }, [applyDraftChange, onDraftChange])
+
+  const resolveTextEnginePointerOffset = useCallback((event: React.PointerEvent<SVGGElement>): number | null => {
+    const svg = event.currentTarget.ownerSVGElement
+    if (!svg) return null
+    const rect = svg.getBoundingClientRect()
+    const point = {
+      x: (event.clientX - rect.left) / scale,
+      y: (event.clientY - rect.top) / scale,
+    }
+    const mappedCaret = resolveCaretOffsetFromPointInFragment(visualFragment, point, { textMeasurer })
+    return mappedCaret?.offset ?? null
+  }, [scale, textMeasurer, visualFragment])
+
+  const applyPointerSelection = useCallback((anchorOffset: number, focusOffset: number) => {
+    if (!onDraftChange) return false
+    const text = draftStateRef.current.text
+    const safeAnchor = clampWysiwygTextOffset(text, anchorOffset) ?? 0
+    const safeFocus = clampWysiwygTextOffset(text, focusOffset) ?? safeAnchor
+    const nextSelection = { anchorOffset: safeAnchor, focusOffset: safeFocus }
+    draftStateRef.current = {
+      text,
+      caretOffset: safeFocus,
+      selection: nextSelection,
+    }
+    onDraftChange(fragment.nodeId, text, safeFocus, nextSelection)
+    return true
+  }, [fragment.nodeId, onDraftChange])
 
   useEffect(() => {
     const input = inputBridgeRef.current
@@ -743,21 +771,32 @@ export function WysiwygTextLayer({
     event.stopPropagation()
     event.preventDefault()
     inputBridgeRef.current?.focus()
-    if (!onDraftChange || draftText == null) return
-    const svg = event.currentTarget.ownerSVGElement
-    if (!svg) return
-    const rect = svg.getBoundingClientRect()
-    const point = {
-      x: (event.clientX - rect.left) / scale,
-      y: (event.clientY - rect.top) / scale,
-    }
-    const mappedCaret = resolveCaretOffsetFromPointInFragment(visualFragment, point, { textMeasurer })
-    if (!mappedCaret) return
-    onDraftChange(fragment.nodeId, draftText, mappedCaret.offset, {
-      anchorOffset: mappedCaret.offset,
-      focusOffset: mappedCaret.offset,
-    })
-  }, [draftText, fragment.nodeId, onDraftChange, scale, textMeasurer, visualFragment])
+    const offset = resolveTextEnginePointerOffset(event)
+    if (offset === null) return
+    pointerSelectionAnchorRef.current = offset
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    applyPointerSelection(offset, offset)
+  }, [applyPointerSelection, resolveTextEnginePointerOffset])
+
+  const handlePointerMove = useCallback((event: React.PointerEvent<SVGGElement>) => {
+    if (pointerSelectionAnchorRef.current === null || (event.buttons & 1) === 0) return
+    const offset = resolveTextEnginePointerOffset(event)
+    if (offset === null) return
+    event.stopPropagation()
+    event.preventDefault()
+    applyPointerSelection(pointerSelectionAnchorRef.current, offset)
+  }, [applyPointerSelection, resolveTextEnginePointerOffset])
+
+  const handlePointerUp = useCallback((event: React.PointerEvent<SVGGElement>) => {
+    if (pointerSelectionAnchorRef.current === null) return
+    event.stopPropagation()
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    pointerSelectionAnchorRef.current = null
+  }, [])
+
+  const handlePointerCancel = useCallback(() => {
+    pointerSelectionAnchorRef.current = null
+  }, [])
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<Element>) => {
     event.stopPropagation()
@@ -834,6 +873,9 @@ export function WysiwygTextLayer({
       aria-multiline="true"
       onKeyDown={handleKeyDown}
       onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       onClick={(event) => event.stopPropagation()}
       onBlur={() => onEndEdit?.(fragment.nodeId, "blur")}
     >
@@ -869,6 +911,15 @@ export function WysiwygTextLayer({
           }}
         />
       </foreignObject>
+      <rect
+        data-wysiwyg-hit-area="true"
+        x={visualFragment.x * scale}
+        y={visualFragment.y * scale}
+        width={visualFragment.width * scale}
+        height={Math.max(visualFragment.height * scale, 1)}
+        fill="transparent"
+        pointerEvents="all"
+      />
       {renderSelectionOverlay(visualFragment, pageKey, scale, selectionOverlayRects)}
       {visualFragment.lines?.map((line, index) =>
         renderLine(line, index, visualFragment, renderProps, pageKey, scale),

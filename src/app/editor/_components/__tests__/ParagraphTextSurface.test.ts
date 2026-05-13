@@ -462,8 +462,60 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
 
     expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
     expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
+    expect(markup).toContain("data-wysiwyg-hit-area=\"true\"")
     expect(markup).toContain("data-wysiwyg-caret=\"true\"")
     expect(markup).toContain("Hello")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("renders text-engine selection overlays from FlowDoc line geometry", () => {
+    const fragment = makeFragment({
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("Hello"),
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextSelection: { anchorOffset: 1, focusOffset: 4 },
+      showTextSegments: false,
+      initialCaretIndex: 4,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).toContain("data-wysiwyg-selection=\"true\"")
+    expect(markup).toContain("width=\"30\"")
     expect(markup).not.toContain("<textarea")
   })
 

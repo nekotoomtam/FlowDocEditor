@@ -169,6 +169,31 @@ Use before closing the FlowDoc-owned Stage 3 text-engine lane.
 This fixture is dev/test-only and intentionally should not autosave over the
 user's normal localStorage document.
 
+### WYSIWYG Text Engine Stage 4 Selection
+
+Use while hardening the FlowDoc-owned Stage 4 selection lane.
+
+- Start the editor with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`.
+- Open `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`.
+- Confirm the target paragraph `stage3-boundary-target` starts as one fragment.
+- Click the target paragraph and confirm `data-wysiwyg-input-bridge="true"` is
+  present while `textarea[data-inline-edit-node-id]` is absent.
+- Press End, then Shift+ArrowLeft one or more times. Confirm
+  `data-wysiwyg-selection="true"` appears and the text remains SVG-rendered.
+- Press an unshifted ArrowLeft or ArrowRight. Confirm the selection overlay
+  collapses without changing text.
+- Press End, Enter, Enter, and a short marker such as `S4B`. Confirm the target
+  crosses to at least two fragments without mounting an inline textarea.
+- Select the marker with Shift+ArrowLeft and press Backspace. Confirm the
+  marker disappears, the selection overlay collapses, and no layout error is
+  visible.
+- Backspace the inserted newlines until the target returns to one fragment.
+  Confirm no inline textarea is mounted and no layout error appears.
+
+This check protects keyboard selection semantics, selected-range deletion, and
+the Stage 3 page-boundary reflow path together. It does not claim clipboard,
+IME, accessibility, or cross-fragment selection coverage.
+
 ### Editor State Race And Reconciliation
 
 Use when changes touch `EditorShell` document state, `previewDoc`,

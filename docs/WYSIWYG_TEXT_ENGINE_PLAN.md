@@ -162,6 +162,23 @@ Gate:
 - unsupported states fail closed to the old flagged path, not to a new visual
   mismatch inside the text-engine lane.
 
+Current implementation note:
+
+- The first Stage 4B slice keeps selection as transient editor/session state in
+  `useWysiwygTextSession`; it does not write selection, caret, or page geometry
+  into `DocumentNode`.
+- Shifted keyboard navigation preserves the original selection anchor and moves
+  the focus endpoint by grapheme-aware offsets for ArrowLeft/ArrowRight and by
+  paragraph offsets for Home/End.
+- The text-engine layer can create same-fragment pointer selections through a
+  transparent SVG hit area and renders selection highlights from
+  `resolveSelectionOverlayRectsInFragment(...)`, keeping SVG line geometry as
+  the visual truth.
+- The Stage 3 boundary stress fixture now also covers deleting a selected
+  overflow append and verifying the draft paginates back to one fragment.
+- Clipboard, cut, OS IME composition hardening, accessibility announcements,
+  and cross-fragment selection are still deferred Stage 4 work.
+
 ### Stage 5: Default Eligibility
 
 The new lane can become default only when:

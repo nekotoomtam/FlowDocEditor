@@ -246,6 +246,9 @@ Current strengths:
 - App-level tests cover drift and editor helper behavior, including
   continuation-slice text reconstruction and WYSIWYG visual-mode selection
   decisions.
+- FlowDoc-owned text-engine tests cover grapheme-aware keyboard selection
+  anchor/focus behavior, SVG selection overlay rendering, and selected-range
+  deletion against the heavy Stage 3 page-boundary stress fixture.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf` when the
   Playwright runtime is installed locally; otherwise the focused drift test

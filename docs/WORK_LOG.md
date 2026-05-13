@@ -20,6 +20,61 @@ Each entry should include:
 
 ## 2026-05-13
 
+### Add WYSIWYG Text Engine Selection Foundation
+
+Goal: Continue Stage 4B by making the FlowDoc-owned text-engine lane handle
+keyboard selection and selected-range deletion from editor/session state, while
+keeping document schema, export, undo, and pagination ownership unchanged.
+
+Completed:
+
+- Fixed shifted keyboard navigation in `useWysiwygTextSession` so repeated
+  Shift+Arrow preserves the original anchor and moves the focus endpoint by
+  grapheme-aware offsets.
+- Added same-fragment pointer selection wiring in the SVG text-engine layer,
+  using a transparent SVG hit area, FlowDoc point-to-offset mapping, and the
+  existing SVG selection overlay geometry.
+- Kept the hidden `contentEditable` bridge as input-only; visible text,
+  selection, caret, wrapping, and layout remain owned by FlowDoc SVG geometry.
+- Added focused tests for forward/backward Shift+Arrow selection, Home/End
+  selection extension, unshifted collapse behavior, text-engine overlay
+  rendering, and selected deletion in the heavy Stage 3 boundary fixture.
+- Updated the text-engine plan, browser smoke checklist, and test strategy with
+  the current Stage 4B selection contract and remaining deferred work.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/useWysiwygTextSession.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- Browser Playwright smoke on `http://localhost:4013/editor?flowdocTestScenario=wysiwyg-stage3-boundary` with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`, `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1`, and `NEXT_PUBLIC_FLOWDOC_WYSIWYG_PERF_TRACE=1`: target started as one fragment, Shift+Arrow rendered a WYSIWYG selection overlay, unshifted Arrow collapsed it, `Enter Enter S4B` overflowed the target to two fragments, Shift+Arrow selected the marker, Backspace deleted the selected range, further Backspace returned the target to one fragment, no inline textarea mounted, and no layout error was visible.
+- Browser Playwright drag smoke on `http://localhost:4014/editor?flowdocTestScenario=wysiwyg-stage3-boundary` with the same flags: dragging inside the text-engine layer produced a WYSIWYG selection overlay, no inline textarea mounted, and no layout error was visible.
+- Browser Playwright undo/redo smoke on `http://localhost:4015/editor?flowdocTestScenario=wysiwyg-stage3-boundary` with the same flags: after selected deletion and replacement marker `S4C`, commit removed the input bridge, Undo returned the target to one fragment with the marker gone, Redo restored the marker and two-fragment overflow, and no layout error was visible.
+- `npm.cmd run smoke:editor`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- The in-app browser plugin was attempted first, but local navigation/runtime
+  issues made it unreliable in this session. The browser verification above
+  used the same local Playwright runtime as the project's automated smoke
+  suite.
+- This intentionally does not change `DocumentNode`, server/API pagination,
+  export behavior, undo transaction policy, clipboard/cut handling, OS IME
+  composition hardening, accessibility announcements, cross-fragment selection,
+  or table-cell text-engine editing.
+
 ### Clean Stage 4A Verification Baseline
 
 Goal: Start the next WYSIWYG text-engine stage by removing verification noise

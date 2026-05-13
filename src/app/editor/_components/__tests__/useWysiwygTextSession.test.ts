@@ -194,6 +194,95 @@ describe("applyWysiwygTextInputKey", () => {
     })
   })
 
+  it("preserves the selection anchor across repeated shifted navigation", () => {
+    const first = applyWysiwygTextInputKey("Aก้B", 0, { key: "ArrowRight", shiftKey: true })
+    expect(first).toEqual({
+      text: "Aก้B",
+      caretOffset: 1,
+      selection: { anchorOffset: 0, focusOffset: 1 },
+    })
+
+    const second = applyWysiwygTextInputKey(
+      first?.text ?? "",
+      first?.caretOffset ?? null,
+      { key: "ArrowRight", shiftKey: true },
+      first?.selection,
+    )
+    expect(second).toEqual({
+      text: "Aก้B",
+      caretOffset: 3,
+      selection: { anchorOffset: 0, focusOffset: 3 },
+    })
+
+    expect(applyWysiwygTextInputKey(
+      second?.text ?? "",
+      second?.caretOffset ?? null,
+      { key: "ArrowLeft", shiftKey: true },
+      second?.selection,
+    )).toEqual({
+      text: "Aก้B",
+      caretOffset: 1,
+      selection: { anchorOffset: 0, focusOffset: 1 },
+    })
+  })
+
+  it("extends backward selections from focus and collapses unshifted arrows to range edges", () => {
+    const first = applyWysiwygTextInputKey("Aก้B", 4, { key: "ArrowLeft", shiftKey: true })
+    expect(first).toEqual({
+      text: "Aก้B",
+      caretOffset: 3,
+      selection: { anchorOffset: 4, focusOffset: 3 },
+    })
+
+    const second = applyWysiwygTextInputKey(
+      first?.text ?? "",
+      first?.caretOffset ?? null,
+      { key: "ArrowLeft", shiftKey: true },
+      first?.selection,
+    )
+    expect(second).toEqual({
+      text: "Aก้B",
+      caretOffset: 1,
+      selection: { anchorOffset: 4, focusOffset: 1 },
+    })
+
+    expect(applyWysiwygTextInputKey("Aก้B", second?.caretOffset ?? null, { key: "ArrowLeft" }, second?.selection))
+      .toEqual({
+        text: "Aก้B",
+        caretOffset: 1,
+        selection: { anchorOffset: 1, focusOffset: 1 },
+      })
+    expect(applyWysiwygTextInputKey("Aก้B", second?.caretOffset ?? null, { key: "ArrowRight" }, second?.selection))
+      .toEqual({
+        text: "Aก้B",
+        caretOffset: 4,
+        selection: { anchorOffset: 4, focusOffset: 4 },
+      })
+  })
+
+  it("keeps the existing anchor for shifted Home and End navigation", () => {
+    expect(applyWysiwygTextInputKey(
+      "Alpha beta",
+      6,
+      { key: "End", shiftKey: true },
+      { anchorOffset: 2, focusOffset: 6 },
+    )).toEqual({
+      text: "Alpha beta",
+      caretOffset: 10,
+      selection: { anchorOffset: 2, focusOffset: 10 },
+    })
+    expect(applyWysiwygTextInputKey(
+      "Alpha beta",
+      6,
+      { key: "Home", shiftKey: true },
+      { anchorOffset: 8, focusOffset: 6 },
+    )).toEqual({
+      text: "Alpha beta",
+      caretOffset: 0,
+      selection: { anchorOffset: 8, focusOffset: 0 },
+    })
+  })
+
   it("ignores modified keys and composition", () => {
     expect(applyWysiwygTextInputKey("Alpha", 5, { key: "b", ctrlKey: true })).toBeNull()
     expect(applyWysiwygTextInputKey("Alpha", 5, { key: "ก", isComposing: true })).toBeNull()

@@ -16,6 +16,7 @@ import {
   countWysiwygTextDraftFragments,
 } from "../wysiwygDraftPreview"
 import { getPlainParagraphTextFromDocument } from "../wysiwygTextCommit"
+import { applyWysiwygTextInputKey } from "../useWysiwygTextSession"
 
 function targetLineText(paginated: ReturnType<typeof paginateDocument>): string {
   return paginated.sections
@@ -90,6 +91,51 @@ describe("WYSIWYG Stage 3 stress scenario", () => {
 
     expect(() => assertPaginatedDocument(shrunkPaginated)).not.toThrow()
     expect(countWysiwygTextDraftFragments(shrunkPaginated, WYSIWYG_STAGE3_TARGET_NODE_ID)).toBe(1)
+    expect(compactText(targetLineText(shrunkPaginated))).toBe(compactText(WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT))
+  })
+
+  it("deletes a selected overflow append from the heavy boundary draft without corrupting pagination", () => {
+    const doc = makeWysiwygStage3BoundaryDocument()
+    const overflowDraft = `${WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT}${WYSIWYG_STAGE3_BOUNDARY_APPEND_TEXT}`
+    const overflowDoc = buildWysiwygTextDraftPreviewDocument({
+      doc,
+      nodeId: WYSIWYG_STAGE3_TARGET_NODE_ID,
+      draftText: overflowDraft,
+    })
+    const overflowPaginated = paginateDocument(overflowDoc, defaultTextMeasurer)
+
+    expect(() => assertPaginatedDocument(overflowPaginated)).not.toThrow()
+    expect(countWysiwygTextDraftFragments(overflowPaginated, WYSIWYG_STAGE3_TARGET_NODE_ID)).toBeGreaterThanOrEqual(2)
+
+    const deleted = applyWysiwygTextInputKey(
+      overflowDraft,
+      WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT.length,
+      { key: "Backspace" },
+      {
+        anchorOffset: overflowDraft.length,
+        focusOffset: WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT.length,
+      },
+    )
+
+    expect(deleted).toEqual({
+      text: WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT,
+      caretOffset: WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT.length,
+      selection: {
+        anchorOffset: WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT.length,
+        focusOffset: WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT.length,
+      },
+    })
+
+    const shrunkDoc = buildWysiwygTextDraftPreviewDocument({
+      doc: overflowDoc,
+      nodeId: WYSIWYG_STAGE3_TARGET_NODE_ID,
+      draftText: deleted?.text ?? "",
+    })
+    const shrunkPaginated = paginateDocument(shrunkDoc, defaultTextMeasurer)
+
+    expect(() => assertPaginatedDocument(shrunkPaginated)).not.toThrow()
+    expect(countWysiwygTextDraftFragments(shrunkPaginated, WYSIWYG_STAGE3_TARGET_NODE_ID)).toBe(1)
+    expect(targetLineText(shrunkPaginated)).not.toContain(WYSIWYG_STAGE3_TARGET_MARKER)
     expect(compactText(targetLineText(shrunkPaginated))).toBe(compactText(WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT))
   })
 })
