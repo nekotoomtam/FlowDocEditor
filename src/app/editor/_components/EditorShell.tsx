@@ -1,7 +1,7 @@
 "use client"
 
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
-import { paginateDocument } from "@/pagination"
+import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
@@ -42,6 +42,7 @@ import {
 } from "./documentPersistence"
 import type { DriftReport } from "./comparePagination"
 import { resolveSamePreviewOptimisticLayout, type LayoutStatus, type OptimisticLayoutSnapshot } from "./layoutReconciliation"
+import { formatExportReadinessMessage, getExportReadiness, selectAuthoritativeLayoutWarnings } from "./exportReadiness"
 import { findWysiwygPageIndexInFragmentRanges, getWysiwygParagraphFragmentRanges } from "./wysiwygCaretMapping"
 import {
   WYSIWYG_INLINE_EDIT_ENABLED,
@@ -165,6 +166,8 @@ const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 0
 // Keep hard reflow from settling between real key-repeat events; live echo
 // carries immediate feedback until the typing burst pauses.
 const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 450
+const FLOWDOC_FONT_HEADER = "X-FlowDoc-Font"
+const FLOWDOC_FONT_FALLBACK_VALUE = "fallback"
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
@@ -781,40 +784,6 @@ export default function EditorShell() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataSnapshot, initialTestScenario, packageFieldRegistry, state.doc])
 
-  const handleExport = useCallback(async (format: "pdf" | "docx") => {
-    finalizeInlineEditBeforeAction()
-    const exportDoc = resolvePreviewDoc(docRef.current)
-    const formatLabel = format.toUpperCase()
-    setExportError(null)
-    setIsExporting(true)
-    try {
-      const res = await fetch("/api/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc: exportDoc, format }),
-      })
-      if (!res.ok) {
-        const message = await res.text()
-        throw new Error(`export failed: ${res.status} ${message}`)
-      }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `document.${format}`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(url), 100)
-      setExportError(null)
-    } catch (err) {
-      setExportError(`${formatLabel} export failed. Please try again.`)
-      console.error("export error:", err)
-    } finally {
-      setIsExporting(false)
-    }
-  }, [finalizeInlineEditBeforeAction, resolvePreviewDoc])
-
   const importRef = useRef<HTMLInputElement>(null)
 
   const handleExportJson = useCallback(() => {
@@ -968,7 +937,9 @@ export default function EditorShell() {
 
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
-  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("server-checked")
+  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus>("optimistic")
+  const [serverCheckedPreviewDoc, setServerCheckedPreviewDoc] = useState<DocumentNode | null>(null)
+  const [serverLayoutWarnings, setServerLayoutWarnings] = useState<ReturnType<typeof collectPaginatedLayoutWarnings>>([])
   const [fontFallback, setFontFallback] = useState(false)
   const [layoutError, setLayoutError] = useState(false)
   const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -978,9 +949,107 @@ export default function EditorShell() {
   const optimisticLayoutRef = useRef<OptimisticLayoutSnapshot | null>(null)
   const prevLineCountRef = useRef<number | null>(null)
   const prevEditNodeIdRef = useRef<string | null>(null)
+  const optimisticLayoutWarnings = useMemo(() => collectPaginatedLayoutWarnings(state.paginated), [state.paginated])
+  const serverLayoutCheckedForCurrentPreview = layoutStatus === "server-checked" && serverCheckedPreviewDoc === previewDoc
+  const authoritativeLayoutWarnings = selectAuthoritativeLayoutWarnings({
+    serverLayoutCheckedForCurrentPreview,
+    serverLayoutWarnings,
+    optimisticLayoutWarnings,
+  })
+  const layoutWarningSource = serverLayoutCheckedForCurrentPreview ? "server" : "preview"
+  const exportReadiness = useMemo(() => getExportReadiness({
+    layoutStatus,
+    layoutError,
+    serverLayoutCheckedForCurrentPreview,
+    fontFallback,
+    driftReport,
+    isFillMode: !isTemplateMode,
+    dataReadinessHasErrors: dataReadiness.hasErrors,
+    dataReadinessIssues: dataReadiness.issues,
+    layoutWarnings: authoritativeLayoutWarnings,
+  }), [
+    authoritativeLayoutWarnings,
+    dataReadiness.hasErrors,
+    dataReadiness.issues,
+    driftReport,
+    fontFallback,
+    isTemplateMode,
+    layoutError,
+    layoutStatus,
+    serverLayoutCheckedForCurrentPreview,
+  ])
+  const exportReadinessMessage = formatExportReadinessMessage(exportReadiness)
   useEffect(() => {
     browserPaginationGenerationRef.current += 1
   }, [inlineEditNodeId])
+
+  const handleExport = useCallback(async (format: "pdf" | "docx") => {
+    const finalizedActiveEdit = finalizeInlineEditBeforeAction()
+    const exportDoc = resolvePreviewDoc(docRef.current)
+    const formatLabel = format.toUpperCase()
+    const readiness = finalizedActiveEdit
+      ? {
+          canExport: false,
+          reasons: ["server layout has not checked the current document"],
+        }
+      : exportReadiness
+    const blockedReason = formatExportReadinessMessage(readiness)
+    if (blockedReason) {
+      setExportError(`${formatLabel} export blocked: ${blockedReason}`)
+      return
+    }
+
+    setExportError(null)
+    setIsExporting(true)
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc: exportDoc, format }),
+      })
+      if (!res.ok) {
+        const responseText = await res.text()
+        let errorCode: string | null = null
+        let errorMessage = responseText
+        try {
+          const body = JSON.parse(responseText) as { code?: unknown; error?: unknown }
+          errorCode = typeof body.code === "string" ? body.code : null
+          errorMessage = typeof body.error === "string" ? body.error : responseText
+        } catch {}
+        if (errorCode === "FONT_FALLBACK_BLOCKED") {
+          setFontFallback(true)
+          setExportError(`${formatLabel} export blocked: runtime font fallback is active`)
+          return
+        }
+        if (errorCode === LAYOUT_WARNINGS_BLOCKED_CODE) {
+          setExportError(`${formatLabel} export blocked: layout warnings block final export`)
+          return
+        }
+        throw new Error(`export failed: ${res.status} ${errorCode ?? ""} ${errorMessage}`)
+      }
+      if (res.headers.get(FLOWDOC_FONT_HEADER) === FLOWDOC_FONT_FALLBACK_VALUE) {
+        setFontFallback(true)
+        setExportError(`${formatLabel} export blocked: runtime font fallback is active`)
+        return
+      }
+      setFontFallback(false)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `document.${format}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 100)
+      setExportError(null)
+    } catch (err) {
+      setExportError(`${formatLabel} export failed. Please try again.`)
+      console.error("export error:", err)
+    } finally {
+      setIsExporting(false)
+    }
+  }, [exportReadiness, finalizeInlineEditBeforeAction, resolvePreviewDoc])
 
   const inlineEditFragmentRanges = useMemo(() => (
     inlineEditNodeId
@@ -1126,6 +1195,8 @@ export default function EditorShell() {
       cancelled = true
       controller?.abort()
     }
+    setServerCheckedPreviewDoc(null)
+    setServerLayoutWarnings([])
     setLayoutStatus("optimistic")
 
     window.addEventListener("pagehide", cancelForPageTransition, { once: true })
@@ -1147,12 +1218,13 @@ export default function EditorShell() {
             const message = await res.text()
             throw new Error(`paginate failed: ${res.status} ${message}`)
           }
-          setFontFallback(res.headers.get("X-FlowDoc-Font") === "fallback")
+          setFontFallback(res.headers.get(FLOWDOC_FONT_HEADER) === FLOWDOC_FONT_FALLBACK_VALUE)
           return await res.json() as PaginatedDocument
         })
         .then((paginated) => {
           if (layoutVersion !== layoutVersionRef.current) return
           setLayoutError(false)
+          setServerLayoutWarnings(collectPaginatedLayoutWarnings(paginated))
           const optimisticLayout = resolveSamePreviewOptimisticLayout(
             optimisticLayoutRef.current,
             previewDoc,
@@ -1177,6 +1249,7 @@ export default function EditorShell() {
             }
             console.groupEnd()
           }
+          setServerCheckedPreviewDoc(previewDoc)
           setLayoutStatus("server-checked")
         })
         .catch((error) => {
@@ -1190,6 +1263,8 @@ export default function EditorShell() {
           ) return
           if (layoutVersion !== layoutVersionRef.current) return
           console.error("server pagination failed:", error)
+          setServerCheckedPreviewDoc(null)
+          setServerLayoutWarnings([])
           setLayoutStatus("optimistic")
           setLayoutError(true)
         })
@@ -1711,13 +1786,22 @@ export default function EditorShell() {
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
           {fontFallback && (
-            <span title="Server is using Helvetica fallback — Thai text layout may be incorrect" style={{ fontSize: 10, color: "#d97706", cursor: "help" }}>
+            <span data-testid="font-fallback-status" title="Server is using Helvetica fallback — Thai text layout may be incorrect" style={{ fontSize: 10, color: "#d97706", cursor: "help" }}>
               ⚠ fallback font
             </span>
           )}
           {layoutError && (
             <span data-testid="layout-error-badge" title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help" }}>
               ⚠ layout error
+            </span>
+          )}
+          {authoritativeLayoutWarnings.length > 0 && (
+            <span
+              data-testid="layout-warning-status"
+              title={authoritativeLayoutWarnings.map((warning) => `${layoutWarningSource} ${warning.count} ${warning.message}`).join("; ")}
+              style={{ fontSize: 10, color: "#d97706", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              layout warning: {layoutWarningSource} {authoritativeLayoutWarnings[0].message}
             </span>
           )}
           {savedAt && !isLayoutLoading && layoutStatus === "server-checked" && (
@@ -1732,8 +1816,17 @@ export default function EditorShell() {
             <span style={{ fontSize: 10, color: "#9ca3af" }}>preview layout</span>
           )}
           {exportError && (
-            <span title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span data-testid="export-error" title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {exportError}
+            </span>
+          )}
+          {!exportReadiness.canExport && !exportError && (
+            <span
+              data-testid="export-readiness-status"
+              title={exportReadinessMessage ?? undefined}
+              style={{ fontSize: 10, color: "#d97706", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              export blocked: {exportReadiness.reasons[0]}
             </span>
           )}
           {documentIoStatus && (
@@ -1752,12 +1845,20 @@ export default function EditorShell() {
               {documentIoStatus.message}
             </span>
           )}
-          {(["pdf", "docx"] as const).map((fmt) => (
-            <button key={fmt} disabled={isExporting} onClick={() => handleExport(fmt)}
-              style={{ padding: "4px 10px", fontSize: 11, cursor: isExporting ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: isExporting ? "#f9fafb" : "white", color: isExporting ? "#9ca3af" : "#374151" }}>
-              {isExporting ? "…" : `Export ${fmt.toUpperCase()}`}
-            </button>
-          ))}
+          {(["pdf", "docx"] as const).map((fmt) => {
+            const disabled = isExporting || !exportReadiness.canExport
+            return (
+              <button
+                key={fmt}
+                disabled={disabled}
+                onClick={() => handleExport(fmt)}
+                title={!exportReadiness.canExport && exportReadinessMessage ? `Export blocked: ${exportReadinessMessage}` : undefined}
+                style={{ padding: "4px 10px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: disabled ? "#f9fafb" : "white", color: disabled ? "#9ca3af" : "#374151" }}
+              >
+                {isExporting ? "…" : `Export ${fmt.toUpperCase()}`}
+              </button>
+            )
+          })}
         </div>
         {state.drag && (
           <span style={{ fontSize: 11, color: "#6b7280" }}>

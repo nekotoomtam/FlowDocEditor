@@ -11,6 +11,7 @@ import type {
   PaginatedSection,
   ParagraphRenderProps,
   ParagraphSplitDecision,
+  PageFragmentWarning,
   ResolvedBorderSide,
   ResolvedCellBorder,
   TableCellRenderProps,
@@ -584,6 +585,99 @@ interface SplitPoint {
   lineIdx: number   // line index ภายใน child นั้น (0 = ทั้ง child ไปหน้าถัดไป)
 }
 
+function endSplitPoint(cellBox: FlowBox, to: SplitPoint | null): SplitPoint {
+  return to ?? { childIdx: cellBox.children.length, lineIdx: 0 }
+}
+
+function splitPointProgressed(from: SplitPoint, to: SplitPoint | null, cellBox: FlowBox): boolean {
+  const end = endSplitPoint(cellBox, to)
+  return end.childIdx > from.childIdx ||
+    (end.childIdx === from.childIdx && end.lineIdx > from.lineIdx)
+}
+
+function splitProgressKey(rowBox: FlowBox, splits: Map<string, SplitPoint>): string {
+  return rowBox.children
+    .map((cellBox) => {
+      const split = splits.get(cellBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }
+      return `${cellBox.nodeId}:${split.childIdx}:${split.lineIdx}`
+    })
+    .join("|")
+}
+
+function cellHasRemainingSplitContent(
+  cellBox: FlowBox,
+  tableNode: TableNode,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  from: SplitPoint,
+): boolean {
+  for (let ci = from.childIdx; ci < cellBox.children.length; ci++) {
+    const child = cellBox.children[ci]
+    if (!child) continue
+    if (child.nodeType === "spacer") return true
+    if (child.nodeType !== "paragraph") continue
+
+    const node = tableNode.nodes[child.nodeId]
+    if (node?.type !== "paragraph") continue
+    const lineStart = ci === from.childIdx ? from.lineIdx : 0
+    const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+    if (lineStart < measured.lines.length) return true
+  }
+
+  return false
+}
+
+function forceOneSplitUnitProgress(
+  cellBox: FlowBox,
+  tableNode: TableNode,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  from: SplitPoint,
+): SplitPoint | null {
+  for (let ci = from.childIdx; ci < cellBox.children.length; ci++) {
+    const child = cellBox.children[ci]
+    if (!child) continue
+    if (child.nodeType === "spacer") return { childIdx: ci + 1, lineIdx: 0 }
+    if (child.nodeType !== "paragraph") continue
+
+    const node = tableNode.nodes[child.nodeId]
+    if (node?.type !== "paragraph") continue
+    const lineStart = ci === from.childIdx ? from.lineIdx : 0
+    const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+    if (lineStart < measured.lines.length) return { childIdx: ci, lineIdx: lineStart + 1 }
+  }
+
+  return null
+}
+
+function forcedSplitUnitHeight(
+  cellBox: FlowBox,
+  tableNode: TableNode,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  from: SplitPoint,
+  to: SplitPoint,
+): number {
+  const child = cellBox.children[from.childIdx]
+  if (!child) return 0
+  if (child.nodeType === "spacer") return child.height
+  if (child.nodeType !== "paragraph") return 0
+
+  const node = tableNode.nodes[child.nodeId]
+  if (node?.type !== "paragraph") return 0
+
+  const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+  const lineStart = from.lineIdx
+  const lineEnd = to.childIdx === from.childIdx ? to.lineIdx : measured.lines.length
+  const lines = measured.lines.slice(lineStart, lineEnd)
+  const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
+  const spacingAfter = lineEnd >= measured.lines.length
+    ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
+    : 0
+
+  return spacingBefore + lines.reduce((sum, line) => sum + line.height, 0) + spacingAfter
+}
+
 // คำนวณ split point โดยเริ่มจาก `from` เพื่อหาว่า content สิ้นสุดที่ไหนเมื่อใส่ใน availH
 // คืน null ถ้า content ที่เหลือทั้งหมดใส่ใน availH ได้พอดี
 function computeSplitPointFrom(
@@ -747,6 +841,7 @@ function paginateTableRowSplit(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
+  repeatedHeaderHeight: number = 0,
 ): PageFlowCursor {
   // Track current split position (start of remaining content) for each cell
   const fromSplits = new Map<string, SplitPoint>()
@@ -755,6 +850,7 @@ function paginateTableRowSplit(
   let current = cursor
   let heightPlaced = 0
   const totalHeight = rowBox.height
+  let retriedNoProgressKey: string | null = null
 
   while (heightPlaced < totalHeight) {
     const availH = contentBottom - current.cursorY
@@ -765,8 +861,9 @@ function paginateTableRowSplit(
       continue
     }
 
-    const sliceH = Math.min(availH, totalHeight - heightPlaced)
+    let sliceH = Math.min(availH, totalHeight - heightPlaced)
     const isLastSlice = sliceH >= totalHeight - heightPlaced
+    const sliceWarnings = new Map<string, PageFragmentWarning[]>()
 
     // Compute per-cell end-split for this page
     const toSplits = new Map<string, SplitPoint | null>()
@@ -778,6 +875,67 @@ function paginateTableRowSplit(
           ? toAbstractUnit(cellNode.props.padding.value, cellNode.props.padding.unit) : 0
         toSplits.set(cellBox.nodeId, computeSplitPointFrom(cellBox, tableNode, Math.max(0, sliceH - padding * 2), measurer, wordBreaker, from))
       }
+
+      let hasRemainingContent = false
+      let hasContentProgress = false
+      for (const cellBox of rowBox.children) {
+        const from = fromSplits.get(cellBox.nodeId)!
+        const hasRemaining = cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, from)
+        hasRemainingContent = hasRemainingContent || hasRemaining
+        hasContentProgress = hasContentProgress ||
+          (hasRemaining && splitPointProgressed(from, toSplits.get(cellBox.nodeId) ?? null, cellBox))
+      }
+
+      if (hasRemainingContent && !hasContentProgress) {
+        const progressKey = splitProgressKey(rowBox, fromSplits)
+        const cleanContinuationY = contentTop + repeatedHeaderHeight
+        if (current.cursorY > cleanContinuationY && retriedNoProgressKey !== progressKey) {
+          retriedNoProgressKey = progressKey
+          current = advancePage(current, contentTop)
+          current = repeatHeaders ? repeatHeaders(current) : current
+          continue
+        }
+
+        const forcedCell = rowBox.children.find((cellBox) =>
+          cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, fromSplits.get(cellBox.nodeId)!),
+        )
+        if (forcedCell) {
+          const forcedSplit = forceOneSplitUnitProgress(
+            forcedCell,
+            tableNode,
+            measurer,
+            wordBreaker,
+            fromSplits.get(forcedCell.nodeId)!,
+          )
+          if (forcedSplit) {
+            // Explicit overflow-progress policy: when padding/headers leave less
+            // than one line of capacity, render one unit anyway rather than
+            // consuming an empty row slice and losing split progress.
+            toSplits.set(forcedCell.nodeId, forcedSplit)
+            const forcedCellNode = tableNode.nodes[forcedCell.nodeId]
+            const forcedPadding = forcedCellNode?.type === "table-cell" && forcedCellNode.props.padding
+              ? toAbstractUnit(forcedCellNode.props.padding.value, forcedCellNode.props.padding.unit) : 0
+            const forcedContentHeight = forcedSplitUnitHeight(
+              forcedCell,
+              tableNode,
+              measurer,
+              wordBreaker,
+              fromSplits.get(forcedCell.nodeId)!,
+              forcedSplit,
+            )
+            const forcedSliceHeight = forcedContentHeight + forcedPadding * 2
+            sliceH = Math.max(sliceH, Math.min(totalHeight - heightPlaced, forcedSliceHeight))
+            const warning: PageFragmentWarning = {
+              code: "forced-table-split-overflow",
+              message: "table row split forced one content unit because the available slice could not fit normal progress",
+            }
+            sliceWarnings.set(rowBox.nodeId, [warning])
+            sliceWarnings.set(forcedCell.nodeId, [warning])
+          }
+        }
+      } else {
+        retriedNoProgressKey = null
+      }
     }
 
     // Row fragment for this slice
@@ -785,6 +943,7 @@ function paginateTableRowSplit(
       nodeId: rowBox.nodeId, nodeType: "row", parentNodeId: tableNodeId,
       pageIndex: current.pageIndex, x: rowBox.x, y: current.cursorY,
       width: rowBox.width, height: sliceH,
+      warnings: sliceWarnings.get(rowBox.nodeId),
     })
 
     // Cell fragments and content for this slice
@@ -798,6 +957,7 @@ function paginateTableRowSplit(
         nodeId: cellBox.nodeId, nodeType: "table-cell", parentNodeId: rowBox.nodeId,
         pageIndex: current.pageIndex, x: cellBox.x, y: current.cursorY,
         width: cellBox.width, height: sliceH,
+        warnings: sliceWarnings.get(cellBox.nodeId),
         cellRenderProps: baseProps
           ? { ...baseProps, continuesOnNext: !isLastSlice, continuedFromPrev: heightPlaced > 0 }
           : undefined,
@@ -960,6 +1120,7 @@ function paginateTable(
         current = paginateTableRowSplit(
           rowBox, tableNode, pages, template, contentTop, contentBottom, current, box.nodeId, measurer, wordBreaker,
           headerRowCount > 0 ? placeHeaders : undefined,
+          headerRowCount > 0 ? headerHeight : 0,
         )
       } else {
         const nextPage = advancePage(current, contentTop)

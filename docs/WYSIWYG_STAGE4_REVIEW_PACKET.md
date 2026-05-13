@@ -20,6 +20,8 @@ In scope:
 - Accessibility status wiring for caret and selected-range state.
 - Heavy row-stack paragraph coverage while preserving the current atomic row
   pagination contract.
+- Read-only editor preview of resolved header/footer text from
+  `PaginatedDocument` zone fragments.
 
 Out of scope:
 
@@ -28,6 +30,7 @@ Out of scope:
 - Human Windows Thai IME candidate-window validation.
 - Full screen reader product validation.
 - Schema/model/export changes.
+- Header/footer authoring or inline editing.
 
 ## PASS
 
@@ -55,6 +58,11 @@ Out of scope:
   `isParagraphInsideRowStack` / `isStackInsideRow` in
   `src/app/editor/_components/EditorCanvas.tsx` and the row-stack test in
   `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`.
+- Header/footer preview content is visible in the editor without becoming an
+  editable/selectable body fragment. Evidence: `ReadOnlyZoneFragments` in
+  `src/app/editor/_components/EditorCanvas.tsx`,
+  `src/app/editor/_components/__tests__/EditorCanvas.test.ts`, and
+  `scripts/editor-smoke.mjs`.
 
 ## RISK
 
@@ -78,6 +86,17 @@ Out of scope:
 
 ## Verification
 
+Reproducible non-browser review gate:
+
+```powershell
+npm.cmd run review:gate
+npm.cmd run review:gate:full
+```
+
+`review:gate` includes type-check, core tests, app tests, and `review:build`.
+`review:gate:full` first runs the review archive manifest check. These gates
+must fail if `public/fonts/THSarabun.ttf` is missing.
+
 Focused tests:
 
 ```powershell
@@ -97,7 +116,20 @@ Browser smoke on the already-running flagged local editor:
 $env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-stage4c
 $env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:wysiwyg-stage4c
 $env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='msedge'; npm.cmd run smoke:wysiwyg-stage4c
+$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_EXECUTABLE_PATH='C:\Path\To\chromium.exe'; npm.cmd run smoke:wysiwyg-stage4c
 ```
+
+Reproducible browser review gate:
+
+```powershell
+npm.cmd run review:browser
+npm.cmd run review:browser:install
+$env:SMOKE_EXECUTABLE_PATH='C:\Path\To\chromium.exe'; npm.cmd run review:browser
+```
+
+`npm ci` installs Playwright's package dependency, but reviewers may still need
+`npx playwright install chromium`, `review:browser:install`, or a system browser
+path before running the browser gate.
 
 Full suite:
 
@@ -108,16 +140,28 @@ git diff --check
 
 Latest observed automated counts:
 
-- Core tests: 324 passed.
-- App tests: 205 passed.
-- Stage 4C smoke passed on bundled Chromium, installed Chrome, and installed
-  Edge.
+- Core tests: 344 passed.
+- App tests: 232 passed.
+- `review:gate:full` passed on 2026-05-14 with archive manifest check,
+  type-check, full core/app tests, and `review:build`.
+- `review:browser` passed on 2026-05-14 on bundled Chromium and on system
+  Chrome via `SMOKE_EXECUTABLE_PATH`.
+- Stage 4C smoke output reports the browser mode, channel, executable path, and
+  headless setting.
+- Missing bundled Chromium launch errors now print FlowDoc-specific install and
+  system-browser guidance instead of only the generic Playwright message.
+- Editor smoke passed with header/footer zone text coverage, Fill-mode export
+  readiness coverage, and favicon-only resource filtering for system Chrome.
 - The row-stack smoke inserted `STAGE4_STACK_MARKER` and observed
   `targetFragments: 1`, `pointerFragments: 1`, and `rowHeight: 571`.
 
 ## Reviewer Notes
 
 - Review this as an Option 1 baseline for body/split text-engine behavior.
+- The text engine remains experimental: production builds require both
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE` and
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE_PRODUCTION_ACK`, and
+  `docs/WYSIWYG_PRODUCTION_GATE.md` must be PASS before default enablement.
 - Do not interpret row-stack coverage as independent row/column continuation.
 - Do not interpret synthetic IME coverage as real OS IME acceptance.
 - If a review requests table-cell text-engine support or independent

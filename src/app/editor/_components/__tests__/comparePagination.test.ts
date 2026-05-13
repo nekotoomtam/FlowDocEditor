@@ -2,21 +2,38 @@ import { describe, it, expect } from "vitest"
 import { comparePagination } from "../comparePagination"
 import type { PaginatedDocument } from "@/pagination"
 
+interface TestFragment {
+  nodeId: string
+  nodeType: string
+  lines?: unknown[]
+  height?: number
+  lineStart?: number
+}
+
 // Minimal PaginatedDocument builder for tests.
 // Only populates fields that comparePagination reads.
 function makeDoc(
   sections: Array<{
     pages: Array<{
-      fragments: Array<{
-        nodeId: string
-        nodeType: string
-        lines?: unknown[]
-        height?: number
-        lineStart?: number
-      }>
+      fragments: TestFragment[]
+      headerFragments?: TestFragment[]
+      footerFragments?: TestFragment[]
     }>
   }>,
 ): PaginatedDocument {
+  const mapFragments = (fragments: TestFragment[]) => fragments.map((f) => ({
+    nodeId: f.nodeId,
+    nodeType: f.nodeType,
+    x: 57,
+    y: 57,
+    width: 481,
+    height: f.height ?? 12,
+    lines: f.lines as never,
+    renderProps: undefined,
+    parentNodeId: undefined,
+    lineStart: f.lineStart,
+  }))
+
   return {
     tocEntries: [],
     sections: sections.map((s) => ({
@@ -26,20 +43,9 @@ function makeDoc(
         width: 595,
         height: 842,
         contentBox: { x: 57, y: 57, width: 481, height: 728 },
-        fragments: p.fragments.map((f) => ({
-          nodeId: f.nodeId,
-          nodeType: f.nodeType,
-          x: 57,
-          y: 57,
-          width: 481,
-          height: f.height ?? 12,
-          lines: f.lines as never,
-          renderProps: undefined,
-          parentNodeId: undefined,
-          lineStart: f.lineStart,
-        })),
-        headerFragments: [],
-        footerFragments: [],
+        fragments: mapFragments(p.fragments),
+        headerFragments: mapFragments(p.headerFragments ?? []),
+        footerFragments: mapFragments(p.footerFragments ?? []),
       })),
     })),
   } as unknown as PaginatedDocument
@@ -255,5 +261,57 @@ describe("comparePagination", () => {
     const report = comparePagination(browser, server)
     expect(report.geometryDriftMap.has("st1")).toBe(true)
     expect(report.geometryDriftMap.get("st1")!.heightDelta).toBe(12)
+  })
+
+  it("tracks header text line drift with zone metadata", () => {
+    const browser = makeDoc([{ pages: [{ fragments: [], headerFragments: [
+      { nodeId: "header-p", nodeType: "paragraph", lines: lines(1), height: 12 },
+    ] }] }])
+    const server = makeDoc([{ pages: [{ fragments: [], headerFragments: [
+      { nodeId: "header-p", nodeType: "paragraph", lines: lines(2), height: 24 },
+    ] }] }])
+
+    const report = comparePagination(browser, server)
+    const drift = report.driftMap.get("header-p")!
+
+    expect(drift).toBeDefined()
+    expect(drift.zone).toBe("header")
+    expect(drift.lineDelta).toBe(1)
+    expect(report.maxLineDelta).toBe(1)
+  })
+
+  it("tracks footer geometry drift", () => {
+    const browser = makeDoc([{ pages: [{ fragments: [], footerFragments: [
+      { nodeId: "footer-spacer", nodeType: "spacer", height: 8 },
+    ] }] }])
+    const server = makeDoc([{ pages: [{ fragments: [], footerFragments: [
+      { nodeId: "footer-spacer", nodeType: "spacer", height: 18 },
+    ] }] }])
+
+    const report = comparePagination(browser, server)
+    const drift = report.geometryDriftMap.get("footer-spacer")!
+
+    expect(drift).toBeDefined()
+    expect(drift.zone).toBe("footer")
+    expect(drift.nodeType).toBe("spacer")
+    expect(drift.heightDelta).toBe(10)
+  })
+
+  it("tracks TOC line and geometry drift", () => {
+    const browser = makeDoc([{ pages: [{ fragments: [
+      { nodeId: "toc1", nodeType: "toc", lines: lines(3), height: 36 },
+    ] }] }])
+    const server = makeDoc([{ pages: [{ fragments: [
+      { nodeId: "toc1", nodeType: "toc", lines: lines(4), height: 54 },
+    ] }] }])
+
+    const report = comparePagination(browser, server)
+    const textDrift = report.driftMap.get("toc1")!
+    const geometryDrift = report.geometryDriftMap.get("toc1")!
+
+    expect(textDrift.nodeType).toBe("toc")
+    expect(textDrift.lineDelta).toBe(1)
+    expect(geometryDrift.nodeType).toBe("toc")
+    expect(geometryDrift.heightDelta).toBe(18)
   })
 })

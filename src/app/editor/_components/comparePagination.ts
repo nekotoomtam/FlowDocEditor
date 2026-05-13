@@ -1,7 +1,11 @@
-import type { PaginatedDocument } from "@/pagination"
+import type { PageFragment, PaginatedDocument } from "@/pagination"
+
+export type FragmentZone = "body" | "header" | "footer"
 
 export interface FragmentDrift {
   nodeId: string
+  zone: FragmentZone
+  nodeType: string
   browserLineCount: number
   serverLineCount: number
   lineDelta: number         // positive = server has more lines, negative = server has fewer
@@ -15,6 +19,7 @@ export interface FragmentDrift {
 
 export interface GeometryDrift {
   nodeId: string
+  zone: FragmentZone
   nodeType: string
   pageMovement: boolean
   heightDelta: number
@@ -33,9 +38,12 @@ export interface DriftReport {
 interface PageLocation {
   sectionIndex: number
   pageIndex: number
+  zone: FragmentZone
 }
 
 interface FragmentSnapshot {
+  zone: FragmentZone
+  nodeType: string
   lineCount: number
   height: number
   pages: PageLocation[]     // all pages this paragraph spans, in order
@@ -44,36 +52,53 @@ interface FragmentSnapshot {
 }
 
 interface LayoutSnapshot {
+  zone: FragmentZone
   nodeType: string
   height: number
   pages: PageLocation[]
 }
 
 // Node types whose page movement and geometry drift should be tracked
-const TRACKED_LAYOUT_TYPES = new Set(["row", "stack", "table-cell", "table-row"])
+const TRACKED_TEXT_TYPES = new Set(["paragraph", "toc"])
+const TRACKED_LAYOUT_TYPES = new Set(["row", "stack", "table", "table-cell", "table-row", "toc", "spacer"])
+
+function getPageZoneFragments(page: PaginatedDocument["sections"][number]["pages"][number]): Array<{
+  fragment: PageFragment
+  zone: FragmentZone
+}> {
+  return [
+    ...page.headerFragments.map((fragment) => ({ fragment, zone: "header" as const })),
+    ...page.fragments.map((fragment) => ({ fragment, zone: "body" as const })),
+    ...page.footerFragments.map((fragment) => ({ fragment, zone: "footer" as const })),
+  ]
+}
 
 function buildSnapshotMap(doc: PaginatedDocument): Map<string, FragmentSnapshot> {
   const map = new Map<string, FragmentSnapshot>()
   doc.sections.forEach((section, si) => {
     section.pages.forEach((page, pi) => {
-      for (const f of page.fragments) {
-        if (f.nodeType !== "paragraph") continue
+      for (const { fragment: f, zone } of getPageZoneFragments(page)) {
+        if (!TRACKED_TEXT_TYPES.has(f.nodeType)) continue
         const existing = map.get(f.nodeId)
         if (existing) {
           // lineStart of a continuation fragment is the split boundary
           const boundary = f.lineStart ?? existing.lineCount
           map.set(f.nodeId, {
+            zone: existing.zone,
+            nodeType: existing.nodeType,
             lineCount: existing.lineCount + (f.lines?.length ?? 0),
             height: existing.height + f.height,
-            pages: [...existing.pages, { sectionIndex: si, pageIndex: pi }],
+            pages: [...existing.pages, { sectionIndex: si, pageIndex: pi, zone }],
             fragmentCount: existing.fragmentCount + 1,
             splitBoundaries: [...existing.splitBoundaries, boundary],
           })
         } else {
           map.set(f.nodeId, {
+            zone,
+            nodeType: f.nodeType,
             lineCount: f.lines?.length ?? 0,
             height: f.height,
-            pages: [{ sectionIndex: si, pageIndex: pi }],
+            pages: [{ sectionIndex: si, pageIndex: pi, zone }],
             fragmentCount: 1,
             splitBoundaries: [],
           })
@@ -88,20 +113,22 @@ function buildLayoutSnapshotMap(doc: PaginatedDocument): Map<string, LayoutSnaps
   const map = new Map<string, LayoutSnapshot>()
   doc.sections.forEach((section, si) => {
     section.pages.forEach((page, pi) => {
-      for (const f of page.fragments) {
+      for (const { fragment: f, zone } of getPageZoneFragments(page)) {
         if (!TRACKED_LAYOUT_TYPES.has(f.nodeType)) continue
         const existing = map.get(f.nodeId)
         if (existing) {
           map.set(f.nodeId, {
+            zone: existing.zone,
             nodeType: existing.nodeType,
             height: existing.height + f.height,
-            pages: [...existing.pages, { sectionIndex: si, pageIndex: pi }],
+            pages: [...existing.pages, { sectionIndex: si, pageIndex: pi, zone }],
           })
         } else {
           map.set(f.nodeId, {
+            zone,
             nodeType: f.nodeType,
             height: f.height,
-            pages: [{ sectionIndex: si, pageIndex: pi }],
+            pages: [{ sectionIndex: si, pageIndex: pi, zone }],
           })
         }
       }
@@ -112,7 +139,11 @@ function buildLayoutSnapshotMap(doc: PaginatedDocument): Map<string, LayoutSnaps
 
 function pagesMatch(a: PageLocation[], b: PageLocation[]): boolean {
   if (a.length !== b.length) return false
-  return a.every((loc, i) => loc.sectionIndex === b[i].sectionIndex && loc.pageIndex === b[i].pageIndex)
+  return a.every((loc, i) => (
+    loc.sectionIndex === b[i].sectionIndex &&
+    loc.pageIndex === b[i].pageIndex &&
+    loc.zone === b[i].zone
+  ))
 }
 
 function arraysEqual(a: number[], b: number[]): boolean {
@@ -148,6 +179,8 @@ export function comparePagination(browser: PaginatedDocument, server: PaginatedD
     maxLineDelta = Math.max(maxLineDelta, Math.abs(lineDelta))
     driftMap.set(nodeId, {
       nodeId,
+      zone: bSnap.zone,
+      nodeType: bSnap.nodeType,
       browserLineCount: bSnap.lineCount,
       serverLineCount: sSnap.lineCount,
       lineDelta,
@@ -172,7 +205,7 @@ export function comparePagination(browser: PaginatedDocument, server: PaginatedD
     const heightDelta = sSnap.height - bSnap.height
     if (!pageMovement && heightDelta === 0) continue
     if (pageMovement) pageBreakChanged = true
-    geometryDriftMap.set(nodeId, { nodeId, nodeType: bSnap.nodeType, pageMovement, heightDelta })
+    geometryDriftMap.set(nodeId, { nodeId, zone: bSnap.zone, nodeType: bSnap.nodeType, pageMovement, heightDelta })
   }
 
   return {

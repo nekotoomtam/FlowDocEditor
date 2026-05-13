@@ -71,7 +71,8 @@ Responsibilities:
 Font loading contract:
 
 - authoritative runtime font file: `public/fonts/THSarabun.ttf`
-- server/API path: `process.cwd()/public/fonts/THSarabun.ttf`
+- server/API path: `process.cwd()/public/fonts/THSarabun.ttf`, resolved through
+  the shared API runtime font loader
 - browser path: `/fonts/THSarabun.ttf`
 - `src/fonts/THSarabun.ttf` is not the runtime source of truth unless the font
   loading contract is intentionally changed

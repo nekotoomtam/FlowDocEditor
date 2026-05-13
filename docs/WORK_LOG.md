@@ -18,7 +18,645 @@ Each entry should include:
 
 ---
 
+## 2026-05-14
+
+### P0R5 Browser Smoke Carry-Over
+
+Goal: Close the Round 5 carry-over around browser smoke reproducibility and
+reviewer/CI clarity before starting P1 report primitives.
+
+Completed:
+
+- Added a shared `scripts/smoke-browser.mjs` launcher used by both browser
+  smoke scripts.
+- Kept bundled Chromium as the default and preserved `SMOKE_BROWSER_CHANNEL`
+  and `SMOKE_EXECUTABLE_PATH` support.
+- Wrapped missing bundled Playwright Chromium launch errors with
+  FlowDoc-specific guidance:
+  `npx playwright install chromium`,
+  `SMOKE_EXECUTABLE_PATH=/path/to/chrome npm run review:browser`, or
+  `SMOKE_BROWSER_CHANNEL=chrome npm run review:browser`.
+- Added `review:browser:install` for CI/review machines that want to install
+  bundled Chromium and immediately run the browser gate.
+- Added `review:gate:full` so a single non-browser command checks the review
+  archive manifest and then runs `review:gate`.
+- Updated browser smoke, test strategy, agent workflow, and review packet docs
+  to clarify that `review:gate` and `review:browser` are separate gates and
+  that `npm ci` does not guarantee Playwright browser binaries.
+
+Files changed:
+
+- `package.json`
+- `scripts/smoke-browser.mjs`
+- `scripts/editor-smoke.mjs`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+- `scripts/create-review-archive.mjs`
+- `docs/AGENT_WORKFLOW.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `node --check scripts/smoke-browser.mjs`
+- `node --check scripts/editor-smoke.mjs`
+- `node --check scripts/wysiwyg-stage4c-smoke.mjs`
+- `node --check scripts/create-review-archive.mjs`
+- `node --check scripts/review-browser.mjs`
+- simulated missing bundled Chromium with `PLAYWRIGHT_BROWSERS_PATH` pointing
+  at an empty path; the launcher printed the FlowDoc-specific install/system
+  browser guidance.
+- `npm.cmd run review:gate:full`
+  - archive check passed: 195 files would be included.
+  - core tests passed: 28 files / 344 tests.
+  - app tests passed: 25 files / 232 tests.
+  - `review:build` passed.
+- `npm.cmd run review:browser`
+  - editor smoke and Stage 4C smoke passed on bundled Chromium.
+- `$env:SMOKE_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'; npm.cmd run review:browser`
+  - editor smoke and Stage 4C smoke passed on system Chrome executable path.
+
+Notes:
+
+- `review:browser:install` was added for CI/reviewer convenience but was not run
+  in this session because bundled Chromium was already available.
+- No P1 report primitive work was started in this carry-over patch.
+
 ## 2026-05-13
+
+### P0R4 Review Round 4 Exit Hardening
+
+Goal: Close the remaining P0 exit blockers from Round 4 before starting any
+P1 or P0-003+ work.
+
+Completed:
+
+- Moved layout-warning collection into shared core pagination code and made
+  `/api/export` fail closed with `LAYOUT_WARNINGS_BLOCKED` for server
+  pagination warnings such as forced table split overflow.
+- Changed editor export readiness to use server layout warnings after the
+  current `previewDoc` has reconciled through `/api/paginate`, while keeping
+  optimistic preview warnings only as a pre-reconcile signal.
+- Added a reproducible `review:build` wrapper and wired `review:gate` to run
+  standalone type-check, full tests, and that build path from archived sources.
+- Extended review archive checks to require the build/browser smoke scripts.
+- Made browser smoke scripts default to bundled Chromium while also supporting
+  `SMOKE_BROWSER_CHANNEL` or `SMOKE_EXECUTABLE_PATH` for installed/system
+  Chromium-family browsers.
+- Updated export/editor/test/browser/archive contracts and coverage snapshots.
+
+Files changed:
+
+- `package.json`
+- `next.config.ts`
+- `scripts/review-build.mjs`
+- `scripts/create-review-archive.mjs`
+- `scripts/editor-smoke.mjs`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+- `packages/core/src/pagination/warnings.ts`
+- `packages/core/src/pagination/index.ts`
+- `src/app/api/export/route.ts`
+- `src/app/api/__tests__/exportPaginate.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/exportReadiness.ts`
+- `src/app/editor/_components/__tests__/exportReadiness.test.ts`
+- `docs/AGENT_WORKFLOW.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `node --check scripts/editor-smoke.mjs`
+- `node --check scripts/wysiwyg-stage4c-smoke.mjs`
+- `node --check scripts/review-build.mjs`
+- `node --check scripts/create-review-archive.mjs`
+- `npm.cmd run test:app -- src/app/api/__tests__/exportPaginate.test.ts src/app/editor/_components/__tests__/exportReadiness.test.ts`
+  - 2 files / 24 tests passed.
+- `npm.cmd run type-check`
+- `npm.cmd run review:build`
+- `npm.cmd run review:gate`
+  - core tests passed: 28 files / 344 tests.
+  - app tests passed: 25 files / 232 tests.
+  - `review:build` passed.
+- `npm.cmd run review:browser`
+  - editor smoke and Stage 4C smoke passed on bundled Chromium.
+- `$env:SMOKE_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'; npm.cmd run review:browser`
+  - editor smoke and Stage 4C smoke passed on system Chrome executable path.
+- `npm.cmd run review:archive -- --check`
+  - 194 files would be included, including `public/fonts/THSarabun.ttf`.
+
+Notes:
+
+- This round intentionally did not start P0-003+ or P1 feature work.
+- System Chrome surfaced a favicon-only 404 console message in editor smoke; the
+  smoke now ignores only the favicon 404 while keeping unexpected resource and
+  console errors blocking.
+
+### P0R3 Review Round 3 Hardening
+
+Goal: Close the Round 3 reproducibility and user-trust gaps before starting
+P1 report features.
+
+Completed:
+
+- Hardened `scripts/create-review-archive.mjs` so `--check` validates required
+  root/package/config/script/public/source/doc paths and rejects generated/cache
+  paths such as `node_modules`, `.next`, `.vite`, and test result caches.
+- Made `npm.cmd run review:archive` create `flowdoc-review-archive.zip` and
+  verify the ZIP entries after writing.
+- Extended `comparePagination` to compare body, header, and footer zones; text
+  drift now includes `paragraph` and `toc` fragments, and geometry drift now
+  includes `row`, `stack`, `table`, `table-row`, `table-cell`, `toc`, and
+  `spacer` fragments with zone metadata.
+- Surfaced layout fragment warnings through `collectLayoutFragmentWarnings`,
+  toolbar status, and export readiness. `forced-table-split-overflow` now blocks
+  final export instead of remaining test-only metadata.
+- Added a final forced-slice regression for the last remaining-line edge to
+  protect contiguous line accounting after forced slice height adjustment.
+- Added a P0 user-report browser smoke path that loads a saved company report
+  package, switches to Fill mode, verifies header/footer visibility and safe
+  export readiness, downloads PDF, and checks the PDF page count.
+- Updated active contracts and coverage snapshots.
+
+Files changed:
+
+- `package.json`
+- `scripts/create-review-archive.mjs`
+- `scripts/editor-smoke.mjs`
+- `src/app/editor/_components/comparePagination.ts`
+- `src/app/editor/_components/exportReadiness.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/comparePagination.test.ts`
+- `src/app/editor/_components/__tests__/exportReadiness.test.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `docs/AGENT_WORKFLOW.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- generated review artifact: `flowdoc-review-archive.zip`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/comparePagination.test.ts src/app/editor/_components/__tests__/exportReadiness.test.ts`
+  - 2 files / 32 tests passed.
+- `npm.cmd run test:core -- src/pagination/__tests__/tablePagination.test.ts`
+  - 1 file / 43 tests passed.
+- `npm.cmd run smoke:editor`
+  - editor smoke passed, including the user-report package PDF export path.
+- `npm.cmd run review:archive`
+  - created `flowdoc-review-archive.zip` with 192 files and verified ZIP
+    entries after writing.
+- `npm.cmd run review:archive -- --check`
+  - 192 files would be included, including `public/fonts/THSarabun.ttf`.
+- `npm.cmd run review:gate`
+  - type-check passed.
+  - core tests passed: 28 files / 344 tests.
+  - app tests passed: 25 files / 227 tests.
+  - production build passed.
+- `npm.cmd run review:browser`
+  - editor smoke passed.
+  - WYSIWYG Stage 4C smoke passed on bundled Chromium.
+
+Notes:
+
+- This still does not start P1 report primitives such as lists, images,
+  captions, inline style runs, or header/footer authoring UX.
+- `/api/export` still accepts a bound document; package-aware final export
+  validation remains P1 unless the API product scope requires it sooner.
+
+### P0R2 Review Round 2 Hardening
+
+Goal: Close the second P0 review gaps without starting P1 report features.
+
+Completed:
+
+- Added review archive reproducibility through `npm run review:archive`, with
+  `--check` coverage for root package/config files, `scripts/`,
+  `public/fonts/THSarabun.ttf`, `src/`, `packages/`, and `docs/`.
+- Kept `public/fonts/THSarabun.ttf` as the runtime font source of truth and
+  added a guard that any legacy `src/fonts/THSarabun.ttf` copy must be absent or
+  byte-identical.
+- Made `/api/export` fail closed with code `FONT_FALLBACK_BLOCKED` when the
+  default runtime font is missing. `/api/paginate` still exposes fallback state
+  because it is a layout-check endpoint, not a final artifact endpoint.
+- Tightened export readiness so final export blocks on page-break drift,
+  continuation drift, line-count drift, split-boundary drift, tracked geometry
+  drift, runtime font fallback, and missing required Fill-mode values.
+- Promoted user report fixture assertions to the production measurement stack:
+  `fontkit + public/fonts/THSarabun.ttf + thaiWordBreaker`.
+- Added `forced-table-split-overflow` fragment warnings and forced-slice height
+  adjustment for table no-progress fallback slices.
+- Extended browser smoke to verify `/fonts/THSarabun.ttf` is reachable.
+
+Files changed:
+
+- `package.json`
+- `scripts/create-review-archive.mjs`
+- `scripts/editor-smoke.mjs`
+- `src/app/api/export/route.ts`
+- `src/app/api/__tests__/exportPaginate.test.ts`
+- `src/app/api/__tests__/runtimeFont.test.ts`
+- `src/app/editor/_components/exportReadiness.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/exportReadiness.test.ts`
+- `src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `packages/core/src/pagination/types.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`
+- `docs/AGENT_WORKFLOW.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/api/__tests__/runtimeFont.test.ts src/app/api/__tests__/exportPaginate.test.ts src/app/editor/_components/__tests__/exportReadiness.test.ts`
+  - 3 files / 18 tests passed.
+- `npm.cmd run test:core -- src/pagination/__tests__/userReportFixtures.test.ts src/pagination/__tests__/tablePagination.test.ts`
+  - 2 files / 55 tests passed.
+- `npm.cmd run test:core -- src/renderer/__tests__/userReportExport.test.ts`
+  - 1 file / 4 tests passed.
+- `npm.cmd run test:app`
+  - 25 files / 221 tests passed.
+- `npm.cmd run review:gate`
+  - type-check passed.
+  - core tests passed: 28 files / 343 tests.
+  - app tests passed: 25 files / 221 tests.
+  - production build passed.
+- `npm.cmd run review:browser`
+  - editor smoke passed.
+  - WYSIWYG Stage 4C smoke passed on bundled Chromium.
+- `npm.cmd run review:archive -- --check`
+  - 192 files would be included, including `public/fonts/THSarabun.ttf`.
+- `git diff --check`
+  - no whitespace errors; only Windows CRLF conversion warnings.
+
+Notes:
+
+- This does not add P1 report features such as lists, images, captions, inline
+  style runs, or header/footer authoring UX.
+- Strict drift blocking may reject more exports, intentionally favoring
+  preview/PDF trust for P0.
+- Missing required values remain data-snapshot warnings for draft/readiness
+  display, but final Fill-mode export now treats them as blockers.
+
+### P0-007 User-Level Report Fixture Suite
+
+Goal: Add representative saved report packages that protect product-facing
+company, government, and university report workflows across pagination, PDF
+export, and at least one editor import/export path.
+
+Completed:
+
+- Added `USER_REPORT_FIXTURES` as saved `FlowDocPackage v2` fixtures for:
+  - `company-report`: cover, scalar fieldRefs, data snapshot, header/footer,
+    page numbers, and a multi-page KPI table.
+  - `government-report`: cover, TOC, formal Thai body, `keepWithNext` heading,
+    bordered table, and restarted footer page numbers.
+  - `university-report`: cover, TOC, body page restart, long Thai continuation,
+    and footer page numbers.
+- Added pagination fixture tests covering package shape, exact section/page
+  counts, TOC entries, footer page-number text, long-body continuation, and
+  multi-page table row counts.
+- Added PDF export tests for every user report fixture using the runtime
+  `public/fonts/THSarabun.ttf`; missing font now fails this fixture gate.
+- Added an app-level import/data-bind/export path for the company report package
+  through `parsePersistedDocument`, `bindDocumentWithSnapshot`, and `/api/export`.
+- Updated fixture/product/test strategy docs so the user-level fixtures are
+  discoverable.
+
+Files changed:
+
+- `packages/core/src/fixtures/userReportFixtures.ts`
+- `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`
+- `packages/core/src/renderer/__tests__/userReportExport.test.ts`
+- `src/app/api/__tests__/userReportImportExport.test.ts`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:core -- src/pagination/__tests__/userReportFixtures.test.ts src/renderer/__tests__/userReportExport.test.ts`
+  - 2 files / 11 tests passed.
+- `npm.cmd run test:app -- src/app/api/__tests__/userReportImportExport.test.ts`
+  - 1 file / 1 test passed.
+- `npm.cmd run type-check`
+- `npm.cmd run review:gate`
+  - type-check passed.
+  - core tests passed: 28 files / 337 tests.
+  - app tests passed: 25 files / 214 tests.
+  - production build passed.
+- `npm.cmd run review:browser`
+  - editor smoke passed.
+  - WYSIWYG Stage 4C smoke passed on bundled Chromium.
+
+Notes:
+
+- The fixtures avoid claiming unsupported image/list/indent behavior. Those
+  remain P1+ report-product work.
+- The app path test binds scalar data before export, matching the current
+  FlowDocPackage v2 and Fill-mode data contract without changing persistence
+  semantics.
+
+### P0-006 WYSIWYG Production Gate
+
+Goal: Keep the FlowDoc-owned WYSIWYG text engine experimental and feature-gated
+until manual Thai IME, page-boundary smoothness, and fallback gates pass.
+
+Completed:
+
+- Hardened `resolveWysiwygTextEngineEnabled` so production builds require both
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE` and
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE_PRODUCTION_ACK`.
+- Kept development/test verification behavior intact: the normal text-engine
+  flag still enables the experimental lane for smoke and focused testing.
+- Added focused config coverage proving production does not enable the text
+  engine with only the rollout flag.
+- Added `docs/WYSIWYG_PRODUCTION_GATE.md` with release states, required
+  automated/manual gates, the page-boundary smoothness checklist, safe fallback
+  switch, and known closed gates.
+- Linked the production gate from the docs index, WYSIWYG plan, roadmap, review
+  packet, and test strategy.
+
+Files changed:
+
+- `src/app/editor/_components/wysiwygInlineEditConfig.ts`
+- `src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts`
+- `docs/WYSIWYG_PRODUCTION_GATE.md`
+- `docs/DOCS_INDEX.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WYSIWYG_EDITOR_ROADMAP.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts`
+  - 1 file / 10 tests passed.
+- `npm.cmd run type-check`
+- `npm.cmd run review:gate`
+  - type-check passed.
+  - core tests passed: 26 files / 326 tests.
+  - app tests passed: 24 files / 213 tests.
+  - production build passed.
+- `npm.cmd run smoke:wysiwyg-stage4c`
+  - Passed on bundled Chromium.
+
+Notes:
+
+- This does not enable WYSIWYG by default.
+- This does not claim real Thai IME PASS, full screen reader validation, or
+  table-cell text-engine readiness; those remain manual/design gates.
+
+### P0-005 Breakable Table-Row No-Progress Guard
+
+Goal: Prevent breakable table-row pagination from consuming continuation slice
+height when remaining table-cell content cannot advance because padding,
+repeated headers, or tiny page capacity leave no room for a line.
+
+Completed:
+
+- Added split-progress helpers in the table row split loop to compare each
+  cell's current split point with the computed end split point before a
+  non-final slice is emitted.
+- If no remaining cell content advances, pagination now moves to a cleaner
+  continuation page when that can increase capacity.
+- If a clean continuation page still cannot fit one content unit, pagination
+  uses an explicit overflow-progress fallback that forces one spacer/line
+  forward instead of emitting an empty body-row slice.
+- Added a regression fixture with a repeated 55-line table header and padded
+  body cell that previously produced empty body-row slices before any body text
+  advanced.
+- Documented the no-progress rule in the layout and cross-page contracts.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:core -- src/pagination/__tests__/tablePagination.test.ts`
+  - 1 file / 42 tests passed.
+- `npm.cmd run type-check`
+- `npm.cmd run review:gate`
+  - type-check passed.
+  - core tests passed: 26 files / 326 tests.
+  - app tests passed: 24 files / 212 tests.
+  - production build passed.
+
+Notes:
+
+- The guard does not change table schema, row/column authoring behavior,
+  renderer contracts, or rowspan-linked row policy.
+- The overflow fallback is intentionally limited to the no-progress edge where
+  the alternative is an empty continuation slice with unchanged cell split
+  positions.
+
+### P0-003 Header/Footer Editor Preview Parity
+
+Goal: Make editor preview inspect resolved header/footer content instead of
+showing only placeholder rectangles, without opening header/footer authoring or
+changing pagination/export semantics.
+
+Completed:
+
+- Replaced header/footer placeholder-only rendering in `EditorCanvas` with
+  read-only zone fragments that render paragraph/TOC text from
+  `page.headerFragments` and `page.footerFragments`.
+- Kept zone fragments non-interactive with `pointer-events: none`, so body
+  paragraph selection, inline editing, drag, resize, and table editing remain
+  owned by body fragments.
+- Preserved the existing pagination/export contract: PDF still consumes
+  `headerFragments`, body `fragments`, and `footerFragments` from
+  `PaginatedDocument`; no schema or renderer behavior was changed.
+- Added focused SSR coverage for editor canvas header/footer text rendering.
+- Extended editor browser smoke with a document fixture that includes
+  header/footer roots and asserts rendered zone text is visible and read-only.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `scripts/editor-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+  - 2 files / 44 tests passed.
+- `node --check scripts/editor-smoke.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+  - Passed.
+- `npm.cmd run review:gate`
+  - type-check passed.
+  - core tests passed: 26 files / 325 tests.
+  - app tests passed: 24 files / 212 tests.
+  - production build passed.
+
+Notes:
+
+- This intentionally does not add header/footer editing controls, selection, or
+  a document model change.
+- Header/footer zone layout continues to come from pagination output; the
+  editor preview only renders the resolved fragments it receives.
+
+### P0-004 Export Readiness Guard
+
+Goal: Block unsafe PDF/DOCX export when authoritative layout, runtime font,
+browser/server drift, or Fill-mode data readiness is not safe.
+
+Completed:
+
+- Added a focused `exportReadiness` helper that checks server layout status,
+  whether the checked layout belongs to the current `previewDoc`, layout errors,
+  font fallback, page-break drift, paragraph continuation drift, and Fill-mode
+  readiness errors.
+- Tracked the latest server-checked `previewDoc` in `EditorShell`, so export is
+  not treated as safe during the small window after the authored/resolved
+  document changes but before `/api/paginate` settles.
+- Disabled PDF/DOCX export buttons while export readiness is unsafe and surfaced
+  the first blocking reason in the toolbar with the full reason list in the
+  control title.
+- Kept `/api/export` as the export authority when export is allowed, and now
+  also consumes the export response `X-FlowDoc-Font: fallback` header before
+  downloading an artifact.
+- Extended editor smoke coverage with a Fill-mode readiness-error package that
+  blocks PDF export and then re-enables export after the data error is fixed and
+  layout settles.
+- Updated editor/export/browser contracts for the new export readiness behavior.
+
+Files changed:
+
+- `src/app/editor/_components/exportReadiness.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/exportReadiness.test.ts`
+- `scripts/editor-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/exportReadiness.test.ts src/app/editor/_components/__tests__/layoutReconciliation.test.ts src/app/api/__tests__/exportPaginate.test.ts`
+  - 3 files / 12 tests passed.
+- `node --check scripts/editor-smoke.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:editor`
+  - Passed.
+- `npm.cmd run review:gate`
+  - type-check passed.
+  - core tests passed: 26 files / 325 tests.
+  - app tests passed: 23 files / 211 tests.
+  - production build passed.
+
+Notes:
+
+- This does not implement table split guards, WYSIWYG production release gates,
+  or user-level report fixtures.
+- Missing required field values currently remain readiness warnings, matching
+  the existing data snapshot contract; P0-004 blocks Fill-mode readiness errors.
+
+### Stage 1 P0 Runtime Font And Review Gate Hardening
+
+Goal: Start P0 Stage 1 by normalizing the runtime font contract and adding a
+reproducible review gate without starting P0-003 or later work.
+
+Completed:
+
+- Added a shared API runtime font loader for `public/fonts/THSarabun.ttf` and
+  routed both `/api/paginate` and `/api/export` through it.
+- Added a non-skipped runtime font contract test and strengthened API route
+  smoke coverage to assert normal dev/test output does not use
+  `X-FlowDoc-Font: fallback`.
+- Changed product export golden coverage so missing runtime font fails instead
+  of skipping, while keeping real browser/font drift skippable only for missing
+  Playwright/Chromium runtime.
+- Added root `test:core`, `review:gate`, and `review:browser` scripts. The
+  browser review wrapper protects the two smoke scripts from being run while an
+  incompatible dev server is already active.
+- Updated active contracts and review packet commands to make the Stage 1 gates
+  reproducible.
+
+Files changed:
+
+- `src/app/api/runtimeFont.ts`
+- `src/app/api/paginate/route.ts`
+- `src/app/api/export/route.ts`
+- `src/app/api/__tests__/runtimeFont.test.ts`
+- `src/app/api/__tests__/exportPaginate.test.ts`
+- `packages/core/src/renderer/__tests__/productExportGolden.test.ts`
+- `src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `scripts/review-browser.mjs`
+- `package.json`
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/TEXT_ENGINE_CHECKLIST.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/api/__tests__/runtimeFont.test.ts src/app/api/__tests__/exportPaginate.test.ts src/app/editor/_components/__tests__/realFontDrift.test.ts`
+  - 3 files / 8 tests passed.
+- `npm.cmd run test:core -- src/renderer/__tests__/productExportGolden.test.ts`
+  - 1 file / 4 tests passed.
+- `npm.cmd run review:gate`
+  - type-check passed.
+  - core tests passed: 26 files / 325 tests.
+  - app tests passed: 22 files / 206 tests.
+  - production build passed.
+- `node --check scripts/review-browser.mjs`
+- `npm.cmd run review:browser`
+  - editor smoke passed.
+  - WYSIWYG Stage 4C smoke passed on bundled Chromium.
+
+Notes:
+
+- P0-003+ was intentionally not started.
+- Stopped an existing local Next dev server on `localhost:4000` to verify the
+  browser gate against the smoke-owned servers.
 
 ### Prepare WYSIWYG Stage 4 Review Baseline
 

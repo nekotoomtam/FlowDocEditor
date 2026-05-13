@@ -928,4 +928,81 @@ describe("tablePagination — multi-page row split", () => {
     expect(getFragments(result, "tbl-row0").length).toBeGreaterThan(1)
     expectContiguousLineAccounting(result, "tbl-p0-0", lineCount)
   })
+
+  it("does not emit empty body-row slices when padding and repeated headers leave no line capacity", () => {
+    const headerText = Array.from({ length: 55 }, (_, i) => `Header ${i}`).join("\n")
+    const bodyLineCount = 12
+    const bodyText = Array.from({ length: bodyLineCount }, (_, i) => `Body ${i}`).join("\n")
+    const tbl = makeTable("tbl", [451], [
+      [{ text: headerText }],
+      [{ text: bodyText }],
+    ])
+    tbl.props = { ...tbl.props, headerRowCount: 1 }
+    const bodyRow = tbl.nodes["tbl-row1"]
+    const bodyCell = tbl.nodes["tbl-c1-0"]
+    if (bodyRow?.type === "table-row") bodyRow.props = { ...bodyRow.props, allowBreak: true }
+    if (bodyCell?.type === "table-cell") bodyCell.props = { ...bodyCell.props, padding: pt(24) }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const bodyRowFragments = getFragments(result, "tbl-row1")
+    const forcedBodyRowFragments = bodyRowFragments.filter((fragment) =>
+      fragment.warnings?.some((warning) => warning.code === "forced-table-split-overflow"),
+    )
+    const emptyBodyRowSlices = bodyRowFragments.filter((rowFragment) => {
+      const page = result.sections[0].pages.find((candidate) => candidate.index === rowFragment.pageIndex)
+      return !page?.fragments.some((fragment) =>
+        fragment.nodeId === "tbl-p1-0" &&
+        fragment.pageIndex === rowFragment.pageIndex &&
+        (fragment.lines?.length ?? 0) > 0,
+      )
+    })
+
+    assertPaginatedDocument(result)
+    expect(bodyRowFragments.length).toBeGreaterThan(1)
+    expect(forcedBodyRowFragments.length).toBeGreaterThan(0)
+    expect(emptyBodyRowSlices).toHaveLength(0)
+    for (const rowFragment of forcedBodyRowFragments) {
+      const page = result.sections[0].pages.find((candidate) => candidate.index === rowFragment.pageIndex)!
+      const forcedCell = page.fragments.find((fragment) =>
+        fragment.nodeId === "tbl-c1-0" &&
+        fragment.pageIndex === rowFragment.pageIndex &&
+        fragment.warnings?.some((warning) => warning.code === "forced-table-split-overflow"),
+      )
+      const forcedParagraph = page.fragments.find((fragment) =>
+        fragment.nodeId === "tbl-p1-0" &&
+        fragment.pageIndex === rowFragment.pageIndex &&
+        (fragment.lines?.length ?? 0) > 0,
+      )
+
+      expect(forcedCell).toBeDefined()
+      expect(forcedParagraph).toBeDefined()
+      expect(forcedCell!.height).toBeGreaterThanOrEqual((forcedParagraph!.y - forcedCell!.y) + forcedParagraph!.height)
+    }
+    expectContiguousLineAccounting(result, "tbl-p1-0", bodyLineCount)
+  })
+
+  it("keeps final forced table-row progress from skipping remaining content", () => {
+    const headerText = Array.from({ length: 55 }, (_, i) => `Header ${i}`).join("\n")
+    const bodyLineCount = 1
+    const bodyText = Array.from({ length: bodyLineCount }, (_, i) => `Final forced body ${i}`).join("\n")
+    const tbl = makeTable("tbl", [451], [
+      [{ text: headerText }],
+      [{ text: bodyText }],
+    ])
+    tbl.props = { ...tbl.props, headerRowCount: 1 }
+    const bodyRow = tbl.nodes["tbl-row1"]
+    const bodyCell = tbl.nodes["tbl-c1-0"]
+    if (bodyRow?.type === "table-row") bodyRow.props = { ...bodyRow.props, allowBreak: true }
+    if (bodyCell?.type === "table-cell") bodyCell.props = { ...bodyCell.props, padding: pt(24) }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+    const bodyRowFragments = getFragments(result, "tbl-row1")
+    const forcedBodyRowFragments = bodyRowFragments.filter((fragment) =>
+      fragment.warnings?.some((warning) => warning.code === "forced-table-split-overflow"),
+    )
+
+    assertPaginatedDocument(result)
+    expect(forcedBodyRowFragments.length).toBeGreaterThan(0)
+    expectContiguousLineAccounting(result, "tbl-p1-0", bodyLineCount)
+  })
 })

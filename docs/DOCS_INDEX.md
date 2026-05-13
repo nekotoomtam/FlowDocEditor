@@ -33,6 +33,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Editor interaction and UX behavior | `docs/EDITOR_UX_CONTRACT.md` |
 | WYSIWYG/inline edit roadmap | `docs/WYSIWYG_EDITOR_ROADMAP.md` |
 | FlowDoc-owned WYSIWYG text engine plan | `docs/WYSIWYG_TEXT_ENGINE_PLAN.md` |
+| WYSIWYG production enablement gate | `docs/WYSIWYG_PRODUCTION_GATE.md` |
 | Current WYSIWYG Stage 4 review packet | `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md` |
 | Real OS WYSIWYG IME verification | `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` |
 | Stage 4C WYSIWYG IME evidence log | `docs/WYSIWYG_STAGE4C_IME_RESULTS.md` |
@@ -68,6 +69,7 @@ Start with:
 - `docs/EDITOR_UX_CONTRACT.md`
 - `docs/WYSIWYG_EDITOR_ROADMAP.md`
 - `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WYSIWYG_PRODUCTION_GATE.md` before changing default/production eligibility
 - `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md` when preparing or reviewing the current Stage 4 baseline
 - `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` when clipboard or OS IME behavior is in scope
 - `docs/WYSIWYG_STAGE4C_IME_RESULTS.md` when checking the latest Stage 4C evidence

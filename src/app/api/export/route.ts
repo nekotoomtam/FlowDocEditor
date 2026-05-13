@@ -1,43 +1,19 @@
-import fs from "fs"
-import path from "path"
 import { NextRequest, NextResponse } from "next/server"
-import { paginateDocument } from "@/pagination"
+import { assertPaginatedDocument, collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { thaiWordBreaker } from "@/layout/word-breaker"
 import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { PdfRenderer, DocxRenderer } from "@/renderer"
 import { assertDocument, DocumentAssertionError } from "@/document"
-import { assertPaginatedDocument } from "@/pagination"
-import { DEFAULT_FONT_KEY, resolveFontFileName } from "@/font-registry"
+import { DEFAULT_FONT_KEY } from "@/font-registry"
 import type { FontProvider } from "@/renderer"
-
-// ─── Font Loader ───────────────────────────────────────────────────────────────
-
-const fontCache = new Map<string, Uint8Array | null>()
-
-function loadFontSync(key: string): Uint8Array | null {
-  if (fontCache.has(key)) return fontCache.get(key)!
-  const fontPath = path.join(process.cwd(), "public", "fonts", resolveFontFileName(key))
-  try {
-    const buf = new Uint8Array(fs.readFileSync(fontPath))
-    fontCache.set(key, buf)
-    return buf
-  } catch (err) {
-    console.error(
-      `[FlowDoc] /api/export: font "${key}" not found at "${fontPath}" — export will use Helvetica fallback. ` +
-      `Thai text may render incorrectly. Error: ${err}`,
-    )
-    fontCache.set(key, null)
-    return null
-  }
-}
+import { loadRuntimeFontSync, runtimeFontFallbackHeaders } from "../runtimeFont"
 
 // Measurer cache — keyed to "default" font
 let cachedMeasurer: ReturnType<typeof createFontkitMeasurer> | null = null
 
-function getMeasurer() {
+function getMeasurer(fontBuffer: Uint8Array) {
   if (cachedMeasurer) return cachedMeasurer
-  const buf = loadFontSync(DEFAULT_FONT_KEY)
-  cachedMeasurer = createFontkitMeasurer(buf ?? null)
+  cachedMeasurer = createFontkitMeasurer(fontBuffer)
   return cachedMeasurer
 }
 
@@ -45,7 +21,7 @@ function getMeasurer() {
 
 const fontProvider: FontProvider = {
   async getFont(key: string): Promise<Uint8Array | null> {
-    return loadFontSync(key)
+    return loadRuntimeFontSync(key)
   },
 }
 
@@ -74,10 +50,20 @@ export async function POST(req: NextRequest) {
     throw error
   }
 
-  const usingFallback = loadFontSync(DEFAULT_FONT_KEY) === null
+  const defaultFont = loadRuntimeFontSync(DEFAULT_FONT_KEY)
+  if (defaultFont === null) {
+    return NextResponse.json(
+      {
+        error: "Runtime font unavailable",
+        code: "FONT_FALLBACK_BLOCKED",
+      },
+      { status: 503, headers: runtimeFontFallbackHeaders(true) },
+    )
+  }
+
   let paginated
   try {
-    paginated = paginateDocument(doc, getMeasurer(), thaiWordBreaker)
+    paginated = paginateDocument(doc, getMeasurer(defaultFont), thaiWordBreaker)
   } catch (err) {
     console.error("[FlowDoc] /api/export: pagination failed:", err)
     return NextResponse.json({ error: "Pagination failed", detail: String(err) }, { status: 500 })
@@ -90,6 +76,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Layout assertion failed", detail: String(err) }, { status: 500 })
   }
 
+  const layoutWarnings = collectPaginatedLayoutWarnings(paginated)
+  if (layoutWarnings.length > 0) {
+    return NextResponse.json(
+      {
+        error: "Layout warnings block final export",
+        code: LAYOUT_WARNINGS_BLOCKED_CODE,
+        warnings: layoutWarnings,
+      },
+      { status: 409 },
+    )
+  }
+
   const renderer = format === "pdf" ? new PdfRenderer(fontProvider) : new DocxRenderer()
   const result = await renderer.render(paginated)
 
@@ -97,7 +95,6 @@ export async function POST(req: NextRequest) {
     headers: {
       "Content-Type": result.mimeType,
       "Content-Disposition": `attachment; filename="document.${result.extension}"`,
-      ...(usingFallback ? { "X-FlowDoc-Font": "fallback" } : {}),
     },
   })
 }

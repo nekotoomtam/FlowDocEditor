@@ -152,6 +152,14 @@ Table-specific interaction rules are defined in
 - The editor may show optimistic layout while editing, but it should settle back
   predictably.
 - Layout assertion failures and font fallback should be visible to the user.
+- Header/footer fragments in `PaginatedDocument` should be inspectable in the
+  editor preview as read-only content. They should not intercept body
+  selection, inline editing, drag, resize, or table editing unless a separate
+  header/footer authoring mode is designed and accepted.
+- Layout warnings shown after the current `previewDoc` reconciles through
+  `/api/paginate` should come from the server `PaginatedDocument`. Optimistic
+  browser-preview warnings are only a temporary pre-reconcile signal and should
+  not override the current server result.
 
 ## WYSIWYG Track Guardrails
 
@@ -189,8 +197,17 @@ classified:
 - Undo/redo should restore document data and its matching paginated snapshot
   together so redo does not briefly show a different layout.
 - Export may be triggered while the editor is optimistic or reconciling, but it
-  must call `/api/export` with the current `previewDoc` and let the API paginate
-  and assert output. It must not serialize the current canvas snapshot.
+  must not produce a file until the current `previewDoc` has been checked by
+  server/API pagination and unsafe font, drift, or fill-readiness state is
+  cleared. Blocking drift includes page-break changes, paragraph continuation
+  changes, line wrapping changes, split-boundary movement, and tracked geometry
+  drift across body, header, footer, and TOC fragments. Layout fragment warnings
+  such as forced table split overflow must be visible from the current server
+  pagination result and block final export until resolved. Fill mode final
+  export must also block missing required field values.
+  When export does run, it must call `/api/export` with the current `previewDoc`
+  and let the API paginate and assert output. It must not serialize the current
+  canvas snapshot.
 - Selection, caret, drag, resize, and inline-edit transaction snapshots are
   ephemeral interaction state only.
 
@@ -202,6 +219,9 @@ The editor should surface important degraded states:
 - layout assertion failure from `/api/paginate`
 - optimistic layout while authoritative pagination is pending
 - drift information when the drift overlay is enabled
+- layout fragment warnings from pagination output
+- export blocking reasons when authoritative layout, font, drift, or fill data
+  readiness is unsafe, including missing required values for final export
 
 Silent degraded layout is worse than a visible warning.
 

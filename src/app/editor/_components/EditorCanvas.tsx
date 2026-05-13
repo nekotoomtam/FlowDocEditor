@@ -39,6 +39,10 @@ const NODE_COLORS: Record<string, string> = {
 const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "table", "toc"])
 const PARAGRAPH_CHROME_Y = 3
 const PARAGRAPH_LIVE_PREVIEW_GAP_Y = 2
+const READ_ONLY_ZONE_FILL: Record<"header" | "footer", string> = {
+  header: "#fef9c3",
+  footer: "#fce7f3",
+}
 
 type PendingClickAction = {
   type: "inline-edit"
@@ -181,6 +185,72 @@ function isParagraphInsideRowStack(doc: DocumentNode, nodeId: string | null | un
   return false
 }
 
+function ReadOnlyZoneFragments({
+  fragments,
+  zone,
+  doc,
+  pageKey,
+  scale,
+  textMeasurer,
+  showTextSegments,
+}: {
+  fragments: PageFragment[]
+  zone: "header" | "footer"
+  doc: DocumentNode
+  pageKey: string
+  scale: number
+  textMeasurer: TextMeasurer
+  showTextSegments: boolean
+}) {
+  return fragments.map((fragment, index) => {
+    const canRenderText = fragment.nodeType === "paragraph" || fragment.nodeType === "toc"
+    return (
+      <g
+        key={`${zone}-${fragment.nodeId}-${fragment.pageIndex}-${index}`}
+        data-testid="editor-zone-fragment"
+        data-zone={zone}
+        data-node-id={fragment.nodeId}
+        data-node-type={fragment.nodeType}
+        data-page-index={fragment.pageIndex}
+        style={{ pointerEvents: "none" }}
+      >
+        <rect
+          x={fragment.x * scale}
+          y={fragment.y * scale}
+          width={fragment.width * scale}
+          height={Math.max(fragment.height * scale, 2)}
+          fill={READ_ONLY_ZONE_FILL[zone]}
+          stroke="#9ca3af"
+          strokeWidth={0.5}
+          opacity={canRenderText ? 0.24 : 0.45}
+        />
+        {canRenderText && (
+          <ParagraphTextSurface
+            fragment={fragment}
+            doc={doc}
+            pageKey={pageKey}
+            scale={scale}
+            textMeasurer={textMeasurer}
+            isEditing={false}
+            isVisualFresh={false}
+            wysiwygInlineEditEnabled={false}
+            wysiwygTextEngineEnabled={false}
+            showTextSegments={showTextSegments}
+            initialCaretIndex={null}
+            onChange={() => undefined}
+            onCaretChange={() => undefined}
+            onUserEditInteraction={() => undefined}
+            onHeightChange={() => undefined}
+            onEndEdit={() => undefined}
+            onSplitParagraph={() => undefined}
+            onMergeParagraph={() => undefined}
+          />
+        )}
+      </g>
+    )
+  })
+}
+
 // ─── Drop Highlight ───────────────────────────────────────────────────────────
 
 function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
@@ -306,6 +376,9 @@ function PageView({
   const renderFragments = visualDraftFragmentForPage && !hasRealVisualDraftFragment
     ? [visualDraftFragmentForPage, ...shiftedPageFragments]
     : shiftedPageFragments
+  const headerFragments = page.headerFragments ?? []
+  const footerFragments = page.footerFragments ?? []
+  const zoneFragments = [...headerFragments, ...footerFragments]
   const activeInlineEditPageIndex = wysiwygDraftVisualPreview?.caretPageIndex ?? inlineEditPageIndex
 
   const resolveDisplayFragment = (fragment: PageFragment): PageFragment => (
@@ -330,10 +403,10 @@ function PageView({
     >
       {/* clipPaths — ป้องกัน text overflow ออกนอก fragment width */}
       <defs>
-        {renderFragments.map((f) => {
+        {[...renderFragments, ...zoneFragments].map((f, i) => {
           const displayFragment = resolveDisplayFragment(f)
           return (
-          <clipPath key={f.nodeId} id={`cp-${pageKey}-${f.nodeId}`}>
+          <clipPath key={`${f.nodeId}-${i}`} id={`cp-${pageKey}-${f.nodeId}`}>
             <rect x={displayFragment.x * scale} y={displayFragment.y * scale} width={displayFragment.width * scale} height={9999} />
           </clipPath>
           )
@@ -605,12 +678,24 @@ function PageView({
         )
       })}
 
-      {/* header/footer */}
-      {[...page.headerFragments, ...page.footerFragments].map((f, i) => (
-        <rect key={`hz-${i}`} x={f.x * scale} y={f.y * scale}
-          width={f.width * scale} height={Math.max(f.height * scale, 2)}
-          fill="#fef9c3" stroke="#9ca3af" strokeWidth={0.5} opacity={0.6} />
-      ))}
+      <ReadOnlyZoneFragments
+        fragments={headerFragments}
+        zone="header"
+        doc={doc}
+        pageKey={pageKey}
+        scale={scale}
+        textMeasurer={textMeasurer}
+        showTextSegments={showTextSegments}
+      />
+      <ReadOnlyZoneFragments
+        fragments={footerFragments}
+        zone="footer"
+        doc={doc}
+        pageKey={pageKey}
+        scale={scale}
+        textMeasurer={textMeasurer}
+        showTextSegments={showTextSegments}
+      />
 
       {/* resize handles — แสดงระหว่าง stacks ของแต่ละ row */}
       {!drag && page.fragments.filter((f) => f.nodeType === "row").map((rowFrag) => {

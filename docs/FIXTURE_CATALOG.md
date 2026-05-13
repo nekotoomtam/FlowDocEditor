@@ -11,8 +11,8 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 26 core test files / 324 core tests
-- 12 app test files / 119 app tests
+- 28 core test files / 344 core tests
+- 25 app test files / 232 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 `docs/TEST_STRATEGY.md` as the current coverage snapshot until the suite changes.
@@ -32,6 +32,9 @@ Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 | `report-long-thai-paragraph` | `packages/core/src/pagination/__tests__/paginator.test.ts` | Thai paragraph continuation across pages |
 | `report-keep-with-next` | `packages/core/src/pagination/__tests__/keepWithNext.test.ts` | heading kept with following paragraph |
 | `report-docx-structure` | `packages/core/src/renderer/__tests__/multiSection.test.ts` | DOCX section boundaries and editable document XML |
+| `company-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts`, `src/app/api/__tests__/userReportImportExport.test.ts` | saved FlowDoc package v2, field/data binding, header/footer, page numbers, multi-page KPI table, default and production-stack pagination assertions, PDF page count, app import/export path |
+| `government-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts` | saved FlowDoc package v2, cover, TOC, Thai formal body, keep-with-next heading, bordered table, restarted footer page numbers, default and production-stack pagination assertions, PDF page count |
+| `university-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts` | saved FlowDoc package v2, cover, TOC, body page restart, long Thai continuation, footer page numbers, default and production-stack pagination assertions, PDF page count |
 
 Product fixture names should stay visible in test descriptions, such as
 `product fixture - customs-basic-table`.
@@ -84,10 +87,12 @@ segments, spacing, and grapheme fallback.
 - `packages/core/src/pagination/__tests__/resizeConvergence.test.ts`
 - `packages/core/src/pagination/__tests__/assertPaginated.test.ts`
 - `packages/core/src/pagination/__tests__/productGolden.test.ts`
+- `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`
 
 Protects page placement, line continuation, metadata, keep rules, page numbers,
 TOC overflow, drift reporting, table split behavior, row/stack behavior, resize
-convergence, and paginated-output invariants.
+convergence, user-level report package fixtures, and paginated-output
+invariants.
 
 `tablePagination.test.ts` also owns table row split accounting coverage for
 uneven multi-cell splits, empty cells, spacer-before-paragraph cells, padded
@@ -100,14 +105,17 @@ fragments.
 - `packages/core/src/renderer/__tests__/textFlow.test.ts`
 - `packages/core/src/renderer/__tests__/multiSection.test.ts`
 - `packages/core/src/renderer/__tests__/productExportGolden.test.ts`
+- `packages/core/src/renderer/__tests__/userReportExport.test.ts`
 
 Protects PDF/DOCX smoke behavior, renderer input contract, text flow, multiple
 sections, page-number restarts, TOC output, DOCX structural XML checks, product
-PDF page-count parity, and product DOCX table row structure.
+PDF page-count parity, user-level report PDF page-count parity, and product
+DOCX table row structure.
 
 ## App Test Files
 
 - `src/app/api/__tests__/exportPaginate.test.ts`
+- `src/app/api/__tests__/userReportImportExport.test.ts`
 - `src/app/editor/_components/__tests__/comparePagination.test.ts`
 - `src/app/editor/_components/__tests__/documentPersistence.test.ts`
 - `src/app/editor/_components/__tests__/inlineEditBlur.test.ts`
@@ -150,8 +158,9 @@ typing, undo/redo, flicker, and table panel workflows.
 ## Browser Smoke Scripts
 
 - `scripts/editor-smoke.mjs`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
 
-Protects the default `/editor` load path with a real browser, deterministic
+`scripts/editor-smoke.mjs` protects the default `/editor` load path with a real browser, deterministic
 localStorage document fixtures, paragraph inline edit commit, undo/redo, Thai
 composition fallback, table cell selection, the property-panel title,
 table-cell row/column insert/delete controls, table-cell boundary Backspace,
@@ -165,6 +174,12 @@ fieldRef inspection/editing for selected document fields. It starts its own
 Next dev server on port `4010` with WYSIWYG inline editing explicitly enabled
 unless
 `SMOKE_BASE_URL` is provided.
+`scripts/wysiwyg-stage4c-smoke.mjs` protects the opt-in Stage 4C text-engine
+clipboard, composition, cross-fragment selection, perf trace, and heavy
+row-stack smoke paths.
+The browser smoke scripts use bundled Chromium by default and can be pointed at
+an installed Playwright browser channel with `SMOKE_BROWSER_CHANNEL` or a
+system Chromium-family executable with `SMOKE_EXECUTABLE_PATH`.
 
 This is intentionally a focused workflow smoke, not a fixture catalog for every
 editor scenario.

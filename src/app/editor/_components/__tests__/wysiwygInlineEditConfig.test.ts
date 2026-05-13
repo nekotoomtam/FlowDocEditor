@@ -33,8 +33,15 @@ describe("resolveWysiwygTextEngineEnabled", () => {
 
   it("requires an explicit environment override", () => {
     expect(resolveWysiwygTextEngineEnabled("1", "development")).toBe(true)
-    expect(resolveWysiwygTextEngineEnabled("enabled", "production")).toBe(true)
+    expect(resolveWysiwygTextEngineEnabled("enabled", "test")).toBe(true)
     expect(resolveWysiwygTextEngineEnabled("disabled", "development")).toBe(false)
+  })
+
+  it("requires a second acknowledgement before enabling in production", () => {
+    expect(resolveWysiwygTextEngineEnabled("enabled", "production")).toBe(false)
+    expect(resolveWysiwygTextEngineEnabled("enabled", "production", "off")).toBe(false)
+    expect(resolveWysiwygTextEngineEnabled("enabled", "production", "yes")).toBe(false)
+    expect(resolveWysiwygTextEngineEnabled("enabled", "production", "enabled")).toBe(true)
   })
 
   it("does not inherit the legacy inline-edit flag value", () => {

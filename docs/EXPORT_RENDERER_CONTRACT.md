@@ -34,12 +34,27 @@ decisions.
 - paginate with the server measurement stack, currently fontkit plus
   `thaiWordBreaker`
 - call `assertPaginatedDocument` before rendering
-- expose font fallback through `X-FlowDoc-Font: fallback`
+- fail closed with a non-200 JSON response and code `FONT_FALLBACK_BLOCKED`
+  when the default runtime font is unavailable
+- fail closed with a non-200 JSON response and code `LAYOUT_WARNINGS_BLOCKED`
+  when authoritative server pagination emits layout warnings such as forced
+  table split overflow
 - return a visible failure instead of silently producing invalid output when
   layout assertions fail
 
 `src/app/api/paginate/route.ts` is the sibling authoritative pagination path for
 editor status and drift comparison. Export should stay aligned with it.
+
+The editor should block or clearly warn before calling `/api/export` when the
+current preview document has not completed server pagination, when font fallback
+is active, when browser/server drift changes page breaks, paragraph
+continuations, line wrapping, split boundaries, or tracked geometry across
+body, header, footer, or TOC fragments, when layout fragment warnings such as
+forced table split overflow are present, or when Fill mode has blocking
+data-readiness errors or missing required values.
+After `/api/paginate` reconciles the current preview document, editor export
+readiness should use the server-returned layout warnings as authoritative
+instead of stale or optimistic browser-preview warnings.
 
 ## Renderer Rules
 
@@ -79,6 +94,8 @@ PDF should:
 
 - follow server/export pagination closely
 - preserve page count, page order, fragment order, and page-number text
+- draw resolved header/footer text from `page.headerFragments` and
+  `page.footerFragments` in the same pagination output the editor preview shows
 - draw paragraph, row, stack, table, table-row, and table-cell fragments from
   paginated geometry
 - preserve repeated headers and table split slices produced by pagination
@@ -118,12 +135,16 @@ state must be visible.
 Current behavior:
 
 - authoritative runtime font file is `public/fonts/THSarabun.ttf`
-- API routes load fonts from `process.cwd()/public/fonts/...`
+- API routes load fonts from `process.cwd()/public/fonts/...` through the shared
+  API runtime font loader
 - browser font CSS loads from `/fonts/...`
 - `src/fonts/THSarabun.ttf` is not the runtime font source unless the project
   intentionally changes the font loading contract
 - the API logs the missing font path/error server-side
-- `/api/paginate` exposes `X-FlowDoc-Font: fallback`
+- `/api/paginate` exposes `X-FlowDoc-Font: fallback` when it must use fallback
+  metrics
+- `/api/export` returns a non-200 JSON response with code
+  `FONT_FALLBACK_BLOCKED` when the default runtime font is missing
 - editor status should make fallback understandable to the user
 
 Thai measurement/rendering under fallback can be wrong. Do not treat fallback

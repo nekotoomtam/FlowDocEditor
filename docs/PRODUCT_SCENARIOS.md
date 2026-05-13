@@ -342,6 +342,19 @@ gaps.
 - [x] `report-docx-structure`: DOCX XML section boundary assertion.
   - Covered by `product fixture — report-docx-structure` in
     `packages/core/src/renderer/__tests__/multiSection.test.ts`.
+- [x] `company-report`: saved FlowDoc package v2 with cover, scalar fieldRefs,
+  filled data snapshot, header/footer, page numbers, and a multi-page KPI table.
+  - Covered by `USER_REPORT_FIXTURES`, `userReportFixtures.test.ts`,
+    `userReportExport.test.ts`, and the app import/export path test.
+- [x] `government-report`: saved FlowDoc package v2 with cover, TOC, formal Thai
+  body, `keepWithNext` heading, bordered table, and restarted footer page
+  numbers.
+  - Covered by `USER_REPORT_FIXTURES`, `userReportFixtures.test.ts`, and
+    `userReportExport.test.ts`.
+- [x] `university-report`: saved FlowDoc package v2 with cover, TOC, restarted
+  body section, long Thai body continuation, and footer page numbers.
+  - Covered by `USER_REPORT_FIXTURES`, `userReportFixtures.test.ts`, and
+    `userReportExport.test.ts`.
 
 ## Coverage Matrix
 
@@ -359,6 +372,9 @@ gaps.
 | Report heading stays with next paragraph | `report-keep-with-next` / `keepWithNext.test.ts` | Structural pagination |
 | Row/column paragraph currently remains atomic with the row | `rowStack.test.ts` | Structural pagination |
 | Report DOCX section boundaries and editable text | `report-docx-structure` / `multiSection.test.ts` | DOCX XML structural |
+| User-level company report package with data binding, pagination, PDF export, and app import/export path | `company-report` / `USER_REPORT_FIXTURES` + `userReportImportExport.test.ts` | Product package fixture |
+| User-level government report package with Thai body, TOC, bordered table, and footer restarts | `government-report` / `USER_REPORT_FIXTURES` | Product package fixture |
+| User-level university report package with cover/TOC/body restart and long Thai continuation | `university-report` / `USER_REPORT_FIXTURES` | Product package fixture |
 | PDF export does not throw for representative multi-section documents | renderer smoke tests | Smoke |
 | PDF/editor pixel or page-count parity for product fixtures | future visual regression tests | Missing |
 | DOCX semantic Word heading styles | future DOCX structure tests | Missing |

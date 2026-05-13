@@ -91,6 +91,14 @@ export interface PageFragment {
   lineEnd?: number         // exclusive end index (lineStart + this fragment's line count)
   continuesFrom?: boolean  // true if a previous fragment exists for this paragraph
   isContinued?: boolean    // true if a subsequent fragment exists for this paragraph
+  warnings?: PageFragmentWarning[]
+}
+
+export type PageFragmentWarningCode = "forced-table-split-overflow"
+
+export interface PageFragmentWarning {
+  code: PageFragmentWarningCode
+  message: string
 }
 
 export interface PaginatedLine {

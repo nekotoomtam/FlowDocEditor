@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { existsSync, readFileSync } from "node:fs"
 import { createRequire } from "node:module"
-import path from "node:path"
 import { defaultWordBreaker, type TextMeasurer } from "@/layout"
 import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { paginateDocument, type PaginatedDocument } from "@/pagination"
 import { pt, type DocumentNode, type LayoutNode, type ParagraphNode } from "@/schema"
+import { resolveRuntimeFontPath } from "../../../api/runtimeFont"
 import { comparePagination } from "../comparePagination"
 
 interface Browser {
@@ -27,10 +27,10 @@ interface ChromiumRuntime {
 }
 
 const FONT_FAMILY = "FlowDocRealFontDrift"
-const FONT_PATH = path.join(process.cwd(), "public", "fonts", "THSarabun.ttf")
+const FONT_PATH = resolveRuntimeFontPath()
 const WIDTH_KEY_SEPARATOR = "\u0000"
 const chromium = loadOptionalChromium()
-const CAN_RUN_REAL_FONT_DRIFT = existsSync(FONT_PATH) && chromiumExecutableExists()
+const CAN_RUN_REAL_FONT_DRIFT = chromiumExecutableExists()
 
 function loadOptionalChromium(): ChromiumRuntime | null {
   try {
@@ -189,7 +189,7 @@ describe.skipIf(!CAN_RUN_REAL_FONT_DRIFT)("real-font Thai browser/server drift",
       await document.fonts.load(`12px "${family}"`)
       await document.fonts.ready
     }, FONT_FAMILY)
-  })
+  }, 30000)
 
   afterAll(async () => {
     await browser?.close()

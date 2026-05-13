@@ -14,6 +14,46 @@ output. Tests should protect both:
 - editor trust: expected selection, stable editing, intuitive undo/redo, no
   distracting flicker or layout errors in core workflows
 
+## Review Gate Commands
+
+Use `npm.cmd run review:gate` as the default reproducible non-browser review
+gate from the repository root or from an extracted review archive. It runs
+standalone type-check, core tests, app tests, and `npm.cmd run review:build`.
+`review:build` invokes the local Next binary with `next build --webpack` and
+sets `FLOWDOC_REVIEW_BUILD_SKIP_NEXT_TYPECHECK=1` only for that child build,
+because `review:gate` has already run `tsc --noEmit`.
+Use `npm.cmd run review:gate:full` when a reviewer or CI job also needs to
+prove that the archive manifest is complete before running the non-browser
+gate. It runs `review:archive -- --check` and then `review:gate`.
+
+Use `npm.cmd run review:browser` as the separate browser smoke gate. It runs
+the focused Playwright smoke scripts sequentially so each script can start the
+dev server with its required feature flags. Close any already-running Next dev
+server for this repo first, or run an individual smoke command with
+`SMOKE_BASE_URL` when intentionally targeting an existing server. The smoke
+scripts use bundled Chromium by default; reviewers without the bundled browser
+can set either `SMOKE_BROWSER_CHANNEL=chrome` / `msedge` or
+`SMOKE_EXECUTABLE_PATH=<path>` for a system Chromium-family executable.
+`npm ci` installs Playwright's npm package, but it does not guarantee browser
+binaries. CI/review machines that use bundled Chromium should run
+`npx playwright install chromium` before `review:browser`, or use the
+convenience command `npm.cmd run review:browser:install`.
+
+Use `npm.cmd run review:archive -- --check` before preparing external review
+archives. The check verifies that the review package would include the root
+package/config files, `scripts/`, `public/fonts/THSarabun.ttf`, `src/`,
+`packages/`, and `docs/`, and that generated/cache paths such as
+`node_modules`, `.next`, `.vite`, and test result caches are excluded. Running
+`npm.cmd run review:archive` creates the actual `flowdoc-review-archive.zip`
+and verifies the ZIP entries after writing. A reviewer should be able to extract
+that archive, install dependencies, and run `review:gate` plus
+`review:browser` without relying on untracked workspace files.
+
+Missing `public/fonts/THSarabun.ttf` is not an allowed skip. The runtime font
+contract test and product export golden smoke must fail when the default runtime
+font asset is absent. Browser-based real-font drift coverage may still skip only
+when the local Playwright/Chromium runtime is unavailable.
+
 ## Test Levels
 
 ### Level 0: API Route Contract Smoke
@@ -26,6 +66,7 @@ Protects:
 - authored document validation before pagination
 - asserted paginated JSON from `/api/paginate`
 - PDF/DOCX response headers and readable artifact bytes from `/api/export`
+- fail-closed `/api/export` behavior when the default runtime font is missing
 
 Typical command:
 
@@ -83,6 +124,8 @@ Protects:
 - table header repetition
 - rowspan and breakable-row policies
 - `assertPaginatedDocument` invariants
+- user-level report fixtures under both default measurement and the production
+  `fontkit + THSarabun + thaiWordBreaker` stack
 
 Typical commands:
 
@@ -176,7 +219,7 @@ pass.
 | Docs only | `git diff --check` |
 | UI copy or minor panel wiring | type-check; browser check if interaction changed |
 | Editor interaction behavior | type-check; focused app tests if available; `npm.cmd run smoke:editor`; manual browser smoke for interaction not covered by the script |
-| WYSIWYG text-engine clipboard or IME behavior | type-check; focused app tests for draft operations; `npm.cmd run smoke:wysiwyg-stage4c`; use `SMOKE_BROWSER_CHANNEL=chrome` / `SMOKE_BROWSER_CHANNEL=msedge` when installed-browser evidence matters; complete `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` when changing composition behavior or raising real-world confidence; update `docs/WYSIWYG_STAGE4C_IME_RESULTS.md` with what actually ran |
+| WYSIWYG text-engine clipboard, IME, or production eligibility | type-check; focused app tests for draft operations/config; `npm.cmd run smoke:wysiwyg-stage4c`; use `SMOKE_BROWSER_CHANNEL=chrome` / `SMOKE_BROWSER_CHANNEL=msedge` or `SMOKE_EXECUTABLE_PATH=<path>` when installed/system-browser evidence matters; complete `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` and `docs/WYSIWYG_PRODUCTION_GATE.md` before changing production/default eligibility; update `docs/WYSIWYG_STAGE4C_IME_RESULTS.md` with what actually ran |
 | Editor state race or reconciliation | type-check; focused app tests if available; `npm.cmd run smoke:editor`; manual browser smoke using the editor state race set |
 | Persistence or JSON import | focused persistence tests; type-check; browser smoke if editor load/import/export behavior changed |
 | Package proposal docs | `git diff --check`; no runtime tests unless code or active behavior changes |
@@ -204,7 +247,7 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  26 core test files / 324 core tests, plus 12 app test files / 123 app tests.
+  28 core test files / 344 core tests, plus 25 app test files / 232 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases,
   including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
@@ -222,14 +265,18 @@ Current strengths:
 - Operation coverage protects inline `fieldRef` insertion in body paragraphs
   and table-cell paragraphs without flattening existing text runs.
 - Table row split accounting has focused coverage for uneven cells, empty cells,
-  spacer-containing cells, padded cells, tall repeated headers, and continuation
-  line ranges.
+  spacer-containing cells, padded cells, tall repeated headers, low-capacity
+  no-progress guards, and continuation line ranges.
 - Table operation coverage protects row/column structural edits, subtree
   cleanup, total-width preservation, header-row clamping, and last-row/column
   deletion guards.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage.
 - Product export golden smoke protects PDF page-count parity for customs/report
   fixtures and DOCX table row structure for the customs fixture.
+- User-level report fixture coverage protects saved FlowDoc package v2 fixtures
+  for company, government, and university reports, including pagination
+  assertions, PDF page-count export assertions, runtime-font failure behavior,
+  and one app import/data-bind/export path.
 - API route contract smoke protects `/api/paginate` and `/api/export` status,
   headers, and artifact readability.
 - Document package persistence coverage protects current `FlowDocPackage v2`
@@ -253,7 +300,8 @@ Current strengths:
 - Real-font Thai drift coverage compares Chromium canvas measurement and
   fontkit measurement using the runtime `public/fonts/THSarabun.ttf` when the
   Playwright runtime is installed locally; otherwise the focused drift test
-  skips while preserving type-check coverage.
+  skips while preserving type-check coverage. Missing runtime font is covered by
+  a non-skipped API contract test and product export golden smoke.
 - Automated browser smoke now protects default editor load, paragraph inline
   edit commit, undo/redo, same-fragment WYSIWYG drag selection overlay,
   stack-paragraph visual parity, Thai/composition fallback, table-cell
@@ -297,6 +345,21 @@ Avoid:
 
 ## Command Reference
 
+- Non-browser review gate:
+  - Windows PowerShell: `npm.cmd run review:gate`
+  - Non-Windows: `npm run review:gate`
+- Non-browser review gate with archive manifest check:
+  - Windows PowerShell: `npm.cmd run review:gate:full`
+  - Non-Windows: `npm run review:gate:full`
+- Browser smoke review gate:
+  - Windows PowerShell: `npm.cmd run review:browser`
+  - Non-Windows: `npm run review:browser`
+- Browser smoke with bundled Chromium install:
+  - Windows PowerShell: `npm.cmd run review:browser:install`
+  - Non-Windows: `npm run review:browser:install`
+- Browser smoke with a system browser:
+  - Windows PowerShell: `$env:SMOKE_EXECUTABLE_PATH='C:\Path\To\chrome.exe'; npm.cmd run review:browser`
+  - Non-Windows: `SMOKE_EXECUTABLE_PATH=/path/to/chrome npm run review:browser`
 - Full verification:
   - Windows PowerShell: `npm.cmd test`
   - Non-Windows: `npm test`
@@ -310,8 +373,8 @@ Avoid:
   - Windows PowerShell: `npm.cmd run smoke:editor`
   - Non-Windows: `npm run smoke:editor`
 - Core tests only:
-  - Windows PowerShell: `npm.cmd run test -w packages/core`
-  - Non-Windows: `npm run test -w packages/core`
+  - Windows PowerShell: `npm.cmd run test:core`
+  - Non-Windows: `npm run test:core`
 - Focused core test:
   - Windows PowerShell: `npm.cmd run test -w packages/core -- <test-file-or-filter>`
   - Non-Windows: `npm run test -w packages/core -- <test-file-or-filter>`

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import JSZip from "jszip"
 import { PDFDocument as PdfLibDocument } from "pdf-lib"
 import { assertDocument } from "../../document"
+import { DEFAULT_FONT_KEY, resolveFontFileName } from "../../font-registry"
 import { createFontkitMeasurer } from "../../layout/font-measurer"
 import { thaiWordBreaker } from "../../layout/word-breaker"
 import { assertPaginatedDocument, paginateDocument } from "../../pagination"
@@ -14,8 +15,7 @@ import type { DocumentNode, DocumentSection, LayoutNode, ParagraphNode, TableCel
 import type { FontProvider } from "../shared"
 
 const testDir = path.dirname(fileURLToPath(import.meta.url))
-const FONT_PATH = path.resolve(testDir, "../../../../../public/fonts/THSarabun.ttf")
-const HAS_RUNTIME_FONT = existsSync(FONT_PATH)
+const FONT_PATH = path.resolve(testDir, "../../../../../public/fonts", resolveFontFileName(DEFAULT_FONT_KEY))
 
 const PAGE = {
   size: "A4" as const,
@@ -187,6 +187,13 @@ function makeFontProvider(fontBuffer: Uint8Array): FontProvider {
   }
 }
 
+function readRuntimeFont(): Uint8Array {
+  if (!existsSync(FONT_PATH)) {
+    throw new Error(`Missing default runtime font: ${FONT_PATH}`)
+  }
+  return readFileSync(FONT_PATH)
+}
+
 function totalPageCount(doc: ReturnType<typeof paginateForExport>): number {
   return doc.sections.reduce((sum, section) => sum + section.pages.length, 0)
 }
@@ -207,10 +214,14 @@ function countXmlTag(xml: string, tag: string): number {
   return xml.match(new RegExp(`<${tag}(\\s|>|/)`, "g"))?.length ?? 0
 }
 
-describe.skipIf(!HAS_RUNTIME_FONT)("product export golden smoke", () => {
-  const fontBuffer = readFileSync(FONT_PATH)
+describe("product export golden smoke", () => {
+  it("requires the default runtime font asset", () => {
+    const fontBuffer = readRuntimeFont()
+    expect(fontBuffer.byteLength).toBeGreaterThan(0)
+  })
 
   it("product fixture - customs PDF preserves page count and table geometry", async () => {
+    const fontBuffer = readRuntimeFont()
     const paginated = paginateForExport(makeCustomsDoc(), fontBuffer)
     const pages = paginated.sections[0].pages
     const headerRows = pages.flatMap((page) =>
@@ -241,6 +252,7 @@ describe.skipIf(!HAS_RUNTIME_FONT)("product export golden smoke", () => {
   })
 
   it("product fixture - report PDF preserves section page counts and Thai render path", async () => {
+    const fontBuffer = readRuntimeFont()
     const paginated = paginateForExport(makeReportDoc(), fontBuffer)
     const bodyPages = paginated.sections[2].pages
 
@@ -255,6 +267,7 @@ describe.skipIf(!HAS_RUNTIME_FONT)("product export golden smoke", () => {
   })
 
   it("product fixture - customs DOCX preserves paginated table rows", async () => {
+    const fontBuffer = readRuntimeFont()
     const paginated = paginateForExport(makeCustomsDoc(), fontBuffer)
     const expectedRows = paginated.sections[0].pages.flatMap((page) =>
       page.fragments.filter((fragment) =>

@@ -1,7 +1,7 @@
-import { chromium } from "playwright"
 import { spawn } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { getSmokeBrowserConfig, launchSmokeBrowser, smokeBrowserLabel } from "./smoke-browser.mjs"
 
 const DEFAULT_SMOKE_PORT = 4016
 const TARGET_NODE_ID = "stage3-boundary-target"
@@ -19,7 +19,7 @@ const smokePort = Number(process.env.SMOKE_PORT ?? DEFAULT_SMOKE_PORT)
 const baseEditorUrl = process.env.SMOKE_BASE_URL ?? `http://localhost:${smokePort}/editor`
 const shouldStartServer = process.env.SMOKE_BASE_URL == null
 const headless = process.env.HEADED !== "1"
-const browserChannel = process.env.SMOKE_BROWSER_CHANNEL?.trim() || undefined
+const smokeBrowser = getSmokeBrowserConfig({ headless })
 const platformShortcut = process.platform === "darwin" ? "Meta" : "Control"
 
 const targetFragmentSelector = `[data-testid="editor-fragment"][data-node-id="${TARGET_NODE_ID}"]`
@@ -741,10 +741,8 @@ async function run() {
   try {
     if (server) await waitForServer(scenarioUrl(), server)
 
-    browser = await chromium.launch({
-      headless,
-      ...(browserChannel ? { channel: browserChannel } : {}),
-    })
+    console.log(`wysiwyg stage4c smoke browser: ${smokeBrowserLabel(smokeBrowser)}`)
+    browser = await launchSmokeBrowser(smokeBrowser)
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
     const consoleErrors = []
@@ -779,7 +777,9 @@ async function run() {
     console.log(JSON.stringify({
       ok: true,
       browser: {
-        channel: browserChannel ?? "bundled-chromium",
+        mode: smokeBrowserLabel(smokeBrowser),
+        channel: smokeBrowser.channel ?? null,
+        executablePath: smokeBrowser.executablePath ?? null,
         headless,
       },
       performanceTrace,

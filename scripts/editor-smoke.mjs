@@ -1,7 +1,9 @@
-import { chromium } from "playwright"
 import { spawn } from "node:child_process"
+import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { PDFDocument } from "pdf-lib"
+import { getSmokeBrowserConfig, launchSmokeBrowser, smokeBrowserLabel } from "./smoke-browser.mjs"
 
 const STORAGE_KEY = "flowdoc_document"
 const DEFAULT_SMOKE_PORT = 4010
@@ -12,6 +14,7 @@ const smokePort = Number(process.env.SMOKE_PORT ?? DEFAULT_SMOKE_PORT)
 const baseUrl = process.env.SMOKE_BASE_URL ?? `http://localhost:${smokePort}/editor`
 const shouldStartServer = process.env.SMOKE_BASE_URL == null
 const headless = process.env.HEADED !== "1"
+const smokeBrowser = getSmokeBrowserConfig({ headless })
 
 function pt(value) {
   return { value, unit: "pt" }
@@ -39,6 +42,10 @@ function paragraph(id, text) {
 function makeSmokeDocument() {
   const p1 = paragraph("smoke-p1", "Smoke paragraph baseline")
   const thai = paragraph("smoke-thai-p1", "ภาษาไทยเริ่มต้น")
+  const header = paragraph("smoke-header-p1", "Smoke Header Preview")
+  const footer = paragraph("smoke-footer-p1", "Smoke Footer Preview")
+  const headerRoot = { id: "smoke-header-root", type: "stack", props: {}, childIds: [header.id] }
+  const footerRoot = { id: "smoke-footer-root", type: "stack", props: {}, childIds: [footer.id] }
   const stackParagraph = paragraph("smoke-stack-p1", "Stack paragraph baseline")
   const stack = {
     id: "smoke-stack",
@@ -90,10 +97,18 @@ function makeSmokeDocument() {
           size: "A4",
           orientation: "portrait",
           margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+          headerReserved: 36,
+          footerReserved: 36,
         },
+        headerRootId: headerRoot.id,
         bodyRootId: "smoke-body",
+        footerRootId: footerRoot.id,
         nodes: {
           "smoke-body": { id: "smoke-body", type: "body", props: {}, childIds: [p1.id, thai.id, row.id, table.id] },
+          [headerRoot.id]: headerRoot,
+          [footerRoot.id]: footerRoot,
+          [header.id]: header,
+          [footer.id]: footer,
           [p1.id]: p1,
           [thai.id]: thai,
           [row.id]: row,
@@ -218,6 +233,197 @@ function makeRegistryPlacementPackage() {
   }
 }
 
+function makeUserReportSmokeTable(id, bodyRowCount) {
+  const nodes = {}
+  const rowIds = []
+  const rows = [
+    ["No.", "Business area", "Result"],
+    ...Array.from({ length: bodyRowCount }, (_, index) => [
+      String(index + 1),
+      `Operational metric ${index + 1}`,
+      `${(index + 1) * 7}%`,
+    ]),
+  ]
+
+  rows.forEach((cells, rowIndex) => {
+    const cellIds = []
+    cells.forEach((text, colIndex) => {
+      const paragraphId = `${id}-p${rowIndex}-${colIndex}`
+      const cellId = `${id}-c${rowIndex}-${colIndex}`
+      nodes[paragraphId] = paragraph(paragraphId, text)
+      nodes[cellId] = { id: cellId, type: "table-cell", props: {}, childIds: [paragraphId] }
+      cellIds.push(cellId)
+    })
+    const rowId = `${id}-row${rowIndex}`
+    nodes[rowId] = { id: rowId, type: "table-row", props: {}, cellIds }
+    rowIds.push(rowId)
+  })
+
+  return {
+    id,
+    type: "table",
+    props: { headerRowCount: 1 },
+    columns: [{ width: pt(90) }, { width: pt(221) }, { width: pt(140) }],
+    rowIds,
+    nodes,
+  }
+}
+
+function makeUserReportSmokePackage() {
+  const coverTitle = paragraph("report-smoke-cover-title", "Company Quarterly Performance Report")
+  coverTitle.props = {
+    ...coverTitle.props,
+    align: "center",
+    headingLevel: 1,
+    fontSize: pt(18),
+    lineHeight: 1.25,
+    spacingAfter: pt(12),
+  }
+  const coverClient = paragraph("report-smoke-cover-client", "")
+  coverClient.props = { ...coverClient.props, align: "center", spacingAfter: pt(8) }
+  coverClient.children = [
+    { id: "report-smoke-cover-client-label", type: "text", text: "Prepared for " },
+    {
+      id: "report-smoke-cover-client-field",
+      type: "fieldRef",
+      key: "customer.name",
+      label: "Customer",
+      fallback: "Acme Manufacturing Co.",
+    },
+  ]
+  const headerText = paragraph("report-smoke-header-text", "Company report smoke")
+  headerText.props = { ...headerText.props, fontSize: pt(9), spacingAfter: pt(0) }
+  const footerText = paragraph("report-smoke-footer-text", "")
+  footerText.children = [
+    { id: "report-smoke-footer-label", type: "text", text: "หน้า " },
+    { id: "report-smoke-footer-page", type: "pageNumber" },
+  ]
+  const summaryHeading = paragraph("report-smoke-summary-heading", "Executive Summary")
+  summaryHeading.props = { ...summaryHeading.props, headingLevel: 1, keepWithNext: true, spacingAfter: pt(6) }
+  const summary = paragraph(
+    "report-smoke-summary",
+    Array.from({ length: 24 }, (_, index) =>
+      `Performance narrative line ${index + 1}: revenue, margin, risk, and operations stay visible for review.`,
+    ).join("\n"),
+  )
+  const table = makeUserReportSmokeTable("report-smoke-kpi-table", 42)
+  const doc = {
+    version: 1,
+    document: {
+      id: "editor-smoke-company-report",
+      meta: { title: "Company Quarterly Performance Report" },
+      sections: [{
+        id: "report-smoke-cover-section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+        },
+        bodyRootId: "report-smoke-cover-body",
+        nodes: {
+          "report-smoke-cover-body": {
+            id: "report-smoke-cover-body",
+            type: "body",
+            props: {},
+            childIds: [coverTitle.id, coverClient.id],
+          },
+          [coverTitle.id]: coverTitle,
+          [coverClient.id]: coverClient,
+        },
+      }, {
+        id: "report-smoke-body-section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+          headerReserved: 36,
+          footerReserved: 28,
+          pageNumberStart: 1,
+        },
+        headerRootId: "report-smoke-header",
+        bodyRootId: "report-smoke-body",
+        footerRootId: "report-smoke-footer",
+        nodes: {
+          "report-smoke-header": { id: "report-smoke-header", type: "stack", props: {}, childIds: [headerText.id] },
+          [headerText.id]: headerText,
+          "report-smoke-footer": { id: "report-smoke-footer", type: "stack", props: {}, childIds: [footerText.id] },
+          [footerText.id]: footerText,
+          "report-smoke-body": {
+            id: "report-smoke-body",
+            type: "body",
+            props: {},
+            childIds: [summaryHeading.id, summary.id, table.id],
+          },
+          [summaryHeading.id]: summaryHeading,
+          [summary.id]: summary,
+          [table.id]: table,
+        },
+      }],
+    },
+  }
+
+  return {
+    packageVersion: 2,
+    kind: "document",
+    id: doc.document.id,
+    meta: {
+      title: "Company Quarterly Performance Report",
+      createdAt: "2026-05-13T00:00:00.000Z",
+      updatedAt: "2026-05-13T00:00:00.000Z",
+    },
+    document: doc,
+    fields: {
+      version: 1,
+      fields: [
+        {
+          key: "customer.name",
+          fieldType: "text",
+          label: "Customer name",
+          required: true,
+          fallback: "Acme Manufacturing Co.",
+        },
+      ],
+    },
+    data: {
+      version: 1,
+      updatedAt: "2026-05-13T00:00:00.000Z",
+      values: {
+        "customer.name": "Acme Manufacturing Co.",
+      },
+    },
+  }
+}
+
+function makeFillReadinessErrorPackage() {
+  const doc = makeFillReadinessDocument()
+  return {
+    packageVersion: 2,
+    kind: "document",
+    id: doc.document.id,
+    meta: {
+      title: "Fill Readiness Error",
+      createdAt: "2026-05-13T00:00:00.000Z",
+      updatedAt: "2026-05-13T00:00:00.000Z",
+    },
+    document: doc,
+    fields: {
+      version: 1,
+      fields: [
+        { key: "customer.name", label: "Customer name", fieldType: "text", required: true },
+      ],
+    },
+    data: {
+      version: 1,
+      updatedAt: "2026-05-13T00:00:00.000Z",
+      values: {
+        "customer.name": 123,
+      },
+    },
+  }
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -225,6 +431,44 @@ function assert(condition, message) {
 async function expectNoLayoutError(page) {
   const badge = page.getByTestId("layout-error-badge")
   assert(await badge.count() === 0, "unexpected layout error badge is visible")
+}
+
+async function expectRuntimeFontFetch(page) {
+  const result = await page.evaluate(async () => {
+    const response = await fetch("/fonts/THSarabun.ttf")
+    return {
+      ok: response.ok,
+      status: response.status,
+      byteLength: response.ok ? (await response.arrayBuffer()).byteLength : 0,
+    }
+  })
+
+  assert(result.ok, `runtime font fetch failed with status ${result.status}`)
+  assert(result.byteLength > 0, "runtime font fetch returned an empty file")
+}
+
+async function expectedPaginatedPageCount(page, doc) {
+  return page.evaluate(async (documentForPagination) => {
+    const response = await fetch("/api/paginate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(documentForPagination),
+    })
+    if (!response.ok) throw new Error(`paginate failed with ${response.status}`)
+    if (response.headers.get("X-FlowDoc-Font") === "fallback") {
+      throw new Error("paginate used runtime font fallback")
+    }
+    const paginated = await response.json()
+    return paginated.sections.reduce((sum, section) => sum + section.pages.length, 0)
+  }, doc)
+}
+
+async function pdfPageCountFromDownload(download) {
+  const filePath = await download.path()
+  assert(filePath, "expected PDF download to have a local path")
+  const bytes = await readFile(filePath)
+  const pdf = await PDFDocument.load(bytes)
+  return pdf.getPageCount()
 }
 
 async function expectInlineEditVisualMode(page, nodeId, expected) {
@@ -490,6 +734,23 @@ async function expectActiveInlineTextarea(page, nodeId) {
   )
 }
 
+async function openInlineTextareaFromFragment(page, fragment, nodeId) {
+  const textarea = page.locator(`textarea[data-inline-edit-node-id="${nodeId}"]`)
+  let lastError = null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await fragment.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(100)
+    await fragment.dblclick()
+    try {
+      await textarea.waitFor({ state: "visible", timeout: 5000 })
+      return textarea
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError ?? new Error(`expected inline textarea for ${nodeId}`)
+}
+
 async function waitForActiveInlineTextareaSliceStartAtLeast(page, nodeId, expectedMinStart) {
   await page.waitForFunction(
     ({ nodeId, expectedMinStart }) => {
@@ -581,6 +842,22 @@ async function waitForVisibleTableCellCount(page, expectedCount) {
   )
 }
 
+async function waitForZoneText(page, zone, nodeId, expectedText, timeout = 5000) {
+  await page.waitForFunction(
+    ({ zone, nodeId, expectedText }) => {
+      const fragments = Array.from(document.querySelectorAll(
+        `[data-testid="editor-zone-fragment"][data-zone="${zone}"][data-node-id="${nodeId}"]`,
+      ))
+      return fragments.some((fragment) =>
+        fragment.textContent?.includes(expectedText) &&
+        getComputedStyle(fragment).pointerEvents === "none",
+      )
+    },
+    { zone, nodeId, expectedText },
+    { timeout },
+  )
+}
+
 async function waitForStoredPackageVersion(page, expectedVersion) {
   await page.waitForFunction(
     ({ key, expectedVersion }) => {
@@ -653,11 +930,57 @@ async function expectPropertyPanelTitle(page, expectedTitle) {
   }, expectedTitle, { timeout: 3000 })
 }
 
-function collectPageErrors(page, consoleErrors, pageErrors) {
+function isIgnoredResourceError(error) {
+  if (error.status !== 404) return false
+
+  return isIgnoredResourceUrl(error.url)
+}
+
+function isIgnoredResourceUrl(url) {
+  try {
+    return new URL(url).pathname === "/favicon.ico"
+  } catch {
+    return false
+  }
+}
+
+function formatConsoleError(error) {
+  return [
+    error.text,
+    error.location?.url ? `at ${error.location.url}:${error.location.lineNumber}:${error.location.columnNumber}` : null,
+  ].filter(Boolean).join(" ")
+}
+
+function formatResourceError(error) {
+  return `${error.status} ${error.url}`
+}
+
+function isIgnorableConsoleError(error, ignoredResourceErrors) {
+  return (
+    error.text === "Failed to load resource: the server responded with a status of 404 (Not Found)" &&
+    (
+      ignoredResourceErrors.some((error) => isIgnoredResourceError(error)) ||
+      isIgnoredResourceUrl(error.location?.url ?? "")
+    )
+  )
+}
+
+function collectPageErrors(page, consoleErrors, pageErrors, resourceErrors) {
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text())
+    if (message.type() === "error") {
+      consoleErrors.push({
+        text: message.text(),
+        location: message.location(),
+      })
+    }
   })
   page.on("pageerror", (error) => pageErrors.push(error.message))
+  page.on("response", (response) => {
+    const status = response.status()
+    if (status >= 400) {
+      resourceErrors.push({ status, url: response.url() })
+    }
+  })
 }
 
 async function waitForServer(url, server, timeoutMs = 60000) {
@@ -727,12 +1050,14 @@ async function run() {
   try {
     if (server) await waitForServer(baseUrl, server)
 
-    browser = await chromium.launch({ headless })
+    console.log(`editor smoke browser: ${smokeBrowserLabel(smokeBrowser)}`)
+    browser = await launchSmokeBrowser(smokeBrowser)
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
     const consoleErrors = []
     const pageErrors = []
+    const resourceErrors = []
 
-    collectPageErrors(page, consoleErrors, pageErrors)
+    collectPageErrors(page, consoleErrors, pageErrors, resourceErrors)
 
     await page.addInitScript(({ key, doc }) => {
       window.localStorage.clear()
@@ -744,6 +1069,9 @@ async function run() {
     await page.getByTestId("editor-toolbar").waitFor({ state: "visible" })
     await page.getByTestId("editor-canvas").waitFor({ state: "visible" })
     await page.getByTestId("editor-page").first().waitFor({ state: "visible" })
+    await waitForZoneText(page, "header", "smoke-header-p1", "Smoke Header Preview")
+    await waitForZoneText(page, "footer", "smoke-footer-p1", "Smoke Footer Preview")
+    await expectRuntimeFontFetch(page)
     await expectNoLayoutError(page)
 
     const editedText = [
@@ -890,7 +1218,7 @@ async function run() {
     await expectNoLayoutError(page)
 
     const fillPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
-    collectPageErrors(fillPage, consoleErrors, pageErrors)
+    collectPageErrors(fillPage, consoleErrors, pageErrors, resourceErrors)
     await fillPage.addInitScript(({ key, doc }) => {
       window.localStorage.clear()
       window.localStorage.setItem(key, JSON.stringify(doc))
@@ -921,8 +1249,95 @@ async function run() {
     await expectNoLayoutError(fillPage)
     await fillPage.close()
 
+    const fillErrorPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    collectPageErrors(fillErrorPage, consoleErrors, pageErrors, resourceErrors)
+    await fillErrorPage.addInitScript(({ key, pkg }) => {
+      window.localStorage.clear()
+      window.localStorage.setItem(key, JSON.stringify(pkg))
+    }, { key: STORAGE_KEY, pkg: makeFillReadinessErrorPackage() })
+    await fillErrorPage.goto(baseUrl, { waitUntil: "domcontentloaded" })
+    await fillErrorPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
+    await fillErrorPage.getByRole("button", { name: "Fill" }).click()
+    const errorReadiness = fillErrorPage.getByTestId("filling-readiness")
+    await errorReadiness.waitFor({ state: "visible", timeout: 5000 })
+    const errorReadinessText = await errorReadiness.textContent()
+    assert(
+      errorReadinessText?.includes("customer.name") && errorReadinessText.includes("expects string or null"),
+      `expected fill readiness error for customer.name, got: ${errorReadinessText}`,
+    )
+    await fillErrorPage.waitForFunction(
+      () => document.querySelector('[data-testid="export-readiness-status"]')?.textContent?.includes("customer.name"),
+      null,
+      { timeout: 10000 },
+    )
+    assert(
+      await fillErrorPage.getByRole("button", { name: "Export PDF" }).isDisabled(),
+      "expected PDF export to be blocked while fill readiness has errors",
+    )
+    await fillErrorPage.getByLabel(/Customer name/).fill("Acme Co")
+    await fillErrorPage.waitForFunction(
+      () => !document.querySelector('[data-testid="filling-readiness"]'),
+      null,
+      { timeout: 5000 },
+    )
+    await fillErrorPage.waitForFunction(
+      () => !document.querySelector('[data-testid="export-readiness-status"]'),
+      null,
+      { timeout: 10000 },
+    )
+    assert(
+      !(await fillErrorPage.getByRole("button", { name: "Export PDF" }).isDisabled()),
+      "expected PDF export to be enabled after fill readiness errors clear and layout settles",
+    )
+    await expectNoLayoutError(fillErrorPage)
+    await fillErrorPage.close()
+
+    const reportPackage = makeUserReportSmokePackage()
+    const reportPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    collectPageErrors(reportPage, consoleErrors, pageErrors, resourceErrors)
+    await reportPage.addInitScript(({ key, pkg }) => {
+      window.localStorage.clear()
+      window.localStorage.setItem(key, JSON.stringify(pkg))
+    }, { key: STORAGE_KEY, pkg: reportPackage })
+    await reportPage.goto(baseUrl, { waitUntil: "domcontentloaded" })
+    await reportPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
+    await reportPage.getByRole("button", { name: "Fill" }).click()
+    await waitForZoneText(reportPage, "header", "report-smoke-header-text", "Company report smoke", 15000)
+    await waitForZoneText(reportPage, "footer", "report-smoke-footer-text", "หน้า", 15000)
+    await reportPage.waitForFunction(
+      () => document.body.textContent?.includes("Acme Manufacturing Co."),
+      null,
+      { timeout: 5000 },
+    )
+    await expectRuntimeFontFetch(reportPage)
+    await expectNoLayoutError(reportPage)
+    const expectedReportPageCount = await expectedPaginatedPageCount(reportPage, reportPackage.document)
+    await reportPage.waitForFunction(
+      () => {
+        const exportButton = Array.from(document.querySelectorAll("button"))
+          .find((button) => button.textContent?.includes("Export PDF"))
+        return exportButton instanceof HTMLButtonElement &&
+          !exportButton.disabled &&
+          !document.querySelector('[data-testid="font-fallback-status"]') &&
+          !document.querySelector('[data-testid="layout-warning-status"]') &&
+          !document.querySelector('[data-testid="export-readiness-status"]')
+      },
+      null,
+      { timeout: 15000 },
+    )
+    const [reportDownload] = await Promise.all([
+      reportPage.waitForEvent("download"),
+      reportPage.getByRole("button", { name: "Export PDF" }).click(),
+    ])
+    const actualReportPageCount = await pdfPageCountFromDownload(reportDownload)
+    assert(
+      actualReportPageCount === expectedReportPageCount,
+      `expected report PDF page count ${expectedReportPageCount}, got ${actualReportPageCount}`,
+    )
+    await reportPage.close()
+
     const registryPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
-    collectPageErrors(registryPage, consoleErrors, pageErrors)
+    collectPageErrors(registryPage, consoleErrors, pageErrors, resourceErrors)
     await registryPage.addInitScript(({ key, pack }) => {
       window.localStorage.clear()
       window.localStorage.setItem(key, JSON.stringify(pack))
@@ -957,7 +1372,7 @@ async function run() {
     await registryPage.close()
 
     const continuationPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
-    collectPageErrors(continuationPage, consoleErrors, pageErrors)
+    collectPageErrors(continuationPage, consoleErrors, pageErrors, resourceErrors)
     await continuationPage.addInitScript(({ key, doc }) => {
       window.localStorage.clear()
       window.localStorage.setItem(key, JSON.stringify(doc))
@@ -1005,7 +1420,7 @@ async function run() {
     await continuationPage.close()
 
     const continuationBoundaryPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
-    collectPageErrors(continuationBoundaryPage, consoleErrors, pageErrors)
+    collectPageErrors(continuationBoundaryPage, consoleErrors, pageErrors, resourceErrors)
     await continuationBoundaryPage.addInitScript(({ key, doc }) => {
       window.localStorage.clear()
       window.localStorage.setItem(key, JSON.stringify(doc))
@@ -1015,10 +1430,11 @@ async function run() {
     await waitForParagraphFragmentCountAtLeast(continuationBoundaryPage, "wysiwyg-continuation-p1", 3)
     const continuationBoundaryFragments = continuationBoundaryPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]')
     const continuationFragment = continuationBoundaryFragments.nth(1)
-    await continuationFragment.scrollIntoViewIfNeeded()
-    await continuationFragment.dblclick()
-    const continuationTextarea = continuationBoundaryPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
-    await continuationTextarea.waitFor({ state: "visible", timeout: 5000 })
+    const continuationTextarea = await openInlineTextareaFromFragment(
+      continuationBoundaryPage,
+      continuationFragment,
+      "wysiwyg-continuation-p1",
+    )
     const continuationSliceStart = Number(await continuationTextarea.getAttribute("data-inline-edit-slice-start"))
     assert(continuationSliceStart > 0, `expected continuation slice start > 0, got ${continuationSliceStart}`)
     const continuationEditSlice = await expectInlineEditSliceMatchesTextarea(continuationBoundaryPage, "wysiwyg-continuation-p1", {
@@ -1053,10 +1469,11 @@ async function run() {
 
     await waitForParagraphFragmentCountAtLeast(continuationBoundaryPage, "wysiwyg-continuation-p1", 3)
     const boundaryFragment = continuationBoundaryPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]').nth(1)
-    await boundaryFragment.scrollIntoViewIfNeeded()
-    await boundaryFragment.click()
-    const boundaryTextarea = continuationBoundaryPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
-    await boundaryTextarea.waitFor({ state: "visible", timeout: 5000 })
+    const boundaryTextarea = await openInlineTextareaFromFragment(
+      continuationBoundaryPage,
+      boundaryFragment,
+      "wysiwyg-continuation-p1",
+    )
     const boundarySliceStart = Number(await boundaryTextarea.getAttribute("data-inline-edit-slice-start"))
     assert(boundarySliceStart > 0, `expected boundary slice start > 0, got ${boundarySliceStart}`)
     const beforeBoundaryText = await readStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1")
@@ -1079,8 +1496,22 @@ async function run() {
     await expectNoLayoutError(continuationBoundaryPage)
     await continuationBoundaryPage.close()
 
+    const ignoredResourceErrors = resourceErrors.filter(isIgnoredResourceError)
+    const unexpectedResourceErrors = resourceErrors.filter((error) => !isIgnoredResourceError(error))
+    const unexpectedConsoleErrors = consoleErrors.filter((error) => (
+      !isIgnorableConsoleError(error, ignoredResourceErrors)
+    ))
+
     assert(pageErrors.length === 0, `page errors during smoke:\n${pageErrors.join("\n")}`)
-    assert(consoleErrors.length === 0, `console errors during smoke:\n${consoleErrors.join("\n")}`)
+    assert(unexpectedResourceErrors.length === 0, [
+      "resource errors during smoke:",
+      unexpectedResourceErrors.map(formatResourceError).join("\n"),
+    ].join("\n"))
+    assert(unexpectedConsoleErrors.length === 0, [
+      "console errors during smoke:",
+      unexpectedConsoleErrors.map(formatConsoleError).join("\n"),
+      resourceErrors.length > 0 ? `resource errors seen:\n${resourceErrors.map(formatResourceError).join("\n")}` : "resource errors seen: none",
+    ].join("\n"))
 
     console.log("editor smoke passed")
   } catch (error) {

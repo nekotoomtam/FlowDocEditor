@@ -105,8 +105,8 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
     - paginates a representative Thai document through browser-canvas metrics
       and server fontkit metrics, then asserts `comparePagination` reports no
       line, page-break, continuation, or geometry drift.
-    - skips only when the runtime font file or Playwright Chromium runtime is
-      unavailable.
+    - skips only when the Playwright Chromium runtime is unavailable. Missing
+      runtime font is covered by non-skipped font contract/export tests.
 - [x] Separate preview drift from authoritative failure.
   - Server/export `assertPaginatedDocument` failure returns HTTP 500 and blocks export;
     already done in `/api/paginate` and `/api/export`.

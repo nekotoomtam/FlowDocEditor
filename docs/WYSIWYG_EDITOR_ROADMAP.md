@@ -29,6 +29,10 @@ The editor has an opt-in experimental collapsed-caret and point-to-offset
 foundation for plain paragraph inline editing. It is disabled by default unless
 `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT` is explicitly set to `1`, `true`,
 `on`, or `enabled`. This is not a production-stable WYSIWYG default yet.
+The FlowDoc-owned text engine has a stricter production gate: production builds
+require both `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE` and
+`NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE_PRODUCTION_ACK`; see
+`docs/WYSIWYG_PRODUCTION_GATE.md`.
 Stability gates must cover continuation fragments,
 textarea remount/blur behavior, undo history, IME/composition fallback,
 missing-geometry fallback, and stale browser pagination guards before the track

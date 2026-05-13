@@ -383,6 +383,13 @@ paragraph paginator directly. Single-row table groups are breakable by default;
 `allowBreak=false` keeps a row together when possible. Rowspan-linked rows are
 still kept together as a unit at this stage.
 
+Breakable table-row slices must make content progress before they consume row
+height. If padding, repeated headers, or a very small remaining page slice leave
+less than one line of capacity, pagination should first move to a cleaner
+continuation page when that can increase available capacity. If no cleaner page
+can help, the row split loop may force one spacer/line of overflow progress
+rather than emit an empty continuation slice.
+
 Future hardening:
 
 - list-item continuation policy
@@ -422,6 +429,11 @@ Rules:
   and document the overflow
 - avoid infinite loops even when input is impossible to lay out cleanly
 - record forced-progress behavior in tests or debug traces
+- breakable table rows that must force one content unit forward should expose a
+  `forced-table-split-overflow` fragment warning and keep the row/cell slice
+  height large enough to enclose the forced content when possible
+- fragment warnings are renderer/editor-facing diagnostics; final export should
+  not hide them from the user
 
 ### 4.6 Keep Rules
 

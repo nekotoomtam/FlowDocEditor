@@ -15,10 +15,15 @@ export const WYSIWYG_INLINE_EDIT_ENABLED = resolveWysiwygInlineEditEnabled()
 
 export function resolveWysiwygTextEngineEnabled(
   rawValue: string | undefined = process.env.NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE,
-  _nodeEnv: string | undefined = process.env.NODE_ENV,
+  nodeEnv: string | undefined = process.env.NODE_ENV,
+  productionAckValue: string | undefined = process.env.NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE_PRODUCTION_ACK,
 ): boolean {
   const normalized = rawValue?.trim().toLowerCase()
-  if (normalized && ENABLED_VALUES.has(normalized)) return true
+  if (normalized && ENABLED_VALUES.has(normalized)) {
+    if (nodeEnv !== "production") return true
+    const productionAck = productionAckValue?.trim().toLowerCase()
+    return Boolean(productionAck && ENABLED_VALUES.has(productionAck))
+  }
   if (normalized && DISABLED_VALUES.has(normalized)) return false
   return false
 }

@@ -101,6 +101,25 @@ Command examples often use Windows PowerShell spelling:
 If dependencies, config files, or workspace setup are unavailable, report that
 verification could not run. Do not pretend a command passed.
 
+Before sending an external review archive, run
+`npm.cmd run review:gate:full` from the repository root when time allows; it
+checks the review archive manifest and then runs the non-browser review gate.
+For archive-only checks, run `npm.cmd run review:archive -- --check`. The
+review archive must include root package/config files, `scripts/`,
+`public/fonts/THSarabun.ttf`, `src/`, `packages/`, and `docs/` so reviewers can
+run the declared gates from the extracted package. In particular,
+`npm.cmd run review:gate` must use only archived sources/scripts/config, and
+`npm.cmd run review:browser` must work from the archive with bundled Chromium
+or a reviewer-provided system Chromium-family browser via
+`SMOKE_BROWSER_CHANNEL` or `SMOKE_EXECUTABLE_PATH`. `npm ci` does not guarantee
+that Playwright browser binaries are installed; use
+`npx playwright install chromium`, `npm.cmd run review:browser:install`, or a
+system executable path before claiming the browser gate. Use
+`npm.cmd run review:archive` to produce the actual
+`flowdoc-review-archive.zip`; the script verifies the ZIP entries after writing
+and rejects generated/cache paths such as `node_modules`, `.next`, `.vite`, and
+test result caches.
+
 The root `tsconfig.json` defines `@/*` path aliases that resolve to
 `packages/core/src/*` and `src/*`. Do not rewrite aliased imports to long
 relative imports unless the alias config is intentionally changed.

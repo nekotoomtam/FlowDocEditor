@@ -17,6 +17,9 @@ gates.
 - Server/API pagination remains authoritative for settled layout and export.
 - The first implementation runs behind `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE`
   and is disabled by default.
+- Production builds additionally require
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE_PRODUCTION_ACK=1`; see
+  `docs/WYSIWYG_PRODUCTION_GATE.md`.
 
 ## Non-Goals For The First Lane
 
@@ -243,6 +246,7 @@ Current implementation note:
 
 The new lane can become default only when:
 
+- `docs/WYSIWYG_PRODUCTION_GATE.md` is fully PASS for the target release.
 - edit/show parity passes on body paragraphs, split paragraphs, table cells,
   Thai/mixed text, and long unbroken text.
 - performance trace shows no full-document pagination on the critical keypress

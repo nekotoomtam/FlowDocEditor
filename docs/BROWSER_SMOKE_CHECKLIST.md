@@ -50,6 +50,8 @@ documents into `localStorage`, explicitly enables
 
 - editor shell, toolbar, canvas, and first page render
 - no unexpected layout error badge is visible
+- header/footer preview text renders from `PaginatedDocument` zone fragments and
+  remains read-only/non-interactive
 - paragraph inline edit commits multiline text
 - same-fragment drag selection produces a visible WYSIWYG selection overlay
 - stack paragraph inline edit keeps document-visual layout parity while typing
@@ -74,6 +76,8 @@ documents into `localStorage`, explicitly enables
   without a layout error
 - Fill mode shows a required-field readiness warning for an empty used field
   and clears the warning after the value is filled
+- Fill mode blocks PDF export with the field-specific reason while readiness has
+  errors, then enables export again after the value is fixed and layout settles
 - filled values are autosaved as package v2 `data.values`
 - a package v2 custom registry appears in the Field palette and selected
   fieldRef details appear in the property panel
@@ -84,6 +88,36 @@ you intentionally want to run against an already-started server. That external
 server must already have `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1` when the
 WYSIWYG smoke assertions are expected to pass. Use `SMOKE_PORT=<port>` when
 port `4010` is unavailable.
+By default the script uses Playwright's bundled Chromium. Use
+`SMOKE_BROWSER_CHANNEL=chrome` / `SMOKE_BROWSER_CHANNEL=msedge` for an
+installed Playwright browser channel, or `SMOKE_EXECUTABLE_PATH=<path>` for a
+system Chromium/Chrome/Edge executable. Set only one of
+`SMOKE_BROWSER_CHANNEL` and `SMOKE_EXECUTABLE_PATH` per run.
+If bundled Chromium is missing, the smoke launcher prints FlowDoc-specific
+guidance with the install and system-browser alternatives.
+
+## CI Browser Smoke Setup
+
+`npm ci` installs Playwright's package dependency, but it does not guarantee
+that Playwright browser binaries are present on every review or CI machine.
+Use one of these setups before the browser gate:
+
+```bash
+npm ci
+npx playwright install chromium
+npm run review:browser
+```
+
+or:
+
+```bash
+npm ci
+SMOKE_EXECUTABLE_PATH=/path/to/chrome npm run review:browser
+```
+
+The convenience command `npm run review:browser:install` installs bundled
+Chromium and then runs `review:browser`. `review:gate` and `review:browser` are
+separate gates; a non-browser pass does not prove editor browser behavior.
 
 This automated smoke is still focused coverage. It does not replace manual
 checks for perceived flicker, scroll feel, drag interactions, export artifacts,
@@ -213,6 +247,9 @@ Automated command:
   already-running server that has `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`.
 - Use `SMOKE_BROWSER_CHANNEL=chrome` or `SMOKE_BROWSER_CHANNEL=msedge` to run
   the same automated gate against installed Chrome or Edge through Playwright.
+- Use `SMOKE_EXECUTABLE_PATH=<path>` when the reviewer has a system Chromium or
+  Chrome-family executable but no Playwright browser channel installed. Leave
+  both browser-selection variables unset to use bundled Chromium.
 
 The automated smoke starts the flagged editor, opens
 `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`, and checks double-click
@@ -289,9 +326,10 @@ reconciliation, or export while layout status is not settled.
   pagination does not overwrite the latest text.
 - If the change touches fill mode, switch template/fill mode around the edit and
   confirm the resolved preview does not mutate the template.
-- If the change touches export/status wiring, trigger export while the layout is
-  optimistic or reconciling and confirm export goes through the API path without
-  making the canvas snapshot the source of truth.
+- If the change touches export/status wiring, trigger or inspect export while
+  the layout is optimistic, reconciling, drifted, or fill readiness has errors;
+  confirm export is blocked or clearly warned without making the canvas snapshot
+  the source of truth.
 
 Record any remaining flicker, stale preview, layout status mismatch, or
 undo/redo mismatch as a specific follow-up.
@@ -355,6 +393,14 @@ pagination status is presented.
 - For package export changes, confirm `Save JSON` writes the current package
   shape and preserves the active registry when the scenario uses fields.
 - Confirm any failure or fallback is visible and not silent.
+- Confirm `/fonts/THSarabun.ttf` is reachable from the browser when export or
+  font status changes are in scope.
+- Confirm PDF/DOCX export buttons are disabled or blocked while authoritative
+  layout, font, drift, or fill-readiness state is unsafe.
+- For the P0 user-report path, load a saved company/government/university style
+  package, switch to Fill mode, verify header/footer preview visibility, confirm
+  no font fallback or layout warning is visible, export PDF, and verify the PDF
+  page count.
 - Confirm editor preview remains usable after the status update.
 
 Renderer correctness itself belongs to `docs/EXPORT_RENDERER_CONTRACT.md` and
