@@ -192,6 +192,10 @@ Current implementation note:
   starts the flagged dev editor, runs heavy paste/copy/cut, keyboard undo/redo,
   focus restoration, page-boundary reflow, and synthetic duplicate-composition
   checks against the Stage 3 boundary scenario.
+- The Stage 4C smoke can be run against installed browser channels with
+  `SMOKE_BROWSER_CHANNEL=chrome` or `SMOKE_BROWSER_CHANNEL=msedge`; current
+  Stage 4C+3 evidence is recorded in
+  `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`.
 - `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` is the real OS IME gate. It must be
   completed for Windows Chrome and Windows Edge with Thai IME before claiming
   high real-world IME confidence from Stage 4C.

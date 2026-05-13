@@ -205,6 +205,8 @@ Automated command:
 - Use `SMOKE_PORT=<port>` to choose a dev-server port.
 - Use `SMOKE_BASE_URL=http://localhost:<port>/editor` only when pointing at an
   already-running server that has `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`.
+- Use `SMOKE_BROWSER_CHANNEL=chrome` or `SMOKE_BROWSER_CHANNEL=msedge` to run
+  the same automated gate against installed Chrome or Edge through Playwright.
 
 The automated smoke starts the flagged editor, opens
 `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`, and checks paste, copy,
@@ -215,6 +217,8 @@ console/page errors.
 For real OS IME coverage, use `docs/WYSIWYG_STAGE4C_IME_MATRIX.md`. The
 automated smoke uses synthetic composition events and is not enough by itself
 to claim Windows Thai IME confidence.
+Latest Stage 4C evidence is recorded in
+`docs/WYSIWYG_STAGE4C_IME_RESULTS.md`.
 
 Manual equivalent:
 

@@ -13,6 +13,7 @@ const smokePort = Number(process.env.SMOKE_PORT ?? DEFAULT_SMOKE_PORT)
 const baseEditorUrl = process.env.SMOKE_BASE_URL ?? `http://localhost:${smokePort}/editor`
 const shouldStartServer = process.env.SMOKE_BASE_URL == null
 const headless = process.env.HEADED !== "1"
+const browserChannel = process.env.SMOKE_BROWSER_CHANNEL?.trim() || undefined
 const platformShortcut = process.platform === "darwin" ? "Meta" : "Control"
 
 const targetFragmentSelector = `[data-testid="editor-fragment"][data-node-id="${TARGET_NODE_ID}"]`
@@ -23,17 +24,63 @@ function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
 
+function isIgnoredResourceError(error) {
+  if (error.status !== 404) return false
+
+  return isIgnoredResourceUrl(error.url)
+}
+
+function isIgnoredResourceUrl(url) {
+  try {
+    return new URL(url).pathname === "/favicon.ico"
+  } catch {
+    return false
+  }
+}
+
+function formatConsoleError(error) {
+  return [
+    error.text,
+    error.location?.url ? `at ${error.location.url}:${error.location.lineNumber}:${error.location.columnNumber}` : null,
+  ].filter(Boolean).join(" ")
+}
+
+function formatResourceError(error) {
+  return `${error.status} ${error.url}`
+}
+
+function isIgnorableConsoleError(error, ignoredResourceErrors) {
+  return (
+    error.text === "Failed to load resource: the server responded with a status of 404 (Not Found)" &&
+    (
+      ignoredResourceErrors.some((error) => isIgnoredResourceError(error)) ||
+      isIgnoredResourceUrl(error.location?.url ?? "")
+    )
+  )
+}
+
 function scenarioUrl() {
   const url = new URL(baseEditorUrl)
   url.searchParams.set("flowdocTestScenario", SCENARIO_ID)
   return url.toString()
 }
 
-function collectPageErrors(page, consoleErrors, pageErrors) {
+function collectPageErrors(page, consoleErrors, pageErrors, resourceErrors) {
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text())
+    if (message.type() === "error") {
+      consoleErrors.push({
+        text: message.text(),
+        location: message.location(),
+      })
+    }
   })
   page.on("pageerror", (error) => pageErrors.push(error.message))
+  page.on("response", (response) => {
+    const status = response.status()
+    if (status >= 400) {
+      resourceErrors.push({ status, url: response.url() })
+    }
+  })
 }
 
 async function waitForServer(url, server, timeoutMs = 60000) {
@@ -298,21 +345,49 @@ async function run() {
   try {
     if (server) await waitForServer(scenarioUrl(), server)
 
-    browser = await chromium.launch({ headless })
+    browser = await chromium.launch({
+      headless,
+      ...(browserChannel ? { channel: browserChannel } : {}),
+    })
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
     const page = await context.newPage()
     const consoleErrors = []
     const pageErrors = []
+    const resourceErrors = []
 
-    collectPageErrors(page, consoleErrors, pageErrors)
+    collectPageErrors(page, consoleErrors, pageErrors, resourceErrors)
 
     const clipboard = await assertStage4ClipboardFlow(page, context)
     const composition = await assertStage4CompositionFlow(page)
 
-    assert(consoleErrors.length === 0, `browser console errors:\n${consoleErrors.join("\n")}`)
+    const ignoredResourceErrors = resourceErrors.filter(isIgnoredResourceError)
+    const unexpectedResourceErrors = resourceErrors.filter((error) => !isIgnoredResourceError(error))
+    const ignoredConsoleErrors = consoleErrors.filter((error) => (
+      isIgnorableConsoleError(error, ignoredResourceErrors)
+    ))
+    const unexpectedConsoleErrors = consoleErrors.filter((error) => (
+      !isIgnorableConsoleError(error, ignoredResourceErrors)
+    ))
+
+    assert(unexpectedResourceErrors.length === 0, `browser resource errors:\n${unexpectedResourceErrors.map(formatResourceError).join("\n")}`)
+    assert(unexpectedConsoleErrors.length === 0, [
+      "browser console errors:",
+      unexpectedConsoleErrors.map(formatConsoleError).join("\n"),
+      resourceErrors.length > 0 ? `resource errors seen:\n${resourceErrors.map(formatResourceError).join("\n")}` : "resource errors seen: none",
+    ].join("\n"))
     assert(pageErrors.length === 0, `browser page errors:\n${pageErrors.join("\n")}`)
 
-    console.log(JSON.stringify({ ok: true, clipboard, composition }, null, 2))
+    console.log(JSON.stringify({
+      ok: true,
+      browser: {
+        channel: browserChannel ?? "bundled-chromium",
+        headless,
+      },
+      clipboard,
+      composition,
+      ignoredConsoleErrors: ignoredConsoleErrors.map(formatConsoleError),
+      ignoredResourceErrors,
+    }, null, 2))
   } finally {
     if (browser) await browser.close()
     await stopNextDevServer(server)

@@ -24,6 +24,55 @@ Each entry should include:
 
 ## 2026-05-13
 
+### Add Stage 4C+3 Browser-Channel IME Evidence
+
+Goal: Strengthen Stage 4C clipboard/IME confidence with repeatable installed
+Chrome and Edge evidence while keeping real Windows Thai IME rows honest.
+
+Completed:
+
+- Added `SMOKE_BROWSER_CHANNEL` support to `scripts/wysiwyg-stage4c-smoke.mjs`
+  so the Stage 4C gate can run on bundled Chromium, installed Chrome, or
+  installed Edge through Playwright.
+- Kept browser/page/resource failures strict, but ignored only the
+  browser-generated `404 /favicon.ico` console message seen in installed
+  Chrome and Edge channel runs.
+- Added `docs/WYSIWYG_STAGE4C_IME_RESULTS.md` to record the current evidence,
+  environment, installed input methods, browser versions, PASS/RISK/UNKNOWN
+  result matrix, and minimal next patch.
+- Updated the browser smoke checklist, test strategy, docs index, real IME
+  matrix, and WYSIWYG text-engine plan to link the evidence and channel command.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/DOCS_INDEX.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_STAGE4C_IME_MATRIX.md`
+- `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+
+Verification:
+
+- `node --check scripts\wysiwyg-stage4c-smoke.mjs`
+- `npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:wysiwyg-stage4c; $code=$LASTEXITCODE; Remove-Item Env:SMOKE_BROWSER_CHANNEL; exit $code`
+- `$env:SMOKE_BROWSER_CHANNEL='msedge'; npm.cmd run smoke:wysiwyg-stage4c; $code=$LASTEXITCODE; Remove-Item Env:SMOKE_BROWSER_CHANNEL; exit $code`
+
+Notes:
+
+- `Get-WinUserLanguageList` found Thai `041E:0000041E` and English US
+  `0409:00000409` installed.
+- Chrome `148.0.7778.97` and Edge `148.0.3967.54` channel runs passed the
+  automated Stage 4C workflow.
+- Real Windows Thai IME rows remain `UNKNOWN` until a human/unrestricted desktop
+  session completes `docs/WYSIWYG_STAGE4C_IME_MATRIX.md`.
+- No editor runtime behavior, document model, pagination, undo/redo semantics,
+  or export behavior changed in this patch.
+
 ### Add Stage 4C Real OS IME Matrix
 
 Goal: Define the real-world IME verification gate that must complement the

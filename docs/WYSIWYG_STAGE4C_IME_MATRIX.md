@@ -45,6 +45,21 @@ Not covered:
    npm.cmd run smoke:wysiwyg-stage4c
    ```
 
+   When installed-browser evidence is needed, also run:
+
+   ```powershell
+   $env:SMOKE_BROWSER_CHANNEL="chrome"
+   npm.cmd run smoke:wysiwyg-stage4c
+   Remove-Item Env:SMOKE_BROWSER_CHANNEL
+
+   $env:SMOKE_BROWSER_CHANNEL="msedge"
+   npm.cmd run smoke:wysiwyg-stage4c
+   Remove-Item Env:SMOKE_BROWSER_CHANNEL
+   ```
+
+   These browser-channel runs are still automation. They do not replace the
+   manual Windows Thai IME rows below.
+
 2. Stop other Next dev servers for this repo. Next dev holds a per-repo lock.
 
 3. Start a flagged manual server:
@@ -278,7 +293,11 @@ Mark the row `FAIL / BLOCKER` if any of these happen:
 ## Current Session Notes
 
 - Chrome and Edge executables were found on this Windows machine.
-- The active Windows input-method list could not be read reliably from the
-  current sandboxed shell session; mark the real OS IME rows `UNKNOWN` until a
-  human or unrestricted desktop session records them.
+- `Get-WinUserLanguageList` found Thai `041E:0000041E` and English US
+  `0409:00000409` input methods installed.
+- Stage 4C+3 automated evidence is recorded in
+  `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`.
+- Installed Chrome and Edge browser-channel automation is useful evidence, but
+  the real OS IME rows remain `UNKNOWN` until a human or unrestricted desktop
+  session records them.
 - The automated Stage 4C smoke remains required before and after manual runs.
