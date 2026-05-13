@@ -198,6 +198,22 @@ IME, accessibility, or cross-fragment selection coverage.
 
 Use while hardening the FlowDoc-owned Stage 4 clipboard and composition lane.
 
+Automated command:
+
+- Windows PowerShell: `npm.cmd run smoke:wysiwyg-stage4c`
+- Non-Windows: `npm run smoke:wysiwyg-stage4c`
+- Use `SMOKE_PORT=<port>` to choose a dev-server port.
+- Use `SMOKE_BASE_URL=http://localhost:<port>/editor` only when pointing at an
+  already-running server that has `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`.
+
+The automated smoke starts the flagged editor, opens
+`/editor?flowdocTestScenario=wysiwyg-stage3-boundary`, and checks paste, copy,
+cut, keyboard undo/redo, focus restoration, page-boundary reflow, duplicate IME
+suppression, no inline textarea mount, no layout error, and no browser
+console/page errors.
+
+Manual equivalent:
+
 - Start the editor with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`.
 - Open `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`.
 - Confirm the target paragraph `stage3-boundary-target` starts as one fragment.

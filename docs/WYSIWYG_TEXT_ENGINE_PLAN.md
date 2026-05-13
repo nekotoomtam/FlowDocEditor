@@ -188,6 +188,10 @@ Current implementation note:
   text once and suppresses duplicate final input events.
 - Keyboard edit end now restores focus to the editor shell for keyboard exits,
   and undo/redo shortcut matching is case-insensitive.
+- `npm.cmd run smoke:wysiwyg-stage4c` is the repeatable Stage 4C gate. It
+  starts the flagged dev editor, runs heavy paste/copy/cut, keyboard undo/redo,
+  focus restoration, page-boundary reflow, and synthetic duplicate-composition
+  checks against the Stage 3 boundary scenario.
 - Accessibility announcements, cross-fragment selection, and table-cell
   text-engine editing are still deferred Stage 4/5 work.
 

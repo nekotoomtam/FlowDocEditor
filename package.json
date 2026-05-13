@@ -13,7 +13,8 @@
     "type-check": "tsc --noEmit",
     "test": "npm run test -w packages/core && npm run test:app",
     "test:app": "vitest run",
-    "smoke:editor": "node scripts/editor-smoke.mjs"
+    "smoke:editor": "node scripts/editor-smoke.mjs",
+    "smoke:wysiwyg-stage4c": "node scripts/wysiwyg-stage4c-smoke.mjs"
   },
   "keywords": [],
   "author": "",

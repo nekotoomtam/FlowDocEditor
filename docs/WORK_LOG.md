@@ -20,6 +20,56 @@ Each entry should include:
 
 ## 2026-05-13
 
+### Add Automated Stage 4C WYSIWYG Smoke Gate
+
+Goal: Turn the Stage 4C clipboard/IME browser verification into a repeatable
+repo command so future WYSIWYG text-engine changes cannot silently regress
+paste, cut, composition, focus, or undo/redo behavior.
+
+Completed:
+
+- Added `scripts/wysiwyg-stage4c-smoke.mjs`, a Playwright smoke that starts the
+  flagged editor with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1` and opens the
+  `wysiwyg-stage3-boundary` scenario.
+- Added `npm.cmd run smoke:wysiwyg-stage4c` / `npm run smoke:wysiwyg-stage4c`.
+- The smoke verifies the text-engine bridge mounts with no inline textarea,
+  pastes a heavy Thai/English CRLF payload, crosses the target paragraph from
+  one fragment to at least two fragments, copies and cuts the selected
+  `CUTME4C` marker through the system clipboard, exits with Escape, verifies
+  editor focus restoration, and checks keyboard Undo/Redo.
+- The same smoke verifies synthetic IME composition commits exactly once,
+  suppresses duplicate final input, leaves the hidden bridge empty, and records
+  browser console/page errors as failures.
+- Hardened script cleanup so spawned Next dev servers are awaited on shutdown,
+  and clipboard permissions use the actual scenario origin for `SMOKE_BASE_URL`
+  compatibility.
+- Updated the browser checklist, test strategy, and text-engine plan to make
+  this command the Stage 4C automated gate.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `package.json`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+
+Verification:
+
+- `npm.cmd run smoke:wysiwyg-stage4c`
+- `SMOKE_PORT=4017 npm.cmd run smoke:wysiwyg-stage4c`
+- `npm.cmd run type-check`
+
+Notes:
+
+- The smoke intentionally remains synthetic for IME composition. Real OS IME
+  coverage still belongs to the planned manual matrix.
+- The command cannot run while another Next dev server for this same repo is
+  already holding the Next dev lock, unless `SMOKE_BASE_URL` points at an
+  already-running flagged server.
+
 ### Harden WYSIWYG Text Engine Clipboard And IME
 
 Goal: Continue Stage 4C by routing paste, copy, cut, and IME composition
