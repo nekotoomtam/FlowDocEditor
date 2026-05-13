@@ -212,6 +212,10 @@ cut, keyboard undo/redo, focus restoration, page-boundary reflow, duplicate IME
 suppression, no inline textarea mount, no layout error, and no browser
 console/page errors.
 
+For real OS IME coverage, use `docs/WYSIWYG_STAGE4C_IME_MATRIX.md`. The
+automated smoke uses synthetic composition events and is not enough by itself
+to claim Windows Thai IME confidence.
+
 Manual equivalent:
 
 - Start the editor with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`.

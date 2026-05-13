@@ -33,6 +33,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Editor interaction and UX behavior | `docs/EDITOR_UX_CONTRACT.md` |
 | WYSIWYG/inline edit roadmap | `docs/WYSIWYG_EDITOR_ROADMAP.md` |
 | FlowDoc-owned WYSIWYG text engine plan | `docs/WYSIWYG_TEXT_ENGINE_PLAN.md` |
+| Real OS WYSIWYG IME verification | `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` |
 | Layout/pagination engine rules | `docs/LAYOUT_ENGINE_SPEC.md` |
 | Page-boundary behavior | `docs/CROSS_PAGE_BEHAVIOR.md` |
 | Table authoring and table operations | `docs/TABLE_EDITING_CONTRACT.md` |
@@ -65,6 +66,7 @@ Start with:
 - `docs/EDITOR_UX_CONTRACT.md`
 - `docs/WYSIWYG_EDITOR_ROADMAP.md`
 - `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` when clipboard or OS IME behavior is in scope
 - `docs/BROWSER_SMOKE_CHECKLIST.md`
 - `docs/TEST_STRATEGY.md`
 - `docs/WORK_LOG_RECENT.md` when checking the latest implementation notes

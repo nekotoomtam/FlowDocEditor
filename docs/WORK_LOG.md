@@ -20,6 +20,48 @@ Each entry should include:
 
 ## 2026-05-13
 
+### Add Stage 4C Real OS IME Matrix
+
+Goal: Define the real-world IME verification gate that must complement the
+automated Stage 4C smoke before raising clipboard/IME confidence to the
+9.2-9.5 range.
+
+Completed:
+
+- Added `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` as the source of truth for manual
+  Windows Chrome/Edge Thai IME coverage.
+- Defined PASS, FAIL / BLOCKER, RISK, and UNKNOWN terms for Stage 4C IME rows.
+- Added preflight commands, DevTools probes, required environment rows,
+  eight manual case groups, an evidence template, and blocker rules.
+- Linked the matrix from the docs index, browser smoke checklist, test strategy,
+  and WYSIWYG text-engine plan.
+- Recorded that Chrome and Edge are installed on this machine, while the active
+  Windows input-method list could not be read reliably from the current
+  sandboxed shell session.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/DOCS_INDEX.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_STAGE4C_IME_MATRIX.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run smoke:wysiwyg-stage4c`
+- `git diff --check`
+
+Notes:
+
+- This closes the documentation and evidence format for Stage 4C+2, but the
+  real OS IME rows remain `UNKNOWN` until a human/unrestricted desktop session
+  records Windows Chrome and Edge Thai IME results.
+- No editor runtime behavior, document model, pagination, export, or test code
+  changed in this patch.
+
 ### Add Automated Stage 4C WYSIWYG Smoke Gate
 
 Goal: Turn the Stage 4C clipboard/IME browser verification into a repeatable

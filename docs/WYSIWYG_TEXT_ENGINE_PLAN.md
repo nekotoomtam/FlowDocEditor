@@ -192,6 +192,9 @@ Current implementation note:
   starts the flagged dev editor, runs heavy paste/copy/cut, keyboard undo/redo,
   focus restoration, page-boundary reflow, and synthetic duplicate-composition
   checks against the Stage 3 boundary scenario.
+- `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` is the real OS IME gate. It must be
+  completed for Windows Chrome and Windows Edge with Thai IME before claiming
+  high real-world IME confidence from Stage 4C.
 - Accessibility announcements, cross-fragment selection, and table-cell
   text-engine editing are still deferred Stage 4/5 work.
 
