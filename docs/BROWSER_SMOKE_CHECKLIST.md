@@ -194,6 +194,38 @@ This check protects keyboard selection semantics, selected-range deletion, and
 the Stage 3 page-boundary reflow path together. It does not claim clipboard,
 IME, accessibility, or cross-fragment selection coverage.
 
+### WYSIWYG Text Engine Stage 4 Clipboard And IME
+
+Use while hardening the FlowDoc-owned Stage 4 clipboard and composition lane.
+
+- Start the editor with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`.
+- Open `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`.
+- Confirm the target paragraph `stage3-boundary-target` starts as one fragment.
+- Click the target paragraph and confirm `data-wysiwyg-input-bridge="true"` is
+  present while `textarea[data-inline-edit-node-id]` is absent.
+- Put a heavy plain-text clipboard payload on the system clipboard: include
+  Thai/English text, multiple newlines, a long unbroken token, and a final cut
+  marker such as `CUTME4C`.
+- Press End and paste with Ctrl/Cmd+V. Confirm the marker text is visible in
+  SVG text, line endings render as document line breaks, the target crosses to
+  at least two fragments, no inline textarea appears, and no layout error is
+  visible.
+- Press End, select the cut marker with Shift+ArrowLeft, and cut with
+  Ctrl/Cmd+X. Confirm the system clipboard contains the selected marker, the
+  marker is removed from SVG text, the selection overlay collapses, no inline
+  textarea appears, and no layout error is visible.
+- Exit edit with Escape, then Undo and Redo from the keyboard. Confirm Undo
+  removes the pasted payload and returns the target to one fragment; Redo
+  restores the pasted payload without restoring the cut marker.
+- For IME, dispatch or perform a composition sequence on the hidden bridge.
+  Confirm intermediate composition input does not mutate visible SVG text,
+  compositionend commits the final text exactly once, the hidden bridge is
+  empty afterward, no inline textarea appears, and no layout error is visible.
+
+This check protects clipboard and IME adapter behavior. It does not claim
+accessibility announcements, cross-fragment selection, or table-cell
+text-engine coverage.
+
 ### Editor State Race And Reconciliation
 
 Use when changes touch `EditorShell` document state, `previewDoc`,

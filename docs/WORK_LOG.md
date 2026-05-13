@@ -20,6 +20,59 @@ Each entry should include:
 
 ## 2026-05-13
 
+### Harden WYSIWYG Text Engine Clipboard And IME
+
+Goal: Continue Stage 4C by routing paste, copy, cut, and IME composition
+through FlowDoc-owned text draft operations while keeping the hidden
+`contentEditable` bridge adapter-only.
+
+Completed:
+
+- Added plain-text clipboard helpers to `useWysiwygTextSession`, including CRLF
+  normalization, selected-text extraction from FlowDoc offsets, and selected
+  cut as one draft change.
+- Wired paste/copy/cut handlers in the text-engine bridge so visible text,
+  selection, wrapping, and layout remain owned by SVG/FlowDoc geometry.
+- Added Ctrl/Cmd+C/X/V fallback handling through the Clipboard API because the
+  SVG selection overlay is not a native browser selection.
+- Added IME composition guards so intermediate composition input does not
+  mutate the draft, compositionend commits once, and duplicate final input is
+  suppressed.
+- Restored editor focus after keyboard edit exit and made editor undo/redo
+  shortcut matching case-insensitive.
+- Updated the text-engine plan, browser smoke checklist, and test strategy for
+  the Stage 4C clipboard/IME gate.
+
+Files changed:
+
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/useWysiwygTextSession.ts`
+- `src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- Browser Playwright smoke on `http://localhost:4016/editor?flowdocTestScenario=wysiwyg-stage3-boundary` with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`, `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1`, and `NEXT_PUBLIC_FLOWDOC_WYSIWYG_PERF_TRACE=1`: pasted heavy Thai/English multiline text through Ctrl+V, crossed the target from one fragment to two, selected and cut `CUTME4C` through Ctrl+X with the system clipboard matching the selected text, committed with Escape, Undo returned the target to one fragment with the pasted marker gone, Redo restored the pasted marker and two-fragment layout without restoring the cut marker, synthetic IME composition committed `IME4Cทดสอบ` exactly once, the hidden bridge was empty after composition, no inline textarea mounted, and no layout error was visible.
+
+Notes:
+
+- The in-app browser plugin was attempted first, but this session blocked local
+  `localhost` and `127.0.0.1` navigation with `ERR_BLOCKED_BY_CLIENT`. Browser
+  verification used the same local Playwright runtime as the project smoke
+  suite.
+- A pre-existing Next dev server for this repo did not have the text-engine
+  flags enabled, so it was stopped before running the flagged Stage 4C smoke.
+- This intentionally does not change `DocumentNode`, server/API pagination,
+  export behavior, accessibility announcements, cross-fragment selection, or
+  table-cell text-engine editing.
+
 ### Add WYSIWYG Text Engine Selection Foundation
 
 Goal: Continue Stage 4B by making the FlowDoc-owned text-engine lane handle

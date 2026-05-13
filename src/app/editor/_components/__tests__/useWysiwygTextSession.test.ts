@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest"
 import {
   INACTIVE_WYSIWYG_TEXT_SESSION,
+  applyWysiwygTextClipboardCut,
   applyWysiwygTextInputKey,
   applyWysiwygTextInputText,
   changeWysiwygTextSessionDraft,
   clampWysiwygTextOffset,
+  getWysiwygTextSelectedText,
   isWysiwygTextSessionLayoutFresh,
   markWysiwygTextLayoutFresh,
   moveWysiwygTextSessionCaret,
+  normalizeWysiwygPlainTextInput,
   startWysiwygTextSessionState,
 } from "../useWysiwygTextSession"
 
@@ -39,6 +42,55 @@ describe("applyWysiwygTextInputText", () => {
 
   it("ignores empty browser input text", () => {
     expect(applyWysiwygTextInputText("Alpha", 5, "")).toBeNull()
+  })
+
+  it("normalizes pasted CRLF text before replacing the active selection", () => {
+    expect(applyWysiwygTextInputText("AxxB", 3, "หนึ่ง\r\nสอง\rสาม", {
+      anchorOffset: 1,
+      focusOffset: 3,
+    })).toEqual({
+      text: "Aหนึ่ง\nสอง\nสามB",
+      caretOffset: 14,
+      selection: { anchorOffset: 14, focusOffset: 14 },
+    })
+  })
+})
+
+describe("WYSIWYG text clipboard helpers", () => {
+  it("normalizes plain-text clipboard line endings", () => {
+    expect(normalizeWysiwygPlainTextInput("A\r\nB\rC\nD")).toBe("A\nB\nC\nD")
+  })
+
+  it("reads selected text from forward and backward selections", () => {
+    expect(getWysiwygTextSelectedText("Alpha beta", 10, {
+      anchorOffset: 6,
+      focusOffset: 10,
+    })).toBe("beta")
+    expect(getWysiwygTextSelectedText("Alpha beta", 6, {
+      anchorOffset: 10,
+      focusOffset: 6,
+    })).toBe("beta")
+  })
+
+  it("cuts selected text as one draft change and collapses at the removed range", () => {
+    expect(applyWysiwygTextClipboardCut("Alpha beta", 10, {
+      anchorOffset: 6,
+      focusOffset: 10,
+    })).toEqual({
+      selectedText: "beta",
+      change: {
+        text: "Alpha ",
+        caretOffset: 6,
+        selection: { anchorOffset: 6, focusOffset: 6 },
+      },
+    })
+  })
+
+  it("does not cut collapsed selections", () => {
+    expect(applyWysiwygTextClipboardCut("Alpha", 5, {
+      anchorOffset: 5,
+      focusOffset: 5,
+    })).toBeNull()
   })
 })
 

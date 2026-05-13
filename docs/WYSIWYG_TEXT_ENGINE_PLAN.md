@@ -176,8 +176,20 @@ Current implementation note:
   the visual truth.
 - The Stage 3 boundary stress fixture now also covers deleting a selected
   overflow append and verifying the draft paginates back to one fragment.
-- Clipboard, cut, OS IME composition hardening, accessibility announcements,
-  and cross-fragment selection are still deferred Stage 4 work.
+- Stage 4C adds explicit clipboard and IME handling to the hidden input bridge:
+  paste reads plain text, normalizes CRLF to LF, and applies it as a FlowDoc
+  draft replacement; copy/cut read the active FlowDoc selection offsets; cut
+  deletes through the same draft operation path.
+- Ctrl/Cmd+C/X/V have a Clipboard API fallback because the SVG selection is not
+  a browser-native selection. The fallback writes or reads plain text and still
+  keeps visible text, wrapping, caret, and selection owned by FlowDoc geometry.
+- IME composition is guarded with composing/suppression state so intermediate
+  composition input does not mutate the draft, while compositionend commits
+  text once and suppresses duplicate final input events.
+- Keyboard edit end now restores focus to the editor shell for keyboard exits,
+  and undo/redo shortcut matching is case-insensitive.
+- Accessibility announcements, cross-fragment selection, and table-cell
+  text-engine editing are still deferred Stage 4/5 work.
 
 ### Stage 5: Default Eligibility
 

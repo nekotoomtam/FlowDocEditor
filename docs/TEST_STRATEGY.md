@@ -176,6 +176,7 @@ pass.
 | Docs only | `git diff --check` |
 | UI copy or minor panel wiring | type-check; browser check if interaction changed |
 | Editor interaction behavior | type-check; focused app tests if available; `npm.cmd run smoke:editor`; manual browser smoke for interaction not covered by the script |
+| WYSIWYG text-engine clipboard or IME behavior | type-check; focused app tests for draft operations; manual browser smoke on `wysiwyg-stage3-boundary` covering paste/cut/composition, no textarea mount, no layout error, and undo/redo |
 | Editor state race or reconciliation | type-check; focused app tests if available; `npm.cmd run smoke:editor`; manual browser smoke using the editor state race set |
 | Persistence or JSON import | focused persistence tests; type-check; browser smoke if editor load/import/export behavior changed |
 | Package proposal docs | `git diff --check`; no runtime tests unless code or active behavior changes |

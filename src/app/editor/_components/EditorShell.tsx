@@ -694,11 +694,17 @@ export default function EditorShell() {
   ])
 
   const handleInlineEditEnd = useCallback((nodeId?: string, reason: "blur" | "keyboard" = "keyboard") => {
+    const restoreEditorFocus = () => {
+      if (reason !== "keyboard") return
+      requestAnimationFrame(() => editorRootRef.current?.focus())
+    }
     if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionState.nodeId && (!nodeId || nodeId === wysiwygTextSessionState.nodeId)) {
       finalizeInlineEditBeforeAction()
+      restoreEditorFocus()
       return
     }
     endInlineEditSession(nodeId, reason)
+    restoreEditorFocus()
   }, [endInlineEditSession, finalizeInlineEditBeforeAction, wysiwygTextSessionState.nodeId])
 
   const handleWysiwygTextDraftChange = useCallback((nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => {
@@ -1479,18 +1485,19 @@ export default function EditorShell() {
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     const tag = (e.target as HTMLElement).tagName
     const isTextInput = tag === "INPUT" || tag === "TEXTAREA"
+    const key = e.key.toLowerCase()
     if ((e.ctrlKey || e.metaKey) && !isTextInput) {
-      if (e.key === "=" || e.key === "+") {
+      if (key === "=" || key === "+") {
         e.preventDefault()
         zoomIn()
         return
       }
-      if (e.key === "-") {
+      if (key === "-") {
         e.preventDefault()
         zoomOut()
         return
       }
-      if (e.key === "0") {
+      if (key === "0") {
         e.preventDefault()
         resetZoom()
         return
@@ -1510,13 +1517,13 @@ export default function EditorShell() {
       e.preventDefault()
       dispatch({ type: "DELETE_NODE", nodeId: state.selectedNodeId })
     }
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === "z") {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === "z") {
       if (isTextInput) return
       e.preventDefault()
       if (!isTemplateMode) return
       handleUndo()
     }
-    if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.shiftKey && e.key === "z"))) {
+    if ((e.ctrlKey || e.metaKey) && (key === "y" || (e.shiftKey && key === "z"))) {
       if (isTextInput) return
       e.preventDefault()
       if (!isTemplateMode) return

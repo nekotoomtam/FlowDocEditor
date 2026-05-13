@@ -13,8 +13,14 @@ import {
 } from "./wysiwygCaretMapping"
 import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
 import type { InlineEditSelectionSnapshot } from "./wysiwygTextInteraction"
-import { applyWysiwygTextInputKey, applyWysiwygTextInputText, clampWysiwygTextOffset } from "./useWysiwygTextSession"
-import type { WysiwygTextSelection } from "./useWysiwygTextSession"
+import {
+  applyWysiwygTextClipboardCut,
+  applyWysiwygTextInputKey,
+  applyWysiwygTextInputText,
+  clampWysiwygTextOffset,
+  getWysiwygTextSelectedText,
+} from "./useWysiwygTextSession"
+import type { WysiwygTextSelection, WysiwygTextSessionDraftChange } from "./useWysiwygTextSession"
 import { classifyWysiwygTextReflow } from "./wysiwygReflow"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 
@@ -537,6 +543,15 @@ function renderSelectionOverlay(
   ))
 }
 
+interface TextEngineClipboardShortcutEvent {
+  key: string
+  altKey: boolean
+  ctrlKey: boolean
+  metaKey: boolean
+  preventDefault: () => void
+  stopPropagation: () => void
+}
+
 function paragraphWithDraftText(node: ParagraphNode, draftText: string): ParagraphNode | null {
   if (!isPlainTextParagraph(node)) return null
   const firstRun = node.children[0]
@@ -621,6 +636,8 @@ export function WysiwygTextLayer({
   const layerRef = useRef<SVGGElement | null>(null)
   const inputBridgeRef = useRef<HTMLDivElement | null>(null)
   const pointerSelectionAnchorRef = useRef<number | null>(null)
+  const isComposingTextEngineRef = useRef(false)
+  const suppressNextCompositionInputRef = useRef(false)
   const draftStateRef = useRef<{
     text: string
     caretOffset: number | null
@@ -646,7 +663,25 @@ export function WysiwygTextLayer({
     inputBridgeRef.current?.focus()
   }, [fragment.nodeId])
 
-  const applyDraftChange = useCallback((change: ReturnType<typeof applyWysiwygTextInputKey>) => {
+  const clearInputBridgeText = useCallback((input: HTMLElement | null = inputBridgeRef.current) => {
+    if (input) input.textContent = ""
+  }, [])
+
+  const isCompositionBridgeInput = useCallback((event: InputEvent) => (
+    event.isComposing ||
+    isComposingTextEngineRef.current ||
+    event.inputType === "insertCompositionText" ||
+    event.inputType === "deleteCompositionText"
+  ), [])
+
+  const consumeSuppressedCompositionInput = useCallback((input: HTMLElement | null) => {
+    if (!suppressNextCompositionInputRef.current) return false
+    suppressNextCompositionInputRef.current = false
+    clearInputBridgeText(input)
+    return true
+  }, [clearInputBridgeText])
+
+  const applyDraftChange = useCallback((change: WysiwygTextSessionDraftChange | null) => {
     if (!change || !onDraftChange) return false
     draftStateRef.current = {
       text: change.text,
@@ -667,6 +702,86 @@ export function WysiwygTextLayer({
       current.selection,
     ))
   }, [applyDraftChange, onDraftChange])
+
+  const getSelectedDraftText = useCallback(() => {
+    const current = draftStateRef.current
+    return getWysiwygTextSelectedText(current.text, current.caretOffset, current.selection)
+  }, [])
+
+  const getClipboardCutDraft = useCallback(() => {
+    const current = draftStateRef.current
+    return applyWysiwygTextClipboardCut(current.text, current.caretOffset, current.selection)
+  }, [])
+
+  const applyClipboardCutToDraft = useCallback((cut = getClipboardCutDraft()) => {
+    if (!cut || !applyDraftChange(cut.change)) return null
+    return cut.selectedText
+  }, [applyDraftChange, getClipboardCutDraft])
+
+  const writeClipboardText = useCallback((text: string) => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) return Promise.resolve(false)
+    return navigator.clipboard.writeText(text).then(() => true, () => false)
+  }, [])
+
+  const readClipboardText = useCallback(() => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) return Promise.resolve("")
+    return navigator.clipboard.readText().then((text) => text, () => "")
+  }, [])
+
+  const handleClipboardShortcutKeyDown = useCallback((event: TextEngineClipboardShortcutEvent) => {
+    if (event.altKey || (!event.ctrlKey && !event.metaKey)) return false
+    const key = event.key.toLowerCase()
+    if (key !== "c" && key !== "x" && key !== "v") return false
+
+    if (key === "v") {
+      event.stopPropagation()
+      event.preventDefault()
+      void readClipboardText().then((pastedText) => {
+        clearInputBridgeText()
+        applyTextInput(pastedText)
+      })
+      return true
+    }
+
+    const cut = key === "x" ? getClipboardCutDraft() : null
+    const selectedText = cut?.selectedText ?? getSelectedDraftText()
+    if (!selectedText) return false
+
+    event.stopPropagation()
+    event.preventDefault()
+    void writeClipboardText(selectedText).then((written) => {
+      if (written && cut) {
+        applyClipboardCutToDraft(cut)
+        clearInputBridgeText()
+      }
+    })
+    return true
+  }, [
+    applyClipboardCutToDraft,
+    applyTextInput,
+    clearInputBridgeText,
+    getClipboardCutDraft,
+    getSelectedDraftText,
+    readClipboardText,
+    writeClipboardText,
+  ])
+
+  const startCompositionInput = useCallback((input: HTMLElement | null) => {
+    isComposingTextEngineRef.current = true
+    suppressNextCompositionInputRef.current = false
+    clearInputBridgeText(input)
+  }, [clearInputBridgeText])
+
+  const endCompositionInput = useCallback((input: HTMLElement | null, committedText: string) => {
+    isComposingTextEngineRef.current = false
+    clearInputBridgeText(input)
+    if (!committedText) {
+      suppressNextCompositionInputRef.current = false
+      return false
+    }
+    suppressNextCompositionInputRef.current = true
+    return applyTextInput(committedText)
+  }, [applyTextInput, clearInputBridgeText])
 
   const applyKeyInput = useCallback((input: {
     key: string
@@ -712,10 +827,6 @@ export function WysiwygTextLayer({
     const input = inputBridgeRef.current
     if (!input) return
 
-    const clearBridgeText = () => {
-      input.textContent = ""
-    }
-
     const handleNativeKeyDown = (event: KeyboardEvent) => {
       event.stopPropagation()
       if (event.key === "Escape") {
@@ -723,6 +834,7 @@ export function WysiwygTextLayer({
         onEndEdit?.(fragment.nodeId, "keyboard")
         return
       }
+      if (handleClipboardShortcutKeyDown(event)) return
       if (!applyKeyInput({
         key: event.key,
         shiftKey: event.shiftKey,
@@ -735,7 +847,12 @@ export function WysiwygTextLayer({
     }
 
     const handleNativeBeforeInput = (event: InputEvent) => {
-      if (event.isComposing) return
+      event.stopPropagation()
+      if (consumeSuppressedCompositionInput(input)) {
+        event.preventDefault()
+        return
+      }
+      if (isCompositionBridgeInput(event)) return
       let handled = false
       if (event.inputType === "insertText" && event.data) {
         handled = applyTextInput(event.data)
@@ -748,24 +865,85 @@ export function WysiwygTextLayer({
       }
       if (!handled) return
       event.preventDefault()
-      clearBridgeText()
+      clearInputBridgeText(input)
     }
 
-    const handleNativeInput = () => {
+    const handleNativeInput = (event: InputEvent) => {
+      event.stopPropagation()
+      if (consumeSuppressedCompositionInput(input)) return
+      if (isComposingTextEngineRef.current) return
       const insertedText = input.textContent ?? ""
-      clearBridgeText()
+      clearInputBridgeText(input)
       applyTextInput(insertedText)
+    }
+
+    const handleNativePaste = (event: ClipboardEvent) => {
+      event.stopPropagation()
+      event.preventDefault()
+      clearInputBridgeText(input)
+      applyTextInput(event.clipboardData?.getData("text/plain") ?? "")
+    }
+
+    const handleNativeCopy = (event: ClipboardEvent) => {
+      const selectedText = getSelectedDraftText()
+      if (!selectedText || !event.clipboardData) return
+      event.stopPropagation()
+      event.preventDefault()
+      event.clipboardData.setData("text/plain", selectedText)
+    }
+
+    const handleNativeCut = (event: ClipboardEvent) => {
+      if (!event.clipboardData) return
+      const selectedText = applyClipboardCutToDraft()
+      if (!selectedText) return
+      event.stopPropagation()
+      event.preventDefault()
+      event.clipboardData.setData("text/plain", selectedText)
+      clearInputBridgeText(input)
+    }
+
+    const handleNativeCompositionStart = (event: CompositionEvent) => {
+      event.stopPropagation()
+      startCompositionInput(input)
+    }
+
+    const handleNativeCompositionEnd = (event: CompositionEvent) => {
+      event.stopPropagation()
+      endCompositionInput(input, event.data || input.textContent || "")
     }
 
     input.addEventListener("keydown", handleNativeKeyDown)
     input.addEventListener("beforeinput", handleNativeBeforeInput)
     input.addEventListener("input", handleNativeInput)
+    input.addEventListener("paste", handleNativePaste)
+    input.addEventListener("copy", handleNativeCopy)
+    input.addEventListener("cut", handleNativeCut)
+    input.addEventListener("compositionstart", handleNativeCompositionStart)
+    input.addEventListener("compositionend", handleNativeCompositionEnd)
     return () => {
       input.removeEventListener("keydown", handleNativeKeyDown)
       input.removeEventListener("beforeinput", handleNativeBeforeInput)
       input.removeEventListener("input", handleNativeInput)
+      input.removeEventListener("paste", handleNativePaste)
+      input.removeEventListener("copy", handleNativeCopy)
+      input.removeEventListener("cut", handleNativeCut)
+      input.removeEventListener("compositionstart", handleNativeCompositionStart)
+      input.removeEventListener("compositionend", handleNativeCompositionEnd)
     }
-  }, [applyKeyInput, applyTextInput, fragment.nodeId, onEndEdit])
+  }, [
+    applyClipboardCutToDraft,
+    applyKeyInput,
+    applyTextInput,
+    clearInputBridgeText,
+    consumeSuppressedCompositionInput,
+    endCompositionInput,
+    fragment.nodeId,
+    getSelectedDraftText,
+    handleClipboardShortcutKeyDown,
+    isCompositionBridgeInput,
+    onEndEdit,
+    startCompositionInput,
+  ])
 
   const handlePointerDown = useCallback((event: React.PointerEvent<SVGGElement>) => {
     event.stopPropagation()
@@ -805,6 +983,7 @@ export function WysiwygTextLayer({
       onEndEdit?.(fragment.nodeId, "keyboard")
       return
     }
+    if (handleClipboardShortcutKeyDown(event)) return
     if (!applyKeyInput({
       key: event.key,
       shiftKey: event.shiftKey,
@@ -814,16 +993,21 @@ export function WysiwygTextLayer({
       isComposing: event.nativeEvent.isComposing,
     })) return
     event.preventDefault()
-  }, [applyKeyInput, fragment.nodeId, onEndEdit])
+  }, [applyKeyInput, fragment.nodeId, handleClipboardShortcutKeyDown, onEndEdit])
 
   const handleInputBridgeBeforeInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
+    event.stopPropagation()
     const nativeEvent = event.nativeEvent as InputEvent
-    if (nativeEvent.isComposing) return
+    if (consumeSuppressedCompositionInput(event.currentTarget)) {
+      event.preventDefault()
+      return
+    }
+    if (isCompositionBridgeInput(nativeEvent)) return
     let change: ReturnType<typeof applyWysiwygTextInputKey> = null
     if (nativeEvent.inputType === "insertText" && nativeEvent.data) {
       if (applyTextInput(nativeEvent.data)) {
         event.preventDefault()
-        event.currentTarget.textContent = ""
+        clearInputBridgeText(event.currentTarget)
       }
       return
     } else if (nativeEvent.inputType === "insertLineBreak" || nativeEvent.inputType === "insertParagraph") {
@@ -851,14 +1035,57 @@ export function WysiwygTextLayer({
     if (!change) return
     event.preventDefault()
     applyDraftChange(change)
-    event.currentTarget.textContent = ""
-  }, [applyDraftChange, applyTextInput])
+    clearInputBridgeText(event.currentTarget)
+  }, [
+    applyDraftChange,
+    applyTextInput,
+    clearInputBridgeText,
+    consumeSuppressedCompositionInput,
+    isCompositionBridgeInput,
+  ])
 
   const handleInputBridgeInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
+    event.stopPropagation()
+    if (consumeSuppressedCompositionInput(event.currentTarget)) return
+    if (isComposingTextEngineRef.current) return
     const insertedText = event.currentTarget.textContent ?? ""
-    event.currentTarget.textContent = ""
+    clearInputBridgeText(event.currentTarget)
     applyTextInput(insertedText)
-  }, [applyTextInput])
+  }, [applyTextInput, clearInputBridgeText, consumeSuppressedCompositionInput])
+
+  const handleInputBridgePaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    event.stopPropagation()
+    event.preventDefault()
+    clearInputBridgeText(event.currentTarget)
+    applyTextInput(event.clipboardData.getData("text/plain"))
+  }, [applyTextInput, clearInputBridgeText])
+
+  const handleInputBridgeCopy = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    const selectedText = getSelectedDraftText()
+    if (!selectedText) return
+    event.stopPropagation()
+    event.preventDefault()
+    event.clipboardData.setData("text/plain", selectedText)
+  }, [getSelectedDraftText])
+
+  const handleInputBridgeCut = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    const selectedText = applyClipboardCutToDraft()
+    if (!selectedText) return
+    event.stopPropagation()
+    event.preventDefault()
+    event.clipboardData.setData("text/plain", selectedText)
+    clearInputBridgeText(event.currentTarget)
+  }, [applyClipboardCutToDraft, clearInputBridgeText])
+
+  const handleInputBridgeCompositionStart = useCallback((event: React.CompositionEvent<HTMLDivElement>) => {
+    event.stopPropagation()
+    startCompositionInput(event.currentTarget)
+  }, [startCompositionInput])
+
+  const handleInputBridgeCompositionEnd = useCallback((event: React.CompositionEvent<HTMLDivElement>) => {
+    event.stopPropagation()
+    endCompositionInput(event.currentTarget, event.data || event.currentTarget.textContent || "")
+  }, [endCompositionInput])
 
   return (
     <g
@@ -895,6 +1122,11 @@ export function WysiwygTextLayer({
           onBeforeInput={handleInputBridgeBeforeInput}
           onInput={handleInputBridgeInput}
           onKeyDown={handleKeyDown}
+          onPaste={handleInputBridgePaste}
+          onCopy={handleInputBridgeCopy}
+          onCut={handleInputBridgeCut}
+          onCompositionStart={handleInputBridgeCompositionStart}
+          onCompositionEnd={handleInputBridgeCompositionEnd}
           spellCheck={false}
           aria-label="WYSIWYG text input"
           role="textbox"

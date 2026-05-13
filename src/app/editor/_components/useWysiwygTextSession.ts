@@ -29,6 +29,11 @@ export interface WysiwygTextSessionDraftChange {
   selection?: WysiwygTextSelection | null
 }
 
+export interface WysiwygTextClipboardCutResult {
+  selectedText: string
+  change: WysiwygTextSessionDraftChange
+}
+
 export interface WysiwygTextInputKey {
   key: string
   shiftKey?: boolean
@@ -171,6 +176,35 @@ function replaceRange(
   }
 }
 
+export function normalizeWysiwygPlainTextInput(text: string): string {
+  return text.replace(/\r\n?/g, "\n")
+}
+
+export function getWysiwygTextSelectedText(
+  text: string,
+  caretOffset: number | null,
+  selection?: WysiwygTextSelection | null,
+): string {
+  const caret = clampWysiwygTextOffset(text, caretOffset) ?? text.length
+  const range = selectedRange(text, caret, selection)
+  if (range.isCollapsed) return ""
+  return text.slice(range.start, range.end)
+}
+
+export function applyWysiwygTextClipboardCut(
+  text: string,
+  caretOffset: number | null,
+  selection?: WysiwygTextSelection | null,
+): WysiwygTextClipboardCutResult | null {
+  const caret = clampWysiwygTextOffset(text, caretOffset) ?? text.length
+  const range = selectedRange(text, caret, selection)
+  if (range.isCollapsed) return null
+  return {
+    selectedText: text.slice(range.start, range.end),
+    change: replaceRange(text, range.start, range.end, ""),
+  }
+}
+
 function moveCaretByKey(
   text: string,
   caret: number,
@@ -256,10 +290,11 @@ export function applyWysiwygTextInputText(
   insertedText: string,
   selection?: WysiwygTextSelection | null,
 ): WysiwygTextSessionDraftChange | null {
-  if (!insertedText) return null
+  const normalizedText = normalizeWysiwygPlainTextInput(insertedText)
+  if (!normalizedText) return null
   const caret = clampWysiwygTextOffset(text, caretOffset) ?? text.length
   const range = selectedRange(text, caret, selection)
-  return replaceRange(text, range.start, range.end, insertedText)
+  return replaceRange(text, range.start, range.end, normalizedText)
 }
 
 export function markWysiwygTextLayoutFresh(
