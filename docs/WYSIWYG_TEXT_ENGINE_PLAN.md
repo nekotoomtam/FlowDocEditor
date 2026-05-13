@@ -122,21 +122,29 @@ Current implementation note:
 
 - The first Stage 3 slice classifies soft, hard-local, and hard-page-boundary
   edits for the flagged text-engine lane.
-- Hard-local edits patch active paragraph height and shift later same-page
-  fragments only when the draft still fits the current page content box.
-- Hard-page-boundary edits queue debounced draft pagination against a normalized
-  preview document, then render draft fragments from the same paginated geometry
-  source instead of falling back to a textarea.
+- Hard-local edits render active draft lines and active paragraph chrome from
+  canvas-owned draft visual geometry while deferring downstream movement to the
+  settling lane.
+- Hard-page-boundary edits render active draft fragments from a paragraph-only
+  live visual preview that splits by direct line capacity, so only overflowing
+  lines move to the next page during typing. Debounced draft pagination still
+  settles the broader document preview, and server/API pagination remains the
+  export truth.
 - The active SVG layer now owns a hidden `contentEditable` input bridge for
   keypress input. The bridge adapts browser key/input events into FlowDoc draft
   operations; it does not own visible text, wrapping, caret geometry, or layout.
+- The text-engine bridge uses one native event pipeline for keydown,
+  beforeinput, input, clipboard, and composition events. React bridge handlers
+  are not duplicated on top of the native adapter, keeping normal and shifted
+  typing in the same deterministic path.
 - A deterministic Stage 3 stress scenario is available in dev/test mode at
   `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`. It seeds a target
   paragraph near a page boundary with dense downstream content so browser
   checks can exercise overflow, shrink-back, and undo/redo using real keypress
   events without relying on clipboard-backed `fill()` / `type()` automation.
-- Split and table-cell fragments fail closed to the existing path until their
-  continuation and row/stack contracts are explicitly implemented.
+- Plain body paragraph continuation fragments can stay on the text-engine path
+  after exit/re-enter. Table-cell fragments still fail closed until their row
+  and cell contracts are explicitly implemented.
 
 Stage 3 closure evidence:
 
@@ -176,6 +184,18 @@ Current implementation note:
   the visual truth.
 - The Stage 3 boundary stress fixture now also covers deleting a selected
   overflow append and verifying the draft paginates back to one fragment.
+- Same-fragment double-click word selection is handled inside the text-engine
+  layer by resolving a word range from FlowDoc draft offsets and rendering the
+  existing SVG selection overlay. The selection remains transient editor state
+  and does not use textarea/browser-native visual selection.
+- Cross-fragment same-paragraph selection now renders passive SVG selection
+  overlays on non-active continuation fragments. The hidden input bridge still
+  exists only on the active fragment, and selection remains full-paragraph
+  offset state in the editor/session.
+- Cross-fragment same-paragraph pointer drag selection now resolves pointer
+  offsets against all target paragraph fragments across pages. During an active
+  drag, a transparent document-level selection overlay keeps move/up events
+  deterministic without making browser-native text selection the visual truth.
 - Stage 4C adds explicit clipboard and IME handling to the hidden input bridge:
   paste reads plain text, normalizes CRLF to LF, and applies it as a FlowDoc
   draft replacement; copy/cut read the active FlowDoc selection offsets; cut
@@ -188,19 +208,36 @@ Current implementation note:
   text once and suppresses duplicate final input events.
 - Keyboard edit end now restores focus to the editor shell for keyboard exits,
   and undo/redo shortcut matching is case-insensitive.
+- The text-engine session exposes a hidden live accessibility status derived
+  from FlowDoc session state, and the active text-engine layer/input bridge
+  references that status with `aria-describedby`.
+- The text-engine draft-change handler now records `inline-edit-draft-update`
+  perf events, and the Stage 4C smoke asserts that heavy text input does not
+  trigger `browser-preview-pagination` in the immediate input lane. If a
+  debounced browser preview pagination occurs, the smoke asserts it starts
+  outside that immediate input lane.
 - `npm.cmd run smoke:wysiwyg-stage4c` is the repeatable Stage 4C gate. It
   starts the flagged dev editor, runs heavy paste/copy/cut, keyboard undo/redo,
   focus restoration, page-boundary reflow, and synthetic duplicate-composition
   checks against the Stage 3 boundary scenario.
 - The Stage 4C smoke can be run against installed browser channels with
   `SMOKE_BROWSER_CHANNEL=chrome` or `SMOKE_BROWSER_CHANNEL=msedge`; current
-  Stage 4C+3 evidence is recorded in
+  Stage 4C+5 evidence is recorded in
   `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`.
 - `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` is the real OS IME gate. It must be
   completed for Windows Chrome and Windows Edge with Thai IME before claiming
   high real-world IME confidence from Stage 4C.
-- Accessibility announcements, cross-fragment selection, and table-cell
-  text-engine editing are still deferred Stage 4/5 work.
+- Full screen reader product validation, cross-fragment edit semantics beyond
+  same-paragraph selection, and table-cell text-engine editing are still
+  deferred Stage 4/5 work.
+- Table-cell paragraphs remain a guarded decision gate for the text-engine lane:
+  the current implementation keeps them out of text-engine eligibility and live
+  draft visual preview so row/cell pagination constraints are not bypassed.
+- Row-stack paragraphs remain eligible for the text-engine lane, but they are
+  guarded out of the body-paragraph live split preview. Heavy stack edits must
+  preserve the current atomic row contract: the edited paragraph stays one
+  fragment inside its stack, sibling stack geometry stays aligned, and any
+  independent row/column continuation remains a future design gate.
 
 ### Stage 5: Default Eligibility
 

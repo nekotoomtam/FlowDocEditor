@@ -5,6 +5,12 @@ export const WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM = "flowdocTestScenario"
 export const WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID = "wysiwyg-stage3-boundary"
 export const WYSIWYG_STAGE3_TARGET_NODE_ID = "stage3-boundary-target"
 export const WYSIWYG_STAGE3_TARGET_MARKER = "STAGE3_BOUNDARY_MARKER"
+export const WYSIWYG_STAGE3_STACK_ROW_ID = "stage3-stack-row"
+export const WYSIWYG_STAGE3_STACK_LEFT_ID = "stage3-stack-left"
+export const WYSIWYG_STAGE3_STACK_RIGHT_ID = "stage3-stack-right"
+export const WYSIWYG_STAGE3_STACK_TARGET_NODE_ID = "stage3-stack-target"
+export const WYSIWYG_STAGE3_STACK_CONTROL_NODE_ID = "stage3-stack-control"
+export const WYSIWYG_STAGE3_STACK_TARGET_MARKER = "STAGE4_STACK_MARKER"
 
 export const WYSIWYG_STAGE3_BOUNDARY_APPEND_TEXT = [
   " ",
@@ -26,6 +32,22 @@ const TARGET_INITIAL_LINES = [
 ]
 
 export const WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT = TARGET_INITIAL_LINES.join("\n")
+
+const STACK_TARGET_INITIAL_LINES = [
+  "Stack target line 1 keeps column editing on the text-engine path.",
+  "Stack target line 2 checks row geometry while the sibling column remains stable.",
+  "Stack target line 3 keeps mixed Thai text in the stack: ทดสอบข้อความในคอลัมน์.",
+]
+
+export const WYSIWYG_STAGE3_STACK_TARGET_INITIAL_TEXT = STACK_TARGET_INITIAL_LINES.join("\n")
+
+export const WYSIWYG_STAGE3_STACK_TARGET_APPEND_TEXT = [
+  "",
+  WYSIWYG_STAGE3_STACK_TARGET_MARKER,
+  "Stack paragraph edit keeps the containing row atomic while text grows.",
+  "stacklongtoken".repeat(12),
+  "Another line keeps local line wrapping under column width pressure.",
+].join("\n")
 
 function paragraph(id: string, text: string, overrides: Partial<ParagraphNode["props"]> = {}): ParagraphNode {
   return {
@@ -86,10 +108,50 @@ function stressTable(): TableNode {
   }
 }
 
+function stressStackRow(): Record<string, LayoutNode> {
+  const target = paragraph(
+    WYSIWYG_STAGE3_STACK_TARGET_NODE_ID,
+    WYSIWYG_STAGE3_STACK_TARGET_INITIAL_TEXT,
+    { fontSize: pt(10), lineHeight: 1.2, spacingAfter: pt(0) },
+  )
+  const control = paragraph(
+    WYSIWYG_STAGE3_STACK_CONTROL_NODE_ID,
+    "Sibling stack paragraph must keep its x/width and row-height relationship while the left stack is edited. ".repeat(3),
+    { fontSize: pt(10), lineHeight: 1.2, spacingAfter: pt(0) },
+  )
+  const leftStack: LayoutNode = {
+    id: WYSIWYG_STAGE3_STACK_LEFT_ID,
+    type: "stack",
+    props: { widthShare: 48, minHeight: 72 },
+    childIds: [target.id],
+  }
+  const rightStack: LayoutNode = {
+    id: WYSIWYG_STAGE3_STACK_RIGHT_ID,
+    type: "stack",
+    props: { widthShare: 52, minHeight: 72 },
+    childIds: [control.id],
+  }
+  const row: LayoutNode = {
+    id: WYSIWYG_STAGE3_STACK_ROW_ID,
+    type: "row",
+    props: { gap: 8, minHeight: 72 },
+    childIds: [leftStack.id, rightStack.id],
+  }
+
+  return {
+    [row.id]: row,
+    [leftStack.id]: leftStack,
+    [rightStack.id]: rightStack,
+    [target.id]: target,
+    [control.id]: control,
+  }
+}
+
 export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
   const spacer: LayoutNode = { id: "stage3-boundary-spacer", type: "spacer", props: { height: 590 } }
   const target = paragraph(WYSIWYG_STAGE3_TARGET_NODE_ID, WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT)
   const downstream = Array.from({ length: 10 }, (_, index) => downstreamParagraph(index + 1))
+  const stackRowNodes = stressStackRow()
   const table = stressTable()
   const nodes: Record<string, LayoutNode> = {
     "stage3-body": {
@@ -100,11 +162,13 @@ export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
         spacer.id,
         target.id,
         ...downstream.map((node) => node.id),
+        WYSIWYG_STAGE3_STACK_ROW_ID,
         table.id,
       ],
     },
     [spacer.id]: spacer,
     [target.id]: target,
+    ...stackRowNodes,
     [table.id]: table,
   }
 

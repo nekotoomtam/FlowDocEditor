@@ -6,6 +6,7 @@ import {
   applyWysiwygTextInputText,
   changeWysiwygTextSessionDraft,
   clampWysiwygTextOffset,
+  describeWysiwygTextSessionAccessibility,
   getWysiwygTextSelectedText,
   isWysiwygTextSessionLayoutFresh,
   markWysiwygTextLayoutFresh,
@@ -144,6 +145,28 @@ describe("WYSIWYG text session state", () => {
       text: "ignored",
       caretOffset: 3,
     })).toBe(INACTIVE_WYSIWYG_TEXT_SESSION)
+  })
+
+  it("describes caret and selection state for assistive technology", () => {
+    const active = startWysiwygTextSessionState(INACTIVE_WYSIWYG_TEXT_SESSION, {
+      nodeId: "p1",
+      text: "Alpha beta",
+      caretOffset: 5,
+    })
+
+    expect(describeWysiwygTextSessionAccessibility(active)).toBe(
+      "Editing paragraph text. Caret at 5 of 10.",
+    )
+
+    const selected = moveWysiwygTextSessionCaret(active, 10, {
+      anchorOffset: 6,
+      focusOffset: 10,
+    })
+
+    expect(describeWysiwygTextSessionAccessibility(selected)).toBe(
+      "Editing paragraph text. 4 characters selected, 6 to 10 of 10.",
+    )
+    expect(describeWysiwygTextSessionAccessibility(INACTIVE_WYSIWYG_TEXT_SESSION)).toBeNull()
   })
 
   it("restarts the same paragraph as a fresh draft session", () => {

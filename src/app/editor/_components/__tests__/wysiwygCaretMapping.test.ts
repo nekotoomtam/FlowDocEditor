@@ -341,6 +341,42 @@ describe("WYSIWYG caret mapping contract", () => {
     expect(resolveCaretOffsetFromPointInFragment(fragment, { x: 15, y: 21 })).toBeNull()
   })
 
+  it("maps the caret onto an empty line created by Enter", () => {
+    const fragment = makeFragment({
+      lines: [
+        makeLine({
+          text: "Hello",
+          x: 0,
+          y: 0,
+          width: 50,
+          height: 12,
+          segments: [{
+            kind: "word",
+            text: "Hello",
+            start: 0,
+            end: 5,
+            x: 0,
+            width: 50,
+            breakableAfter: false,
+          }],
+        }),
+        { text: "", x: 0, y: 12, width: 0, height: 12 },
+      ],
+    })
+
+    expect(resolveCaretPositionInFragment(fragment, 6)).toMatchObject({
+      offset: 6,
+      lineIndex: 1,
+      x: 0,
+      y: 12,
+      source: "segment-ratio",
+    })
+    expect(resolveCaretOffsetFromPointInFragment(fragment, { x: 4, y: 14 })).toMatchObject({
+      offset: 6,
+      lineIndex: 1,
+    })
+  })
+
   it("resolves collapsed caret overlay geometry without touching editor rendering", () => {
     const fragment = makeFragment({
       lines: [makeLine({

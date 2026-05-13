@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useEffect } from "react"
+import { useRef, useEffect, useMemo } from "react"
 import type { TextMeasurer } from "@/layout"
 import type { PaginatedDocument, PageFragment, PaginatedLine, PaginatedPage, ParagraphRenderProps } from "@/pagination"
 import { isPlainTextParagraph } from "@/document"
@@ -9,9 +9,19 @@ import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
 import { getRowGeometry } from "@/placement/geometry"
-import { ParagraphTextSurface } from "./ParagraphTextSurface"
+import {
+  buildWysiwygDraftParagraphLayout,
+  ParagraphTextSurface,
+  type WysiwygTextPointerFragmentTarget,
+} from "./ParagraphTextSurface"
 import { resolveCaretOffsetFromPointInFragment } from "./wysiwygCaretMapping"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
+import {
+  createWysiwygDraftVisualPreview,
+  shiftWysiwygDraftPreviewDownstreamFragments,
+  splitWysiwygDraftVisualFragments,
+  type WysiwygDraftVisualPreview,
+} from "./wysiwygDraftVisualPreview"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -28,6 +38,7 @@ const NODE_COLORS: Record<string, string> = {
 
 const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "table", "toc"])
 const PARAGRAPH_CHROME_Y = 3
+const PARAGRAPH_LIVE_PREVIEW_GAP_Y = 2
 
 type PendingClickAction = {
   type: "inline-edit"
@@ -117,6 +128,22 @@ function canInlineEditParagraph(doc: DocumentNode, nodeId: string): boolean {
   return paragraph !== null && isPlainTextParagraph(paragraph)
 }
 
+function getPlainParagraphText(doc: DocumentNode, nodeId: string): string | null {
+  const paragraph = findParagraphNode(doc, nodeId)
+  if (!paragraph || !isPlainTextParagraph(paragraph)) return null
+  return paragraph.children
+    .map((child) => child.type === "text" ? child.text : "")
+    .join("")
+}
+
+function countParagraphFragments(paginated: PaginatedDocument, nodeId: string): number {
+  return paginated.sections
+    .flatMap((section) => section.pages)
+    .flatMap((page) => page.fragments)
+    .filter((fragment) => fragment.nodeId === nodeId && fragment.nodeType === "paragraph")
+    .length
+}
+
 function isTableCellId(doc: DocumentNode, nodeId: string | null | undefined): boolean {
   if (!nodeId) return false
   for (const section of doc.document.sections) {
@@ -125,6 +152,31 @@ function isTableCellId(doc: DocumentNode, nodeId: string | null | undefined): bo
       const table = node as unknown as TableNode
       if (table.nodes[nodeId]?.type === "table-cell") return true
     }
+  }
+  return false
+}
+
+function isStackInsideRow(doc: DocumentNode, stackId: string | null | undefined): boolean {
+  if (!stackId) return false
+  for (const section of doc.document.sections) {
+    const stack = section.nodes[stackId]
+    if (stack?.type !== "stack") continue
+    if (Object.values(section.nodes).some((node) => (
+      node.type === "row" && node.childIds.includes(stackId)
+    ))) return true
+  }
+  return false
+}
+
+function isParagraphInsideRowStack(doc: DocumentNode, nodeId: string | null | undefined): boolean {
+  if (!nodeId) return false
+  for (const section of doc.document.sections) {
+    const paragraph = section.nodes[nodeId]
+    if (paragraph?.type !== "paragraph") continue
+    const stack = Object.values(section.nodes).find((node) => (
+      node.type === "stack" && node.childIds.includes(nodeId)
+    ))
+    if (stack && isStackInsideRow(doc, stack.id)) return true
   }
   return false
 }
@@ -185,7 +237,7 @@ function PageView({
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
-  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, onWysiwygTextDraftChange, onWysiwygTextReflowDecision,
+  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygTextReflowDecision,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
@@ -201,6 +253,8 @@ function PageView({
   wysiwygTextCaretOffset: number | null
   wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
   wysiwygTextDraftPaginationActive: boolean
+  wysiwygDraftVisualPreview: WysiwygDraftVisualPreview | null
+  wysiwygTextPointerFragments: WysiwygTextPointerFragmentTarget[]
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
   inlineEditPageIndex: number | null
@@ -235,12 +289,39 @@ function PageView({
     if (inlineEditNodeId == null) editFragmentRef.current = null
   }, [inlineEditNodeId])
   const wysiwygCaretMappingEnabled = wysiwygInlineEditEnabled || wysiwygTextEngineEnabled
+  const visualDraftFragmentForPage = wysiwygDraftVisualPreview?.fragmentsByPageIndex.get(page.index) ?? null
+  const hasRealVisualDraftFragment = visualDraftFragmentForPage
+    ? page.fragments.some((fragment) =>
+      fragment.nodeId === visualDraftFragmentForPage.nodeId &&
+      fragment.nodeType === "paragraph"
+    )
+    : false
+  const shiftedPageFragments = visualDraftFragmentForPage && !hasRealVisualDraftFragment
+    ? shiftWysiwygDraftPreviewDownstreamFragments({
+      fragments: page.fragments,
+      draftFragment: visualDraftFragmentForPage,
+      extraShiftY: (PARAGRAPH_CHROME_Y * 2 + PARAGRAPH_LIVE_PREVIEW_GAP_Y) / scale,
+    })
+    : page.fragments
+  const renderFragments = visualDraftFragmentForPage && !hasRealVisualDraftFragment
+    ? [visualDraftFragmentForPage, ...shiftedPageFragments]
+    : shiftedPageFragments
+  const activeInlineEditPageIndex = wysiwygDraftVisualPreview?.caretPageIndex ?? inlineEditPageIndex
+
+  const resolveDisplayFragment = (fragment: PageFragment): PageFragment => (
+    visualDraftFragmentForPage &&
+    fragment.nodeId === visualDraftFragmentForPage.nodeId &&
+    fragment.nodeType === "paragraph"
+      ? visualDraftFragmentForPage
+      : fragment
+  )
 
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
     <svg
       ref={(el) => setPageRef(pageKey, el)}
       data-testid="editor-page"
+      data-page-key={pageKey}
       data-page-index={page.index}
       width={W} height={H}
       overflow="visible"
@@ -249,11 +330,14 @@ function PageView({
     >
       {/* clipPaths — ป้องกัน text overflow ออกนอก fragment width */}
       <defs>
-        {page.fragments.map((f) => (
+        {renderFragments.map((f) => {
+          const displayFragment = resolveDisplayFragment(f)
+          return (
           <clipPath key={f.nodeId} id={`cp-${pageKey}-${f.nodeId}`}>
-            <rect x={f.x * scale} y={f.y * scale} width={f.width * scale} height={9999} />
+            <rect x={displayFragment.x * scale} y={displayFragment.y * scale} width={displayFragment.width * scale} height={9999} />
           </clipPath>
-        ))}
+          )
+        })}
       </defs>
 
       {/* margin handles — 4 drag lines แทน content box guide */}
@@ -326,7 +410,7 @@ function PageView({
       })()}
 
       {/* fragments */}
-      {page.fragments.map((f, i) => {
+      {renderFragments.map((f, i) => {
         const color = NODE_COLORS[f.nodeType] ?? "#f3f4f6"
         const isHovered = f.nodeId === hoverNodeId
         const isLayoutNode = doc.document.sections.some((s) => s.nodes[f.nodeId] != null)
@@ -336,24 +420,25 @@ function PageView({
         const isSelected = f.nodeId === selectedNodeId
         const isTableCellParagraph = f.nodeType === "paragraph" && isTableCellId(doc, f.parentNodeId)
         const canInlineEditThisParagraph = f.nodeType === "paragraph" && canInlineEditParagraph(doc, f.nodeId)
+        const visualDisplayFragment = resolveDisplayFragment(f)
         // For split paragraphs: only the fragment on the clicked page enters edit mode.
         // Without the pageIndex check, ALL fragments of the paragraph get isInlineEditing=true,
         // disabling pointer events and rendering textareas on every page the paragraph spans.
         const isInlineEditing = f.nodeId === inlineEditNodeId &&
-          (inlineEditPageIndex == null || f.pageIndex === inlineEditPageIndex)
+          (activeInlineEditPageIndex == null || f.pageIndex === activeInlineEditPageIndex)
         if (isInlineEditing) {
           if (
             editFragmentRef.current?.nodeId !== f.nodeId ||
             editFragmentRef.current?.pageKey !== pageKey
           ) {
-            editFragmentRef.current = { nodeId: f.nodeId, pageKey, fragment: { ...f } }
+            editFragmentRef.current = { nodeId: f.nodeId, pageKey, fragment: { ...visualDisplayFragment } }
           } else {
-            editFragmentRef.current = { ...editFragmentRef.current, fragment: { ...f } }
+            editFragmentRef.current = { ...editFragmentRef.current, fragment: { ...visualDisplayFragment } }
           }
         }
         const displayFragment = isInlineEditing
-          ? editFragmentRef.current?.fragment ?? f
-          : f
+          ? editFragmentRef.current?.fragment ?? visualDisplayFragment
+          : visualDisplayFragment
         const docNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === f.nodeId)
         const isEmpty = f.nodeType === "stack" && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
         // visual override ระหว่าง resize
@@ -385,11 +470,11 @@ function PageView({
             data-testid="editor-fragment"
             data-node-id={f.nodeId}
             data-node-type={f.nodeType}
-            data-page-index={f.pageIndex}
-            data-fragment-index={f.fragmentIndex ?? undefined}
-            data-line-start={f.lineStart ?? undefined}
-            data-line-end={f.lineEnd ?? undefined}
-            data-parent-node-id={f.parentNodeId ?? undefined}
+            data-page-index={displayFragment.pageIndex}
+            data-fragment-index={displayFragment.fragmentIndex ?? undefined}
+            data-line-start={displayFragment.lineStart ?? undefined}
+            data-line-end={displayFragment.lineEnd ?? undefined}
+            data-parent-node-id={displayFragment.parentNodeId ?? undefined}
             onPointerDown={(isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
@@ -398,9 +483,9 @@ function PageView({
                       type: "inline-edit" as const,
                       nodeId: f.nodeId,
                       caretIndex: wysiwygCaretMappingEnabled
-                        ? caretIndexFromPointer(f, e, scale, textMeasurer, true)
+                        ? caretIndexFromPointer(displayFragment, e, scale, textMeasurer, true)
                         : null,
-                      pageIndex: f.pageIndex,
+                      pageIndex: displayFragment.pageIndex,
                     }
                   : undefined
                 const nodeId = isTableCellParagraph && f.parentNodeId ? f.parentNodeId : selectNodeId
@@ -415,9 +500,9 @@ function PageView({
                 onInlineEditStart(
                   paragraphId,
                   f.nodeType === "paragraph" && wysiwygCaretMappingEnabled
-                    ? caretIndexFromPointer(f, e, scale, textMeasurer, true)
+                    ? caretIndexFromPointer(displayFragment, e, scale, textMeasurer, true)
                     : null,
-                  f.pageIndex,
+                  displayFragment.pageIndex,
                 )
               }
               : undefined}
@@ -500,7 +585,9 @@ function PageView({
                 wysiwygTextDraftText={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextDraftText : null}
                 wysiwygTextCaretOffset={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextCaretOffset : null}
                 wysiwygTextSelection={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextSelection : null}
-                wysiwygTextDraftPaginationActive={wysiwygTextDraftNodeId === f.nodeId && wysiwygTextDraftPaginationActive}
+                wysiwygTextVisualDraftLines={wysiwygTextDraftNodeId === f.nodeId ? visualDraftFragmentForPage?.lines ?? null : null}
+                wysiwygTextPointerFragments={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextPointerFragments : undefined}
+                wysiwygTextDraftPaginationActive={wysiwygTextDraftNodeId === f.nodeId && (wysiwygTextDraftPaginationActive || visualDraftFragmentForPage !== null)}
                 showTextSegments={showTextSegments}
                 initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
                 onChange={onInlineEditChange}
@@ -652,6 +739,64 @@ interface Props {
   onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
 }
 
+export function buildWysiwygDraftVisualPreview(input: {
+  paginated: PaginatedDocument
+  doc: DocumentNode
+  nodeId: string
+  draftText: string
+  caretOffset: number | null
+  textMeasurer: TextMeasurer
+}): WysiwygDraftVisualPreview | null {
+  const paragraph = findParagraphNode(input.doc, input.nodeId)
+  if (!paragraph || !isPlainTextParagraph(paragraph)) return null
+  if (isTableCellId(input.doc, input.nodeId)) return null
+  if (isParagraphInsideRowStack(input.doc, input.nodeId)) return null
+
+  for (const section of input.paginated.sections) {
+    const pageIndex = section.pages.findIndex((page) =>
+      page.fragments.some((fragment) =>
+        fragment.nodeId === input.nodeId &&
+        fragment.nodeType === "paragraph" &&
+        !fragment.continuesFrom
+      )
+    )
+    if (pageIndex < 0) continue
+
+    const sourcePage = section.pages[pageIndex]
+    const sourceFragment = sourcePage.fragments.find((fragment) =>
+      fragment.nodeId === input.nodeId &&
+      fragment.nodeType === "paragraph" &&
+      !fragment.continuesFrom
+    )
+    if (!sourceFragment) return null
+    if (isTableCellId(input.doc, sourceFragment.parentNodeId)) return null
+    if (isStackInsideRow(input.doc, sourceFragment.parentNodeId)) return null
+
+    const draftLayout = buildWysiwygDraftParagraphLayout(
+      sourceFragment,
+      paragraph,
+      input.draftText,
+      input.textMeasurer,
+      { allowContinuedFirstFragment: true },
+    )
+    if (!draftLayout) return null
+
+    return createWysiwygDraftVisualPreview({
+      nodeId: input.nodeId,
+      fragments: splitWysiwygDraftVisualFragments({
+        sourceFragment,
+        draftLines: draftLayout.lines,
+        draftHeight: draftLayout.height,
+        pages: section.pages,
+      }),
+      caretOffset: input.caretOffset,
+      textMeasurer: input.textMeasurer,
+    })
+  }
+
+  return null
+}
+
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
   textMeasurer,
@@ -672,6 +817,68 @@ export function EditorCanvas({
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
   const pageWidth = sections[0]?.pages[0]?.width ?? 595
   const scaledPageWidth = pageWidth * scale
+  const pageKeyByPageIndex = useMemo(() => {
+    const byPageIndex = new Map<number, string>()
+    for (const [sectionIndex, section] of sections.entries()) {
+      for (const [pageArrayIndex, page] of section.pages.entries()) {
+        byPageIndex.set(page.index, `${sectionIndex}-${pageArrayIndex}`)
+      }
+    }
+    return byPageIndex
+  }, [sections])
+  const wysiwygTextExistingSplitActive = Boolean(
+    wysiwygTextEngineEnabled &&
+    wysiwygTextDraftNodeId &&
+    inlineEditNodeId === wysiwygTextDraftNodeId &&
+    countParagraphFragments(paginated, wysiwygTextDraftNodeId) > 1,
+  )
+  const wysiwygDraftVisualPreview = useMemo(() => {
+    if (!wysiwygTextEngineEnabled) return null
+    if (!wysiwygTextDraftNodeId || wysiwygTextDraftText == null) return null
+    if (inlineEditNodeId !== wysiwygTextDraftNodeId) return null
+    if (getPlainParagraphText(doc, wysiwygTextDraftNodeId) === wysiwygTextDraftText) return null
+    return buildWysiwygDraftVisualPreview({
+      paginated,
+      doc,
+      nodeId: wysiwygTextDraftNodeId,
+      draftText: wysiwygTextDraftText,
+      caretOffset: wysiwygTextCaretOffset,
+      textMeasurer,
+    })
+  }, [
+    doc,
+    inlineEditNodeId,
+    paginated,
+    textMeasurer,
+    wysiwygTextCaretOffset,
+    wysiwygTextDraftNodeId,
+    wysiwygTextDraftText,
+    wysiwygTextEngineEnabled,
+  ])
+  const wysiwygTextPointerFragments = useMemo<WysiwygTextPointerFragmentTarget[]>(() => {
+    if (!wysiwygTextEngineEnabled || !wysiwygTextDraftNodeId) return []
+    const sourceFragments = wysiwygDraftVisualPreview?.fragments ?? sections.flatMap((section) =>
+      section.pages.flatMap((page) =>
+        page.fragments.filter((fragment) =>
+          fragment.nodeId === wysiwygTextDraftNodeId &&
+          fragment.nodeType === "paragraph"
+        ),
+      ),
+    )
+
+    return sourceFragments
+      .map((fragment): WysiwygTextPointerFragmentTarget | null => {
+        const targetPageKey = pageKeyByPageIndex.get(fragment.pageIndex)
+        return targetPageKey ? { pageKey: targetPageKey, fragment } : null
+      })
+      .filter((target): target is WysiwygTextPointerFragmentTarget => target !== null)
+  }, [
+    pageKeyByPageIndex,
+    sections,
+    wysiwygDraftVisualPreview,
+    wysiwygTextDraftNodeId,
+    wysiwygTextEngineEnabled,
+  ])
 
   useEffect(() => {
     if (!autoFitScale) return
@@ -735,7 +942,9 @@ export function EditorCanvas({
                   wysiwygTextDraftText={wysiwygTextDraftText}
                   wysiwygTextCaretOffset={wysiwygTextCaretOffset}
                   wysiwygTextSelection={wysiwygTextSelection}
-                  wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive}
+                  wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive}
+                  wysiwygDraftVisualPreview={wysiwygDraftVisualPreview}
+                  wysiwygTextPointerFragments={wysiwygTextPointerFragments}
                   onWysiwygTextDraftChange={onWysiwygTextDraftChange}
                   onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
                 />

@@ -6,11 +6,19 @@ import {
   WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT,
   WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID,
   WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM,
+  WYSIWYG_STAGE3_STACK_CONTROL_NODE_ID,
+  WYSIWYG_STAGE3_STACK_LEFT_ID,
+  WYSIWYG_STAGE3_STACK_RIGHT_ID,
+  WYSIWYG_STAGE3_STACK_ROW_ID,
+  WYSIWYG_STAGE3_STACK_TARGET_APPEND_TEXT,
+  WYSIWYG_STAGE3_STACK_TARGET_INITIAL_TEXT,
+  WYSIWYG_STAGE3_STACK_TARGET_NODE_ID,
   WYSIWYG_STAGE3_TARGET_MARKER,
   WYSIWYG_STAGE3_TARGET_NODE_ID,
   makeWysiwygStage3BoundaryDocument,
   resolveEditorTestScenario,
 } from "../wysiwygStage3StressScenarios"
+import { buildWysiwygDraftVisualPreview } from "../EditorCanvas"
 import {
   buildWysiwygTextDraftPreviewDocument,
   countWysiwygTextDraftFragments,
@@ -30,6 +38,12 @@ function targetLineText(paginated: ReturnType<typeof paginateDocument>): string 
 
 function compactText(text: string): string {
   return text.replace(/\s+/g, "")
+}
+
+function allFragments(paginated: ReturnType<typeof paginateDocument>) {
+  return paginated.sections
+    .flatMap((section) => section.pages)
+    .flatMap((page) => page.fragments)
 }
 
 describe("WYSIWYG Stage 3 stress scenario", () => {
@@ -92,6 +106,55 @@ describe("WYSIWYG Stage 3 stress scenario", () => {
     expect(() => assertPaginatedDocument(shrunkPaginated)).not.toThrow()
     expect(countWysiwygTextDraftFragments(shrunkPaginated, WYSIWYG_STAGE3_TARGET_NODE_ID)).toBe(1)
     expect(compactText(targetLineText(shrunkPaginated))).toBe(compactText(WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT))
+  })
+
+  it("covers row-stack paragraph editing without independent paragraph visual splitting", () => {
+    const doc = makeWysiwygStage3BoundaryDocument()
+    const paginated = paginateDocument(doc, defaultTextMeasurer)
+    const fragments = allFragments(paginated)
+    const rowFragment = fragments.find((fragment) => fragment.nodeId === WYSIWYG_STAGE3_STACK_ROW_ID)
+    const leftStack = fragments.find((fragment) => fragment.nodeId === WYSIWYG_STAGE3_STACK_LEFT_ID)
+    const rightStack = fragments.find((fragment) => fragment.nodeId === WYSIWYG_STAGE3_STACK_RIGHT_ID)
+    const stackTarget = fragments.find((fragment) => fragment.nodeId === WYSIWYG_STAGE3_STACK_TARGET_NODE_ID)
+    const stackControl = fragments.find((fragment) => fragment.nodeId === WYSIWYG_STAGE3_STACK_CONTROL_NODE_ID)
+
+    expect(() => assertPaginatedDocument(paginated)).not.toThrow()
+    expect(rowFragment).toBeDefined()
+    expect(leftStack).toBeDefined()
+    expect(rightStack).toBeDefined()
+    expect(stackTarget).toBeDefined()
+    expect(stackControl).toBeDefined()
+    expect(leftStack?.parentNodeId).toBe(WYSIWYG_STAGE3_STACK_ROW_ID)
+    expect(rightStack?.parentNodeId).toBe(WYSIWYG_STAGE3_STACK_ROW_ID)
+    expect(stackTarget?.parentNodeId).toBe(WYSIWYG_STAGE3_STACK_LEFT_ID)
+    expect(stackControl?.parentNodeId).toBe(WYSIWYG_STAGE3_STACK_RIGHT_ID)
+    expect(leftStack?.pageIndex).toBe(rowFragment?.pageIndex)
+    expect(rightStack?.pageIndex).toBe(rowFragment?.pageIndex)
+    expect(stackTarget?.pageIndex).toBe(rowFragment?.pageIndex)
+    expect(leftStack?.height).toBe(rowFragment?.height)
+    expect(rightStack?.height).toBe(rowFragment?.height)
+    expect((leftStack?.x ?? 0) + (leftStack?.width ?? 0)).toBeLessThanOrEqual((rightStack?.x ?? 0) + 0.5)
+    expect(fragments.filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_STACK_TARGET_NODE_ID)).toHaveLength(1)
+
+    const stackPreview = buildWysiwygDraftVisualPreview({
+      paginated,
+      doc,
+      nodeId: WYSIWYG_STAGE3_STACK_TARGET_NODE_ID,
+      draftText: `${WYSIWYG_STAGE3_STACK_TARGET_INITIAL_TEXT}${WYSIWYG_STAGE3_STACK_TARGET_APPEND_TEXT}${WYSIWYG_STAGE3_STACK_TARGET_APPEND_TEXT}`,
+      caretOffset: null,
+      textMeasurer: defaultTextMeasurer,
+    })
+    expect(stackPreview).toBeNull()
+
+    const bodyPreview = buildWysiwygDraftVisualPreview({
+      paginated,
+      doc,
+      nodeId: WYSIWYG_STAGE3_TARGET_NODE_ID,
+      draftText: `${WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT}${WYSIWYG_STAGE3_BOUNDARY_APPEND_TEXT}`,
+      caretOffset: null,
+      textMeasurer: defaultTextMeasurer,
+    })
+    expect(bodyPreview?.fragments.length).toBeGreaterThanOrEqual(2)
   })
 
   it("deletes a selected overflow append from the heavy boundary draft without corrupting pagination", () => {

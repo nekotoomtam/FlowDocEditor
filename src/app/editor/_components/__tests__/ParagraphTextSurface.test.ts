@@ -14,6 +14,9 @@ import {
   inlineEditTextareaCaretColor,
   inlineEditTextareaOutline,
   inlineEditTextareaTextColor,
+  resolveWysiwygLiveTextEcho,
+  resolveWysiwygTextPointerOffsetFromFragmentTargets,
+  resolveWysiwygWordSelectionRange,
   shouldUseInlineEditDocumentLayer,
   shouldUseInlineEditDocumentVisual,
   shouldUseNativeInlineEditEnter,
@@ -75,6 +78,114 @@ function makeDoc(text = "Hello"): DocumentNode {
               indentRight: { value: 0, unit: "pt" },
             },
             children: [{ id: "p1-text", type: "text", text }],
+          },
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
+function makeTableDoc(text = "Cell text"): DocumentNode {
+  const paragraph = {
+    id: "p1",
+    type: "paragraph",
+    props: {
+      align: "left",
+      fontSize: { value: 12, unit: "pt" },
+      fontFamilyKey: "default",
+      lineHeight: 1,
+      spacingBefore: { value: 0, unit: "pt" },
+      spacingAfter: { value: 0, unit: "pt" },
+      textIndent: { value: 0, unit: "pt" },
+      indentLeft: { value: 0, unit: "pt" },
+      indentRight: { value: 0, unit: "pt" },
+    },
+    children: [{ id: "p1-text", type: "text", text }],
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 72, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 72, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["tbl"] },
+          tbl: {
+            id: "tbl",
+            type: "table",
+            props: {},
+            rowIds: ["r1"],
+            nodes: {
+              r1: { id: "r1", type: "table-row", props: {}, cellIds: ["c1"] },
+              c1: { id: "c1", type: "table-cell", props: {}, childIds: ["p1"] },
+              p1: paragraph,
+            },
+          },
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
+function makeStackDoc(text = "Stack text"): DocumentNode {
+  const paragraph = {
+    id: "p1",
+    type: "paragraph",
+    props: {
+      align: "left",
+      fontSize: { value: 12, unit: "pt" },
+      fontFamilyKey: "default",
+      lineHeight: 1,
+      spacingBefore: { value: 0, unit: "pt" },
+      spacingAfter: { value: 0, unit: "pt" },
+      textIndent: { value: 0, unit: "pt" },
+      indentLeft: { value: 0, unit: "pt" },
+      indentRight: { value: 0, unit: "pt" },
+    },
+    children: [{ id: "p1-text", type: "text", text }],
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 72, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 72, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["row1"] },
+          row1: { id: "row1", type: "row", props: {}, childIds: ["st1", "st2"] },
+          st1: { id: "st1", type: "stack", props: { widthShare: 50 }, childIds: ["p1"] },
+          st2: { id: "st2", type: "stack", props: { widthShare: 50 }, childIds: ["p2"] },
+          p1: paragraph,
+          p2: {
+            ...paragraph,
+            id: "p2",
+            children: [{ id: "p2-text", type: "text", text: "Sibling stack text" }],
           },
         },
       }],
@@ -417,6 +528,33 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     })).toBe(false)
   })
 
+  it("resolves inserted text for a deferred live echo", () => {
+    expect(resolveWysiwygLiveTextEcho("Hello", "Hello world")).toEqual({
+      anchorOffset: 5,
+      text: " world",
+    })
+    expect(resolveWysiwygLiveTextEcho("Hello world", "Hello wide world")).toEqual({
+      anchorOffset: 7,
+      text: "ide w",
+    })
+    expect(resolveWysiwygLiveTextEcho("Hello", "Hell")).toBeNull()
+  })
+
+  it("resolves a double-click word selection range from draft text", () => {
+    expect(resolveWysiwygWordSelectionRange("Hello world", 1)).toEqual({
+      anchorOffset: 0,
+      focusOffset: 5,
+    })
+    expect(resolveWysiwygWordSelectionRange("Hello world", 6)).toEqual({
+      anchorOffset: 6,
+      focusOffset: 11,
+    })
+    expect(resolveWysiwygWordSelectionRange("Hello world", 5)).toEqual({
+      anchorOffset: 0,
+      focusOffset: 5,
+    })
+  })
+
   it("renders the flagged text-engine edit lane from document lines without textarea markup", () => {
     const fragment = makeFragment({
       lines: [{
@@ -519,6 +657,110 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).not.toContain("<textarea")
   })
 
+  it("renders passive text-engine selection overlays on non-active continuation fragments", () => {
+    const fragment = makeFragment({
+      pageIndex: 1,
+      fragmentIndex: 1,
+      continuesFrom: true,
+      lineStart: 1,
+      lineEnd: 2,
+      lines: [{
+        text: "world",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "world", start: 6, end: 11, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("Hello world"),
+      pageKey: "0-1",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      isEditing: false,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextSelection: { anchorOffset: 0, focusOffset: 11 },
+      showTextSegments: false,
+      initialCaretIndex: null,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-selection=\"true\"")
+    expect(markup).toContain("world")
+    expect(markup).not.toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("resolves pointer offsets from continuation fragment page targets", () => {
+    const firstFragment = makeFragment({
+      pageIndex: 0,
+      fragmentIndex: 0,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+    })
+    const continuationFragment = makeFragment({
+      pageIndex: 1,
+      fragmentIndex: 1,
+      continuesFrom: true,
+      lineStart: 1,
+      lineEnd: 2,
+      lines: [{
+        text: "world",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "world", start: 6, end: 11, x: 0, width: 50, breakableAfter: false }],
+      }],
+    })
+    const pageRects = new Map([
+      ["0-0", { left: 0, top: 0 }],
+      ["0-1", { left: 400, top: 0 }],
+    ])
+
+    expect(resolveWysiwygTextPointerOffsetFromFragmentTargets({
+      clientX: 430,
+      clientY: 22,
+      scale: 1,
+      targets: [
+        { pageKey: "0-0", fragment: firstFragment },
+        { pageKey: "0-1", fragment: continuationFragment },
+      ],
+      getPageRect: (pageKey) => pageRects.get(pageKey),
+      textMeasurer: fixedMeasurer,
+    })).toBe(8)
+  })
+
   it("does not use the text-engine lane for continuation fragments", () => {
     const fragment = makeFragment({
       continuesFrom: true,
@@ -567,6 +809,111 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
 
     expect(markup).not.toContain("data-wysiwyg-text-engine-layer=\"true\"")
     expect(markup).toContain("<textarea")
+  })
+
+  it("keeps table-cell paragraphs on the guarded non-text-engine edit path", () => {
+    const fragment = makeFragment({
+      parentNodeId: "c1",
+      lines: [{
+        text: "Cell text",
+        x: 10,
+        y: 20,
+        width: 80,
+        height: 14,
+        segments: [{ kind: "word", text: "Cell text", start: 0, end: 9, x: 0, width: 80, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeTableDoc("Cell text"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Cell text draft",
+      wysiwygTextCaretOffset: 15,
+      showTextSegments: false,
+      initialCaretIndex: 0,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).not.toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-input-bridge=\"true\"")
+    expect(markup).toContain("<textarea")
+  })
+
+  it("keeps row-stack paragraphs on the text-engine path without textarea fallback", () => {
+    const fragment = makeFragment({
+      parentNodeId: "st1",
+      lines: [{
+        text: "Stack text",
+        x: 10,
+        y: 20,
+        width: 90,
+        height: 14,
+        segments: [{ kind: "word", text: "Stack text", start: 0, end: 10, x: 0, width: 90, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeStackDoc("Stack text"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Stack text draft",
+      wysiwygTextCaretOffset: 16,
+      showTextSegments: false,
+      initialCaretIndex: 0,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
+    expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
+    expect(markup).not.toContain("<textarea")
   })
 
   it("uses the text-engine lane for continuation fragments after draft pagination", () => {
@@ -624,7 +971,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).not.toContain("<textarea")
   })
 
-  it("marks local draft layout as hard-page-boundary when it grows past page content", () => {
+  it("renders draft lines while deferring downstream layout past the page boundary", () => {
     const fragment = makeFragment({
       y: 20,
       width: 200,
@@ -676,8 +1023,185 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     })))
 
     expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
+    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
     expect(markup).toContain("A")
     expect(markup).toContain("B")
+  })
+
+  it("can render a parent-split draft slice while still classifying the full draft as page-boundary reflow", () => {
+    const fragment = makeFragment({
+      y: 20,
+      width: 200,
+      height: 12,
+      lines: [{
+        text: "A",
+        x: 10,
+        y: 20,
+        width: 10,
+        height: 12,
+        segments: [{ kind: "word", text: "A", start: 0, end: 1, x: 0, width: 10, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("A"),
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 30,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "A\nB",
+      wysiwygTextVisualDraftLines: fragment.lines,
+      wysiwygTextCaretOffset: 1,
+      showTextSegments: false,
+      initialCaretIndex: 1,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
+    expect(markup).toContain("A")
+    expect(markup).not.toContain(">B<")
+  })
+
+  it("renders draft lines while deferring downstream layout when line count changes", () => {
+    const doc = makeDoc("Hello")
+    const fragment = makeFragment({
+      width: 50,
+      height: 12,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 12,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc,
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 200,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Hello world",
+      wysiwygTextCaretOffset: 11,
+      showTextSegments: false,
+      initialCaretIndex: 5,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-local\"")
+    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+    expect(markup).toContain("Hello")
+    expect(markup).toContain("world")
+  })
+
+  it("moves the draft caret to the next line for deferred Enter input", () => {
+    const doc = makeDoc("Hello")
+    const fragment = makeFragment({
+      width: 50,
+      height: 12,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 12,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc,
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 200,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Hello\n",
+      wysiwygTextCaretOffset: 6,
+      showTextSegments: false,
+      initialCaretIndex: 5,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-local\"")
+    expect(markup).toContain("data-wysiwyg-caret=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
+    expect(markup).toContain("y1=\"12\"")
   })
 
   it("can render text-engine draft text from local paragraph measurement", () => {
@@ -685,6 +1209,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
     const fragment = makeFragment({
       width: 200,
+      height: 12,
       lines: [{
         text: "Hello",
         x: 10,
@@ -734,6 +1259,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(draftLines?.[0].text).toBe("Hello!")
     expect(markup).toContain("Hello!")
     expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
+    expect(markup).toContain("aria-describedby=\"flowdoc-wysiwyg-text-status\"")
     expect(markup).not.toContain("<textarea")
   })
 
@@ -759,5 +1285,19 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     const fragment = makeFragment({ continuesFrom: true, lineStart: 1, lineEnd: 2 })
 
     expect(buildWysiwygDraftParagraphLayout(fragment, paragraph, "Hello world!", fixedMeasurer)).toBeNull()
+  })
+
+  it("allows the first continued fragment to seed a canvas-owned draft preview", () => {
+    const doc = makeDoc("Hello world")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({ isContinued: true, lineStart: 0, lineEnd: 1 })
+
+    expect(buildWysiwygDraftParagraphLayout(
+      fragment,
+      paragraph,
+      "Hello world!",
+      fixedMeasurer,
+      { allowContinuedFirstFragment: true },
+    )?.lines.map((line) => line.text)).toEqual(["Hello world!"])
   })
 })

@@ -71,7 +71,6 @@ export function isWysiwygTextEngineFragmentEligible(input: {
 }): boolean {
   const fragment = findWysiwygTextEngineFragment(input.paginated, input.nodeId, input.pageIndex)
   if (!fragment) return false
-  if (fragment.continuesFrom || fragment.isContinued) return false
   if (isParagraphInsideTableCell(input.doc, input.nodeId, fragment.parentNodeId)) return false
   const paragraph = findParagraphNode(input.doc, input.nodeId)
   return paragraph !== null && isPlainTextParagraph(paragraph)

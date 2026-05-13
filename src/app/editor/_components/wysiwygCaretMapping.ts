@@ -131,9 +131,13 @@ function candidateFromSegment(
   }
 }
 
-function getLineRange(line: PaginatedLine, lineIndex: number): LineRange | null {
+function getLineRange(line: PaginatedLine, lineIndex: number, fallbackStart?: number): LineRange | null {
   const segments = line.segments ?? []
-  if (segments.length === 0) return null
+  if (segments.length === 0) {
+    if (line.text.length > 0) return null
+    if (fallbackStart == null) return null
+    return { line, lineIndex, start: fallbackStart, end: fallbackStart }
+  }
 
   let start = segments[0].start
   let end = segments[0].end
@@ -145,9 +149,17 @@ function getLineRange(line: PaginatedLine, lineIndex: number): LineRange | null 
 }
 
 function getLineRanges(fragment: PageFragment): LineRange[] {
-  return (fragment.lines ?? [])
-    .map((line, lineIndex) => getLineRange(line, lineIndex))
-    .filter((range): range is LineRange => range !== null)
+  const ranges: LineRange[] = []
+  let nextEmptyLineOffset = 0
+
+  for (const [lineIndex, line] of (fragment.lines ?? []).entries()) {
+    const range = getLineRange(line, lineIndex, nextEmptyLineOffset)
+    if (!range) continue
+    ranges.push(range)
+    nextEmptyLineOffset = range.end + 1
+  }
+
+  return ranges
 }
 
 function findLineRangeForOffset(fragment: PageFragment, offset: number): LineRange | null {
@@ -300,10 +312,17 @@ export function resolveCaretPositionInFragment(
   const range = findLineRangeForOffset(fragment, offset)
   if (!range) return null
 
-  return nearestCandidate(
-    getWysiwygCaretCandidatesForLine(fragment, range.line, range.lineIndex, options),
-    offset,
-  )
+  const candidates = getWysiwygCaretCandidatesForLine(fragment, range.line, range.lineIndex, options)
+  return nearestCandidate(candidates, offset) ?? {
+    offset: range.start,
+    pageIndex: fragment.pageIndex,
+    fragmentIndex: fragment.fragmentIndex,
+    lineIndex: range.lineIndex,
+    x: range.line.x,
+    y: range.line.y,
+    height: range.line.height,
+    source: "segment-ratio",
+  }
 }
 
 export function resolveCaretOffsetFromPointInFragment(
@@ -325,10 +344,18 @@ export function resolveCaretOffsetFromPointInFragment(
     }, 0)
 
   const line = lines[lineIndex]
-  return nearestCandidateByX(
-    getWysiwygCaretCandidatesForLine(fragment, line, lineIndex, options),
-    point.x,
-  )
+  const candidates = getWysiwygCaretCandidatesForLine(fragment, line, lineIndex, options)
+  const range = getLineRanges(fragment).find((candidateRange) => candidateRange.lineIndex === lineIndex)
+  return nearestCandidateByX(candidates, point.x) ?? (range ? {
+    offset: range.start,
+    pageIndex: fragment.pageIndex,
+    fragmentIndex: fragment.fragmentIndex,
+    lineIndex,
+    x: line.x,
+    y: line.y,
+    height: line.height,
+    source: "segment-ratio",
+  } : null)
 }
 
 export function resolveParagraphCaretPosition(

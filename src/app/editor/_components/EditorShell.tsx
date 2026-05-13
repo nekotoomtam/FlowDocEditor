@@ -62,7 +62,11 @@ import { resolveEditorTestScenarioFromLocation } from "./wysiwygStage3StressScen
 import { isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
 import { commitWysiwygTextEditState, getPlainParagraphTextFromDocument } from "./wysiwygTextCommit"
 import { useInlineEditSession } from "./useInlineEditSession"
-import { useWysiwygTextSession } from "./useWysiwygTextSession"
+import {
+  describeWysiwygTextSessionAccessibility,
+  useWysiwygTextSession,
+  WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
+} from "./useWysiwygTextSession"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -87,6 +91,18 @@ interface PendingDrag {
   clientY: number
   clickAction?: PendingClickAction
 }
+
+const SCREEN_READER_ONLY_STYLE = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0, 0, 0, 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+} as const
 
 interface HistoryEntry {
   doc: DocumentNode
@@ -146,7 +162,9 @@ const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
 const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 0
-const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 80
+// Keep hard reflow from settling between real key-repeat events; live echo
+// carries immediate feedback until the typing burst pauses.
+const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 450
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
@@ -556,6 +574,10 @@ export default function EditorShell() {
     enabled: WYSIWYG_TEXT_ENGINE_ENABLED,
     getParagraphText: (nodeId) => getParagraphTextFromDoc(docRef.current, nodeId),
   })
+  const wysiwygTextAccessibilityStatus = useMemo(
+    () => describeWysiwygTextSessionAccessibility(wysiwygTextSessionState),
+    [wysiwygTextSessionState],
+  )
   const wysiwygTextSessionStateRef = useRef(wysiwygTextSessionState)
   const [wysiwygDraftPaginationNodeId, setWysiwygDraftPaginationNodeId] = useState<string | null>(null)
   useEffect(() => { wysiwygTextSessionStateRef.current = wysiwygTextSessionState }, [wysiwygTextSessionState])
@@ -712,7 +734,13 @@ export default function EditorShell() {
     if (text === wysiwygTextSessionState.draftText) {
       moveWysiwygTextCaret(caretIndex, selection)
     } else {
+      const startedAt = startWysiwygPerfSpan()
       changeWysiwygTextDraft({ text, caretOffset: caretIndex, selection })
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-draft-update", startedAt, {
+        nodeId,
+        draftVersion: wysiwygTextSessionState.dirtyVersion + 1,
+        textLength: text.length,
+      })
     }
     handleInlineEditCaretChange(nodeId, caretIndex)
     if (wysiwygDraftPaginationNodeId === nodeId) {
@@ -1093,7 +1121,14 @@ export default function EditorShell() {
   useEffect(() => {
     const layoutVersion = ++layoutVersionRef.current
     let controller: AbortController | null = null
+    let cancelled = false
+    const cancelForPageTransition = () => {
+      cancelled = true
+      controller?.abort()
+    }
     setLayoutStatus("optimistic")
+
+    window.addEventListener("pagehide", cancelForPageTransition, { once: true })
 
     if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
     serverPaginationDebounceRef.current = setTimeout(() => {
@@ -1145,7 +1180,14 @@ export default function EditorShell() {
           setLayoutStatus("server-checked")
         })
         .catch((error) => {
+          if (cancelled) return
+          if (controller?.signal.aborted) return
           if (error instanceof DOMException && error.name === "AbortError") return
+          if (
+            error instanceof TypeError &&
+            error.message === "Failed to fetch" &&
+            document.visibilityState === "hidden"
+          ) return
           if (layoutVersion !== layoutVersionRef.current) return
           console.error("server pagination failed:", error)
           setLayoutStatus("optimistic")
@@ -1157,6 +1199,8 @@ export default function EditorShell() {
     }, inlineEditNodeId ? 500 : 120)
 
     return () => {
+      cancelled = true
+      window.removeEventListener("pagehide", cancelForPageTransition)
       if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
       controller?.abort()
     }
@@ -1545,6 +1589,15 @@ export default function EditorShell() {
       onWheelCapture={handleWheelCapture}
       tabIndex={-1}
     >
+      <div
+        id={WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID}
+        data-wysiwyg-accessibility-status="true"
+        aria-live="polite"
+        aria-atomic="true"
+        style={SCREEN_READER_ONLY_STYLE}
+      >
+        {wysiwygTextAccessibilityStatus ?? ""}
+      </div>
       {/* Toolbar */}
       <div data-testid="editor-toolbar" style={{ padding: "10px 20px", background: "white", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <span style={{ fontSize: 13, fontWeight: "bold", color: "#111827" }}>FlowDoc Editor</span>

@@ -20,6 +20,397 @@ Each entry should include:
 
 ## 2026-05-13
 
+### Prepare WYSIWYG Stage 4 Review Baseline
+
+Goal: Freeze the current Option 1 WYSIWYG baseline for a larger review without
+adding more editor behavior.
+
+Completed:
+
+- Added a Stage 4 review packet that summarizes scope, out-of-scope items,
+  PASS/RISK/UNKNOWN status, verification commands, and reviewer notes.
+- Linked the review packet from the active docs index.
+- Kept this slice documentation-only so the baseline logic and previous smoke
+  evidence stay stable for review.
+
+Files changed:
+
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/DOCS_INDEX.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- Documentation-only follow-up. The baseline verification remains the Stage 4E
+  focused tests, browser smoke runs, type-check, full test suite, and
+  `git diff --check` recorded below.
+
+Notes:
+
+- The review packet explicitly does not claim table-cell text-engine support,
+  independent row/column continuation, real OS IME acceptance, or full screen
+  reader validation.
+
+### Add Stage 4E Row-Stack Paragraph Coverage
+
+Goal: Continue Option 1 by covering paragraph editing inside row/stack columns
+without changing the current atomic row/stack pagination contract or opening
+table-cell text-engine editing.
+
+Completed:
+
+- Added a row/stack target to the Stage 3 boundary stress scenario, with a left
+  editable stack paragraph and a right sibling stack paragraph for geometry
+  comparison.
+- Kept row-stack paragraphs eligible for the text-engine lane and added an
+  explicit test that they do not fall back to visible textarea editing.
+- Guarded row-stack paragraphs out of the body-paragraph live visual split
+  preview, so typing in a column cannot create independent continuation
+  fragments that bypass the containing row.
+- Extended the Stage 4C smoke with a heavy row-stack paragraph edit. The smoke
+  inserts `STAGE4_STACK_MARKER`, confirms no textarea mounts, confirms the
+  stack target remains one fragment and one pointer fragment, and checks
+  row/stack width and height relationships after the edit.
+- Preserved the existing body paragraph page-boundary visual preview behavior
+  with focused regression coverage.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/wysiwygStage3StressScenarios.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts`
+- `node --check scripts/wysiwyg-stage4c-smoke.mjs`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='msedge'; npm.cmd run smoke:wysiwyg-stage4c`
+- `npm.cmd test`
+
+Notes:
+
+- This does not change `DocumentNode`, core pagination, export, undo/redo, or
+  table-cell text-engine eligibility.
+- Row/stack paragraph content remains governed by the current atomic row
+  policy: the paragraph does not split independently from its row. Independent
+  row/column continuation remains a future design gate.
+
+### Add Stage 4D Cross-Fragment Pointer Selection
+
+Goal: Continue Option 1 in the body/split text-engine lane by making
+same-paragraph pointer selection work across active and continuation fragments
+without opening the table-cell decision gate.
+
+Completed:
+
+- Added pointer fragment targets for every visible fragment of the active
+  text-engine paragraph, using draft visual preview fragments when the current
+  draft crosses a page boundary.
+- Updated `WysiwygTextLayer` pointer offset resolution so drag selection can
+  map client coordinates back to the nearest paragraph fragment across pages.
+- Added a document-level transparent drag overlay that appears only after real
+  pointer movement, keeping cross-fragment move/up deterministic without
+  breaking click or double-click word selection.
+- Extended the Stage 4C smoke to drag-select from visible text in the active
+  continued fragment back to visible text in the earlier fragment and require
+  selection overlays on multiple target pages.
+- Updated Stage 4 evidence and browser checklist wording for the new pointer
+  drag coverage.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `node --check scripts/wysiwyg-stage4c-smoke.mjs`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='msedge'; npm.cmd run smoke:wysiwyg-stage4c`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- This keeps selection state transient in the editor/session. It does not
+  change `DocumentNode`, pagination semantics, export, undo/redo, or table-cell
+  text-engine eligibility.
+- Cross-fragment edit semantics beyond same-paragraph selection remain a later
+  Stage 4/5 risk.
+
+### Consolidate Stage 4C+4 Evidence And Browser Gates
+
+Goal: Keep the current body/split text-engine stage auditable before moving to
+the next WYSIWYG stage.
+
+Completed:
+
+- Reconciled the Stage 4C+4 evidence file with the current browser smoke gate:
+  clipboard, synthetic composition, double-click selection, cross-fragment
+  overlays, accessibility status, live continuation overlap protection, and
+  perf trace separation.
+- Recorded that the latest bundled Chromium, installed Chrome, and installed
+  Edge smoke runs used the already-running flagged server at
+  `http://localhost:4000/editor` because an isolated Next smoke server was
+  blocked by the repo dev-server lock.
+- Kept real Thai IME, full screen reader validation, full cross-fragment
+  drag/edit semantics, and table-cell text-engine editing marked as risk or
+  unknown instead of treating automated smoke as product-complete proof.
+
+Files changed:
+
+- `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='msedge'; npm.cmd run smoke:wysiwyg-stage4c`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This consolidation changes documentation only. It does not change editor
+  behavior, document model semantics, pagination output, export, undo/redo, or
+  table-cell eligibility.
+
+### Add Text-Engine Performance Trace Guard
+
+Goal: Continue Option 1 by protecting the body/split text-engine critical input
+lane before opening any table-cell text-engine work.
+
+Completed:
+
+- Added `inline-edit-draft-update` perf events for text-engine draft changes so
+  the existing perf trace covers the FlowDoc-owned input bridge, not only the
+  legacy textarea path.
+- Extended the Stage 4C smoke with a heavy text insertion perf check that
+  resets `window.__flowDocWysiwygPerfEvents`, inserts a long marker through the
+  hidden text-engine bridge, and asserts `browser-preview-pagination` is absent
+  from the immediate input lane.
+- If the same smoke observes a debounced `browser-preview-pagination`, it
+  asserts it starts after the draft update instead of in the synchronous input
+  path.
+- Updated the WYSIWYG plan and browser checklist to record the perf gate.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+- `node --check scripts/wysiwyg-stage4c-smoke.mjs`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-stage4c`
+- `git diff --check`
+
+Notes:
+
+- This patch changes instrumentation and smoke coverage only. It does not
+  change `DocumentNode`, pagination output, export, undo/redo, or table-cell
+  eligibility.
+- Starting an isolated smoke server without `SMOKE_BASE_URL` was blocked by
+  the existing Next dev-server lock for this repo on `localhost:4000`, so the
+  smoke was run against that already-running flagged server.
+
+### Add WYSIWYG Text-Engine Accessibility Status
+
+Goal: Continue Option 1 by improving the body/split text-engine lane without
+opening the table-cell text-engine decision gate.
+
+Completed:
+
+- Added an accessibility status helper derived from `WysiwygTextSessionState`
+  so caret and selection announcements use the same draft/caret/selection state
+  as the text-engine lane.
+- Added a visually hidden polite live region in `EditorShell` and connected the
+  active text-engine layer and hidden input bridge with `aria-describedby`.
+- Extended the Stage 4C smoke to assert the live status updates for caret and
+  selection during the heavy cross-page clipboard flow.
+- Updated the WYSIWYG plan and browser checklist to distinguish DOM live-status
+  coverage from full screen reader product validation.
+
+Files changed:
+
+- `src/app/editor/_components/useWysiwygTextSession.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `node --check scripts/wysiwyg-stage4c-smoke.mjs`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-stage4c`
+- `git diff --check`
+
+Notes:
+
+- This is an editor accessibility-state patch only. It does not change
+  `DocumentNode`, pagination, export, undo/redo, or table-cell eligibility.
+
+### Guard Table-Cell Text-Engine Decision Gate
+
+Goal: Continue the WYSIWYG staged work without silently expanding table-cell
+editing into the text-engine lane before row/cell reflow semantics are designed.
+
+Completed:
+
+- Rechecked the table editing contract and cross-page behavior contract before
+  touching table-related WYSIWYG behavior.
+- Kept table-cell paragraphs explicitly outside the text-engine lane for now:
+  they still fail closed to the guarded non-text-engine edit path instead of
+  using the hidden text-engine input bridge.
+- Added regression coverage that a table-cell paragraph with the text-engine
+  flag enabled does not render `data-wysiwyg-text-engine-layer` or the hidden
+  `data-wysiwyg-input-bridge`.
+- Updated the WYSIWYG plan to distinguish the completed passive
+  cross-fragment selection overlay from the still-deferred full drag/edit
+  semantics and table-cell text-engine editing decision gate.
+
+Files changed:
+
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This guard does not change `DocumentNode`, core pagination, table pagination,
+  export behavior, undo/redo, or the existing table-cell property-panel flow.
+- Enabling text-engine editing inside table cells is the next big decision gate
+  because it must define row/cell live reflow and continuation behavior instead
+  of treating table-cell paragraphs like normal body paragraphs.
+
+### Stabilize WYSIWYG Active Draft Page-Boundary Preview
+
+Goal: Keep Stage 4C+3 typing feedback visible and stable when the active
+paragraph grows across a page boundary, without letting full-document pagination
+sit on the critical keypress path.
+
+Completed:
+
+- Added a canvas-owned WYSIWYG draft visual preview that measures only the
+  active paragraph and splits draft lines across existing pages for live
+  rendering.
+- The live preview uses direct line capacity, not widow/orphan adjustment, so
+  the current page keeps the lines that still fit and only overflowing draft
+  lines move to the next page while typing.
+- Updated active paragraph chrome to use the draft visual fragment and shifted
+  downstream fragments when a live continuation is inserted, including chrome
+  and a small gap so the continuation does not overlap the next paragraph.
+- Kept plain body split paragraphs on the text-engine path after exit/re-enter
+  by allowing continuation fragments through eligibility while still rejecting
+  table-cell paragraphs.
+- Removed duplicate React bridge handlers from the text-engine input bridge so
+  keydown, beforeinput, input, clipboard, and composition events go through one
+  native adapter path for normal and shifted typing.
+- Added same-fragment double-click word selection in the text-engine layer,
+  resolving the selected word from FlowDoc draft offsets and rendering the
+  existing SVG selection overlay without mounting a textarea.
+- Added passive SVG selection overlays for non-active continuation fragments of
+  the active paragraph, so a full-paragraph selection can visibly span page
+  fragments while keeping a single hidden input bridge on the active fragment.
+- Kept full browser/server pagination as the settling/export truth and guarded
+  aborted or page-transition server pagination fetches from logging false
+  console errors.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygTextEligibility.ts`
+- `src/app/editor/_components/wysiwygDraftVisualPreview.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+
+Verification:
+
+- `node --check scripts/wysiwyg-stage4c-smoke.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='msedge'; npm.cmd run smoke:wysiwyg-stage4c`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:wysiwyg-stage4c`
+- Browser check on `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  confirmed the target paragraph changed from one fragment to two with the
+  first fragment staying at `lineStart=0,lineEnd=9` and the overflow fragment
+  starting at `lineStart=9`, one active input bridge, and no inline textarea.
+- Bundled Chromium, installed Chrome, and installed Edge Stage 4C smoke runs
+  confirmed double-click selection produced a WYSIWYG selection overlay before
+  the clipboard/IME flows.
+- The Stage 4C smoke also selected from the end of the overflowed paragraph
+  back to the start and confirmed WYSIWYG selection overlays on at least two
+  target pages before collapsing the selection for the copy/cut flow.
+- The same browser check exited edit and re-entered the continuation paragraph;
+  settled line ranges stayed `0-8` / `8-10` before and after re-entry.
+- A headless browser geometry check confirmed the live continuation bottom was
+  below the next downstream paragraph top with no overlap, no inline textarea,
+  no layout error badge, and no console errors.
+- The automated Stage 4C smoke now waits for WYSIWYG selection and clipboard
+  state to settle before copy/cut assertions, and asserts that the live target
+  continuation does not overlap downstream paragraph fragments while the
+  text-engine bridge is active.
+
+Notes:
+
+- This is an editor-only live visual preview. It does not change
+  `DocumentNode`, core pagination, authoritative server/export pagination,
+  undo/redo semantics, or renderer output.
+- `npm.cmd run smoke:editor` could not be used as a clean broader gate while
+  the flagged `localhost:4000` text-engine server was running: the isolated
+  server path hit the Next dev-server lock, and the external-server path expects
+  the legacy textarea lane. Stage 4C smoke was run against the active
+  text-engine lane instead.
+- Before the smoke wait hardening, one installed Chrome run had a transient
+  selection/clipboard timing failure. After the script waited for selection and
+  clipboard state to settle, bundled Chromium, installed Chrome, and installed
+  Edge Stage 4C runs passed.
+
 ### Add Stage 4C+3 Browser-Channel IME Evidence
 
 Goal: Strengthen Stage 4C clipboard/IME confidence with repeatable installed

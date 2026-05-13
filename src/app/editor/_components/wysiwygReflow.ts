@@ -75,8 +75,8 @@ export function classifyWysiwygTextReflow(input: {
       kind: "hard-local",
       reason: "line-count-changed",
       shouldPatchActiveLines: true,
-      shouldPatchSamePageHeight: true,
-      shouldQueueSettledPagination: false,
+      shouldPatchSamePageHeight: false,
+      shouldQueueSettledPagination: true,
     }
   }
 
@@ -85,8 +85,8 @@ export function classifyWysiwygTextReflow(input: {
       kind: "hard-local",
       reason: "height-changed",
       shouldPatchActiveLines: true,
-      shouldPatchSamePageHeight: true,
-      shouldQueueSettledPagination: false,
+      shouldPatchSamePageHeight: false,
+      shouldQueueSettledPagination: true,
     }
   }
 

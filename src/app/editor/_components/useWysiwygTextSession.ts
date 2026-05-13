@@ -59,6 +59,8 @@ export const INACTIVE_WYSIWYG_TEXT_SESSION: WysiwygTextSessionState = {
   layoutVersion: 0,
 }
 
+export const WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID = "flowdoc-wysiwyg-text-status"
+
 export function clampWysiwygTextOffset(text: string, offset: number | null | undefined): number | null {
   if (offset == null || !Number.isFinite(offset)) return null
   return Math.max(0, Math.min(text.length, Math.trunc(offset)))
@@ -314,6 +316,20 @@ export function endWysiwygTextSessionState(): WysiwygTextSessionState {
 
 export function isWysiwygTextSessionLayoutFresh(state: WysiwygTextSessionState): boolean {
   return !state.nodeId || state.layoutVersion >= state.dirtyVersion
+}
+
+export function describeWysiwygTextSessionAccessibility(state: WysiwygTextSessionState): string | null {
+  if (!state.nodeId) return null
+  const textLength = state.draftText.length
+  const caretOffset = clampWysiwygTextOffset(state.draftText, state.caretOffset) ?? textLength
+  const anchorOffset = clampWysiwygTextOffset(state.draftText, state.selection?.anchorOffset) ?? caretOffset
+  const focusOffset = clampWysiwygTextOffset(state.draftText, state.selection?.focusOffset) ?? caretOffset
+  const startOffset = Math.min(anchorOffset, focusOffset)
+  const endOffset = Math.max(anchorOffset, focusOffset)
+  if (startOffset !== endOffset) {
+    return `Editing paragraph text. ${endOffset - startOffset} characters selected, ${startOffset} to ${endOffset} of ${textLength}.`
+  }
+  return `Editing paragraph text. Caret at ${caretOffset} of ${textLength}.`
 }
 
 export function useWysiwygTextSession({

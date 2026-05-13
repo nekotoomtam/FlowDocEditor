@@ -82,13 +82,22 @@ describe("isWysiwygTextEngineFragmentEligible", () => {
     })).toBe(true)
   })
 
-  it("rejects continuation fragments", () => {
+  it("allows the first fragment of a split body paragraph", () => {
     expect(isWysiwygTextEngineFragmentEligible({
       doc: makeDoc(),
       paginated: makePaginated({ isContinued: true }),
       nodeId: "p1",
       pageIndex: 0,
-    })).toBe(false)
+    })).toBe(true)
+  })
+
+  it("allows continuation fragments of split body paragraphs", () => {
+    expect(isWysiwygTextEngineFragmentEligible({
+      doc: makeDoc(),
+      paginated: makePaginated({ continuesFrom: true, pageIndex: 1 }),
+      nodeId: "p1",
+      pageIndex: 1,
+    })).toBe(true)
   })
 
   it("rejects table-cell paragraphs", () => {

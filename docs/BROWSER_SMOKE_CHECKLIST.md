@@ -180,6 +180,12 @@ Use while hardening the FlowDoc-owned Stage 4 selection lane.
   present while `textarea[data-inline-edit-node-id]` is absent.
 - Press End, then Shift+ArrowLeft one or more times. Confirm
   `data-wysiwyg-selection="true"` appears and the text remains SVG-rendered.
+- Double-click inside the active text-engine paragraph. Confirm
+  `data-wysiwyg-selection="true"` appears and no inline textarea mounts.
+- After the target paragraph crosses a page boundary, use Shift+Home/End or an
+  equivalent full-paragraph selection and confirm selection overlays appear on
+  the active fragment and at least one continuation fragment without mounting a
+  second input bridge.
 - Press an unshifted ArrowLeft or ArrowRight. Confirm the selection overlay
   collapses without changing text.
 - Press End, Enter, Enter, and a short marker such as `S4B`. Confirm the target
@@ -209,10 +215,14 @@ Automated command:
   the same automated gate against installed Chrome or Edge through Playwright.
 
 The automated smoke starts the flagged editor, opens
-`/editor?flowdocTestScenario=wysiwyg-stage3-boundary`, and checks paste, copy,
-cut, keyboard undo/redo, focus restoration, page-boundary reflow, duplicate IME
-suppression, no inline textarea mount, no layout error, and no browser
-console/page errors.
+`/editor?flowdocTestScenario=wysiwyg-stage3-boundary`, and checks double-click
+WYSIWYG word selection, cross-fragment selection overlays, cross-fragment
+same-paragraph pointer drag selection, perf trace separation between immediate
+input and debounced browser preview pagination, paste, copy, cut, keyboard
+undo/redo, focus restoration, page-boundary reflow, duplicate IME suppression,
+no live continuation overlap with downstream paragraph fragments, heavy
+row-stack paragraph editing without independent paragraph splitting, no inline
+textarea mount, no layout error, and no browser console/page errors.
 
 For real OS IME coverage, use `docs/WYSIWYG_STAGE4C_IME_MATRIX.md`. The
 automated smoke uses synthetic composition events and is not enough by itself
@@ -234,6 +244,10 @@ Manual equivalent:
   SVG text, line endings render as document line breaks, the target crosses to
   at least two fragments, no inline textarea appears, and no layout error is
   visible.
+- Drag-select from visible text in the active continued fragment back to visible
+  text in the earlier fragment. Confirm the SVG selection overlay appears on at
+  least two target pages and the DOM live accessibility status reports selected
+  characters.
 - Press End, select the cut marker with Shift+ArrowLeft, and cut with
   Ctrl/Cmd+X. Confirm the system clipboard contains the selected marker, the
   marker is removed from SVG text, the selection overlay collapses, no inline
@@ -245,9 +259,16 @@ Manual equivalent:
   Confirm intermediate composition input does not mutate visible SVG text,
   compositionend commits the final text exactly once, the hidden bridge is
   empty afterward, no inline textarea appears, and no layout error is visible.
+- Click the stack paragraph `stage3-stack-target`, type a heavy multiline
+  marker such as `STAGE4_STACK_MARKER`, and confirm the paragraph stays on the
+  text-engine path without textarea fallback. The row/stack columns should keep
+  stable widths, both stack fragments should still match the row height, and the
+  stack target should remain one fragment inside `stage3-stack-left`.
 
-This check protects clipboard and IME adapter behavior. It does not claim
-accessibility announcements, cross-fragment selection, or table-cell
+This check protects clipboard, IME adapter behavior, cross-fragment selection
+overlay and pointer drag selection for the same paragraph, and the DOM live
+accessibility status. It does not claim full screen reader product validation,
+cross-fragment edit semantics beyond same-paragraph selection, or table-cell
 text-engine coverage.
 
 ### Editor State Race And Reconciliation

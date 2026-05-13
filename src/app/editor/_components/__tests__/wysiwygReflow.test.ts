@@ -48,7 +48,9 @@ describe("classifyWysiwygTextReflow", () => {
     })).toMatchObject({
       kind: "hard-local",
       reason: "line-count-changed",
-      shouldPatchSamePageHeight: true,
+      shouldPatchActiveLines: true,
+      shouldPatchSamePageHeight: false,
+      shouldQueueSettledPagination: true,
     })
   })
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { isPlainTextParagraph } from "@/document"
 import { measureParagraph, snapToGraphemeBoundary } from "@/layout"
 import type { TextMeasurer } from "@/layout"
@@ -8,6 +9,7 @@ import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagina
 import { resolveFontCssFamily } from "@/font-registry"
 import {
   resolveCollapsedCaretOverlayInFragment,
+  resolveCaretPositionInFragment,
   resolveCaretOffsetFromPointInFragment,
   resolveSelectionOverlayRectsInFragment,
 } from "./wysiwygCaretMapping"
@@ -19,6 +21,7 @@ import {
   applyWysiwygTextInputText,
   clampWysiwygTextOffset,
   getWysiwygTextSelectedText,
+  WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
 import type { WysiwygTextSelection, WysiwygTextSessionDraftChange } from "./useWysiwygTextSession"
 import { classifyWysiwygTextReflow } from "./wysiwygReflow"
@@ -38,6 +41,8 @@ interface Props {
   wysiwygTextDraftText?: string | null
   wysiwygTextCaretOffset?: number | null
   wysiwygTextSelection?: WysiwygTextSelection | null
+  wysiwygTextVisualDraftLines?: PaginatedLine[] | null
+  wysiwygTextPointerFragments?: WysiwygTextPointerFragmentTarget[]
   wysiwygTextDraftPaginationActive?: boolean
   showTextSegments: boolean
   initialCaretIndex: number | null
@@ -87,6 +92,7 @@ export interface InlineEditVisualMode {
 const EDIT_CHROME_X = 3
 const EDIT_CHROME_Y = 3
 const INLINE_EDIT_TEXT_COLOR = "#1e40af"
+const POINTER_SELECTION_DRAG_THRESHOLD_PX = 3
 
 export function shouldUseInlineEditSvgVisual(isEditing: boolean, isVisualFresh: boolean): boolean {
   return isEditing && isVisualFresh
@@ -567,13 +573,19 @@ export interface WysiwygDraftParagraphLayout {
   height: number
 }
 
+export interface WysiwygLiveTextEcho {
+  anchorOffset: number
+  text: string
+}
+
 export function buildWysiwygDraftParagraphLayout(
   fragment: PageFragment,
   node: ParagraphNode,
   draftText: string,
   textMeasurer: TextMeasurer,
+  options: { allowContinuedFirstFragment?: boolean } = {},
 ): WysiwygDraftParagraphLayout | null {
-  if (fragment.continuesFrom || fragment.isContinued) return null
+  if (fragment.continuesFrom || (fragment.isContinued && !options.allowContinuedFirstFragment)) return null
   const draftNode = paragraphWithDraftText(node, draftText)
   if (!draftNode) return null
   const measured = measureParagraph(draftNode, fragment.width, textMeasurer)
@@ -600,6 +612,148 @@ export function buildWysiwygDraftParagraphLines(
   return buildWysiwygDraftParagraphLayout(fragment, node, draftText, textMeasurer)?.lines ?? null
 }
 
+export function resolveWysiwygLiveTextEcho(
+  baseText: string,
+  draftText: string,
+): WysiwygLiveTextEcho | null {
+  if (baseText === draftText) return null
+
+  let prefixLength = 0
+  const maxPrefixLength = Math.min(baseText.length, draftText.length)
+  while (
+    prefixLength < maxPrefixLength &&
+    baseText[prefixLength] === draftText[prefixLength]
+  ) {
+    prefixLength += 1
+  }
+
+  let baseSuffixIndex = baseText.length
+  let draftSuffixIndex = draftText.length
+  while (
+    baseSuffixIndex > prefixLength &&
+    draftSuffixIndex > prefixLength &&
+    baseText[baseSuffixIndex - 1] === draftText[draftSuffixIndex - 1]
+  ) {
+    baseSuffixIndex -= 1
+    draftSuffixIndex -= 1
+  }
+
+  const insertedText = draftText.slice(prefixLength, draftSuffixIndex)
+  if (!insertedText) return null
+
+  return {
+    anchorOffset: prefixLength,
+    text: insertedText,
+  }
+}
+
+export function resolveWysiwygWordSelectionRange(
+  text: string,
+  offset: number | null,
+): WysiwygTextSelection | null {
+  if (!text) return null
+  const safeOffset = clampWysiwygTextOffset(text, offset) ?? 0
+
+  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+    const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "word" })
+    for (const rawPart of segmenter.segment(text)) {
+      const part = rawPart as { segment: string; index: number; isWordLike?: boolean }
+      const start = part.index
+      const end = start + part.segment.length
+      if (part.isWordLike === false || !/\S/u.test(part.segment)) continue
+      if ((safeOffset >= start && safeOffset < end) || (safeOffset === end && safeOffset > start)) {
+        return { anchorOffset: start, focusOffset: end }
+      }
+    }
+  }
+
+  const probe = safeOffset < text.length && /\S/u.test(text[safeOffset] ?? "")
+    ? safeOffset
+    : safeOffset - 1
+  if (probe < 0 || !/\S/u.test(text[probe] ?? "")) return null
+
+  let start = probe
+  while (start > 0 && /\S/u.test(text[start - 1] ?? "")) start -= 1
+
+  let end = probe + 1
+  while (end < text.length && /\S/u.test(text[end] ?? "")) end += 1
+
+  return start < end ? { anchorOffset: start, focusOffset: end } : null
+}
+
+export interface WysiwygTextPointerFragmentTarget {
+  pageKey: string
+  fragment: PageFragment
+}
+
+export interface WysiwygTextPointerPageRect {
+  left: number
+  top: number
+}
+
+function distanceToFragmentRect(point: { x: number; y: number }, fragment: PageFragment): number {
+  const left = fragment.x
+  const right = fragment.x + fragment.width
+  const top = fragment.y
+  const bottom = fragment.y + Math.max(fragment.height, 1)
+  const dx = point.x < left ? left - point.x : point.x > right ? point.x - right : 0
+  const dy = point.y < top ? top - point.y : point.y > bottom ? point.y - bottom : 0
+  return dx * dx + dy * dy
+}
+
+function safelySetPointerCapture(element: Element | null | undefined, pointerId: number): void {
+  try {
+    element?.setPointerCapture?.(pointerId)
+  } catch {
+    // Pointer capture is a drag continuity optimization; selection still works
+    // through document-level listeners if the browser rejects capture here.
+  }
+}
+
+function safelyReleasePointerCapture(element: Element | null | undefined, pointerId: number): void {
+  try {
+    element?.releasePointerCapture?.(pointerId)
+  } catch {
+    // The browser may already have released capture when pointerup/cancel fires.
+  }
+}
+
+export function resolveWysiwygTextPointerOffsetFromFragmentTargets(input: {
+  clientX: number
+  clientY: number
+  scale: number
+  targets: WysiwygTextPointerFragmentTarget[]
+  getPageRect: (pageKey: string) => WysiwygTextPointerPageRect | null | undefined
+  textMeasurer?: TextMeasurer
+}): number | null {
+  let best: { offset: number; distance: number; order: number } | null = null
+
+  for (const [order, target] of input.targets.entries()) {
+    const pageRect = input.getPageRect(target.pageKey)
+    if (!pageRect) continue
+
+    const point = {
+      x: (input.clientX - pageRect.left) / input.scale,
+      y: (input.clientY - pageRect.top) / input.scale,
+    }
+    const mappedCaret = resolveCaretOffsetFromPointInFragment(target.fragment, point, {
+      textMeasurer: input.textMeasurer,
+    })
+    if (!mappedCaret) continue
+
+    const distance = distanceToFragmentRect(point, target.fragment)
+    if (
+      !best ||
+      distance < best.distance ||
+      (distance === best.distance && order < best.order)
+    ) {
+      best = { offset: mappedCaret.offset, distance, order }
+    }
+  }
+
+  return best?.offset ?? null
+}
+
 interface WysiwygTextLayerProps {
   fragment: PageFragment
   lines?: PaginatedLine[]
@@ -614,7 +768,100 @@ interface WysiwygTextLayerProps {
   onEndEdit?: (nodeId: string, reason?: "blur" | "keyboard") => void
   showTextSegments: boolean
   selectionOverlayRects?: ReturnType<typeof resolveSelectionOverlayRectsInFragment>
+  pointerFragments?: WysiwygTextPointerFragmentTarget[]
   reflowKind?: WysiwygTextReflowDecision["kind"]
+  liveTextEcho?: WysiwygLiveTextEcho | null
+}
+
+function measureLiveEchoTextWidth(
+  text: string,
+  renderProps: ParagraphRenderProps | undefined,
+  line: PaginatedLine | undefined,
+  textMeasurer: TextMeasurer | undefined,
+): number {
+  if (!text) return 0
+  const fontFamilyKey = renderProps?.fontFamilyKey
+  const fontSize = line?.fontSize ?? renderProps?.fontSize
+  if (textMeasurer && fontFamilyKey && fontSize) {
+    return textMeasurer.measureText(text, fontFamilyKey, fontSize).width
+  }
+  return text.length * (fontSize ?? 8) * 0.5
+}
+
+function renderLiveTextEcho(
+  fragment: PageFragment,
+  echo: WysiwygLiveTextEcho | null | undefined,
+  renderProps: ParagraphRenderProps | undefined,
+  pageKey: string,
+  scale: number,
+  textMeasurer: TextMeasurer | undefined,
+): { content: React.ReactNode; caret: React.ReactNode } | null {
+  if (!echo || echo.text.length === 0) return null
+
+  const anchor = resolveCaretPositionInFragment(fragment, echo.anchorOffset, { textMeasurer })
+  if (!anchor) return null
+
+  const anchorLine = fragment.lines?.[anchor.lineIndex]
+  const lineHeight = anchorLine?.height ?? renderProps?.lineHeight ?? (renderProps?.fontSize ?? 8) * 1.5
+  const fontSize = (anchorLine?.fontSize ?? renderProps?.fontSize ?? 8) * scale
+  const fontFamily = resolveFontCssFamily(renderProps?.fontFamilyKey)
+  const parts = echo.text.split("\n")
+  const continuationX = anchorLine ? lineVisualLeft(anchorLine) : fragment.x
+  const renderedLines: React.ReactNode[] = []
+
+  let caretX = anchor.x
+  let caretY = anchor.y
+
+  parts.forEach((part, index) => {
+    const x = index === 0 ? anchor.x : continuationX
+    const y = anchor.y + lineHeight * index
+    caretX = x + measureLiveEchoTextWidth(part, renderProps, anchorLine, textMeasurer)
+    caretY = y
+    if (!part) return
+    renderedLines.push(
+      <text
+        key={`live-echo-${index}`}
+        data-wysiwyg-live-echo-line="true"
+        x={x * scale}
+        y={(y + lineHeight * 0.78) * scale}
+        fontSize={fontSize}
+        fontFamily={fontFamily}
+        fill={INLINE_EDIT_TEXT_COLOR}
+        opacity={0.88}
+        style={{ pointerEvents: "none", userSelect: "none" }}
+      >
+        {part}
+      </text>,
+    )
+  })
+
+  return {
+    content: renderedLines.length > 0
+      ? (
+        <g
+          data-wysiwyg-live-echo="true"
+          data-wysiwyg-live-echo-anchor={echo.anchorOffset}
+          style={{ pointerEvents: "none" }}
+        >
+          {renderedLines}
+        </g>
+      )
+      : null,
+    caret: (
+      <line
+        key={`live-caret-${fragment.nodeId}-${echo.anchorOffset}`}
+        data-wysiwyg-live-caret="true"
+        x1={caretX * scale}
+        y1={caretY * scale}
+        x2={caretX * scale}
+        y2={(caretY + lineHeight) * scale}
+        stroke={INLINE_EDIT_TEXT_COLOR}
+        strokeWidth={Math.max(1, 1.1 * scale)}
+        strokeLinecap="round"
+        style={{ pointerEvents: "none" }}
+      />
+    ),
+  }
 }
 
 export function WysiwygTextLayer({
@@ -631,13 +878,18 @@ export function WysiwygTextLayer({
   onEndEdit,
   showTextSegments,
   selectionOverlayRects = [],
+  pointerFragments = [],
   reflowKind,
+  liveTextEcho,
 }: WysiwygTextLayerProps) {
   const layerRef = useRef<SVGGElement | null>(null)
   const inputBridgeRef = useRef<HTMLDivElement | null>(null)
   const pointerSelectionAnchorRef = useRef<number | null>(null)
+  const activePointerIdRef = useRef<number | null>(null)
+  const pointerDragStartPointRef = useRef<{ x: number; y: number } | null>(null)
   const isComposingTextEngineRef = useRef(false)
   const suppressNextCompositionInputRef = useRef(false)
+  const [isPointerSelecting, setIsPointerSelecting] = useState(false)
   const draftStateRef = useRef<{
     text: string
     caretOffset: number | null
@@ -650,6 +902,35 @@ export function WysiwygTextLayer({
   const visualFragment = useMemo(() => (
     lines ? { ...fragment, lines } : fragment
   ), [fragment, lines])
+  const pointerFragmentTargets = useMemo(() => {
+    const seen = new Set<string>()
+    const targets: WysiwygTextPointerFragmentTarget[] = []
+    const addTarget = (target: WysiwygTextPointerFragmentTarget) => {
+      const key = [
+        target.pageKey,
+        target.fragment.nodeId,
+        target.fragment.pageIndex,
+        target.fragment.fragmentIndex ?? "x",
+        target.fragment.lineStart ?? "x",
+        target.fragment.lineEnd ?? "x",
+      ].join(":")
+      if (seen.has(key)) return
+      seen.add(key)
+      targets.push(target)
+    }
+
+    addTarget({ pageKey, fragment: visualFragment })
+    for (const target of pointerFragments) addTarget(target)
+    return targets
+  }, [pageKey, pointerFragments, visualFragment])
+  const liveEchoVisual = useMemo(() => renderLiveTextEcho(
+    visualFragment,
+    liveTextEcho,
+    renderProps,
+    pageKey,
+    scale,
+    textMeasurer,
+  ), [liveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
 
   useEffect(() => {
     draftStateRef.current = {
@@ -796,17 +1077,32 @@ export function WysiwygTextLayer({
     return applyDraftChange(applyWysiwygTextInputKey(current.text, current.caretOffset, input, current.selection))
   }, [applyDraftChange, onDraftChange])
 
-  const resolveTextEnginePointerOffset = useCallback((event: React.PointerEvent<SVGGElement>): number | null => {
-    const svg = event.currentTarget.ownerSVGElement
-    if (!svg) return null
-    const rect = svg.getBoundingClientRect()
-    const point = {
-      x: (event.clientX - rect.left) / scale,
-      y: (event.clientY - rect.top) / scale,
-    }
-    const mappedCaret = resolveCaretOffsetFromPointInFragment(visualFragment, point, { textMeasurer })
-    return mappedCaret?.offset ?? null
-  }, [scale, textMeasurer, visualFragment])
+  const resolveTextEnginePointerOffsetFromClientPoint = useCallback((clientX: number, clientY: number): number | null => {
+    const pageElements = typeof document === "undefined"
+      ? []
+      : Array.from(document.querySelectorAll<SVGSVGElement>('[data-testid="editor-page"]'))
+
+    return resolveWysiwygTextPointerOffsetFromFragmentTargets({
+      clientX,
+      clientY,
+      scale,
+      targets: pointerFragmentTargets,
+      textMeasurer,
+      getPageRect: (targetPageKey) => {
+        const target = pointerFragmentTargets.find((candidate) => candidate.pageKey === targetPageKey)
+        return pageElements
+          .find((pageElement) => pageElement.getAttribute("data-page-key") === targetPageKey)
+          ?.getBoundingClientRect() ??
+          pageElements
+            .find((pageElement) => pageElement.getAttribute("data-page-index") === String(target?.fragment.pageIndex))
+          ?.getBoundingClientRect()
+      },
+    })
+  }, [pointerFragmentTargets, scale, textMeasurer])
+
+  const resolveTextEnginePointerOffset = useCallback((event: React.PointerEvent<SVGGElement> | React.MouseEvent<SVGGElement>): number | null => (
+    resolveTextEnginePointerOffsetFromClientPoint(event.clientX, event.clientY)
+  ), [resolveTextEnginePointerOffsetFromClientPoint])
 
   const applyPointerSelection = useCallback((anchorOffset: number, focusOffset: number) => {
     if (!onDraftChange) return false
@@ -822,6 +1118,84 @@ export function WysiwygTextLayer({
     onDraftChange(fragment.nodeId, text, safeFocus, nextSelection)
     return true
   }, [fragment.nodeId, onDraftChange])
+
+  const applyPointerSelectionFromClientPoint = useCallback((clientX: number, clientY: number) => {
+    if (pointerSelectionAnchorRef.current === null) return false
+    const offset = resolveTextEnginePointerOffsetFromClientPoint(clientX, clientY)
+    if (offset === null) return false
+    return applyPointerSelection(pointerSelectionAnchorRef.current, offset)
+  }, [applyPointerSelection, resolveTextEnginePointerOffsetFromClientPoint])
+
+  const maybeStartPointerSelectionDrag = useCallback((clientX: number, clientY: number) => {
+    const startPoint = pointerDragStartPointRef.current
+    if (!startPoint || isPointerSelecting) return
+    const dx = clientX - startPoint.x
+    const dy = clientY - startPoint.y
+    if (Math.sqrt(dx * dx + dy * dy) < POINTER_SELECTION_DRAG_THRESHOLD_PX) return
+    setIsPointerSelecting(true)
+  }, [isPointerSelecting])
+
+  const finishPointerSelection = useCallback((clientX: number, clientY: number) => {
+    applyPointerSelectionFromClientPoint(clientX, clientY)
+    if (activePointerIdRef.current !== null) {
+      safelyReleasePointerCapture(document.body, activePointerIdRef.current)
+    }
+    pointerSelectionAnchorRef.current = null
+    activePointerIdRef.current = null
+    pointerDragStartPointRef.current = null
+    setIsPointerSelecting(false)
+  }, [applyPointerSelectionFromClientPoint])
+
+  useEffect(() => {
+    const handleWindowPointerMove = (event: PointerEvent) => {
+      if (pointerSelectionAnchorRef.current === null) return
+      maybeStartPointerSelectionDrag(event.clientX, event.clientY)
+      event.preventDefault()
+      applyPointerSelectionFromClientPoint(event.clientX, event.clientY)
+    }
+
+    const handleWindowMouseMove = (event: MouseEvent) => {
+      if (pointerSelectionAnchorRef.current === null) return
+      maybeStartPointerSelectionDrag(event.clientX, event.clientY)
+      event.preventDefault()
+      applyPointerSelectionFromClientPoint(event.clientX, event.clientY)
+    }
+
+    const finishWindowPointerSelection = (event: PointerEvent) => {
+      finishPointerSelection(event.clientX, event.clientY)
+    }
+
+    const finishWindowMouseSelection = (event: MouseEvent) => {
+      finishPointerSelection(event.clientX, event.clientY)
+    }
+
+    window.addEventListener("pointermove", handleWindowPointerMove, true)
+    window.addEventListener("pointerup", finishWindowPointerSelection, true)
+    window.addEventListener("pointercancel", finishWindowPointerSelection, true)
+    window.addEventListener("mousemove", handleWindowMouseMove, true)
+    window.addEventListener("mouseup", finishWindowMouseSelection, true)
+    document.addEventListener("pointermove", handleWindowPointerMove, true)
+    document.addEventListener("pointerup", finishWindowPointerSelection, true)
+    document.addEventListener("pointercancel", finishWindowPointerSelection, true)
+    document.addEventListener("mousemove", handleWindowMouseMove, true)
+    document.addEventListener("mouseup", finishWindowMouseSelection, true)
+    return () => {
+      window.removeEventListener("pointermove", handleWindowPointerMove, true)
+      window.removeEventListener("pointerup", finishWindowPointerSelection, true)
+      window.removeEventListener("pointercancel", finishWindowPointerSelection, true)
+      window.removeEventListener("mousemove", handleWindowMouseMove, true)
+      window.removeEventListener("mouseup", finishWindowMouseSelection, true)
+      document.removeEventListener("pointermove", handleWindowPointerMove, true)
+      document.removeEventListener("pointerup", finishWindowPointerSelection, true)
+      document.removeEventListener("pointercancel", finishWindowPointerSelection, true)
+      document.removeEventListener("mousemove", handleWindowMouseMove, true)
+      document.removeEventListener("mouseup", finishWindowMouseSelection, true)
+    }
+  }, [
+    applyPointerSelectionFromClientPoint,
+    finishPointerSelection,
+    maybeStartPointerSelectionDrag,
+  ])
 
   useEffect(() => {
     const input = inputBridgeRef.current
@@ -951,161 +1325,130 @@ export function WysiwygTextLayer({
     inputBridgeRef.current?.focus()
     const offset = resolveTextEnginePointerOffset(event)
     if (offset === null) return
+    if (event.detail >= 2) {
+      pointerSelectionAnchorRef.current = null
+      const wordSelection = resolveWysiwygWordSelectionRange(draftStateRef.current.text, offset)
+      if (wordSelection) {
+        applyPointerSelection(wordSelection.anchorOffset, wordSelection.focusOffset)
+        return
+      }
+    }
     pointerSelectionAnchorRef.current = offset
-    event.currentTarget.setPointerCapture?.(event.pointerId)
+    activePointerIdRef.current = event.pointerId
+    pointerDragStartPointRef.current = { x: event.clientX, y: event.clientY }
     applyPointerSelection(offset, offset)
   }, [applyPointerSelection, resolveTextEnginePointerOffset])
 
+  const selectWordFromPointerEvent = useCallback((event: React.MouseEvent<SVGGElement>) => {
+    inputBridgeRef.current?.focus()
+    pointerSelectionAnchorRef.current = null
+    const offset = resolveTextEnginePointerOffset(event)
+    const wordSelection = resolveWysiwygWordSelectionRange(draftStateRef.current.text, offset)
+    if (!wordSelection) return false
+    return applyPointerSelection(wordSelection.anchorOffset, wordSelection.focusOffset)
+  }, [applyPointerSelection, resolveTextEnginePointerOffset])
+
+  const handleDoubleClick = useCallback((event: React.MouseEvent<SVGGElement>) => {
+    event.stopPropagation()
+    event.preventDefault()
+    selectWordFromPointerEvent(event)
+  }, [selectWordFromPointerEvent])
+
+  const handleClick = useCallback((event: React.MouseEvent<SVGGElement>) => {
+    event.stopPropagation()
+    if (event.detail < 2) return
+    event.preventDefault()
+    selectWordFromPointerEvent(event)
+  }, [selectWordFromPointerEvent])
+
   const handlePointerMove = useCallback((event: React.PointerEvent<SVGGElement>) => {
     if (pointerSelectionAnchorRef.current === null || (event.buttons & 1) === 0) return
+    maybeStartPointerSelectionDrag(event.clientX, event.clientY)
     const offset = resolveTextEnginePointerOffset(event)
     if (offset === null) return
     event.stopPropagation()
     event.preventDefault()
     applyPointerSelection(pointerSelectionAnchorRef.current, offset)
-  }, [applyPointerSelection, resolveTextEnginePointerOffset])
+  }, [applyPointerSelection, maybeStartPointerSelectionDrag, resolveTextEnginePointerOffset])
 
   const handlePointerUp = useCallback((event: React.PointerEvent<SVGGElement>) => {
     if (pointerSelectionAnchorRef.current === null) return
     event.stopPropagation()
-    event.currentTarget.releasePointerCapture?.(event.pointerId)
-    pointerSelectionAnchorRef.current = null
-  }, [])
+    finishPointerSelection(event.clientX, event.clientY)
+  }, [finishPointerSelection])
 
   const handlePointerCancel = useCallback(() => {
+    if (activePointerIdRef.current !== null) {
+      safelyReleasePointerCapture(document.body, activePointerIdRef.current)
+    }
     pointerSelectionAnchorRef.current = null
+    activePointerIdRef.current = null
+    pointerDragStartPointRef.current = null
+    setIsPointerSelecting(false)
   }, [])
 
-  const handleKeyDown = useCallback((event: React.KeyboardEvent<Element>) => {
-    event.stopPropagation()
-    if (event.key === "Escape") {
-      event.preventDefault()
-      onEndEdit?.(fragment.nodeId, "keyboard")
-      return
-    }
-    if (handleClipboardShortcutKeyDown(event)) return
-    if (!applyKeyInput({
-      key: event.key,
-      shiftKey: event.shiftKey,
-      altKey: event.altKey,
-      ctrlKey: event.ctrlKey,
-      metaKey: event.metaKey,
-      isComposing: event.nativeEvent.isComposing,
-    })) return
-    event.preventDefault()
-  }, [applyKeyInput, fragment.nodeId, handleClipboardShortcutKeyDown, onEndEdit])
-
-  const handleInputBridgeBeforeInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
-    event.stopPropagation()
-    const nativeEvent = event.nativeEvent as InputEvent
-    if (consumeSuppressedCompositionInput(event.currentTarget)) {
-      event.preventDefault()
-      return
-    }
-    if (isCompositionBridgeInput(nativeEvent)) return
-    let change: ReturnType<typeof applyWysiwygTextInputKey> = null
-    if (nativeEvent.inputType === "insertText" && nativeEvent.data) {
-      if (applyTextInput(nativeEvent.data)) {
-        event.preventDefault()
-        clearInputBridgeText(event.currentTarget)
-      }
-      return
-    } else if (nativeEvent.inputType === "insertLineBreak" || nativeEvent.inputType === "insertParagraph") {
-      change = applyWysiwygTextInputKey(
-        draftStateRef.current.text,
-        draftStateRef.current.caretOffset,
-        { key: "Enter" },
-        draftStateRef.current.selection,
-      )
-    } else if (nativeEvent.inputType === "deleteContentBackward") {
-      change = applyWysiwygTextInputKey(
-        draftStateRef.current.text,
-        draftStateRef.current.caretOffset,
-        { key: "Backspace" },
-        draftStateRef.current.selection,
-      )
-    } else if (nativeEvent.inputType === "deleteContentForward") {
-      change = applyWysiwygTextInputKey(
-        draftStateRef.current.text,
-        draftStateRef.current.caretOffset,
-        { key: "Delete" },
-        draftStateRef.current.selection,
-      )
-    }
-    if (!change) return
-    event.preventDefault()
-    applyDraftChange(change)
-    clearInputBridgeText(event.currentTarget)
-  }, [
-    applyDraftChange,
-    applyTextInput,
-    clearInputBridgeText,
-    consumeSuppressedCompositionInput,
-    isCompositionBridgeInput,
-  ])
-
-  const handleInputBridgeInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
-    event.stopPropagation()
-    if (consumeSuppressedCompositionInput(event.currentTarget)) return
-    if (isComposingTextEngineRef.current) return
-    const insertedText = event.currentTarget.textContent ?? ""
-    clearInputBridgeText(event.currentTarget)
-    applyTextInput(insertedText)
-  }, [applyTextInput, clearInputBridgeText, consumeSuppressedCompositionInput])
-
-  const handleInputBridgePaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
-    event.stopPropagation()
-    event.preventDefault()
-    clearInputBridgeText(event.currentTarget)
-    applyTextInput(event.clipboardData.getData("text/plain"))
-  }, [applyTextInput, clearInputBridgeText])
-
-  const handleInputBridgeCopy = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
-    const selectedText = getSelectedDraftText()
-    if (!selectedText) return
-    event.stopPropagation()
-    event.preventDefault()
-    event.clipboardData.setData("text/plain", selectedText)
-  }, [getSelectedDraftText])
-
-  const handleInputBridgeCut = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
-    const selectedText = applyClipboardCutToDraft()
-    if (!selectedText) return
-    event.stopPropagation()
-    event.preventDefault()
-    event.clipboardData.setData("text/plain", selectedText)
-    clearInputBridgeText(event.currentTarget)
-  }, [applyClipboardCutToDraft, clearInputBridgeText])
-
-  const handleInputBridgeCompositionStart = useCallback((event: React.CompositionEvent<HTMLDivElement>) => {
-    event.stopPropagation()
-    startCompositionInput(event.currentTarget)
-  }, [startCompositionInput])
-
-  const handleInputBridgeCompositionEnd = useCallback((event: React.CompositionEvent<HTMLDivElement>) => {
-    event.stopPropagation()
-    endCompositionInput(event.currentTarget, event.data || event.currentTarget.textContent || "")
-  }, [endCompositionInput])
+  const pointerSelectionOverlay = isPointerSelecting && typeof document !== "undefined"
+    ? createPortal(
+      <div
+        data-wysiwyg-pointer-selection-overlay="true"
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 2147483647,
+          cursor: "text",
+          background: "transparent",
+          userSelect: "none",
+        }}
+        onMouseMove={(event) => {
+          event.preventDefault()
+          applyPointerSelectionFromClientPoint(event.clientX, event.clientY)
+        }}
+        onMouseUp={(event) => {
+          event.preventDefault()
+          finishPointerSelection(event.clientX, event.clientY)
+        }}
+        onPointerMove={(event) => {
+          event.preventDefault()
+          applyPointerSelectionFromClientPoint(event.clientX, event.clientY)
+        }}
+        onPointerUp={(event) => {
+          event.preventDefault()
+          finishPointerSelection(event.clientX, event.clientY)
+        }}
+        onPointerCancel={() => {
+          pointerSelectionAnchorRef.current = null
+          activePointerIdRef.current = null
+          pointerDragStartPointRef.current = null
+          setIsPointerSelecting(false)
+        }}
+      />,
+      document.body,
+    )
+    : null
 
   return (
-    <g
-      ref={layerRef}
-      data-wysiwyg-text-engine-layer="true"
-      data-wysiwyg-reflow-kind={reflowKind}
-      data-inline-edit-node-id={fragment.nodeId}
-      data-inline-edit-visual-mode="text-engine"
-      tabIndex={0}
-      focusable="true"
-      role="textbox"
-      aria-multiline="true"
-      onKeyDown={handleKeyDown}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerCancel}
-      onClick={(event) => event.stopPropagation()}
-      onBlur={() => onEndEdit?.(fragment.nodeId, "blur")}
-    >
+    <>
+      {pointerSelectionOverlay}
+      <g
+        ref={layerRef}
+        data-wysiwyg-text-engine-layer="true"
+        data-wysiwyg-pointer-fragment-count={pointerFragmentTargets.length}
+        data-wysiwyg-reflow-kind={reflowKind}
+        data-inline-edit-node-id={fragment.nodeId}
+        data-inline-edit-visual-mode="text-engine"
+        tabIndex={0}
+        focusable="true"
+        role="textbox"
+        aria-multiline="true"
+        aria-describedby={WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onDoubleClick={handleDoubleClick}
+        onClick={handleClick}
+        onBlur={() => onEndEdit?.(fragment.nodeId, "blur")}
+      >
       <foreignObject
         x={fragment.x * scale}
         y={fragment.y * scale}
@@ -1119,16 +1462,9 @@ export function WysiwygTextLayer({
           data-inline-edit-node-id={fragment.nodeId}
           contentEditable="plaintext-only"
           suppressContentEditableWarning
-          onBeforeInput={handleInputBridgeBeforeInput}
-          onInput={handleInputBridgeInput}
-          onKeyDown={handleKeyDown}
-          onPaste={handleInputBridgePaste}
-          onCopy={handleInputBridgeCopy}
-          onCut={handleInputBridgeCut}
-          onCompositionStart={handleInputBridgeCompositionStart}
-          onCompositionEnd={handleInputBridgeCompositionEnd}
           spellCheck={false}
           aria-label="WYSIWYG text input"
+          aria-describedby={WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID}
           role="textbox"
           style={{
             width: 1,
@@ -1156,9 +1492,11 @@ export function WysiwygTextLayer({
       {visualFragment.lines?.map((line, index) =>
         renderLine(line, index, visualFragment, renderProps, pageKey, scale),
       )}
+      {liveEchoVisual?.content}
       {showTextSegments && renderSegmentDebug(visualFragment.lines, visualFragment, renderProps, scale)}
-      {renderCollapsedCaret(visualFragment, pageKey, scale, caretIndex, textMeasurer)}
-    </g>
+      {liveEchoVisual?.caret ?? renderCollapsedCaret(visualFragment, pageKey, scale, caretIndex, textMeasurer)}
+      </g>
+    </>
   )
 }
 
@@ -1176,6 +1514,8 @@ export function ParagraphTextSurface({
   wysiwygTextDraftText,
   wysiwygTextCaretOffset,
   wysiwygTextSelection,
+  wysiwygTextVisualDraftLines,
+  wysiwygTextPointerFragments,
   wysiwygTextDraftPaginationActive = false,
   showTextSegments,
   initialCaretIndex,
@@ -1342,17 +1682,39 @@ export function ParagraphTextSurface({
     textEngineDraftLayout?.height,
     textEngineDraftLines,
   ])
+  const textEngineVisualDraftLines = textEngineReflowDecision.shouldPatchActiveLines
+    ? wysiwygTextVisualDraftLines ?? textEngineDraftLines
+    : null
+  const textEngineLiveTextEcho = !textEngineReflowDecision.shouldPatchActiveLines &&
+    fullText != null &&
+    textEngineDraftText != null
+    ? resolveWysiwygLiveTextEcho(fullText, textEngineDraftText)
+    : null
   const textEngineSelectionOverlayRects = useMemo(() => {
     if (!useWysiwygTextEngineLayer || !wysiwygTextSelection) return []
     if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
-    const visualFragment = textEngineDraftLines ? { ...fragment, lines: textEngineDraftLines } : fragment
+    const visualFragment = textEngineVisualDraftLines ? { ...fragment, lines: textEngineVisualDraftLines } : fragment
     return resolveSelectionOverlayRectsInFragment(
       visualFragment,
       wysiwygTextSelection.anchorOffset,
       wysiwygTextSelection.focusOffset,
       { textMeasurer },
     )
-  }, [fragment, textEngineDraftLines, textMeasurer, useWysiwygTextEngineLayer, wysiwygTextSelection])
+  }, [fragment, textEngineVisualDraftLines, textMeasurer, useWysiwygTextEngineLayer, wysiwygTextSelection])
+  const passiveTextEngineSelectionOverlayRects = useMemo(() => {
+    if (isEditing || !wysiwygTextEngineEnabled || !wysiwygTextSelection) return []
+    if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
+    const visualFragment = wysiwygTextVisualDraftLines ? { ...fragment, lines: wysiwygTextVisualDraftLines } : fragment
+    return resolveSelectionOverlayRectsInFragment(
+      visualFragment,
+      wysiwygTextSelection.anchorOffset,
+      wysiwygTextSelection.focusOffset,
+      { textMeasurer },
+    )
+  }, [fragment, isEditing, textMeasurer, wysiwygTextEngineEnabled, wysiwygTextSelection, wysiwygTextVisualDraftLines])
+  const passiveTextEngineSelectionFragment = wysiwygTextVisualDraftLines
+    ? { ...fragment, lines: wysiwygTextVisualDraftLines }
+    : fragment
   // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
   // Matching padding cancels that expansion so textarea content starts at the
   // same paragraph origin as SVG lines instead of drifting by the chrome size.
@@ -1441,7 +1803,7 @@ export function ParagraphTextSurface({
       return (
         <WysiwygTextLayer
           fragment={fragment}
-          lines={textEngineDraftLines ?? undefined}
+          lines={textEngineVisualDraftLines ?? undefined}
           renderProps={renderProps}
           pageKey={pageKey}
           scale={scale}
@@ -1453,7 +1815,9 @@ export function ParagraphTextSurface({
           onEndEdit={onEndEdit}
           showTextSegments={showTextSegments}
           selectionOverlayRects={textEngineSelectionOverlayRects}
+          pointerFragments={wysiwygTextPointerFragments}
           reflowKind={textEngineReflowDecision.kind}
+          liveTextEcho={textEngineLiveTextEcho}
         />
       )
     }
@@ -1628,7 +1992,11 @@ export function ParagraphTextSurface({
     )
   }
 
-  return fragment.lines?.map((line, index) =>
-    renderLine(line, index, fragment, renderProps, pageKey, scale),
-  ).concat(showTextSegments ? renderSegmentDebug(fragment.lines, fragment, renderProps, scale) ?? [] : []) ?? null
+  return [
+    ...renderSelectionOverlay(passiveTextEngineSelectionFragment, pageKey, scale, passiveTextEngineSelectionOverlayRects),
+    ...(fragment.lines?.map((line, index) =>
+      renderLine(line, index, fragment, renderProps, pageKey, scale),
+    ) ?? []),
+    ...(showTextSegments ? renderSegmentDebug(fragment.lines, fragment, renderProps, scale) ?? [] : []),
+  ]
 }
