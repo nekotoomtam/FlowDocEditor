@@ -29,6 +29,8 @@ import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
 import { SAMPLE_FIELD_REGISTRY_V1 } from "@/app/_lib/fieldRegistry"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
+import { createBrowserFontkitMeasurer, loadBrowserFontBuffer } from "./browserFontkitMeasurer"
+import type { TextMeasurer } from "@/layout"
 import { comparePagination } from "./comparePagination"
 import {
   documentImportSuccessMessage,
@@ -470,8 +472,19 @@ export default function EditorShell() {
   const [scale, setScale] = useState(0.6)
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit")
   const [state, dispatch] = useReducer(reducer, initialTestScenario?.document ?? null, createInitialEditorState)
-  const editorTextMeasurer = useMemo(() => createBrowserTextMeasurer(), [])
+  const [editorTextMeasurer, setEditorTextMeasurer] = useState<TextMeasurer>(() => createBrowserTextMeasurer())
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    loadBrowserFontBuffer().then(async (buffer) => {
+      if (cancelled || !buffer) return
+      const fontkitMeasurer = await createBrowserFontkitMeasurer(buffer)
+      if (cancelled || !fontkitMeasurer) return
+      setEditorTextMeasurer(fontkitMeasurer)
+      setFontReadyVersion((v) => v + 1)
+    })
+    return () => { cancelled = true }
+  }, [])
   const [mode, setMode] = useState<"template" | "fill">("template")
   const [dataSnapshot, setDataSnapshot] = useState<DataSnapshotV1>(() => (
     initialTestScenario

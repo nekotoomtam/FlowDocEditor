@@ -354,6 +354,15 @@ describe("ParagraphTextSurface continuation editing", () => {
     })
   })
 
+  it("backspaces one repeated Thai sara am across a continuation boundary", () => {
+    const input = buildContinuationBackspaceInput("กำำ", "B")
+
+    expect(input).toEqual({
+      text: "กำB",
+      caretIndex: 2,
+    })
+  })
+
   it("leaves first-fragment start backspace for paragraph merge handling", () => {
     expect(buildContinuationBackspaceInput("", "Hello")).toBeNull()
   })

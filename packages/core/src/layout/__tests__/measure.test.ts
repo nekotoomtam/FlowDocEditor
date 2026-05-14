@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { measureParagraph, measureParagraphFrom, snapToGraphemeBoundary } from "../measure"
+import { measureParagraph, measureParagraphFrom, snapToGraphemeBoundary, splitTextGraphemes } from "../measure"
 import { defaultTextMeasurer, defaultWordBreaker } from "../types"
 import type { ParagraphNode } from "../../schema"
 import type { WordBreaker } from "../types"
@@ -144,6 +144,79 @@ describe("long unbroken text (grapheme fallback)", () => {
         expect(seg.kind).toBe("grapheme")
       }
     }
+  })
+})
+
+// ─── Wrap transition stability ────────────────────────────────────────────────
+
+function splitAfterPrefix(prefixLength: number): WordBreaker {
+  return {
+    segment: (text) => [
+      text.slice(0, prefixLength),
+      text.slice(prefixLength),
+    ].filter((segment) => segment.length > 0),
+  }
+}
+
+describe("wrap transition stability", () => {
+  it("fills the current line from a long Thai run before moving the remainder down", () => {
+    const prefix = "ก".repeat(5)
+    const run = "ห".repeat(8)
+    const result = measureParagraph(
+      makeParagraph(prefix + run),
+      50,
+      defaultTextMeasurer,
+      splitAfterPrefix(prefix.length),
+    )
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      prefix + "ห".repeat(3),
+      "ห".repeat(5),
+    ])
+    expect(result.lines[0].width).toBeCloseTo(8 * TW)
+  })
+
+  it("fills the current line from a long repeated ASCII run", () => {
+    const prefix = "A".repeat(8)
+    const run = "l".repeat(8)
+    const result = measureParagraph(
+      makeParagraph(prefix + run),
+      50,
+      defaultTextMeasurer,
+      splitAfterPrefix(prefix.length),
+    )
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      prefix + "ll",
+      "l".repeat(6),
+    ])
+    expect(result.lines[0].width).toBeCloseTo(10 * AW)
+  })
+
+  it("tailors repeated Thai sara am clusters so they can wrap and delete one by one", () => {
+    expect(splitTextGraphemes("ำำำ")).toEqual(["ำ", "ำ", "ำ"])
+    expect(splitTextGraphemes("กำำ")).toEqual(["กำ", "ำ"])
+
+    const prefix = "ก".repeat(5)
+    const run = "ำ".repeat(8)
+    const result = measureParagraph(
+      makeParagraph(prefix + run),
+      50,
+      defaultTextMeasurer,
+      splitAfterPrefix(prefix.length),
+    )
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      prefix + "ำ".repeat(3),
+      "ำ".repeat(5),
+    ])
+  })
+
+  it("keeps normal English words intact when wrapping at a word boundary", () => {
+    const result = measureParagraph(makeParagraph("Hello world"), 30, defaultTextMeasurer, spaceBreaker)
+
+    expect(result.lines.map((line) => line.text)).toEqual(["Hello", "world"])
+    expect(result.lines[1].segments?.map((segment) => segment.kind)).toEqual(["word"])
   })
 })
 
@@ -391,6 +464,11 @@ describe("snapToGraphemeBoundary", () => {
     // "ก้": ก(0) + ้(1) = 1 grapheme cluster, length=2
     // index 1 is inside — distance to start(0)=1, distance to end(2)=1 → snap to start (tie → start wins)
     expect(snapToGraphemeBoundary("ก้", 1)).toBe(0)
+  })
+
+  it("snap treats repeated Thai sara am as separate boundaries", () => {
+    expect(snapToGraphemeBoundary("ำำ", 1)).toBe(1)
+    expect(snapToGraphemeBoundary("กำำ", 2)).toBe(2)
   })
 })
 

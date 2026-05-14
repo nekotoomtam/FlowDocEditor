@@ -1,5 +1,5 @@
 import type { LineSegment, TextMeasurer } from "@/layout"
-import { snapToGraphemeBoundary } from "@/layout"
+import { snapToGraphemeBoundary, textGraphemeBoundaries } from "@/layout"
 import type { PageFragment, PaginatedDocument, PaginatedLine } from "@/pagination"
 
 export type WysiwygCaretMappingSource = "segment-candidate" | "segment-ratio"
@@ -65,25 +65,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function graphemeBoundaries(text: string): number[] {
-  const Segmenter = Intl.Segmenter
-  if (!Segmenter) {
-    const boundaries = [0]
-    let cursor = 0
-    for (const char of Array.from(text)) {
-      cursor += char.length
-      boundaries.push(cursor)
-    }
-    return boundaries
-  }
-
-  const segmenter = new Segmenter(["th", "en"], { granularity: "grapheme" })
-  const boundaries = [0]
-  let cursor = 0
-  for (const { segment } of segmenter.segment(text)) {
-    cursor += segment.length
-    boundaries.push(cursor)
-  }
-  return boundaries
+  return textGraphemeBoundaries(text)
 }
 
 function segmentPrefixWidth(

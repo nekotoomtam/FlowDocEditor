@@ -20,6 +20,531 @@ Each entry should include:
 
 ## 2026-05-14
 
+### WYSIWYG Re-Enter User-Like Variants And Split Preview Fix
+
+Goal: Match the user's reported reproduction more closely by typing through
+keyboard events until text wraps naturally, then exiting, re-entering, and
+inserting a new line.
+
+Completed:
+
+- Extended `scripts/wysiwyg-reenter-drift-probe.mjs` from one baseline flow to
+  three independent variants:
+  - `page-boundary-bulk-keyboard-type`
+  - `gradual-word-wrap-then-line-insert`
+  - `repeated-key-wrap-then-line-insert`
+- The two user-like variants reload the fixture, type through keyboard events
+  until a new line appears by wrapping, exit edit, re-enter edit, press Enter,
+  and insert a new line at the clicked caret.
+- The new variants reproduced the drift before the fix:
+  - `second edit draft vs post second exit` failed.
+  - live draft preview split the first fragment at `lineEnd=9`.
+  - post-exit pagination split the first fragment at `lineEnd=8`.
+- Patched `splitWysiwygDraftVisualFragments(...)` so WYSIWYG draft preview
+  applies the same widow/orphan split behavior as paragraph pagination instead
+  of greedily leaving a single line on the following page.
+- Updated `wysiwygDraftVisualPreview.test.ts` to lock the widow-prevention
+  split expectation.
+- Reduced the default probe output to readable per-fragment summaries and added
+  `REENTER_VERBOSE=1` for full line text/geometry snapshots.
+- Filtered favicon-only local app 404 noise in the re-enter probe while still
+  failing on active console, page, or resource errors.
+- Updated `docs/WYSIWYG_REENTER_DRIFT_PROBE.md` and
+  `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md` with the new evidence.
+
+Files changed:
+
+- `scripts/wysiwyg-reenter-drift-probe.mjs`
+- `src/app/editor/_components/wysiwygDraftVisualPreview.ts`
+- `src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts`
+- `docs/WYSIWYG_REENTER_DRIFT_PROBE.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `node --check scripts/wysiwyg-reenter-drift-probe.mjs` PASS.
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts`
+  PASS: 5/5.
+- `npm.cmd run smoke:wysiwyg-reenter` PASS on bundled Chromium:
+  - variants passing: 3/3.
+  - comparisons passing: 12/12.
+  - gradual word variant: 8 → 9 lines on natural wrap, then 1 → 2 fragments
+    after re-enter line insertion.
+  - repeated-key variant: 50 `A` key presses produced 8 → 9 lines, then
+    1 → 2 fragments after re-enter line insertion.
+- `npm.cmd run smoke:wysiwyg-stage4c` PASS on bundled Chromium.
+- `$env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:wysiwyg-reenter`
+  PASS on installed Chrome:
+  - variants passing: 3/3.
+  - comparisons passing: 12/12.
+- `$env:SMOKE_BROWSER_CHANNEL='msedge'; npm.cmd run smoke:wysiwyg-reenter`
+  PASS on installed Edge:
+  - variants passing: 3/3.
+  - comparisons passing: 12/12.
+- `npm.cmd run review:browser` PASS on bundled Chromium: editor smoke passed
+  and Stage 4C smoke returned `ok: true`.
+- `npm.cmd run review:gate` PASS: type-check, core 344/344, app 251/251,
+  build OK.
+
+Notes / follow-ups:
+
+- One parallel `review:gate` attempt overlapped with a smoke dev-server
+  shutdown and temporarily saw missing `.next/dev/types` files. A serial rerun
+  passed. Keep browser smoke and `review:gate` sequential when using generated
+  Next dev types.
+- Manual human review is still needed for perceived typing rhythm and real
+  Windows Thai IME candidate-window behavior.
+
+---
+
+### WYSIWYG Thai Repeat Re-Enter Screenshot Follow-Up
+
+Goal: Recheck the user's captured screenshot flow: start from a normal
+paragraph, hold repeated Thai keys until wrapping occurs, exit edit, re-enter,
+then insert another Thai run.
+
+Completed:
+
+- Confirmed the originally active `localhost:4000` server had
+  `data-wysiwyg-text-engine-enabled="false"` and mounted the legacy `textarea`
+  path with `data-inline-edit-fallback-reason="wysiwyg-disabled"`.
+- Stopped the stale unflagged PID 36660 after owner approval.
+- Reproduced the same flow on a flagged text-engine server with a
+  localStorage-backed default paragraph and confirmed equivalent edit/show
+  snapshots matched:
+  - show vs first edit entry.
+  - first edit draft vs post first exit.
+  - post first exit vs second edit entry.
+  - second edit draft vs post second exit.
+- Added `scripts/wysiwyg-thai-repeat-reenter-probe.mjs` and
+  `npm.cmd run smoke:wysiwyg-thai-repeat` so this screenshot class is now a
+  repeatable browser smoke.
+- Documented that `data-wysiwyg-text-engine-enabled="false"` means the app is
+  still on the legacy textarea path and should not be treated as WYSIWYG parity
+  evidence.
+
+Files changed:
+
+- `scripts/wysiwyg-thai-repeat-reenter-probe.mjs`
+- `package.json`
+- `docs/WYSIWYG_REENTER_DRIFT_PROBE.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `node --check scripts/wysiwyg-thai-repeat-reenter-probe.mjs` PASS.
+- `npm.cmd run smoke:wysiwyg-thai-repeat` PASS on bundled Chromium:
+  - first repeated Thai run: 245 characters, 1 → 3 lines.
+  - second repeated Thai run after re-enter: 45 characters, ending at 4 lines.
+  - comparisons passing: 4/4.
+- `$env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:wysiwyg-thai-repeat`
+  PASS on installed Chrome: comparisons passing 4/4.
+- `$env:SMOKE_BROWSER_CHANNEL='msedge'; npm.cmd run smoke:wysiwyg-thai-repeat`
+  PASS on installed Edge: comparisons passing 4/4.
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-thai-repeat`
+  PASS against the flagged dev server left running for manual review.
+
+Notes / follow-ups:
+
+- This does not flip the product/default WYSIWYG flag. The legacy textarea path
+  remains a known non-parity fallback unless the text engine is enabled.
+- Real Windows Thai IME candidate-window behavior remains a manual gate.
+
+---
+
+### WYSIWYG Re-Enter Drift Probe And Browser Smoke Unblock
+
+Goal: Restore the flagged WYSIWYG browser smoke gate and add a focused probe
+for the user-reported edit/show re-entry layout drift class.
+
+Completed:
+
+- Stopped the stale unflagged Next dev server that was blocking smoke scripts
+  from starting their own flagged server.
+- Re-ran `smoke:wysiwyg-stage4c` successfully on bundled Chromium.
+- Added `scripts/wysiwyg-reenter-drift-probe.mjs` and
+  `npm.cmd run smoke:wysiwyg-reenter`.
+- The new probe opens the Stage 3 page-boundary scenario, enters edit, records
+  SVG line snapshots, types a long payload that must split the target
+  paragraph across pages, exits edit, re-enters, continues typing, exits again,
+  and compares equivalent edit/show line text and geometry.
+- Added `docs/WYSIWYG_REENTER_DRIFT_PROBE.md` and linked it from
+  `docs/DOCS_INDEX.md`.
+- Updated `docs/WYSIWYG_SMOOTHNESS_PROBE.md` to point the known
+  edit-reenter symptom to the dedicated probe instead of leaving it as a
+  next-session TODO.
+- Updated `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md` with the current Stage 4C
+  smoke and re-enter probe evidence.
+
+Files changed:
+
+- `scripts/wysiwyg-reenter-drift-probe.mjs` (new)
+- `package.json`
+- `docs/WYSIWYG_REENTER_DRIFT_PROBE.md` (new)
+- `docs/DOCS_INDEX.md`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run smoke:wysiwyg-stage4c` PASS on bundled Chromium:
+  clipboard/IME/selection/stack smoke returned `ok: true`.
+- `node --check scripts/wysiwyg-reenter-drift-probe.mjs` PASS.
+- `npm.cmd run smoke:wysiwyg-reenter` PASS on bundled Chromium:
+  - first insert forced the target paragraph from 1 fragment / 8 lines to
+    2 fragments / 13 lines.
+  - second insert ended at 2 fragments / 16 lines.
+  - all 4 equivalent edit/show/re-enter line-geometry comparisons matched.
+  - console errors: 0; page errors: 0.
+
+Notes / follow-ups:
+
+- The standard Stage 3 page-boundary fixture does not currently reproduce the
+  reported re-enter drift. This is useful evidence, but not a global closure.
+  If a real user document still drifts, reuse the probe harness with a fixture
+  matching that document's paragraph width, font size, Thai/Latin mix,
+  whitespace, and page position.
+- Chrome and Edge channel runs for the new re-enter probe remain pending.
+
+---
+
+### WYSIWYG Parity Review Follow-Up — Cache, Fallback, And Whitespace Claims
+
+Goal: Close the four review gaps found in the WYSIWYG edit/show parity
+recheck without changing the document schema, pagination semantics, or the
+accepted current line-edge whitespace policy.
+
+Completed:
+
+- Removed the embedded NUL-byte cache separator from
+  `browserFontkitMeasurer.ts` and replaced it with a structured cache key.
+- Changed browser fontkit setup failure to return `null`, so `EditorShell`
+  keeps the existing canvas measurer fallback instead of silently swapping to
+  heuristic default measurement.
+- Updated `fontMeasurerParity.test.ts` for the new null-return contract and
+  kept exact server/browser fontkit width and line-height parity coverage.
+- Added measured-line assertions to `whitespaceParity.test.ts` documenting
+  the current visual policy: interior spaces render, while line-leading,
+  line-trailing, and wrap-boundary spaces remain authored text but are not
+  rendered as line-edge glyphs.
+- Downgraded Phase B visual edge-space claims in
+  `WYSIWYG_WHITESPACE_MATRIX.md` and `WYSIWYG_PARITY_PLAN.md` from PASS to
+  RISK until a product/layout decision explicitly accepts or changes that
+  behavior.
+- Corrected the Phase A claim from "100 sampled strings" to representative
+  mixed Latin/Thai/whitespace parity coverage.
+
+Files changed:
+
+- `src/app/editor/_components/browserFontkitMeasurer.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/fontMeasurerParity.test.ts`
+- `src/app/editor/_components/__tests__/whitespaceParity.test.ts`
+- `docs/WYSIWYG_WHITESPACE_MATRIX.md`
+- `docs/WYSIWYG_PARITY_PLAN.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/fontMeasurerParity.test.ts src/app/editor/_components/__tests__/whitespaceParity.test.ts`
+  PASS: 2 files, 19 tests.
+- `npm.cmd run type-check` PASS.
+- `npm.cmd run test:core` PASS: 344/344.
+- `npm.cmd run test:app` PASS: 251/251.
+- `npm.cmd run review:build` PASS.
+- `npm.cmd run review:gate` PASS: type-check, core 344/344, app 251/251,
+  build OK.
+- `git diff --check` PASS; PowerShell only reported existing LF/CRLF warnings.
+
+Notes / follow-ups:
+
+- `npm.cmd run smoke:wysiwyg-stage4c` could not start its flagged dev server
+  because Next reported an existing dev server for this repo at
+  `http://localhost:4000` (PID 60488). Running the smoke against that existing
+  server also failed because `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE` was not
+  enabled there. This remains UNKNOWN for this follow-up until the active
+  server is stopped or restarted with the required flags.
+- Rows 3-5 are now intentionally documented as visual RISK, not fixed. Closing
+  them requires a product/layout decision and coordinated renderer/pagination
+  tests.
+
+---
+
+### WYSIWYG Parity Phase C — Smoothness Probe Baseline
+
+Goal: Convert the "page-boundary typing smoothness" RISK item in the Stage 4
+review packet from a subjective manual check into an objective, repeatable
+measurement, and document the symptom categories the probe does and does not
+cover so user-reported feel issues can be triaged.
+
+Completed:
+
+- Added `scripts/wysiwyg-smoothness-probe.mjs`:
+  - Reuses the Stage 3 boundary scenario and the existing dev-server bring-up
+    pattern from `wysiwyg-stage4c-smoke.mjs`.
+  - Starts a flagged Next dev server with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_PERF_TRACE=1`.
+  - Types a controlled burst (default 400 chars @ 30ms intervals), captures
+    per-keystroke paint latency via a double `requestAnimationFrame` proxy,
+    and reads `window.__flowDocWysiwygPerfEvents` for FlowDoc-side timings.
+  - Outputs a JSON report with paint-latency percentiles, perf-event counts
+    by kind, frame-budget breaches, jank counts, and a page-boundary
+    crossing indicator.
+- Added `npm.cmd run smoke:wysiwyg-smoothness` to `package.json`.
+- Authored `docs/WYSIWYG_SMOOTHNESS_PROBE.md`:
+  - Documents how to run the probe (default, headed, custom burst).
+  - Explains every metric and its threshold.
+  - Adds a **Symptom Categories** table that lists exactly which user-felt
+    symptoms the probe surfaces objectively and which symptoms it does not
+    cover. Symptoms in the "Not Covered" column require separate gates
+    (caret offset assertions, DOM mutation tests, real IME matrix, headed
+    visual review, cold-start probe, etc.).
+  - Defines the Phase C smoothness decision gate.
+- Captured the first baseline on bundled Chromium (Phase A+B landed):
+  - `ok: true`, page-boundary crossed (1 → 2 fragments).
+  - paint p50/p95/p99/max = 24.5 / 32.5 / 33.5 / 36.5 ms.
+  - `browser-preview-pagination` count during the burst = 0
+    (immediate-input lane stays light through a page-boundary crossing).
+  - jank count = 0; over-frame-budget count = 0; longest perf event = 0.2ms.
+
+Files changed:
+
+- `scripts/wysiwyg-smoothness-probe.mjs` (new)
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md` (new, includes baseline JSON)
+- `package.json` (new `smoke:wysiwyg-smoothness` script)
+- `docs/DOCS_INDEX.md` (link added)
+
+Verification:
+
+- `npm.cmd run smoke:wysiwyg-smoothness` PASS on bundled Chromium with the
+  baseline numbers above.
+- No console errors, no page errors during a 400-char burst that crosses
+  a page boundary.
+
+Notes / follow-ups:
+
+- The probe is intentionally narrow — it covers the measurable subset of
+  smoothness. The "Not Covered" table in `WYSIWYG_SMOOTHNESS_PROBE.md`
+  enumerates the symptoms that still need separate gates. User-reported
+  feel issues should be matched against that table before being treated as
+  smoothness regressions.
+- **Open symptom captured in this session** — edit-reenter layout drift:
+  the line wrap point inside the active paragraph shifts between the first
+  and second edit session, even after a long idle wait (so it is not a
+  font-load race). The smoothness probe does not catch this because it
+  types a single burst. Full triage notes and the recommended next-session
+  probe live in `docs/WYSIWYG_SMOOTHNESS_PROBE.md` under "Known Open
+  Symptom — Edit-Reenter Layout Drift".
+- `perfEvents.total` is capped at 200 by the existing `MAX_WYSIWYG_PERF_EVENTS`
+  ring buffer in `wysiwygPerformance.ts`; a 400-char burst reports 200 events
+  by design.
+- Real Chrome / Edge channel runs and human headed review still pending —
+  Phase C requires both before the smoothness gate can flip to PASS.
+- Thai IME real-OS matrix remains a separate manual gate.
+
+---
+
+### WYSIWYG Parity Phase B — Whitespace Verification Matrix
+
+Goal: Codify the whitespace contract for the WYSIWYG text engine, decide and
+implement the Tab character behavior, and lock the rules with automated
+coverage.
+
+Completed:
+
+- Audited the whitespace path end-to-end:
+  - `packages/core/src/layout/word-breaker.ts:12-26` confirms space runs are
+    preserved as their own segments by both the `Intl.Segmenter` and the
+    `/\s+|\S+/g` fallback.
+  - `src/app/editor/_components/wysiwygTextCommit.ts:56` passes input text
+    straight to `updateParagraphText` with no trim/collapse.
+  - `src/app/editor/_components/useWysiwygTextSession.ts:181-183` is the
+    single normalization choke point on input.
+- Owner decision: Tab characters convert to 3 spaces on input. Rationale,
+  alternatives, and revisit path are recorded in
+  `docs/WYSIWYG_WHITESPACE_MATRIX.md` under "Decision Record".
+- Added `WYSIWYG_TAB_REPLACEMENT = "   "` (3 spaces) to
+  `useWysiwygTextSession.ts` and extended `normalizeWysiwygPlainTextInput`
+  with `.replace(/\t/g, WYSIWYG_TAB_REPLACEMENT)`. The change keeps a single
+  normalization point so every text ingress (clipboard paste, beforeinput,
+  IME end) applies the same rule.
+- Authored `docs/WYSIWYG_WHITESPACE_MATRIX.md`:
+  - 12 numbered rows mirroring `docs/WYSIWYG_PARITY_PLAN.md` Phase B
+  - explicit "Preserve 1:1 (Word-like)" top-line rule
+  - Tab decision record and revisit path
+  - out-of-scope notes for whitespace visualization UI, keyboard Tab key,
+    and exotic whitespace codepoints
+- Added `src/app/editor/_components/__tests__/whitespaceParity.test.ts`:
+  - one assertion per matrix row (round-trip through
+    `normalizeWysiwygPlainTextInput` and `updateParagraphText`)
+  - two composition checks: a complex mixed whitespace pattern, and Tab +
+    CRLF normalized together
+- Linked the matrix doc from `docs/DOCS_INDEX.md` source-of-truth map.
+
+Files changed:
+
+- `src/app/editor/_components/useWysiwygTextSession.ts` (Tab normalization)
+- `src/app/editor/_components/__tests__/whitespaceParity.test.ts` (new)
+- `docs/WYSIWYG_WHITESPACE_MATRIX.md` (new)
+- `docs/WYSIWYG_PARITY_PLAN.md` (Phase B checklist ticked, header marked
+  COMPLETE)
+- `docs/DOCS_INDEX.md` (link added)
+
+Verification:
+
+- `npm.cmd run type-check` PASS
+- `npm.cmd run review:gate` PASS:
+  - core tests: 344/344 (unchanged)
+  - app tests: 249/249 (was 235; the 14 new whitespace rows are the delta)
+  - `review:build` PASS
+- Focused run of `whitespaceParity.test.ts` 14/14 PASS
+
+Notes / follow-ups:
+
+- Keyboard Tab key inside the active edit session still uses the browser
+  default (move focus). The decision record documents this as accepted; revisit
+  only if user feedback requests in-paragraph Tab insertion via the keyboard.
+- Non-breaking space, zero-width space, and other exotic whitespace are
+  preserved by default but not separately tested. Add a matrix row if a
+  regression is observed.
+- Phase B is complete; Phase C (close Stage 4 residual RISK — page-boundary
+  smoothness, real Thai IME, table-cell decision) is the next scheduled step.
+
+---
+
+### WYSIWYG Parity Phase A — Browser Fontkit Measurer
+
+Goal: Unify text measurement between editor preview (browser) and server
+pagination by porting fontkit to the browser side, matching
+`src/app/api/runtimeFont.ts` and `packages/core/src/layout/font-measurer.ts`
+exactly.
+
+Completed:
+
+- Added `src/app/editor/_components/browserFontkitMeasurer.ts`:
+  - `loadBrowserFontBuffer(url?)` fetches `/fonts/THSarabun.ttf` and returns
+    a `Uint8Array`; safe on environments without `fetch`.
+  - `createBrowserFontkitMeasurer(buffer)` dynamically imports
+    `@pdf-lib/fontkit`, wraps via `Buffer.from(...)` when a polyfill is
+    available (else passes the raw `Uint8Array`), and returns a `TextMeasurer`
+    that calls `font.layout(text)` exactly like the server.
+  - Caches widths per `(fontSize, text)` up to 8000 entries to absorb the
+    measurer-per-keystroke load that the layout pipeline issues during draft
+    typing.
+  - Falls back to `defaultTextMeasurer` when the buffer is missing or the
+    fontkit dynamic import throws, so the editor never blocks on font load.
+- Wired into `src/app/editor/_components/EditorShell.tsx`:
+  - Converted `editorTextMeasurer` from `useMemo` to `useState` so it can be
+    swapped after async font load.
+  - Initial value is `createBrowserTextMeasurer()` (existing canvas fallback)
+    so first paint never waits on `fetch`.
+  - A `useEffect` loads the font buffer, builds the fontkit measurer, swaps
+    it in, and bumps the pre-existing `fontReadyVersion` to trigger the
+    debounced re-pagination path that already keys on that value.
+- Added `src/app/editor/_components/__tests__/fontMeasurerParity.test.ts`:
+  - Asserts browser and server fontkit measurers return numerically identical
+    widths for representative Thai, Latin, mixed, and whitespace strings
+    across font sizes 10–18pt.
+  - Asserts identical line heights across common font sizes and ratios.
+  - Asserts null-buffer fallback returns a finite default measurer width.
+
+Files changed:
+
+- `src/app/editor/_components/browserFontkitMeasurer.ts` (new)
+- `src/app/editor/_components/__tests__/fontMeasurerParity.test.ts` (new)
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WYSIWYG_PARITY_PLAN.md` (Phase A checklist ticked)
+
+Verification:
+
+- `npm.cmd run type-check` PASS
+- `npm.cmd run review:gate` PASS:
+  - core tests: 344/344 (unchanged)
+  - app tests: 235/235 (was 232; the three new parity rows are the delta)
+  - `review:build` PASS — production build succeeded with the new measurer
+    bundled into the editor route
+- `fontMeasurerParity.test.ts` 3/3 PASS — widths match the server fontkit
+  measurer exactly for every case
+- `npm.cmd run smoke:wysiwyg-stage4c` PASS on bundled Chromium:
+  - 0 console errors, 0 resource errors (font fetch healthy)
+  - performance trace: 0 browser-preview paginations in the immediate input
+    lane, 1 draft update — keypress lane stays light with the fontkit
+    measurer active
+  - clipboard, CRLF normalization, cut, cross-page pointer drag, double-click
+    selection, IME composition (`IME4Cทดสอบ`), and row-stack paragraph all
+    behave as before
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md` PASS list updated with the new
+  measurer evidence
+
+Notes / follow-ups:
+
+- `realFontDrift.test.ts` still covers the legacy canvas-vs-fontkit drift
+  (≤0.05pt). It is intentionally not retired in this phase — the new test
+  covers the new path; the old test still documents legacy canvas behavior
+  that ships as the pre-font-load fallback. Decide whether to retire it
+  during Phase D once the default flips.
+- `smoke:wysiwyg-stage4c` PASS run in this session (see Verification above).
+- Stage 4 review packet PASS list updated with the new measurer evidence.
+- Phase A is complete; Phase B (whitespace verification matrix) is the next
+  scheduled step per `docs/WYSIWYG_PARITY_PLAN.md`.
+
+---
+
+### WYSIWYG Edit/Show Parity Plan Drafted
+
+Goal: Capture an end-to-end plan for closing edit/show visual parity in the
+WYSIWYG path, sized for multi-session and multi-agent handoff.
+
+Completed:
+
+- Reviewed `WYSIWYG_TEXT_ENGINE_PLAN.md`, `WYSIWYG_EDITOR_ROADMAP.md`,
+  `EDITOR_UX_CONTRACT.md`, `WYSIWYG_PRODUCTION_GATE.md`, and the Stage 4
+  review packet.
+- Inspected `src/app/editor/_components/browserTextMeasurer.ts`,
+  `src/app/api/runtimeFont.ts`, `wysiwygDraftVisualPreview.ts`, and
+  `EditorCanvas.tsx` to confirm the measurer divergence (Canvas vs fontkit)
+  is the primary parity gap; line-wrap algorithm is already shared via
+  `measureParagraph` in core.
+- Confirmed whitespace is preserved 1:1 by design in
+  `packages/core/src/layout/types.ts` and not mutated in
+  `wysiwygTextCommit.ts` or `useWysiwygTextSession.ts`.
+- Drafted `docs/WYSIWYG_PARITY_PLAN.md` covering four phases:
+  - Phase A: unify text measurement by porting fontkit to the browser
+  - Phase B: whitespace verification matrix (12 rows)
+  - Phase C: close Stage 4 residual RISK (page-boundary smoothness, real
+    Thai IME, table-cell decision)
+  - Phase D: default enablement and rollback plan
+- Each phase carries an explicit scope, out-of-scope, design notes, gates,
+  risks, and a handoff checklist suited for multi-agent execution.
+- Added the plan to `docs/DOCS_INDEX.md` source-of-truth map and the
+  WYSIWYG task reading list.
+
+Files changed:
+
+- `docs/WYSIWYG_PARITY_PLAN.md` (new)
+- `docs/DOCS_INDEX.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Draft document only; no code changes.
+- No tests run; no gates required for a planning artifact.
+
+Notes:
+
+- Plan status is "Draft — pending owner approval". Implementation is
+  intentionally not started.
+- Whitespace policy confirmed with product owner as "Preserve 1:1
+  (Word-like)" prior to drafting; Tab character behavior is flagged as an
+  open decision gate inside Phase B.
+- Expect Phase A to bundle ~400KB additional editor-route weight from
+  lazy-loaded fontkit; rollback path remains the existing canvas measurer.
+
+---
+
 ### P0R5 Browser Smoke Carry-Over
 
 Goal: Close the Round 5 carry-over around browser smoke reproducibility and

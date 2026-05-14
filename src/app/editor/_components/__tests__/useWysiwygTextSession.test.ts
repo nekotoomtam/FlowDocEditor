@@ -232,6 +232,24 @@ describe("applyWysiwygTextInputKey", () => {
     })
   })
 
+  it("deletes repeated Thai sara am one visible unit at a time", () => {
+    expect(applyWysiwygTextInputKey("ำำำ", 3, { key: "Backspace" })).toEqual({
+      text: "ำำ",
+      caretOffset: 2,
+      selection: { anchorOffset: 2, focusOffset: 2 },
+    })
+    expect(applyWysiwygTextInputKey("กำำ", 3, { key: "Backspace" })).toEqual({
+      text: "กำ",
+      caretOffset: 2,
+      selection: { anchorOffset: 2, focusOffset: 2 },
+    })
+    expect(applyWysiwygTextInputKey("ำำำ", 0, { key: "Delete" })).toEqual({
+      text: "ำำ",
+      caretOffset: 0,
+      selection: { anchorOffset: 0, focusOffset: 0 },
+    })
+  })
+
   it("moves the caret with navigation keys without changing text", () => {
     expect(applyWysiwygTextInputKey("Aก้B", 3, { key: "ArrowLeft" })).toEqual({
       text: "Aก้B",
@@ -245,6 +263,13 @@ describe("applyWysiwygTextInputKey", () => {
     })
     expect(applyWysiwygTextInputKey("Alpha", 3, { key: "Home" })?.caretOffset).toBe(0)
     expect(applyWysiwygTextInputKey("Alpha", 3, { key: "End" })?.caretOffset).toBe(5)
+  })
+
+  it("moves through repeated Thai sara am boundaries", () => {
+    expect(applyWysiwygTextInputKey("ำำ", 0, { key: "ArrowRight" })?.caretOffset).toBe(1)
+    expect(applyWysiwygTextInputKey("ำำ", 2, { key: "ArrowLeft" })?.caretOffset).toBe(1)
+    expect(applyWysiwygTextInputKey("กำำ", 0, { key: "ArrowRight" })?.caretOffset).toBe(2)
+    expect(applyWysiwygTextInputKey("กำำ", 2, { key: "ArrowRight" })?.caretOffset).toBe(3)
   })
 
   it("replaces selected text with printable input or delete", () => {

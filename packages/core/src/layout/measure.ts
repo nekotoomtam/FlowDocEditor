@@ -37,31 +37,93 @@ function getSegmentKind(
   return /^\s+$/.test(text) ? "space" : "word"
 }
 
+const THAI_SARA_AM = "\u0E33"
+
+function tailorThaiSaraAmGrapheme(segment: string): string[] {
+  const firstSaraAm = segment.indexOf(THAI_SARA_AM)
+  if (firstSaraAm < 0) return [segment]
+  const secondSaraAm = segment.indexOf(THAI_SARA_AM, firstSaraAm + THAI_SARA_AM.length)
+  if (secondSaraAm < 0) return [segment]
+
+  const tailored = [segment.slice(0, firstSaraAm + THAI_SARA_AM.length)]
+  let cursor = secondSaraAm
+  while (cursor < segment.length) {
+    const nextSaraAm = segment.indexOf(THAI_SARA_AM, cursor + THAI_SARA_AM.length)
+    const end = nextSaraAm < 0 ? segment.length : nextSaraAm
+    tailored.push(segment.slice(cursor, end))
+    if (nextSaraAm < 0) break
+    cursor = nextSaraAm
+  }
+
+  return tailored.filter((part) => part.length > 0)
+}
+
+export function splitTextGraphemes(text: string): string[] {
+  const Segmenter = Intl.Segmenter
+  if (Segmenter) {
+    const segmenter = new Segmenter(["th", "en"], { granularity: "grapheme" })
+    return Array.from(segmenter.segment(text)).flatMap((part) => tailorThaiSaraAmGrapheme(part.segment))
+  }
+  return Array.from(text)
+}
+
+export function textGraphemeBoundaries(text: string): number[] {
+  const boundaries = [0]
+  let cursor = 0
+  for (const grapheme of splitTextGraphemes(text)) {
+    cursor += grapheme.length
+    boundaries.push(cursor)
+  }
+  return boundaries
+}
+
+export function previousTextGraphemeBoundary(
+  text: string,
+  index: number,
+  options: { includeExact?: boolean } = {},
+): number {
+  const safeIndex = Math.max(0, Math.min(index, text.length))
+  if (safeIndex === 0) return 0
+
+  let previous = 0
+  for (const boundary of textGraphemeBoundaries(text).slice(1)) {
+    if (boundary === safeIndex) return options.includeExact ? boundary : previous
+    if (boundary > safeIndex) return previous
+    previous = boundary
+  }
+  return previous
+}
+
+export function nextTextGraphemeBoundary(
+  text: string,
+  index: number,
+  options: { includeExact?: boolean } = {},
+): number {
+  const safeIndex = Math.max(0, Math.min(index, text.length))
+  if (safeIndex >= text.length) return text.length
+  if (safeIndex === 0 && options.includeExact) return 0
+
+  for (const boundary of textGraphemeBoundaries(text).slice(1)) {
+    if (options.includeExact ? boundary >= safeIndex : boundary > safeIndex) return boundary
+  }
+  return text.length
+}
+
 // Snap a UTF-16 index to the nearest grapheme cluster boundary in `text`.
 // Prevents caret landing inside a Thai combining sequence like "งุ่".
 export function snapToGraphemeBoundary(text: string, index: number): number {
   if (index <= 0) return 0
   if (index >= text.length) return text.length
-  const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "grapheme" })
-  let clusterStart = 0
-  for (const { segment } of segmenter.segment(text)) {
-    const clusterEnd = clusterStart + segment.length
-    if (index <= clusterStart) return clusterStart
-    if (index < clusterEnd) {
-      return (index - clusterStart) <= (clusterEnd - index) ? clusterStart : clusterEnd
+
+  let previous = 0
+  for (const boundary of textGraphemeBoundaries(text).slice(1)) {
+    if (index <= previous) return previous
+    if (index < boundary) {
+      return (index - previous) <= (boundary - index) ? previous : boundary
     }
-    clusterStart = clusterEnd
+    previous = boundary
   }
   return text.length
-}
-
-function getGraphemes(text: string): string[] {
-  const Segmenter = Intl.Segmenter
-  if (Segmenter) {
-    const segmenter = new Segmenter(["th", "en"], { granularity: "grapheme" })
-    return Array.from(segmenter.segment(text)).map((part) => part.segment)
-  }
-  return Array.from(text)
 }
 
 function measureSegmentWidth(
@@ -71,6 +133,61 @@ function measureSegmentWidth(
   fontSize: number,
 ): number {
   return measurer.measureText(text, fontFamilyKey, fontSize).width
+}
+
+function hasRepeatedGraphemeRun(graphemes: string[], minimumRunLength: number): boolean {
+  let previous: string | null = null
+  let runLength = 0
+
+  for (const grapheme of graphemes) {
+    if (grapheme === previous) {
+      runLength += 1
+    } else {
+      previous = grapheme
+      runLength = 1
+    }
+    if (runLength >= minimumRunLength) return true
+  }
+
+  return false
+}
+
+function shouldSplitWordToFillLine(segment: SourceLineSegment, availableWidth: number, currentWidth: number): boolean {
+  if (segment.kind !== "word") return false
+  if (currentWidth <= 0 || currentWidth >= availableWidth) return false
+
+  const graphemes = splitTextGraphemes(segment.text)
+  if (graphemes.length < 8) return false
+
+  const containsThai = /[\u0E00-\u0E7F]/.test(segment.text)
+  const repeatedRun = hasRepeatedGraphemeRun(graphemes, 4)
+  const nearFullLine = segment.width >= availableWidth * 0.75
+
+  return containsThai || repeatedRun || nearFullLine
+}
+
+function splitSourceSegmentToGraphemes(
+  segment: SourceLineSegment,
+  measurer: TextMeasurer,
+  fontFamilyKey: string,
+  fontSize: number,
+): SourceLineSegment[] {
+  const graphemeSegments: SourceLineSegment[] = []
+  let graphemeStart = segment.start
+
+  for (const grapheme of splitTextGraphemes(segment.text)) {
+    const graphemeEnd = graphemeStart + grapheme.length
+    graphemeSegments.push({
+      text: grapheme,
+      start: graphemeStart,
+      end: graphemeEnd,
+      width: measureSegmentWidth(grapheme, measurer, fontFamilyKey, fontSize),
+      kind: "grapheme",
+    })
+    graphemeStart = graphemeEnd
+  }
+
+  return graphemeSegments
 }
 
 function createSourceSegments(
@@ -98,18 +215,12 @@ function createSourceSegments(
     const kind = getSegmentKind(segment, start, end, fieldRanges, pageNumberRanges)
 
     if (kind === "word" && width > availableWidth) {
-      let graphemeStart = start
-      for (const grapheme of getGraphemes(segment)) {
-        const graphemeEnd = graphemeStart + grapheme.length
-        sourceSegments.push({
-          text: grapheme,
-          start: graphemeStart + offsetBase,
-          end: graphemeEnd + offsetBase,
-          width: measureSegmentWidth(grapheme, measurer, fontFamilyKey, fontSize),
-          kind: "grapheme",
-        })
-        graphemeStart = graphemeEnd
-      }
+      sourceSegments.push(...splitSourceSegmentToGraphemes(
+        { text: segment, start: start + offsetBase, end: end + offsetBase, width, kind },
+        measurer,
+        fontFamilyKey,
+        fontSize,
+      ))
       continue
     }
 
@@ -172,23 +283,35 @@ function wrapLines(
     currentWidth = 0
   }
 
-  for (const segment of segments) {
-    if (segment.text.length === 0) continue
-    if (currentLine.length === 0 && segment.kind === "space") continue
+  const appendSegment = (segment: SourceLineSegment) => {
+    if (segment.text.length === 0) return
+    if (currentLine.length === 0 && segment.kind === "space") return
 
     const candidateWidth = currentWidth + segment.width
 
     if (candidateWidth <= availableWidth || currentLine.length === 0) {
       currentLine.push(segment)
       currentWidth = candidateWidth
-    } else {
-      pushCurrentLine()
-      if (segment.kind !== "space") {
-        currentLine.push(segment)
-        currentWidth = segment.width
+      return
+    }
+
+    if (shouldSplitWordToFillLine(segment, availableWidth, currentWidth)) {
+      const splitSegments = splitSourceSegmentToGraphemes(segment, measurer, fontFamilyKey, fontSize)
+      const firstSegmentWidth = splitSegments[0]?.width ?? Number.POSITIVE_INFINITY
+      if (currentWidth + firstSegmentWidth <= availableWidth) {
+        for (const splitSegment of splitSegments) appendSegment(splitSegment)
+        return
       }
     }
+
+    pushCurrentLine()
+    if (segment.kind !== "space") {
+      currentLine.push(segment)
+      currentWidth = segment.width
+    }
   }
+
+  for (const segment of segments) appendSegment(segment)
 
   pushCurrentLine()
 

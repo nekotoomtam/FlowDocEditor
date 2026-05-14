@@ -61,7 +61,7 @@ const fixedMeasurer: TextMeasurer = {
 }
 
 describe("wysiwygDraftVisualPreview", () => {
-  it("moves only overflowing draft lines to the next page during live preview", () => {
+  it("applies widow prevention when moving overflowing draft lines to the next page during live preview", () => {
     const draftLines = [
       line("one", 70, 0, 3),
       line("two", 80, 4, 7),
@@ -80,22 +80,22 @@ describe("wysiwygDraftVisualPreview", () => {
     expect(fragments[0]).toMatchObject({
       pageIndex: 0,
       lineStart: 0,
-      lineEnd: 3,
-      height: 30,
+      lineEnd: 2,
+      height: 20,
       continuesFrom: false,
       isContinued: true,
     })
-    expect(fragments[0].lines?.map((candidate) => candidate.text)).toEqual(["one", "two", "three"])
+    expect(fragments[0].lines?.map((candidate) => candidate.text)).toEqual(["one", "two"])
     expect(fragments[1]).toMatchObject({
       pageIndex: 1,
       y: 20,
-      lineStart: 3,
+      lineStart: 2,
       lineEnd: 4,
-      height: 10,
+      height: 20,
       continuesFrom: true,
       isContinued: false,
     })
-    expect(fragments[1].lines?.map((candidate) => [candidate.text, candidate.y])).toEqual([["four", 20]])
+    expect(fragments[1].lines?.map((candidate) => [candidate.text, candidate.y])).toEqual([["three", 20], ["four", 30]])
   })
 
   it("keeps a same-page draft as one fragment with the measured draft height", () => {

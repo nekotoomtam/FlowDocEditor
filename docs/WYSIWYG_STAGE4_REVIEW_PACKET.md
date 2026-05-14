@@ -34,6 +34,13 @@ Out of scope:
 
 ## PASS
 
+- Browser text measurement uses the same fontkit-on-`THSarabun.ttf` pipeline as
+  the server (Phase A of `docs/WYSIWYG_PARITY_PLAN.md` complete 2026-05-14).
+  Evidence: `src/app/editor/_components/browserFontkitMeasurer.ts`,
+  `src/app/editor/_components/__tests__/fontMeasurerParity.test.ts` (exact
+  width parity). If browser fontkit setup fails, `EditorShell` keeps the
+  existing canvas measurer fallback instead of silently swapping to heuristic
+  default measurement.
 - Text-engine editing uses the FlowDoc visual layer and a hidden adapter bridge,
   not visible textarea layout. Evidence: `WysiwygTextLayer` in
   `src/app/editor/_components/ParagraphTextSurface.tsx`.
@@ -141,11 +148,13 @@ git diff --check
 Latest observed automated counts:
 
 - Core tests: 344 passed.
-- App tests: 232 passed.
-- `review:gate:full` passed on 2026-05-14 with archive manifest check,
-  type-check, full core/app tests, and `review:build`.
-- `review:browser` passed on 2026-05-14 on bundled Chromium and on system
-  Chrome via `SMOKE_EXECUTABLE_PATH`.
+- App tests: 251 passed.
+- `review:gate` passed on 2026-05-14 with type-check, full core/app tests,
+  and `review:build`.
+- `review:gate:full` previously passed on 2026-05-14 with archive manifest
+  check, type-check, full core/app tests, and `review:build`.
+- `review:browser` passed on 2026-05-14 on bundled Chromium; an earlier system
+  Chrome run via `SMOKE_EXECUTABLE_PATH` also passed.
 - Stage 4C smoke output reports the browser mode, channel, executable path, and
   headless setting.
 - Missing bundled Chromium launch errors now print FlowDoc-specific install and
@@ -154,6 +163,20 @@ Latest observed automated counts:
   readiness coverage, and favicon-only resource filtering for system Chrome.
 - The row-stack smoke inserted `STAGE4_STACK_MARKER` and observed
   `targetFragments: 1`, `pointerFragments: 1`, and `rowHeight: 571`.
+- Follow-up `smoke:wysiwyg-stage4c` recheck passed on 2026-05-14 after the
+  existing unflagged Next dev server was stopped and the smoke script could
+  start its own flagged server.
+- Follow-up `smoke:wysiwyg-reenter` passed on 2026-05-14 on bundled Chromium
+  and installed Chrome/Edge channels: three keyboard-driven variants passed,
+  including gradual word typing until natural wrap and repeated-key typing
+  until wrap, followed by re-enter line insertion. All 12 equivalent
+  edit/show/re-enter line-geometry comparisons matched in each browser run.
+- Follow-up `smoke:wysiwyg-thai-repeat` passed on 2026-05-14 on bundled
+  Chromium and installed Chrome/Edge channels. It mirrors the manual screenshot
+  report on a normal default paragraph by typing repeated Thai characters until
+  wrap, exiting, re-entering, pressing Enter at the clicked caret, typing
+  another Thai run, and matching all 4 edit/show/re-enter line-geometry
+  comparisons in each browser run.
 
 ## Reviewer Notes
 

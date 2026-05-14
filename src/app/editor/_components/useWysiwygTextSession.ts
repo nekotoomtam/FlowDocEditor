@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react"
+import { nextTextGraphemeBoundary, previousTextGraphemeBoundary } from "@/layout"
 
 export interface WysiwygTextSelection {
   anchorOffset: number
@@ -113,39 +114,11 @@ export function moveWysiwygTextSessionCaret(
 }
 
 function previousGraphemeBoundary(text: string, index: number): number {
-  const safeIndex = Math.max(0, Math.min(index, text.length))
-  if (safeIndex === 0) return 0
-
-  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
-    const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "grapheme" })
-    let offset = 0
-    for (const part of segmenter.segment(text)) {
-      const nextOffset = offset + part.segment.length
-      if (nextOffset >= safeIndex) return offset
-      offset = nextOffset
-    }
-    return offset
-  }
-
-  return safeIndex - 1
+  return previousTextGraphemeBoundary(text, index)
 }
 
 function nextGraphemeBoundary(text: string, index: number): number {
-  const safeIndex = Math.max(0, Math.min(index, text.length))
-  if (safeIndex >= text.length) return text.length
-
-  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
-    const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "grapheme" })
-    let offset = 0
-    for (const part of segmenter.segment(text)) {
-      const nextOffset = offset + part.segment.length
-      if (nextOffset > safeIndex) return nextOffset
-      offset = nextOffset
-    }
-    return text.length
-  }
-
-  return safeIndex + 1
+  return nextTextGraphemeBoundary(text, index)
 }
 
 function collapsedSelection(caretOffset: number): WysiwygTextSelection {
@@ -178,8 +151,12 @@ function replaceRange(
   }
 }
 
+// Phase B whitespace decision: tab characters convert to 3 spaces on input.
+// Source: docs/WYSIWYG_WHITESPACE_MATRIX.md row 6 (Tab decision).
+export const WYSIWYG_TAB_REPLACEMENT = "   "
+
 export function normalizeWysiwygPlainTextInput(text: string): string {
-  return text.replace(/\r\n?/g, "\n")
+  return text.replace(/\r\n?/g, "\n").replace(/\t/g, WYSIWYG_TAB_REPLACEMENT)
 }
 
 export function getWysiwygTextSelectedText(

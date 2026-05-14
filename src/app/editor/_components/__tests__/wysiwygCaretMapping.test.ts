@@ -128,6 +128,27 @@ describe("WYSIWYG caret mapping contract", () => {
     expect(candidates.some((candidate) => candidate.offset === 2)).toBe(false)
   })
 
+  it("builds caret candidates between repeated Thai sara am characters", () => {
+    const line = makeLine({
+      text: "กำำ",
+      width: 30,
+      segments: [{
+        kind: "word",
+        text: "กำำ",
+        start: 0,
+        end: 3,
+        x: 0,
+        width: 30,
+        breakableAfter: false,
+      }],
+    })
+    const fragment = makeFragment({ lines: [line] })
+
+    const candidates = getWysiwygCaretCandidatesForLine(fragment, line, 0, { textMeasurer: fixedWidthMeasurer })
+
+    expect(candidates.map((candidate) => candidate.offset)).toEqual([0, 2, 3])
+  })
+
   it("maps paragraph offsets to page-local caret positions with measured prefix widths", () => {
     const fragment = makeFragment({
       lines: [makeLine({

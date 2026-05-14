@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { isPlainTextParagraph } from "@/document"
-import { measureParagraph, snapToGraphemeBoundary } from "@/layout"
+import { measureParagraph, nextTextGraphemeBoundary, previousTextGraphemeBoundary, snapToGraphemeBoundary } from "@/layout"
 import type { TextMeasurer } from "@/layout"
 import { buildPaginatedLines } from "@/pagination"
 import type { DocumentNode, ParagraphNode, TableNode } from "@/schema"
@@ -292,40 +292,11 @@ export function absoluteInlineEditIndex(preText: string, localIndex: number | nu
 }
 
 function previousGraphemeBoundary(text: string, index: number, includeExact = false): number {
-  const safeIndex = Math.max(0, Math.min(index, text.length))
-  if (safeIndex === 0) return 0
-
-  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
-    const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "grapheme" })
-    let offset = 0
-    for (const part of segmenter.segment(text)) {
-      const nextOffset = offset + part.segment.length
-      if (nextOffset === safeIndex) return includeExact ? nextOffset : offset
-      if (nextOffset > safeIndex) return offset
-      offset = nextOffset
-    }
-    return offset
-  }
-
-  return safeIndex - 1
+  return previousTextGraphemeBoundary(text, index, { includeExact })
 }
 
 function nextGraphemeBoundary(text: string, index: number): number {
-  const safeIndex = Math.max(0, Math.min(index, text.length))
-  if (safeIndex === 0) return 0
-
-  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
-    const segmenter = new Intl.Segmenter(["th", "en"], { granularity: "grapheme" })
-    let offset = 0
-    for (const part of segmenter.segment(text)) {
-      const nextOffset = offset + part.segment.length
-      if (nextOffset >= safeIndex) return nextOffset
-      offset = nextOffset
-    }
-    return text.length
-  }
-
-  return safeIndex + 1
+  return nextTextGraphemeBoundary(text, index, { includeExact: true })
 }
 
 export function buildSplitEditInput(

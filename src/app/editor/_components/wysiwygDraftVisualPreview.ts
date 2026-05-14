@@ -104,27 +104,39 @@ export function splitWysiwygDraftVisualFragments(input: {
     const top = isSourcePage ? sourceFragment.y : page.contentBox.y
     const bottom = pageContentBottom(page)
     const sliceStart = lineIndex
-    const positionedLines: PaginatedLine[] = []
+    const atContentTop = top <= page.contentBox.y + HEIGHT_EPSILON
+    let count = 0
     let cursorY = top
 
-    while (lineIndex < draftLines.length) {
-      const sourceLine = draftLines[lineIndex]
+    while (lineIndex + count < draftLines.length) {
+      const sourceLine = draftLines[lineIndex + count]
       const y = isSourcePage ? sourceLine.y : cursorY
       const lineBottom = y + sourceLine.height
       const lineFits = lineBottom <= bottom + HEIGHT_EPSILON
-      const atContentTop = top <= page.contentBox.y + HEIGHT_EPSILON
 
-      if (!lineFits && positionedLines.length > 0) break
-      if (!lineFits && positionedLines.length === 0 && !atContentTop) break
+      if (!lineFits && count > 0) break
+      if (!lineFits && count === 0 && !atContentTop) break
 
-      positionedLines.push(lineWithY(sourceLine, y))
       cursorY = y + sourceLine.height
-      lineIndex += 1
+      count += 1
 
       if (!lineFits) break
     }
 
-    if (positionedLines.length === 0) continue
+    const remainingAfterCount = draftLines.length - (lineIndex + count)
+    if (count === 1 && remainingAfterCount > 0 && !atContentTop) continue
+    if (remainingAfterCount === 1 && count >= 2 && !atContentTop) count -= 1
+    if (count === 0) continue
+
+    const positionedLines: PaginatedLine[] = []
+    cursorY = top
+    for (let offset = 0; offset < count; offset += 1) {
+      const sourceLine = draftLines[lineIndex + offset]
+      const y = isSourcePage ? sourceLine.y : cursorY
+      positionedLines.push(lineWithY(sourceLine, y))
+      cursorY = y + sourceLine.height
+    }
+    lineIndex += count
 
     const isLastFragment = lineIndex >= draftLines.length
     const lastLine = positionedLines[positionedLines.length - 1]
