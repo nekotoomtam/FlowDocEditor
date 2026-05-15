@@ -67,6 +67,16 @@ function pushFragment(pages: PaginatedPage[], template: PaginatedPage, fragment:
   ensurePage(pages, fragment.pageIndex, template).fragments.push(fragment)
 }
 
+function toPageFragmentNodeType(nodeType: FlowBox["nodeType"]): PageFragment["nodeType"] {
+  switch (nodeType) {
+    case "flow-row":
+    case "flow-stack":
+      throw new Error(`${nodeType} pagination is not implemented yet`)
+    default:
+      return nodeType
+  }
+}
+
 // ─── Paragraph Helpers ────────────────────────────────────────────────────────
 
 function buildRenderProps(node: ParagraphNode, lineHeight: number): ParagraphRenderProps {
@@ -372,7 +382,7 @@ function pushStackContents(
 
     pushFragment(pages, template, {
       nodeId: child.nodeId,
-      nodeType: child.nodeType,
+      nodeType: toPageFragmentNodeType(child.nodeType),
       parentNodeId: stackBox.nodeId,
       pageIndex,
       x: child.x,
@@ -481,6 +491,476 @@ function paginateVerticalContainer(
   return current
 }
 
+// ─── Flow Row Pagination ─────────────────────────────────────────────────────
+
+interface FlowSplitPoint {
+  childIdx: number
+  lineIdx: number
+}
+
+function endFlowSplitPoint(stackBox: FlowBox, to: FlowSplitPoint | null): FlowSplitPoint {
+  return to ?? { childIdx: stackBox.children.length, lineIdx: 0 }
+}
+
+function flowSplitPointProgressed(from: FlowSplitPoint, to: FlowSplitPoint | null, stackBox: FlowBox): boolean {
+  const end = endFlowSplitPoint(stackBox, to)
+  return end.childIdx > from.childIdx ||
+    (end.childIdx === from.childIdx && end.lineIdx > from.lineIdx)
+}
+
+function flowProgressKey(rowBox: FlowBox, splits: Map<string, FlowSplitPoint>): string {
+  return rowBox.children
+    .map((stackBox) => {
+      const split = splits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }
+      return `${stackBox.nodeId}:${split.childIdx}:${split.lineIdx}`
+    })
+    .join("|")
+}
+
+function flowStackHasRemainingContent(
+  stackBox: FlowBox,
+  section: DocumentSection,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  from: FlowSplitPoint,
+): boolean {
+  for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
+    const child = stackBox.children[ci]
+    if (!child) continue
+    if (child.nodeType === "spacer") return true
+    if (child.nodeType !== "paragraph") continue
+
+    const node = section.nodes[child.nodeId]
+    if (node?.type !== "paragraph") continue
+    const lineStart = ci === from.childIdx ? from.lineIdx : 0
+    const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+    if (lineStart < measured.lines.length) return true
+  }
+
+  return false
+}
+
+function forceOneFlowUnitProgress(
+  stackBox: FlowBox,
+  section: DocumentSection,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  from: FlowSplitPoint,
+): FlowSplitPoint | null {
+  for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
+    const child = stackBox.children[ci]
+    if (!child) continue
+    if (child.nodeType === "spacer") return { childIdx: ci + 1, lineIdx: 0 }
+    if (child.nodeType !== "paragraph") continue
+
+    const node = section.nodes[child.nodeId]
+    if (node?.type !== "paragraph") continue
+    const lineStart = ci === from.childIdx ? from.lineIdx : 0
+    const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+    if (lineStart < measured.lines.length) return { childIdx: ci, lineIdx: lineStart + 1 }
+  }
+
+  return null
+}
+
+function flowParagraphSliceHeight(
+  node: ParagraphNode,
+  child: FlowBox,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  lineStart: number,
+  lineEnd?: number,
+): number {
+  const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+  const resolvedLineEnd = lineEnd ?? measured.lines.length
+  const lines = measured.lines.slice(lineStart, resolvedLineEnd)
+  if (lines.length === 0) return 0
+  const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
+  const spacingAfter = resolvedLineEnd >= measured.lines.length
+    ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
+    : 0
+  return spacingBefore + lines.reduce((sum, line) => sum + line.height, 0) + spacingAfter
+}
+
+function flowStackSliceHeight(
+  stackBox: FlowBox,
+  section: DocumentSection,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  from: FlowSplitPoint,
+  to: FlowSplitPoint | null,
+): number {
+  let height = 0
+  for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
+    const child = stackBox.children[ci]
+    if (!child) continue
+
+    const isAtTo = to !== null && ci === to.childIdx
+    if (isAtTo && to.lineIdx === 0) break
+
+    if (child.nodeType === "spacer") {
+      if (!isAtTo) height += child.height
+    } else if (child.nodeType === "paragraph") {
+      const node = section.nodes[child.nodeId]
+      if (node?.type !== "paragraph") { if (isAtTo) break; continue }
+      const lineStart = ci === from.childIdx ? from.lineIdx : 0
+      const lineEnd = isAtTo ? to.lineIdx : undefined
+      height += flowParagraphSliceHeight(node, child, measurer, wordBreaker, lineStart, lineEnd)
+    }
+
+    if (isAtTo) break
+  }
+
+  return height
+}
+
+function computeFlowStackSplitPointFrom(
+  stackBox: FlowBox,
+  section: DocumentSection,
+  availH: number,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  from: FlowSplitPoint,
+): FlowSplitPoint | null {
+  let heightUsed = 0
+
+  for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
+    const child = stackBox.children[ci]
+    if (heightUsed >= availH) return { childIdx: ci, lineIdx: 0 }
+
+    if (child.nodeType === "spacer") {
+      if (heightUsed + child.height <= availH) heightUsed += child.height
+      else return { childIdx: ci, lineIdx: 0 }
+    } else if (child.nodeType === "paragraph") {
+      const node = section.nodes[child.nodeId]
+      if (node?.type !== "paragraph") continue
+      const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+      const lineStart = ci === from.childIdx ? from.lineIdx : 0
+      const remainingHeight = flowParagraphSliceHeight(node, child, measurer, wordBreaker, lineStart)
+
+      if (heightUsed + remainingHeight <= availH) {
+        heightUsed += remainingHeight
+      } else {
+        const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
+        const availForLines = availH - heightUsed - spacingBefore
+        if (availForLines <= 0) return { childIdx: ci, lineIdx: lineStart }
+        let lineAccum = 0
+        for (let li = lineStart; li < measured.lines.length; li++) {
+          if (lineAccum + measured.lines[li].height > availForLines) return { childIdx: ci, lineIdx: li }
+          lineAccum += measured.lines[li].height
+        }
+        heightUsed += remainingHeight
+      }
+    }
+  }
+
+  return null
+}
+
+function buildFlowStackSliceFragments(
+  stackBox: FlowBox,
+  section: DocumentSection,
+  measurer: TextMeasurer,
+  pageIndex: number,
+  stackPageY: number,
+  from: FlowSplitPoint,
+  to: FlowSplitPoint | null,
+  wordBreaker: WordBreaker,
+  pageNumberOffset: number,
+  paragraphFragmentIndexes: Map<string, number>,
+): PageFragment[] {
+  const fragments: PageFragment[] = []
+  let curY = stackPageY
+
+  for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
+    const child = stackBox.children[ci]
+    if (!child) continue
+
+    const isAtTo = to !== null && ci === to.childIdx
+    if (isAtTo && to.lineIdx === 0) break
+
+    if (child.nodeType === "spacer") {
+      if (!isAtTo) {
+        fragments.push({
+          nodeId: child.nodeId,
+          nodeType: "spacer",
+          parentNodeId: stackBox.nodeId,
+          pageIndex,
+          x: child.x,
+          y: curY,
+          width: child.width,
+          height: child.height,
+        })
+        curY += child.height
+      }
+    } else if (child.nodeType === "paragraph") {
+      const node = section.nodes[child.nodeId]
+      if (node?.type !== "paragraph") { if (isAtTo) break; continue }
+
+      const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+      const lineStart = ci === from.childIdx ? from.lineIdx : 0
+      const lineEnd = isAtTo ? to.lineIdx : undefined
+      const lines = lineEnd !== undefined
+        ? measured.lines.slice(lineStart, lineEnd)
+        : measured.lines.slice(lineStart)
+
+      if (lines.length > 0) {
+        const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
+        const resolvedLineEnd = lineStart + lines.length
+        const isLastLines = lineEnd === undefined || lineEnd === measured.lines.length
+        const spacingAfter = isLastLines
+          ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
+          : 0
+        const paraH = spacingBefore + lines.reduce((sum, line) => sum + line.height, 0) + spacingAfter
+        const fragmentIndex = paragraphFragmentIndexes.get(child.nodeId) ?? 0
+        paragraphFragmentIndexes.set(child.nodeId, fragmentIndex + 1)
+        fragments.push({
+          nodeId: child.nodeId,
+          nodeType: "paragraph",
+          parentNodeId: stackBox.nodeId,
+          pageIndex,
+          x: child.x,
+          y: curY,
+          width: child.width,
+          height: paraH,
+          lines: resolvePageNumbers(
+            buildPaginatedLines(lines, child.x, curY, spacingBefore, node.props.align, child.width),
+            pageIndex + 1 + pageNumberOffset,
+          ),
+          renderProps: buildRenderProps(node, measured.lineHeight),
+          fragmentIndex,
+          lineStart,
+          lineEnd: resolvedLineEnd,
+          continuesFrom: lineStart > 0,
+          isContinued: resolvedLineEnd < measured.lines.length,
+        })
+        curY += paraH
+      }
+    }
+
+    if (isAtTo) break
+  }
+
+  return fragments
+}
+
+function paginateFlowRow(
+  box: FlowBox,
+  section: DocumentSection,
+  measurer: TextMeasurer,
+  pages: PaginatedPage[],
+  template: PaginatedPage,
+  contentTop: number,
+  contentBottom: number,
+  cursor: PageFlowCursor,
+  parentNodeId?: string,
+  wordBreaker: WordBreaker = defaultWordBreaker,
+): PageFlowCursor {
+  const fromSplits = new Map<string, FlowSplitPoint>()
+  for (const stackBox of box.children) fromSplits.set(stackBox.nodeId, { childIdx: 0, lineIdx: 0 })
+
+  let current = cursor
+  let fragmentIndex = 0
+  let retriedNoProgressKey: string | null = null
+  const stackFragmentIndexes = new Map<string, number>()
+  const paragraphFragmentIndexes = new Map<string, number>()
+  const rowNode = section.nodes[box.nodeId]
+  const firstSliceMinHeight = rowNode?.type === "flow-row" ? rowNode.props.minHeight ?? 0 : 0
+
+  const hasRemaining = (): boolean => box.children.some((stackBox) =>
+    flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, fromSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }),
+  )
+
+  if (!hasRemaining() && box.children.length > 0) {
+    if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
+      current = advancePage(current, contentTop)
+    }
+
+    let rowSliceHeight = Math.max(firstSliceMinHeight, box.height)
+    const availH = contentBottom - current.cursorY
+    if (current.cursorY > contentTop + 1 && rowSliceHeight > availH) {
+      current = advancePage(current, contentTop)
+    }
+    rowSliceHeight = Math.max(rowSliceHeight, 0)
+
+    pushFragment(pages, template, {
+      nodeId: box.nodeId,
+      nodeType: "flow-row",
+      parentNodeId,
+      pageIndex: current.pageIndex,
+      x: box.x,
+      y: current.cursorY,
+      width: box.width,
+      height: rowSliceHeight,
+      fragmentIndex: 0,
+      continuesFrom: false,
+      isContinued: false,
+    })
+
+    for (const stackBox of box.children) {
+      pushFragment(pages, template, {
+        nodeId: stackBox.nodeId,
+        nodeType: "flow-stack",
+        parentNodeId: box.nodeId,
+        pageIndex: current.pageIndex,
+        x: stackBox.x,
+        y: current.cursorY,
+        width: stackBox.width,
+        height: rowSliceHeight,
+        fragmentIndex: 0,
+        continuesFrom: false,
+        isContinued: false,
+      })
+    }
+
+    return { ...current, cursorY: current.cursorY + rowSliceHeight }
+  }
+
+  while (hasRemaining()) {
+    if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
+      current = advancePage(current, contentTop)
+    }
+
+    const sliceMinHeight = fragmentIndex === 0 ? firstSliceMinHeight : 0
+    const availH = contentBottom - current.cursorY
+    if (current.cursorY > contentTop + 1 && sliceMinHeight > availH) {
+      current = advancePage(current, contentTop)
+      continue
+    }
+
+    const activeStacks = box.children.filter((stackBox) =>
+      flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, fromSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }),
+    )
+    const toSplits = new Map<string, FlowSplitPoint | null>()
+    let hasContentProgress = false
+    let rowSliceHeight = sliceMinHeight
+    const sliceWarnings = new Map<string, PageFragmentWarning[]>()
+
+    for (const stackBox of activeStacks) {
+      const from = fromSplits.get(stackBox.nodeId)!
+      const to = computeFlowStackSplitPointFrom(stackBox, section, Math.max(0, availH), measurer, wordBreaker, from)
+      toSplits.set(stackBox.nodeId, to)
+      if (flowSplitPointProgressed(from, to, stackBox)) {
+        hasContentProgress = true
+      }
+      rowSliceHeight = Math.max(rowSliceHeight, flowStackSliceHeight(stackBox, section, measurer, wordBreaker, from, to))
+    }
+
+    if (!hasContentProgress) {
+      const progressKey = flowProgressKey(box, fromSplits)
+      if (current.cursorY > contentTop + 1 && retriedNoProgressKey !== progressKey) {
+        retriedNoProgressKey = progressKey
+        current = advancePage(current, contentTop)
+        continue
+      }
+
+      const forcedStack = activeStacks[0]
+      if (forcedStack) {
+        const forcedSplit = forceOneFlowUnitProgress(
+          forcedStack,
+          section,
+          measurer,
+          wordBreaker,
+          fromSplits.get(forcedStack.nodeId)!,
+        )
+        if (forcedSplit) {
+          toSplits.set(forcedStack.nodeId, forcedSplit)
+          rowSliceHeight = Math.max(
+            rowSliceHeight,
+            flowStackSliceHeight(forcedStack, section, measurer, wordBreaker, fromSplits.get(forcedStack.nodeId)!, forcedSplit),
+          )
+          const warning: PageFragmentWarning = {
+            code: "forced-flow-row-split-overflow",
+            message: "flow-row split forced one content unit because the available slice could not fit normal progress",
+          }
+          sliceWarnings.set(box.nodeId, [warning])
+          sliceWarnings.set(forcedStack.nodeId, [warning])
+        }
+      }
+    } else {
+      retriedNoProgressKey = null
+    }
+
+    const nextSplits = new Map(fromSplits)
+    for (const stackBox of activeStacks) {
+      const to = toSplits.get(stackBox.nodeId) ?? null
+      nextSplits.set(stackBox.nodeId, endFlowSplitPoint(stackBox, to))
+    }
+    const continuesAfter = box.children.some((stackBox) =>
+      flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, nextSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }),
+    )
+
+    pushFragment(pages, template, {
+      nodeId: box.nodeId,
+      nodeType: "flow-row",
+      parentNodeId,
+      pageIndex: current.pageIndex,
+      x: box.x,
+      y: current.cursorY,
+      width: box.width,
+      height: rowSliceHeight,
+      fragmentIndex,
+      continuesFrom: fragmentIndex > 0,
+      isContinued: continuesAfter,
+      warnings: sliceWarnings.get(box.nodeId),
+    })
+
+    const childFragments: PageFragment[] = []
+    for (const stackBox of activeStacks) {
+      const from = fromSplits.get(stackBox.nodeId)!
+      const to = toSplits.get(stackBox.nodeId) ?? null
+      const stackFragmentIndex = stackFragmentIndexes.get(stackBox.nodeId) ?? 0
+      const stackContinuesAfter = flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, nextSplits.get(stackBox.nodeId)!)
+      stackFragmentIndexes.set(stackBox.nodeId, stackFragmentIndex + 1)
+
+      pushFragment(pages, template, {
+        nodeId: stackBox.nodeId,
+        nodeType: "flow-stack",
+        parentNodeId: box.nodeId,
+        pageIndex: current.pageIndex,
+        x: stackBox.x,
+        y: current.cursorY,
+        width: stackBox.width,
+        height: rowSliceHeight,
+        fragmentIndex: stackFragmentIndex,
+        continuesFrom: stackFragmentIndex > 0,
+        isContinued: stackContinuesAfter,
+        warnings: sliceWarnings.get(stackBox.nodeId),
+      })
+
+      childFragments.push(...buildFlowStackSliceFragments(
+        stackBox,
+        section,
+        measurer,
+        current.pageIndex,
+        current.cursorY,
+        from,
+        to,
+        wordBreaker,
+        current.pageNumberOffset,
+        paragraphFragmentIndexes,
+      ))
+    }
+
+    childFragments
+      .sort((a, b) => a.y - b.y || a.x - b.x || a.nodeId.localeCompare(b.nodeId))
+      .forEach((fragment) => pushFragment(pages, template, fragment))
+
+    for (const [stackId, split] of nextSplits) {
+      fromSplits.set(stackId, split)
+    }
+
+    current = { ...current, cursorY: current.cursorY + rowSliceHeight }
+    fragmentIndex += 1
+
+    if (continuesAfter) {
+      current = advancePage(current, contentTop)
+    }
+  }
+
+  return current
+}
+
 // ─── Table Pagination ─────────────────────────────────────────────────────────
 
 function resolveBorderSide(
@@ -561,7 +1041,7 @@ function pushTableCellContents(
 
     pushFragment(pages, template, {
       nodeId: child.nodeId,
-      nodeType: child.nodeType,
+      nodeType: toPageFragmentNodeType(child.nodeType),
       parentNodeId: cellBox.nodeId,
       pageIndex,
       x: child.x,
@@ -1190,6 +1670,10 @@ function paginateFlowBox(
       return paginateSpacer(box, pages, template, contentTop, contentBottom, cursor, parentNodeId)
     case "row":
       return paginateRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
+    case "flow-row":
+      return paginateFlowRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
+    case "flow-stack":
+      throw new Error(`${box.nodeType} pagination is not implemented yet`)
     case "body":
     case "stack":
       return paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision)
@@ -1213,7 +1697,7 @@ function collectZoneFragments(
 
   const fragment: PageFragment = {
     nodeId: box.nodeId,
-    nodeType: box.nodeType,
+    nodeType: toPageFragmentNodeType(box.nodeType),
     parentNodeId,
     pageIndex: 0,
     x: box.x,

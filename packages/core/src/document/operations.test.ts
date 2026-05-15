@@ -6,6 +6,7 @@ import {
   applyPlacementOperation,
   addTableColumn,
   addTableRow,
+  deleteNode,
   mergeParagraphWithPrevious,
   removeTableColumn,
   removeTableRow,
@@ -361,6 +362,104 @@ describe("field reference operations", () => {
       label: "SKU",
       fallback: "N/A",
     })
+  })
+})
+
+describe("flow-row / flow-stack operations", () => {
+  it("inserts a default two-stack flow-row from the palette", () => {
+    const updated = applyPlacementOperation(
+      makeDoc({}, []),
+      "section",
+      { kind: "insert-into-container", containerId: "body", containerType: "body", index: 0 },
+      { source: "palette", blockType: "flow-columns" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+    expect(body.childIds).toHaveLength(1)
+
+    const row = section.nodes[body.childIds[0]]
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(2)
+    expect(row.childIds.map((id) => section.nodes[id]?.type)).toEqual(["flow-stack", "flow-stack"])
+    expect(row.childIds.map((id) => {
+      const stack = section.nodes[id]
+      return stack.type === "flow-stack" ? stack.props.widthShare : undefined
+    })).toEqual([50, 50])
+  })
+
+  it("inserts a paragraph into an empty flow-stack", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: [] },
+    }, ["fr1"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "insert-into-container", containerId: "fs1", containerType: "flow-stack", index: 0 },
+      { source: "palette", blockType: "paragraph" },
+    )
+    const section = updated.document.sections[0]
+    const stack = section.nodes.fs1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(stack.type).toBe("flow-stack")
+    if (stack.type !== "flow-stack") return
+    expect(stack.childIds).toHaveLength(1)
+    expect(section.nodes[stack.childIds[0]]?.type).toBe("paragraph")
+  })
+
+  it("transfers a deleted flow-stack width share to the nearest sibling", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Right" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 60 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 40 }, childIds: ["p2"] },
+      p1,
+      p2,
+    }, ["fr1"])
+
+    const updated = deleteNode(doc, "fs1")
+    const section = updated.document.sections[0]
+    const row = section.nodes.fr1
+    const remaining = section.nodes.fs2
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toEqual(["fs2"])
+    expect(remaining.type).toBe("flow-stack")
+    if (remaining.type !== "flow-stack") return
+    expect(remaining.props.widthShare).toBe(100)
+    expect(section.nodes.fs1).toBeUndefined()
+    expect(section.nodes.p1).toBeUndefined()
+  })
+
+  it("removes an empty flow-row after deleting its last flow-stack", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Only" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1,
+    }, ["fr1"])
+
+    const updated = deleteNode(doc, "fs1")
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+    expect(body.childIds).toEqual([])
+    expect(section.nodes.fr1).toBeUndefined()
+    expect(section.nodes.fs1).toBeUndefined()
+    expect(section.nodes.p1).toBeUndefined()
   })
 })
 

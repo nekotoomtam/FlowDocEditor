@@ -46,6 +46,7 @@ remain true:
 | Body paragraph | Splits by measured line boundaries across any number of pages. `spacingBefore` applies only to the first fragment; `spacingAfter` applies only to the last fragment. Widow/orphan and `keepWithNext` rules are applied by pagination. | `paginator.test.ts`, `fragmentMeta.test.ts`, `widowOrphan.test.ts`, `keepWithNext.test.ts` |
 | Stack/column paragraph | Does not split independently today. The containing row is atomic; paragraph content is placed as one fragment inside the row's allocated height. If the row is taller than one content page, overflow is documented. | `rowStack.test.ts` |
 | Row/stack group | Moves as a whole row when it fits on the next page. Very tall rows stay at page content top and may overflow to force progress. | `rowStack.test.ts`, `resizeConvergence.test.ts` |
+| Flow-row / flow-stack group | Static pagination may split a `flow-row` into page slices. Each `flow-stack` slice keeps parent/child traceability and sibling stack heights align to the row slice. During flagged WYSIWYG text-engine editing, same-page `flow-stack` paragraph growth and shrink may use a local editor preview; once the active paragraph reaches a page boundary, the editor accelerates draft pagination for that `flow-stack` paragraph instead of extending the same-page preview past the content bottom. The accelerated path coalesces pending pagination instead of repeatedly resetting the timer, so key-repeat Backspace can shrink continuation slices while the key is still held. Re-entering an already split `flow-stack` paragraph keeps draft changes on the same responsive draft-pagination path. Full live cross-page caret/selection behavior inside `flow-stack` remains deferred. | `flowRowStack.test.ts`, `inlineEditHeightPreview.test.ts`, `wysiwygReflow.test.ts`, `wysiwygDraftPreview.test.ts` |
 | Table row with `allowBreak=false` | Moves as a whole row when possible. Too-tall rows may overflow according to the documented forced-progress policy. | `tablePagination.test.ts` |
 | Table row with `allowBreak=true` or omitted (default breakable) | A single-row group may split across pages. Cell paragraphs split by measured line boundaries through the table row split loop. Shorter cells render only once and are not duplicated on continuation pages. A split slice must advance at least one remaining cell content unit before consuming row height; if padding/repeated headers leave no line capacity even on a clean continuation page, the row may force one-line overflow progress. | `tablePagination.test.ts` |
 | Rowspan-linked table rows | Rowspan-linked rows stay together as an atomic group. If the group does not fit, it moves to the next page as a unit. Split-at-row-boundary inside a rowspan group is deferred. | `tablePagination.test.ts` |
@@ -98,7 +99,9 @@ Overflow is allowed only as an explicit fallback.
 
 - Split-at-row-boundary inside rowspan-linked table groups.
 - Colspan-specific split behavior and more complex table span interactions.
-- Independent row/column paragraph continuation across pages.
+- Independent row/column paragraph continuation across pages. The planned
+  parallel primitive for this is `flow-row` / `flow-stack`; see
+  `docs/FLOW_ROW_STACK_SPEC.md`.
 - List marker and indentation rules on continuation fragments.
 - Stable explicit fragment ids for future selection, annotations, comments, or
   collaborative cursors.

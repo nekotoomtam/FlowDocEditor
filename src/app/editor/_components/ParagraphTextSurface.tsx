@@ -26,6 +26,7 @@ import {
 import type { WysiwygTextSelection, WysiwygTextSessionDraftChange } from "./useWysiwygTextSession"
 import { classifyWysiwygTextReflow } from "./wysiwygReflow"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
+import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 
 interface Props {
   fragment: PageFragment
@@ -93,6 +94,17 @@ const EDIT_CHROME_X = 3
 const EDIT_CHROME_Y = 3
 const INLINE_EDIT_TEXT_COLOR = "#1e40af"
 const POINTER_SELECTION_DRAG_THRESHOLD_PX = 3
+
+export function focusElementWithoutScroll(
+  element: { focus: (options?: FocusOptions) => void } | null | undefined,
+): void {
+  if (!element) return
+  try {
+    element.focus({ preventScroll: true })
+  } catch {
+    element.focus()
+  }
+}
 
 export function shouldUseInlineEditSvgVisual(isEditing: boolean, isVisualFresh: boolean): boolean {
   return isEditing && isVisualFresh
@@ -182,6 +194,13 @@ export function shouldUseWysiwygTextEngineLayer(input: {
     input.canPlainTextEdit &&
     input.isVisualFresh &&
     (input.supportsLocalDraftLayout ?? true)
+}
+
+export function hasWysiwygTextDraftChange(
+  fullText: string | null,
+  draftText: string | null | undefined,
+): boolean {
+  return fullText != null && draftText != null && draftText !== fullText
 }
 
 function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
@@ -912,7 +931,7 @@ export function WysiwygTextLayer({
   }, [caretIndex, draftText, selection])
 
   useEffect(() => {
-    inputBridgeRef.current?.focus()
+    focusElementWithoutScroll(inputBridgeRef.current)
   }, [fragment.nodeId])
 
   const clearInputBridgeText = useCallback((input: HTMLElement | null = inputBridgeRef.current) => {
@@ -1293,7 +1312,7 @@ export function WysiwygTextLayer({
   const handlePointerDown = useCallback((event: React.PointerEvent<SVGGElement>) => {
     event.stopPropagation()
     event.preventDefault()
-    inputBridgeRef.current?.focus()
+    focusElementWithoutScroll(inputBridgeRef.current)
     const offset = resolveTextEnginePointerOffset(event)
     if (offset === null) return
     if (event.detail >= 2) {
@@ -1311,7 +1330,7 @@ export function WysiwygTextLayer({
   }, [applyPointerSelection, resolveTextEnginePointerOffset])
 
   const selectWordFromPointerEvent = useCallback((event: React.MouseEvent<SVGGElement>) => {
-    inputBridgeRef.current?.focus()
+    focusElementWithoutScroll(inputBridgeRef.current)
     pointerSelectionAnchorRef.current = null
     const offset = resolveTextEnginePointerOffset(event)
     const wordSelection = resolveWysiwygWordSelectionRange(draftStateRef.current.text, offset)
@@ -1542,6 +1561,7 @@ export function ParagraphTextSurface({
     adjustedInitialCaret,
   } = sliceContextRef.current
   const isTableCellParagraph = isParagraphInsideTableCell(doc, fragment.nodeId, fragment.parentNodeId)
+  const isFlowStackParagraph = isParagraphInsideFlowStack(doc, fragment.nodeId, fragment.parentNodeId)
   const isCurrentEditSlice = useCallback((el: HTMLTextAreaElement) => (
     el.dataset.inlineEditSliceKey === editSliceKey
   ), [editSliceKey])
@@ -1631,11 +1651,12 @@ export function ParagraphTextSurface({
     supportsLocalDraftLayout: supportsLocalDraftLayout || supportsPaginatedDraftLayout,
   })
   const textEngineDraftText = wysiwygTextDraftText ?? fullText
+  const textEngineDraftChanged = hasWysiwygTextDraftChange(fullText, textEngineDraftText)
   const textEngineCaretOffset = wysiwygTextCaretOffset ?? initialCaretIndex
   const textEngineDraftLayout = useMemo(() => {
-    if (!supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null
+    if (!textEngineDraftChanged || !supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null
     return buildWysiwygDraftParagraphLayout(fragment, paragraphNode, textEngineDraftText, textMeasurer)
-  }, [fragment, paragraphNode, supportsLocalDraftLayout, textEngineDraftText, textMeasurer, useWysiwygTextEngineLayer])
+  }, [fragment, paragraphNode, supportsLocalDraftLayout, textEngineDraftChanged, textEngineDraftText, textMeasurer, useWysiwygTextEngineLayer])
   const textEngineDraftLines = textEngineDraftLayout?.lines ?? null
   const textEngineReflowDecision = useMemo(() => (
     classifyWysiwygTextReflow({
@@ -1644,9 +1665,11 @@ export function ParagraphTextSurface({
       draftHeight: textEngineDraftLayout?.height ?? (supportsPaginatedDraftLayout ? fragment.height : null),
       pageContentBottom,
       supportsLocalDraftLayout: supportsLocalDraftLayout || supportsPaginatedDraftLayout,
+      supportsSamePageHeightPatch: isFlowStackParagraph,
     })
   ), [
     fragment,
+    isFlowStackParagraph,
     pageContentBottom,
     supportsLocalDraftLayout,
     supportsPaginatedDraftLayout,
@@ -1702,7 +1725,7 @@ export function ParagraphTextSurface({
     if (!el) return
     const caret = Math.min(Math.max(0, adjustedInitialCaret), el.value.length)
     requestAnimationFrame(() => {
-      el.focus()
+      focusElementWithoutScroll(el)
       el.setSelectionRange(caret, caret)
       el.scrollTop = 0
     })
@@ -1919,7 +1942,7 @@ export function ParagraphTextSurface({
               if (offset === null) return
               event.preventDefault()
               pointerSelectionAnchorRef.current = offset
-              event.currentTarget.focus()
+              focusElementWithoutScroll(event.currentTarget)
               event.currentTarget.setPointerCapture?.(event.pointerId)
               setTextareaPointerSelection(event.currentTarget, offset, offset)
             }}

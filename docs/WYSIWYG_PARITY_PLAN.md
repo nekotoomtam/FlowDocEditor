@@ -304,6 +304,12 @@ paragraphs.
 
 1. **Page-boundary typing smoothness** — manual review only; the automated
    smoke covers structure but not perceived rhythm.
+   - Deferred UX polish: live page-boundary preview currently mirrors settled
+     widow/orphan splitting, so when a draft crosses a page boundary it can pull
+     one already-visible line down to the continuation page. The preferred live
+     typing feel is to move only newly overflowing lines during the active
+     keystroke lane, then let settled pagination/export apply widow/orphan rules
+     after debounce, blur, or edit exit.
 2. **Real Windows Thai IME** — `WYSIWYG_STAGE4C_IME_MATRIX.md` rows for
    Windows Chrome and Edge with Thai IME still need human verification.
 3. **Table-cell text-engine eligibility** — closed by decision; needs an

@@ -326,6 +326,30 @@ export function PropertyPanel({ doc, registry, selectedNodeId, onUpdateProps, on
           </>
         )}
 
+        {/* ── Flow Row ── */}
+        {node.type === "flow-row" && (
+          <>
+            <div>
+              <label style={label}>Gap (pt)</label>
+              <input type="number" min={0}
+                value={node.props.gap ?? 0}
+                onChange={(e) => onUpdateProps(selectedNodeId, { gap: Math.max(0, Number(e.target.value) || 0) })}
+                style={input} />
+            </div>
+            <div>
+              <label style={label}>Min height (pt)</label>
+              <input type="number" min={0} step={1}
+                value={node.props.minHeight ?? 0}
+                onChange={(e) => {
+                  const height = Math.max(0, Number(e.target.value) || 0)
+                  onUpdateProps(selectedNodeId, { minHeight: height > 0 ? height : undefined })
+                }}
+                style={input} />
+              <span style={{ ...label, marginTop: 4, fontSize: 9 }}>0 = auto; first slice only</span>
+            </div>
+          </>
+        )}
+
         {/* ── Stack ── */}
         {node.type === "stack" && (
           <div>
@@ -335,6 +359,30 @@ export function PropertyPanel({ doc, registry, selectedNodeId, onUpdateProps, on
               style={{ ...input, background: "#f9fafb", color: "#9ca3af" }} />
             <span style={{ ...label, marginTop: 4, fontSize: 9 }}>resize via drag — coming soon</span>
           </div>
+        )}
+
+        {/* ── Flow Stack ── */}
+        {node.type === "flow-stack" && (
+          <>
+            <div>
+              <label style={label}>Width share (%)</label>
+              <input type="number" readOnly
+                value={Math.round(node.props.widthShare ?? 100)}
+                style={{ ...input, background: "#f9fafb", color: "#9ca3af" }} />
+              <span style={{ ...label, marginTop: 4, fontSize: 9 }}>resize needs sibling-safe controls</span>
+            </div>
+            <div>
+              <label style={label}>Min height (pt)</label>
+              <input type="number" min={0} step={1}
+                value={node.props.minHeight ?? 0}
+                onChange={(e) => {
+                  const height = Math.max(0, Number(e.target.value) || 0)
+                  onUpdateProps(selectedNodeId, { minHeight: height > 0 ? height : undefined })
+                }}
+                style={input} />
+              <span style={{ ...label, marginTop: 4, fontSize: 9 }}>0 = auto; visual floor only</span>
+            </div>
+          </>
         )}
 
         {/* ── Table ── */}

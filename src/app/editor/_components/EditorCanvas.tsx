@@ -22,6 +22,7 @@ import {
   splitWysiwygDraftVisualFragments,
   type WysiwygDraftVisualPreview,
 } from "./wysiwygDraftVisualPreview"
+import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,8 @@ const NODE_COLORS: Record<string, string> = {
   spacer:    "#d1d5db",
   row:       "#fed7aa",
   stack:     "#e9d5ff",
+  "flow-row":   "#bae6fd",
+  "flow-stack": "#ccfbf1",
   body:      "#bbf7d0",
   table:     "#fde68a",
   "table-cell": "#fef3c7",
@@ -352,7 +355,7 @@ function PageView({
   const W = page.width * scale
   const H = page.height * scale
   const hoverNodeId = drag?.preview?.hoverNodeId ?? null
-  const SELECTABLE = new Set(["paragraph", "spacer", "row", "table", "table-cell", "toc"])
+  const SELECTABLE = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "table", "table-cell", "toc"])
   const editFragmentRef = useRef<{ nodeId: string; pageKey: string; fragment: PageFragment } | null>(null)
 
   useEffect(() => {
@@ -513,7 +516,7 @@ function PageView({
           ? editFragmentRef.current?.fragment ?? visualDisplayFragment
           : visualDisplayFragment
         const docNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === f.nodeId)
-        const isEmpty = f.nodeType === "stack" && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
+        const isEmpty = (f.nodeType === "stack" || f.nodeType === "flow-stack") && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
         // visual override ระหว่าง resize
         let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = displayFragment.height
         if (resizeDrag && f.nodeType === "stack") {
@@ -836,6 +839,7 @@ export function buildWysiwygDraftVisualPreview(input: {
   if (!paragraph || !isPlainTextParagraph(paragraph)) return null
   if (isTableCellId(input.doc, input.nodeId)) return null
   if (isParagraphInsideRowStack(input.doc, input.nodeId)) return null
+  if (isParagraphInsideFlowStack(input.doc, input.nodeId)) return null
 
   for (const section of input.paginated.sections) {
     const pageIndex = section.pages.findIndex((page) =>
@@ -856,6 +860,7 @@ export function buildWysiwygDraftVisualPreview(input: {
     if (!sourceFragment) return null
     if (isTableCellId(input.doc, sourceFragment.parentNodeId)) return null
     if (isStackInsideRow(input.doc, sourceFragment.parentNodeId)) return null
+    if (isParagraphInsideFlowStack(input.doc, input.nodeId, sourceFragment.parentNodeId)) return null
 
     const draftLayout = buildWysiwygDraftParagraphLayout(
       sourceFragment,

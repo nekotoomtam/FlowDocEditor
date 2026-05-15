@@ -6,6 +6,7 @@ import type {
   PlacementError,
   PlacementErrorCode,
   PlacementOperation,
+  PlacementContainerType,
   PlacementResult,
   RawPlacementIntent,
   ValidPlacementIntent,
@@ -46,7 +47,7 @@ function findLocation(document: DocumentNode, nodeId: string): NodeLocation | nu
     // หา parent
     for (const [, candidate] of Object.entries(section.nodes)) {
       if (
-        (candidate.type === "body" || candidate.type === "stack" || candidate.type === "row") &&
+        (candidate.type === "body" || candidate.type === "stack" || candidate.type === "row" || candidate.type === "flow-row" || candidate.type === "flow-stack") &&
         candidate.childIds.includes(nodeId)
       ) {
         const index = candidate.childIds.indexOf(nodeId)
@@ -82,7 +83,7 @@ function isNestedInRow(document: DocumentNode, nodeId: string): boolean {
   for (const section of document.document.sections) {
     const findParent = (childId: string): string | null => {
       for (const [id, node] of Object.entries(section.nodes)) {
-        if ((node.type === "body" || node.type === "stack" || node.type === "row") && node.childIds.includes(childId)) {
+        if ((node.type === "body" || node.type === "stack" || node.type === "row" || node.type === "flow-row" || node.type === "flow-stack") && node.childIds.includes(childId)) {
           return id
         }
       }
@@ -105,7 +106,7 @@ function findDirectRowAnchor(document: DocumentNode, nodeId: string): { rowId: s
   for (const section of document.document.sections) {
     const findParent = (childId: string): { parentId: string; parent: LayoutNode } | null => {
       for (const [id, node] of Object.entries(section.nodes)) {
-        if ((node.type === "body" || node.type === "stack" || node.type === "row") && node.childIds.includes(childId)) {
+        if ((node.type === "body" || node.type === "stack" || node.type === "row" || node.type === "flow-row" || node.type === "flow-stack") && node.childIds.includes(childId)) {
           return { parentId: id, parent: node }
         }
       }
@@ -175,6 +176,7 @@ function getSourceBlockType(document: DocumentNode, source?: DragSource | null):
   if (source.source === "field") return null
   if (source.source === "palette") {
     if (source.blockType === "columns") return "row"
+    if (source.blockType === "flow-columns") return "flow-row"
     return source.blockType
   }
   const location = findLocation(document, source.nodeId)
@@ -182,7 +184,8 @@ function getSourceBlockType(document: DocumentNode, source?: DragSource | null):
 }
 
 function isStructuralStackSource(document: DocumentNode, source?: DragSource | null): boolean {
-  return getSourceBlockType(document, source) === "stack"
+  const sourceType = getSourceBlockType(document, source)
+  return sourceType === "stack" || sourceType === "flow-stack"
 }
 
 function getPaletteBlockType(source?: DragSource | null): PaletteBlockType | null {
@@ -206,7 +209,13 @@ function getPaletteStackInsertCount(source?: DragSource | null): number | null {
 }
 
 function isRowLikeSource(document: DocumentNode, source?: DragSource | null): boolean {
-  return getSourceBlockType(document, source) === "row"
+  const sourceType = getSourceBlockType(document, source)
+  return sourceType === "row" || sourceType === "flow-row"
+}
+
+function isFlowStackContentSource(document: DocumentNode, source?: DragSource | null): boolean {
+  const sourceType = getSourceBlockType(document, source)
+  return sourceType === "paragraph" || sourceType === "spacer"
 }
 
 // ─── Subtree Check ────────────────────────────────────────────────────────────
@@ -290,11 +299,14 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
 
   // center → insert into container
   if (zone === "center") {
-    if (location.node.type !== "stack" && location.node.type !== "body") {
-      return err(rawIntent, "invalid-zone", "Center placement only allowed on body or stack.")
+    if (location.node.type !== "stack" && location.node.type !== "body" && location.node.type !== "flow-stack") {
+      return err(rawIntent, "invalid-zone", "Center placement only allowed on body, stack, or flow-stack.")
     }
-    if (isRowLikeSource(document, source) && location.node.type === "stack") {
+    if (isRowLikeSource(document, source) && (location.node.type === "stack" || location.node.type === "flow-stack")) {
       return err(rawIntent, "invalid-parent", "Cannot create columns inside a column.")
+    }
+    if (location.node.type === "flow-stack" && !isFlowStackContentSource(document, source)) {
+      return err(rawIntent, "invalid-parent", "Flow stack can only contain paragraph or spacer nodes.")
     }
     const subtreeErr = rejectSubtree(document, rawIntent, sourceNodeId, target.nodeId)
     if (subtreeErr != null) return subtreeErr
@@ -304,7 +316,7 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     return ok(intent, {
       kind: "insert-into-container",
       containerId: target.nodeId,
-      containerType: location.node.type as "body" | "stack",
+      containerType: location.node.type as PlacementContainerType,
       index: node.childIds.length,
     })
   }
@@ -312,11 +324,14 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
   // top/bottom → vertical placement
   if (zone === "top" || zone === "bottom") {
     if (location.parent == null) return err(rawIntent, "invalid-parent", "Node has no parent.")
-    if (location.parent.type !== "body" && location.parent.type !== "stack") {
-      return err(rawIntent, "invalid-parent", "Vertical placement requires body or stack parent.")
+    if (location.parent.type !== "body" && location.parent.type !== "stack" && location.parent.type !== "flow-stack") {
+      return err(rawIntent, "invalid-parent", "Vertical placement requires body, stack, or flow-stack parent.")
     }
-    if (isRowLikeSource(document, source) && location.parent.type === "stack") {
+    if (isRowLikeSource(document, source) && (location.parent.type === "stack" || location.parent.type === "flow-stack")) {
       return err(rawIntent, "invalid-parent", "Row-like source cannot be inserted into a stack.")
+    }
+    if (location.parent.type === "flow-stack" && !isFlowStackContentSource(document, source)) {
+      return err(rawIntent, "invalid-parent", "Flow stack can only contain paragraph or spacer nodes.")
     }
     if (paletteBlockType === "columns" && location.parent.type === "stack" && isNestedInRow(document, location.parent.id)) {
       return err(rawIntent, "invalid-parent", "Columns cannot be inserted into a stack already in a row.")
@@ -329,7 +344,7 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     return ok(intent, {
       kind: zone === "top" ? "insert-before" : "insert-after",
       parentId: location.parent.id,
-      parentType: location.parent.type as "body" | "stack",
+      parentType: location.parent.type as PlacementContainerType,
       index: zone === "top" ? location.index : location.index + 1,
       anchorNodeId: target.nodeId,
     })
@@ -356,6 +371,10 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
           index: zone === "left" ? stackIndex : stackIndex + 1,
           count: stackInsertCount,
         })
+      }
+
+      if (isRowLikeSource(document, source)) {
+        return err(rawIntent, "invalid-zone", "Row-like source cannot expand an existing row.")
       }
 
       return createRowExpansion(

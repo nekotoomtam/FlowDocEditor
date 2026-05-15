@@ -30,6 +30,18 @@ export const RowPropsSchema = z.object({
   minHeight: z.number().positive().optional(),
 })
 
+export const FlowStackPropsSchema = z.object({
+  // widthShare คือ % ของ parent flow-row เช่น 50 = 50%
+  // ต้องมีเมื่ออยู่ใน flow-row — validate ตอน assertDocument
+  widthShare: z.number().positive().max(100).optional(),
+  minHeight: z.number().positive().optional(),
+})
+
+export const FlowRowPropsSchema = z.object({
+  gap: z.number().nonnegative().optional(),
+  minHeight: z.number().positive().optional(),
+})
+
 export const ParagraphPropsSchema = z.object({
   align: TextAlignSchema,
   fontSize: UnitValueSchema,
@@ -73,6 +85,20 @@ export const RowNodeSchema = z.object({
   childIds: z.array(z.string().min(1)),
 })
 
+export const FlowStackNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("flow-stack"),
+  props: FlowStackPropsSchema,
+  childIds: z.array(z.string().min(1)),
+})
+
+export const FlowRowNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("flow-row"),
+  props: FlowRowPropsSchema,
+  childIds: z.array(z.string().min(1)),
+})
+
 export const ParagraphNodeSchema = z.object({
   id: z.string().min(1),
   type: z.literal("paragraph"),
@@ -103,6 +129,8 @@ export const LayoutNodeSchema = z.discriminatedUnion("type", [
   BodyNodeSchema,
   StackNodeSchema,
   RowNodeSchema,
+  FlowStackNodeSchema,
+  FlowRowNodeSchema,
   ParagraphNodeSchema,
   SpacerNodeSchema,
   TableNodeSchema,
@@ -112,12 +140,16 @@ export const LayoutNodeSchema = z.discriminatedUnion("type", [
 export type BodyProps = z.infer<typeof BodyPropsSchema>
 export type StackProps = z.infer<typeof StackPropsSchema>
 export type RowProps = z.infer<typeof RowPropsSchema>
+export type FlowStackProps = z.infer<typeof FlowStackPropsSchema>
+export type FlowRowProps = z.infer<typeof FlowRowPropsSchema>
 export type ParagraphProps = z.infer<typeof ParagraphPropsSchema>
 export type SpacerProps = z.infer<typeof SpacerPropsSchema>
 
 export type BodyNode = z.infer<typeof BodyNodeSchema>
 export type StackNode = z.infer<typeof StackNodeSchema>
 export type RowNode = z.infer<typeof RowNodeSchema>
+export type FlowStackNode = z.infer<typeof FlowStackNodeSchema>
+export type FlowRowNode = z.infer<typeof FlowRowNodeSchema>
 export type ParagraphNode = z.infer<typeof ParagraphNodeSchema>
 export type SpacerNode = z.infer<typeof SpacerNodeSchema>
 export type TocProps = z.infer<typeof TocPropsSchema>

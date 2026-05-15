@@ -5,7 +5,7 @@ import {
   TableCellNodeSchema,
   TableRowNodeSchema,
 } from "../schema"
-import type { DocumentNode, DocumentSection, LayoutNode, RowNode, TableCellNode, TableNode } from "../schema"
+import type { DocumentNode, DocumentSection, FlowRowNode, LayoutNode, RowNode, TableCellNode, TableNode } from "../schema"
 
 // ─── Error Types ──────────────────────────────────────────────────────────────
 
@@ -64,6 +64,21 @@ function assertWidthShareSum(section: DocumentSection, row: RowNode, path: strin
 
   if (total !== 100) {
     fail(`${path}.childIds`, `row stack widths must total exactly 100.00, got ${total.toFixed(2)}`)
+  }
+}
+
+function assertFlowWidthShareSum(section: DocumentSection, row: FlowRowNode, path: string): void {
+  const total = Number(
+    row.childIds
+      .reduce((sum, childId) => {
+        const child = section.nodes[childId]
+        return sum + (child?.type === "flow-stack" ? child.props.widthShare ?? 0 : 0)
+      }, 0)
+      .toFixed(2),
+  )
+
+  if (total !== 100) {
+    fail(`${path}.childIds`, `flow-row stack widths must total exactly 100.00, got ${total.toFixed(2)}`)
   }
 }
 
@@ -273,8 +288,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
 
       // Tree law enforcement
       if (node.type === "body") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "table" && child.type !== "toc") {
-          fail(childPath, `body child must be paragraph, row, spacer, table, or toc — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "flow-row" && child.type !== "spacer" && child.type !== "table" && child.type !== "toc") {
+          fail(childPath, `body child must be paragraph, row, flow-row, spacer, table, or toc — got "${child.type}"`)
         }
       }
 
@@ -294,12 +309,29 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
         }
       }
 
+      if (node.type === "flow-row") {
+        if (child.type !== "flow-stack") {
+          fail(childPath, `flow-row child must be flow-stack — got "${child.type}"`)
+        }
+        if (child.type === "flow-stack" && child.props.widthShare == null) {
+          fail(`${path}.nodes.${childId}.props.widthShare`, `flow-stack inside flow-row must have widthShare`)
+        }
+      }
+
+      if (node.type === "flow-stack") {
+        if (child.type !== "paragraph" && child.type !== "spacer") {
+          fail(childPath, `flow-stack child must be paragraph or spacer — got "${child.type}"`)
+        }
+      }
+
       visit(childId, `${path}.nodes.${childId}`)
     })
 
     // ตรวจ widthShare sum หลัง visit children ครบ
     if (node.type === "row") {
       assertWidthShareSum(section, node, nodePath)
+    } else if (node.type === "flow-row") {
+      assertFlowWidthShareSum(section, node, nodePath)
     }
 
     active.delete(nodeId)

@@ -45,6 +45,25 @@ function isParagraphInsideTableCell(
   return false
 }
 
+export function isParagraphInsideFlowStack(
+  doc: DocumentNode,
+  nodeId: string,
+  parentNodeId?: string | null,
+): boolean {
+  if (parentNodeId) {
+    for (const section of doc.document.sections) {
+      if (section.nodes[parentNodeId]?.type === "flow-stack") return true
+    }
+  }
+
+  for (const section of doc.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      if (node.type === "flow-stack" && node.childIds.includes(nodeId)) return true
+    }
+  }
+  return false
+}
+
 export function findWysiwygTextEngineFragment(
   paginated: PaginatedDocument,
   nodeId: string,

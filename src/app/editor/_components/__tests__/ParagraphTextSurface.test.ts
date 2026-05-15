@@ -6,6 +6,7 @@ import {
   buildContinuationBackspaceInput,
   buildInlineEditSliceKey,
   buildSplitEditInput,
+  focusElementWithoutScroll,
   ParagraphTextSurface,
   buildWysiwygDraftParagraphLayout,
   buildWysiwygDraftParagraphLines,
@@ -14,6 +15,7 @@ import {
   inlineEditTextareaCaretColor,
   inlineEditTextareaOutline,
   inlineEditTextareaTextColor,
+  hasWysiwygTextDraftChange,
   resolveWysiwygLiveTextEcho,
   resolveWysiwygTextPointerOffsetFromFragmentTargets,
   resolveWysiwygWordSelectionRange,
@@ -197,6 +199,41 @@ const fixedMeasurer: TextMeasurer = {
   measureText: (text) => ({ width: text.length * 10 }),
   measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => fontSize * lineHeightRatio,
 }
+
+describe("ParagraphTextSurface focus behavior", () => {
+  it("focuses with preventScroll so edit entry does not force the viewport to jump", () => {
+    const calls: Array<FocusOptions | undefined> = []
+
+    focusElementWithoutScroll({
+      focus: (options?: FocusOptions) => {
+        calls.push(options)
+      },
+    })
+
+    expect(calls).toEqual([{ preventScroll: true }])
+  })
+
+  it("falls back to plain focus when focus options are unsupported", () => {
+    const calls: Array<FocusOptions | "plain"> = []
+
+    focusElementWithoutScroll({
+      focus: (options?: FocusOptions) => {
+        if (!options) {
+          calls.push("plain")
+          return
+        }
+        calls.push(options)
+        throw new Error("focus options unsupported")
+      },
+    })
+
+    expect(calls).toEqual([{ preventScroll: true }, "plain"])
+  })
+
+  it("ignores a missing focus target", () => {
+    expect(() => focusElementWithoutScroll(null)).not.toThrow()
+  })
+})
 
 describe("ParagraphTextSurface continuation editing", () => {
   it("uses the full text and absolute caret for a first paragraph fragment", () => {
@@ -535,6 +572,13 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       isVisualFresh: true,
       supportsLocalDraftLayout: false,
     })).toBe(false)
+  })
+
+  it("does not treat edit enter as a draft layout change", () => {
+    expect(hasWysiwygTextDraftChange("same text", "same text")).toBe(false)
+    expect(hasWysiwygTextDraftChange("same text", "same text!")).toBe(true)
+    expect(hasWysiwygTextDraftChange(null, "draft")).toBe(false)
+    expect(hasWysiwygTextDraftChange("same text", null)).toBe(false)
   })
 
   it("resolves inserted text for a deferred live echo", () => {

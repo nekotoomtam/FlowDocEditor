@@ -6,6 +6,7 @@ import {
   createRowNode,
   createRowSubtree,
   createColumnsSubtree,
+  createFlowColumnsSubtree,
   createStackNode,
   getEqualWidthShares,
   DEFAULT_STACK_MIN_HEIGHT,
@@ -34,7 +35,7 @@ export interface FieldRefInlineChanges {
 function findParentInfo(nodes: Nodes, childId: string): ParentInfo | null {
   for (const [id, node] of Object.entries(nodes)) {
     if (
-      (node.type === "body" || node.type === "stack" || node.type === "row") &&
+      (node.type === "body" || node.type === "stack" || node.type === "row" || node.type === "flow-row" || node.type === "flow-stack") &&
       node.childIds.includes(childId)
     ) {
       return { parentId: id, index: node.childIds.indexOf(childId) }
@@ -152,6 +153,32 @@ function transferDeletedStackWidth(nodes: Nodes, rowId: string, deletedStackId: 
   }
 }
 
+function transferDeletedFlowStackWidth(nodes: Nodes, rowId: string, deletedStackId: string, deletedIndex: number): Nodes {
+  const row = nodes[rowId]
+  if (row?.type !== "flow-row" || row.childIds.length === 0) return nodes
+
+  const deletedStack = nodes[deletedStackId]
+  const deletedShare = deletedStack?.type === "flow-stack" ? deletedStack.props.widthShare ?? 0 : 0
+  if (deletedShare <= 0) return nodes
+
+  const receiverId = deletedIndex > 0
+    ? row.childIds[deletedIndex - 1]
+    : row.childIds[0]
+  const receiver = nodes[receiverId]
+  if (receiver?.type !== "flow-stack") return nodes
+
+  return {
+    ...nodes,
+    [receiverId]: {
+      ...receiver,
+      props: {
+        ...receiver.props,
+        widthShare: Math.round(((receiver.props.widthShare ?? 0) + deletedShare) * 100) / 100,
+      },
+    } as LayoutNode,
+  }
+}
+
 // ─── Removal & Cleanup ─────────────────────────────────────────────────────────
 
 function removeFromParent(nodes: Nodes, nodeId: string): { nodes: Nodes; parentInfo: ParentInfo | null } {
@@ -186,6 +213,24 @@ function cleanupAfterRemoval(nodes: Nodes, removedFromId: string): Nodes {
     return nodes
   }
 
+  if (parent.type === "flow-stack") {
+    return nodes
+  }
+
+  if (parent.type === "flow-row") {
+    const remaining = getChildIds(nodes, removedFromId)
+    const parentInfo = findParentInfo(nodes, removedFromId)
+    if (parentInfo == null) return nodes
+
+    if (remaining.length === 0) {
+      let result = setChildIds(nodes, parentInfo.parentId, getChildIds(nodes, parentInfo.parentId).filter((id) => id !== removedFromId))
+      delete result[removedFromId]
+      return cleanupAfterRemoval(result, parentInfo.parentId)
+    }
+
+    return nodes
+  }
+
   return nodes
 }
 
@@ -203,6 +248,10 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
     }
     if (source.blockType === "columns") {
       const { row, nodes } = createColumnsSubtree(2)
+      return { insertId: row.id, newNodes: nodes }
+    }
+    if (source.blockType === "flow-columns") {
+      const { row, nodes } = createFlowColumnsSubtree(2)
       return { insertId: row.id, newNodes: nodes }
     }
     if (source.blockType === "table") {
@@ -824,6 +873,15 @@ export function deleteNode(doc: DocumentNode, nodeId: string): DocumentNode {
       if (parent?.type === "row") {
         nodes = parent.childIds.length > 0
           ? transferDeletedStackWidth(nodes, parentInfo.parentId, nodeId, parentInfo.index)
+          : cleanupAfterRemoval(nodes, parentInfo.parentId)
+      }
+    }
+
+    if (node?.type === "flow-stack") {
+      const parent = nodes[parentInfo.parentId]
+      if (parent?.type === "flow-row") {
+        nodes = parent.childIds.length > 0
+          ? transferDeletedFlowStackWidth(nodes, parentInfo.parentId, nodeId, parentInfo.index)
           : cleanupAfterRemoval(nodes, parentInfo.parentId)
       }
     }

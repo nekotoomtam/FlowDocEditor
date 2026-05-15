@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 import { defaultTextMeasurer } from "@/layout"
 import type { PaginatedDocument, PageFragment, ParagraphRenderProps } from "@/pagination"
 import type { DocumentNode } from "@/schema"
-import { EditorCanvas } from "../EditorCanvas"
+import { buildWysiwygDraftVisualPreview, EditorCanvas } from "../EditorCanvas"
 
 const renderProps: ParagraphRenderProps = {
   align: "left",
@@ -97,6 +97,37 @@ function makeDoc(): DocumentNode {
   } as unknown as DocumentNode
 }
 
+function makeFlowDoc(): DocumentNode {
+  const body = paragraphNode("body-p", "Body text")
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 36, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 36, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["fr1"] },
+          fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+          fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: [body.id] },
+          [body.id]: body,
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
 function makePaginated(): PaginatedDocument {
   return {
     sections: [{
@@ -115,11 +146,33 @@ function makePaginated(): PaginatedDocument {
   }
 }
 
-function renderCanvas(): string {
+function makeFlowPaginated(): PaginatedDocument {
+  return {
+    sections: [{
+      sectionId: "section",
+      pages: [{
+        index: 0,
+        width: 300,
+        height: 400,
+        contentBox: { x: 36, y: 72, width: 228, height: 256 },
+        fragments: [
+          { nodeId: "fr1", nodeType: "flow-row", pageIndex: 0, x: 36, y: 72, width: 228, height: 40, fragmentIndex: 0 },
+          { nodeId: "fs1", nodeType: "flow-stack", parentNodeId: "fr1", pageIndex: 0, x: 36, y: 72, width: 228, height: 40, fragmentIndex: 0 },
+          textFragment("body-p", "Body text", 72),
+        ],
+        headerFragments: [],
+        footerFragments: [],
+      }],
+    }],
+    tocEntries: [],
+  }
+}
+
+function renderCanvas(paginated: PaginatedDocument = makePaginated(), doc: DocumentNode = makeDoc()): string {
   const noop = () => undefined
   return renderToStaticMarkup(createElement(EditorCanvas, {
-    paginated: makePaginated(),
-    doc: makeDoc(),
+    paginated,
+    doc,
     drag: null,
     resizeDrag: null,
     minHeightDrag: null,
@@ -173,5 +226,29 @@ describe("EditorCanvas header/footer zones", () => {
     expect(markup).toContain("Header Preview")
     expect(markup).toContain("หน้า 7")
     expect(markup).toContain("pointer-events:none")
+  })
+})
+
+describe("EditorCanvas flow-row / flow-stack static preview", () => {
+  it("renders flow-row and flow-stack fragments as selectable static fragments", () => {
+    const markup = renderCanvas(makeFlowPaginated(), makeFlowDoc())
+
+    expect(markup).toContain("data-node-type=\"flow-row\"")
+    expect(markup).toContain("data-node-type=\"flow-stack\"")
+    expect(markup).toContain("flow-row")
+    expect(markup).toContain("flow-stack")
+  })
+
+  it("does not synthesize body-style split previews for flow-stack paragraphs", () => {
+    const preview = buildWysiwygDraftVisualPreview({
+      paginated: makeFlowPaginated(),
+      doc: makeFlowDoc(),
+      nodeId: "body-p",
+      draftText: `${"Flow stack text ".repeat(80)}`,
+      caretOffset: null,
+      textMeasurer: defaultTextMeasurer,
+    })
+
+    expect(preview).toBeNull()
   })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import type { PaginatedDocument, PageFragment } from "@/pagination"
-import { isWysiwygTextEngineFragmentEligible } from "../wysiwygTextEligibility"
+import { isParagraphInsideFlowStack, isWysiwygTextEngineFragmentEligible } from "../wysiwygTextEligibility"
 
 const paragraph: ParagraphNode = {
   id: "p1",
@@ -118,5 +118,20 @@ describe("isWysiwygTextEngineFragmentEligible", () => {
       nodeId: "p1",
       pageIndex: 0,
     })).toBe(false)
+  })
+})
+
+describe("isParagraphInsideFlowStack", () => {
+  it("detects paragraph ownership from a flow-stack parent id or authored children", () => {
+    const doc = makeDoc({
+      body: { id: "body", type: "body", props: {}, childIds: ["fr1"] },
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1: paragraph,
+    })
+
+    expect(isParagraphInsideFlowStack(doc, "p1", "fs1")).toBe(true)
+    expect(isParagraphInsideFlowStack(doc, "p1")).toBe(true)
+    expect(isParagraphInsideFlowStack(makeDoc(), "p1")).toBe(false)
   })
 })

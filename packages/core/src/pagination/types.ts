@@ -74,7 +74,7 @@ export interface ParagraphRenderProps {
 
 export interface PageFragment {
   nodeId: string
-  nodeType: "paragraph" | "spacer" | "stack" | "table-cell" | "row" | "body" | "table" | "toc"
+  nodeType: "paragraph" | "spacer" | "stack" | "flow-stack" | "table-cell" | "row" | "flow-row" | "body" | "table" | "toc"
   parentNodeId?: string
   pageIndex: number
   x: number
@@ -94,7 +94,7 @@ export interface PageFragment {
   warnings?: PageFragmentWarning[]
 }
 
-export type PageFragmentWarningCode = "forced-table-split-overflow"
+export type PageFragmentWarningCode = "forced-table-split-overflow" | "forced-flow-row-split-overflow"
 
 export interface PageFragmentWarning {
   code: PageFragmentWarningCode

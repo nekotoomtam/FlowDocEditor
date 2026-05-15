@@ -159,11 +159,11 @@ export function getRowGeometry(
 function isRowLikeDragSource(document: DocumentNode, source?: DragSource | null): boolean {
   if (source == null) return false
   if (source.source === "field") return false
-  if (source.source === "palette") return source.blockType === "row" || source.blockType === "columns"
+  if (source.source === "palette") return source.blockType === "row" || source.blockType === "columns" || source.blockType === "flow-columns"
 
   for (const section of document.document.sections) {
     const node = section.nodes[source.nodeId]
-    if (node != null) return node.type === "row"
+    if (node != null) return node.type === "row" || node.type === "flow-row"
   }
   return false
 }
@@ -312,7 +312,7 @@ export function detectPlacementTarget(input: DetectTargetInput): { zone: Placeme
       }
     }
 
-    if (nodeType === "stack" || nodeType === "body") {
+    if (nodeType === "stack" || nodeType === "flow-stack" || nodeType === "body") {
       // container รับ center ได้ → insert into container
     } else {
       // non-container: แยก top/bottom ตาม Y position

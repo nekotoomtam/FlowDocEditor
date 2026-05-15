@@ -3,6 +3,10 @@ import type {
   BodyProps,
   DocumentNode,
   DocumentSection,
+  FlowRowNode,
+  FlowRowProps,
+  FlowStackNode,
+  FlowStackProps,
   LayoutNode,
   PageSettings,
   ParagraphNode,
@@ -142,6 +146,24 @@ export function createRowNode(childIds: string[] = [], props: Partial<RowProps> 
   }
 }
 
+export function createFlowStackNode(childIds: string[] = [], props: Partial<FlowStackProps> = {}): FlowStackNode {
+  return {
+    id: createId("flow-stack"),
+    type: "flow-stack",
+    props: { minHeight: DEFAULT_STACK_MIN_HEIGHT, ...props },
+    childIds,
+  }
+}
+
+export function createFlowRowNode(childIds: string[] = [], props: Partial<FlowRowProps> = {}): FlowRowNode {
+  return {
+    id: createId("flow-row"),
+    type: "flow-row",
+    props,
+    childIds,
+  }
+}
+
 // ─── Subtree Factories ────────────────────────────────────────────────────────
 
 // สร้าง row ที่มี stack เดียว (canonical empty row)
@@ -171,6 +193,23 @@ export function createColumnsSubtree(columnCount = 2, props: Partial<RowProps> =
     createStackNode([], { widthShare, minHeight: DEFAULT_STACK_MIN_HEIGHT }),
   )
   const row = createRowNode(stacks.map((s) => s.id), props)
+  const nodes: Record<string, LayoutNode> = { [row.id]: row }
+  stacks.forEach((s) => { nodes[s.id] = s })
+  return { row, stacks, nodes }
+}
+
+// สร้าง flow-row ที่มี N flow-stacks แบ่ง width เท่าๆ กัน
+export function createFlowColumnsSubtree(columnCount = 2, props: Partial<FlowRowProps> = {}): {
+  row: FlowRowNode
+  stacks: FlowStackNode[]
+  nodes: Record<string, LayoutNode>
+} {
+  const safeCount = Math.max(1, Math.floor(columnCount))
+  const shares = getEqualWidthShares(safeCount)
+  const stacks = shares.map((widthShare) =>
+    createFlowStackNode([], { widthShare, minHeight: DEFAULT_STACK_MIN_HEIGHT }),
+  )
+  const row = createFlowRowNode(stacks.map((s) => s.id), props)
   const nodes: Record<string, LayoutNode> = { [row.id]: row }
   stacks.forEach((s) => { nodes[s.id] = s })
   return { row, stacks, nodes }

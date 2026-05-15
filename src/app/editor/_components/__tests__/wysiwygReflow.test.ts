@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 import type { PageFragment, PaginatedLine } from "@/pagination"
-import { classifyWysiwygTextReflow } from "../wysiwygReflow"
+import {
+  classifyWysiwygTextReflow,
+  resolveWysiwygDraftPaginationSource,
+  resolveWysiwygDraftPaginationDelayMs,
+  shouldCoalesceWysiwygDraftPaginationRequest,
+  shouldScheduleResponsiveFlowStackDraftPagination,
+  shouldUseWysiwygDraftPaginationFrame,
+} from "../wysiwygReflow"
 
 function line(text: string, y = 20): PaginatedLine {
   return { text, x: 10, y, width: text.length * 5, height: 12 }
@@ -54,6 +61,40 @@ describe("classifyWysiwygTextReflow", () => {
     })
   })
 
+  it("patches same-page height changes only when the caller opts in", () => {
+    expect(classifyWysiwygTextReflow({
+      fragment: fragment({ height: 12 }),
+      draftLines: [line("Hello")],
+      draftHeight: 16,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+      supportsSamePageHeightPatch: true,
+    })).toMatchObject({
+      kind: "hard-local",
+      reason: "height-changed",
+      shouldPatchActiveLines: true,
+      shouldPatchSamePageHeight: true,
+      shouldQueueSettledPagination: true,
+    })
+  })
+
+  it("patches same-page line count changes when flow-stack preview opts in", () => {
+    expect(classifyWysiwygTextReflow({
+      fragment: fragment(),
+      draftLines: [line("Hello"), line("world", 32)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+      supportsSamePageHeightPatch: true,
+    })).toMatchObject({
+      kind: "hard-local",
+      reason: "line-count-changed",
+      shouldPatchActiveLines: true,
+      shouldPatchSamePageHeight: true,
+      shouldQueueSettledPagination: true,
+    })
+  })
+
   it("classifies growth past the page content bottom as hard-page-boundary", () => {
     expect(classifyWysiwygTextReflow({
       fragment: fragment({ y: 180 }),
@@ -81,5 +122,210 @@ describe("classifyWysiwygTextReflow", () => {
       shouldPatchActiveLines: false,
       shouldPatchSamePageHeight: false,
     })
+  })
+})
+
+describe("resolveWysiwygDraftPaginationDelayMs", () => {
+  const defaultDelayMs = 450
+  const flowStackBoundaryDelayMs = 16
+
+  it("uses the short delay for flow-stack page-boundary handoff", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(resolveWysiwygDraftPaginationDelayMs({
+      reflow,
+      isFlowStackParagraph: true,
+      defaultDelayMs,
+      flowStackBoundaryDelayMs,
+    })).toBe(flowStackBoundaryDelayMs)
+  })
+
+  it("keeps the normal settling delay for non-flow-stack page-boundary edits", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(resolveWysiwygDraftPaginationDelayMs({
+      reflow,
+      isFlowStackParagraph: false,
+      defaultDelayMs,
+      flowStackBoundaryDelayMs,
+    })).toBe(defaultDelayMs)
+  })
+
+  it("keeps active flow-stack draft pagination responsive after the first split", () => {
+    expect(resolveWysiwygDraftPaginationDelayMs({
+      draftPaginationActive: true,
+      isFlowStackParagraph: true,
+      defaultDelayMs,
+      flowStackBoundaryDelayMs,
+    })).toBe(flowStackBoundaryDelayMs)
+  })
+
+  it("keeps same-page flow-stack reflow on the normal settling delay", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment(),
+      draftLines: [line("Hello"), line("world", 32)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+      supportsSamePageHeightPatch: true,
+    })
+
+    expect(resolveWysiwygDraftPaginationDelayMs({
+      reflow,
+      isFlowStackParagraph: true,
+      defaultDelayMs,
+      flowStackBoundaryDelayMs,
+    })).toBe(defaultDelayMs)
+  })
+})
+
+describe("shouldCoalesceWysiwygDraftPaginationRequest", () => {
+  it("keeps a pending responsive request so key-repeat deletion cannot starve pagination", () => {
+    expect(shouldCoalesceWysiwygDraftPaginationRequest({
+      pendingDelayMs: 16,
+      nextDelayMs: 16,
+      responsiveDelayMs: 16,
+    })).toBe(true)
+  })
+
+  it("replaces a normal pending debounce when a responsive boundary request arrives", () => {
+    expect(shouldCoalesceWysiwygDraftPaginationRequest({
+      pendingDelayMs: 450,
+      nextDelayMs: 16,
+      responsiveDelayMs: 16,
+    })).toBe(false)
+  })
+
+  it("keeps normal draft pagination debounced", () => {
+    expect(shouldCoalesceWysiwygDraftPaginationRequest({
+      pendingDelayMs: 450,
+      nextDelayMs: 450,
+      responsiveDelayMs: 16,
+    })).toBe(false)
+  })
+})
+
+describe("shouldUseWysiwygDraftPaginationFrame", () => {
+  it("uses a frame pump for responsive flow-stack pagination when available", () => {
+    expect(shouldUseWysiwygDraftPaginationFrame({
+      nextDelayMs: 16,
+      responsiveDelayMs: 16,
+      canUseAnimationFrame: true,
+    })).toBe(true)
+  })
+
+  it("keeps normal settled pagination on timers", () => {
+    expect(shouldUseWysiwygDraftPaginationFrame({
+      nextDelayMs: 450,
+      responsiveDelayMs: 16,
+      canUseAnimationFrame: true,
+    })).toBe(false)
+  })
+
+  it("falls back to timers when animation frames are unavailable", () => {
+    expect(shouldUseWysiwygDraftPaginationFrame({
+      nextDelayMs: 16,
+      responsiveDelayMs: 16,
+      canUseAnimationFrame: false,
+    })).toBe(false)
+  })
+})
+
+describe("shouldScheduleResponsiveFlowStackDraftPagination", () => {
+  it("keeps re-entered split flow-stack paragraphs on the responsive pagination path", () => {
+    expect(shouldScheduleResponsiveFlowStackDraftPagination({
+      isFlowStackParagraph: true,
+      draftPaginationActive: false,
+      currentFragmentCount: 2,
+    })).toBe(true)
+  })
+
+  it("keeps the first active split handoff responsive while the marker is set", () => {
+    expect(shouldScheduleResponsiveFlowStackDraftPagination({
+      isFlowStackParagraph: true,
+      draftPaginationActive: true,
+      currentFragmentCount: 1,
+    })).toBe(true)
+  })
+
+  it("does not promote non-flow-stack split paragraphs to the flow-stack responsive path", () => {
+    expect(shouldScheduleResponsiveFlowStackDraftPagination({
+      isFlowStackParagraph: false,
+      draftPaginationActive: false,
+      currentFragmentCount: 2,
+    })).toBe(false)
+  })
+})
+
+describe("resolveWysiwygDraftPaginationSource", () => {
+  it("uses the latest synchronous draft snapshot before React state catches up", () => {
+    expect(resolveWysiwygDraftPaginationSource({
+      nodeId: "p1",
+      session: {
+        nodeId: "p1",
+        draftText: "old draft",
+        caretOffset: 9,
+        dirtyVersion: 1,
+      },
+      latestSnapshot: {
+        nodeId: "p1",
+        draftText: "new draft",
+        caretOffset: 3,
+        revision: 4,
+      },
+    })).toEqual({
+      nodeId: "p1",
+      draftText: "new draft",
+      caretOffset: 3,
+      revision: 4,
+    })
+  })
+
+  it("falls back to the session state when no matching snapshot is available", () => {
+    expect(resolveWysiwygDraftPaginationSource({
+      nodeId: "p1",
+      session: {
+        nodeId: "p1",
+        draftText: "session draft",
+        caretOffset: 5,
+        dirtyVersion: 2,
+      },
+      latestSnapshot: {
+        nodeId: "other",
+        draftText: "other draft",
+        caretOffset: 1,
+        revision: 7,
+      },
+    })).toEqual({
+      nodeId: "p1",
+      draftText: "session draft",
+      caretOffset: 5,
+      revision: 2,
+    })
+  })
+
+  it("returns null when neither the session nor latest snapshot is for the requested node", () => {
+    expect(resolveWysiwygDraftPaginationSource({
+      nodeId: "p1",
+      session: {
+        nodeId: "other",
+        draftText: "other draft",
+        caretOffset: 5,
+        dirtyVersion: 2,
+      },
+      latestSnapshot: null,
+    })).toBeNull()
   })
 })

@@ -9,7 +9,7 @@ import type { LayoutNode } from "../schema"
 
 // ─── Drag Source ──────────────────────────────────────────────────────────────
 
-export type PaletteBlockType = "paragraph" | "row" | "columns" | "table"
+export type PaletteBlockType = "paragraph" | "row" | "columns" | "flow-columns" | "table"
 
 export interface FieldDragData {
   key: string
@@ -75,12 +75,14 @@ export interface ValidPlacementIntent extends RawPlacementIntent {
 
 // ─── Operation ───────────────────────────────────────────────────────────────
 
+export type PlacementContainerType = "body" | "stack" | "flow-stack"
+
 // operation คือ canonical execution-level action
 export type PlacementOperation =
   | { kind: "insert-inline-field"; paragraphId: string; index: number }
-  | { kind: "insert-before"; parentId: string; parentType: "body" | "stack"; index: number; anchorNodeId: string }
-  | { kind: "insert-after"; parentId: string; parentType: "body" | "stack"; index: number; anchorNodeId: string }
-  | { kind: "insert-into-container"; containerId: string; containerType: "body" | "stack"; index: number }
+  | { kind: "insert-before"; parentId: string; parentType: PlacementContainerType; index: number; anchorNodeId: string }
+  | { kind: "insert-after"; parentId: string; parentType: PlacementContainerType; index: number; anchorNodeId: string }
+  | { kind: "insert-into-container"; containerId: string; containerType: PlacementContainerType; index: number }
   | { kind: "expand-row-left"; rowId: string; targetStackId: string; index: number }
   | { kind: "expand-row-right"; rowId: string; targetStackId: string; index: number }
   | { kind: "insert-stacks-into-row"; rowId: string; targetStackId: string; index: number; count: number }

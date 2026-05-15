@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest"
+import JSZip from "jszip"
 import { PdfRenderer } from "../pdf"
 import { DocxRenderer } from "../docx"
 import { paginateDocument } from "../../pagination"
@@ -60,6 +61,18 @@ function paginate(doc: DocumentNode) {
   return paginateDocument(doc, defaultTextMeasurer, defaultWordBreaker)
 }
 
+async function readDocxXml(buffer: Uint8Array, path: string): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer)
+  const file = zip.file(path)
+  if (!file) throw new Error(`Missing DOCX XML path: ${path}`)
+  return file.async("string")
+}
+
+function countText(xml: string, text: string): number {
+  const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return xml.match(new RegExp(escaped, "g"))?.length ?? 0
+}
+
 // ─── PDF smoke tests ──────────────────────────────────────────────────────────
 
 describe("PdfRenderer smoke tests", () => {
@@ -99,6 +112,17 @@ describe("PdfRenderer smoke tests", () => {
     const row: LayoutNode = { id: "r1", type: "row", props: {}, childIds: ["st1", "st2"] }
     const result = await pdf.render(paginate(makeDoc(["r1"], { r1: row, st1, st2, p1, p2 })))
     expect(result.buffer.length).toBeGreaterThan(0)
+  })
+
+  it("renders document with multi-page flow-row without throwing", async () => {
+    const p1 = makePara("p1", Array.from({ length: 120 }, (_, i) => `Line ${i + 1}`).join("\n"))
+    const p2 = makePara("p2", "Short sibling")
+    const fs1: LayoutNode = { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] }
+    const fs2: LayoutNode = { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] }
+    const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] }
+    const result = await pdf.render(paginate(makeDoc(["fr1"], { fr1: row, fs1, fs2, p1, p2 })))
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
   })
 
   it("renders multi-page document without throwing", async () => {
@@ -141,6 +165,20 @@ describe("renderer input contract — fragment coverage", () => {
     const kinds = new Set(allFrags.map((f) => f.nodeType))
     expect(kinds.has("row")).toBe(true)
     expect(kinds.has("stack")).toBe(true)
+    expect(kinds.has("paragraph")).toBe(true)
+  })
+
+  it("paginated input contains flow-row, flow-stack, and paragraph fragment kinds", () => {
+    const p1 = makePara("p1", Array.from({ length: 80 }, (_, i) => `Line ${i + 1}`).join("\n"))
+    const p2 = makePara("p2", "Short")
+    const fs1: LayoutNode = { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] }
+    const fs2: LayoutNode = { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] }
+    const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] }
+    const paginated = paginate(makeDoc(["fr1"], { fr1: row, fs1, fs2, p1, p2 }))
+    const allFrags = paginated.sections[0].pages.flatMap((pg) => pg.fragments)
+    const kinds = new Set(allFrags.map((f) => f.nodeType))
+    expect(kinds.has("flow-row")).toBe(true)
+    expect(kinds.has("flow-stack")).toBe(true)
     expect(kinds.has("paragraph")).toBe(true)
   })
 
@@ -228,6 +266,35 @@ describe("DocxRenderer smoke tests", () => {
     const row: LayoutNode = { id: "r1", type: "row", props: {}, childIds: ["st1", "st2"] }
     const result = await docx.render(paginate(makeDoc(["r1"], { r1: row, st1, st2, p1, p2 })))
     expect(result.buffer.length).toBeGreaterThan(0)
+  })
+
+  it("renders document with flow-row without throwing", async () => {
+    const p1 = makePara("p1", Array.from({ length: 80 }, (_, i) => `Line ${i + 1}`).join("\n"))
+    const p2 = makePara("p2", "Short")
+    const fs1: LayoutNode = { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] }
+    const fs2: LayoutNode = { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] }
+    const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] }
+    const result = await docx.render(paginate(makeDoc(["fr1"], { fr1: row, fs1, fs2, p1, p2 })))
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(result.buffer[0]).toBe(0x50)
+    expect(result.buffer[1]).toBe(0x4b)
+  })
+
+  it("renders long flow-row marker lines once in DOCX output", async () => {
+    const leftLines = Array.from({ length: 90 }, (_, i) => `FLOWDOC_LEFT_MARKER_${i}`)
+    const rightLines = Array.from({ length: 90 }, (_, i) => `FLOWDOC_RIGHT_MARKER_${i}`)
+    const p1 = makePara("p1", leftLines.join("\n"))
+    const p2 = makePara("p2", rightLines.join("\n"))
+    const fs1: LayoutNode = { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] }
+    const fs2: LayoutNode = { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] }
+    const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] }
+    const paginated = paginate(makeDoc(["fr1"], { fr1: row, fs1, fs2, p1, p2 }))
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    for (const marker of [leftLines[0], leftLines[45], leftLines[89], rightLines[0], rightLines[45], rightLines[89]]) {
+      expect(countText(xml, marker)).toBe(1)
+    }
   })
 
   it("renders multi-page document without throwing", async () => {

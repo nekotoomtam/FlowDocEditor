@@ -54,6 +54,32 @@ function docWithParagraph(text: string): DocumentNode {
   }
 }
 
+function docWithFlowStackParagraph(text: string): DocumentNode {
+  const paragraph = docWithParagraph(text).document.sections[0].nodes.p1
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["fr1"] },
+          fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+          fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1"] },
+          p1: paragraph,
+        },
+      }],
+    },
+  }
+}
+
 describe("commitWysiwygTextEditState", () => {
   it("commits session draft text once and records one history entry", () => {
     const beforeDoc = docWithParagraph("Alpha")
@@ -118,5 +144,31 @@ describe("commitWysiwygTextEditState", () => {
 
     expect(next.past).toEqual([history])
   })
-})
 
+  it("commits flow-stack paragraph drafts without changing the flow tree", () => {
+    const beforeDoc = docWithFlowStackParagraph("Flow base")
+    const beforePaginated = paginated("before-flow")
+    const afterPaginated = paginated("after-flow")
+    const state: WysiwygTextCommitState = {
+      doc: beforeDoc,
+      paginated: beforePaginated,
+      past: [],
+      future: [{ doc: docWithParagraph("Future"), paginated: paginated("future") }],
+    }
+
+    const next = commitWysiwygTextEditState(state, {
+      nodeId: "p1",
+      text: "Flow committed",
+      beforeText: "Flow base",
+      afterPaginated,
+    }, 50)
+
+    expect(getPlainParagraphTextFromDocument(beforeDoc, "p1")).toBe("Flow base")
+    expect(getPlainParagraphTextFromDocument(next.doc, "p1")).toBe("Flow committed")
+    expect(next.doc.document.sections[0].nodes.fr1.type).toBe("flow-row")
+    expect(next.doc.document.sections[0].nodes.fs1.type).toBe("flow-stack")
+    expect(next.paginated).toBe(afterPaginated)
+    expect(next.past).toEqual([{ doc: beforeDoc, paginated: beforePaginated }])
+    expect(next.future).toEqual([])
+  })
+})

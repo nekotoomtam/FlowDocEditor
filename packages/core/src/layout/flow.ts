@@ -1,4 +1,4 @@
-import type { BodyNode, DocumentSection, LayoutNode, RowNode, StackNode, TocNode } from "../schema"
+import type { BodyNode, DocumentSection, FlowRowNode, FlowStackNode, LayoutNode, RowNode, StackNode, TocNode } from "../schema"
 import type { TableNode, TableCellNode } from "../schema"
 import { DEFAULT_STACK_MIN_HEIGHT } from "../document/defaults"
 import { measureParagraph, measureSpacer, toAbstractUnit } from "./measure"
@@ -25,14 +25,19 @@ function toScaledShare(share: number): number {
   return Math.max(0, Math.round(share * SHARE_PRECISION))
 }
 
-function distributeRowWidths(section: DocumentSection, row: RowNode, availableWidth: number): number[] {
-  const gap = Math.max(0, row.props.gap ?? 0)
-  const totalGap = gap * Math.max(0, row.childIds.length - 1)
+function distributeChildWidths(
+  section: DocumentSection,
+  childIds: string[],
+  availableWidth: number,
+  gap: number,
+  childType: "stack" | "flow-stack",
+): number[] {
+  const totalGap = gap * Math.max(0, childIds.length - 1)
   const contentWidth = Math.max(0, availableWidth - totalGap)
 
-  const scaledShares = row.childIds.map((childId) => {
+  const scaledShares = childIds.map((childId) => {
     const child = section.nodes[childId]
-    return child?.type === "stack" && typeof child.props.widthShare === "number"
+    return child?.type === childType && typeof child.props.widthShare === "number"
       ? toScaledShare(child.props.widthShare)
       : 0
   })
@@ -40,8 +45,8 @@ function distributeRowWidths(section: DocumentSection, row: RowNode, availableWi
   const totalScaled = scaledShares.reduce((sum, s) => sum + s, 0)
   if (totalScaled <= 0) {
     // fallback: equal distribution
-    const equal = contentWidth / Math.max(1, row.childIds.length)
-    return row.childIds.map(() => equal)
+    const equal = contentWidth / Math.max(1, childIds.length)
+    return childIds.map(() => equal)
   }
 
   // deterministic: trailing stack absorbs remainder เพื่อไม่ให้มี rounding gap
@@ -52,6 +57,14 @@ function distributeRowWidths(section: DocumentSection, row: RowNode, availableWi
     assigned += width
     return width
   })
+}
+
+function distributeRowWidths(section: DocumentSection, row: RowNode, availableWidth: number): number[] {
+  return distributeChildWidths(section, row.childIds, availableWidth, Math.max(0, row.props.gap ?? 0), "stack")
+}
+
+function distributeFlowRowWidths(section: DocumentSection, row: FlowRowNode, availableWidth: number): number[] {
+  return distributeChildWidths(section, row.childIds, availableWidth, Math.max(0, row.props.gap ?? 0), "flow-stack")
 }
 
 // ─── Stack Height Resolution ──────────────────────────────────────────────────
@@ -89,6 +102,10 @@ function flowNode(
       return flowVerticalContainer(section, node, x, y, width, measurer, stackRenderHeight, wordBreaker, tocHeightOverrides)
     case "row":
       return flowRow(section, node, x, y, width, measurer, wordBreaker, tocHeightOverrides)
+    case "flow-row":
+      return flowFlowRow(section, node, x, y, width, measurer, wordBreaker, tocHeightOverrides)
+    case "flow-stack":
+      return flowFlowStack(section, node, x, y, width, measurer, stackRenderHeight, wordBreaker, tocHeightOverrides)
     case "paragraph": {
       const measured = measureParagraph(node, width, measurer, wordBreaker)
       return {
@@ -238,6 +255,90 @@ function flowRow(
   return {
     nodeId: node.id,
     nodeType: "row",
+    x,
+    y,
+    width,
+    height: rowHeight,
+    children,
+  }
+}
+
+function flowFlowStack(
+  section: DocumentSection,
+  node: FlowStackNode,
+  x: number,
+  y: number,
+  width: number,
+  measurer: TextMeasurer,
+  stackRenderHeight?: number,
+  wordBreaker: WordBreaker = defaultWordBreaker,
+  tocHeightOverrides?: Map<string, number>,
+): FlowBox {
+  let cursorY = y
+  const children: FlowBox[] = []
+
+  const childNodes = node.childIds
+    .map((id) => section.nodes[id])
+    .filter((n): n is LayoutNode => n != null)
+
+  childNodes.forEach((child) => {
+    const childBox = flowNode(section, child, x, cursorY, width, measurer, undefined, wordBreaker, tocHeightOverrides)
+    children.push(childBox)
+    cursorY = childBox.y + childBox.height
+  })
+
+  const contentHeight = cursorY - y
+  const resolvedHeight = Math.max(contentHeight, Math.max(0, node.props.minHeight ?? 0), stackRenderHeight ?? 0)
+
+  return {
+    nodeId: node.id,
+    nodeType: "flow-stack",
+    x,
+    y,
+    width,
+    height: resolvedHeight,
+    children,
+  }
+}
+
+function flowFlowRow(
+  section: DocumentSection,
+  node: FlowRowNode,
+  x: number,
+  y: number,
+  width: number,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker = defaultWordBreaker,
+  tocHeightOverrides?: Map<string, number>,
+): FlowBox {
+  const gap = Math.max(0, node.props.gap ?? 0)
+  const columnWidths = distributeFlowRowWidths(section, node, width)
+
+  const childNodes = node.childIds
+    .map((id) => section.nodes[id])
+    .filter((n): n is LayoutNode => n != null)
+
+  const measuredHeights = childNodes.map((child, index) => {
+    const colWidth = columnWidths[index] ?? 0
+    const box = flowNode(section, child, 0, 0, colWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
+    return box.height
+  })
+
+  const rowHeight = Math.max(node.props.minHeight ?? 0, ...measuredHeights)
+
+  let cursorX = x
+  const children: FlowBox[] = []
+
+  childNodes.forEach((child, index) => {
+    const colWidth = columnWidths[index] ?? 0
+    const childBox = flowNode(section, child, cursorX, y, colWidth, measurer, rowHeight, wordBreaker, tocHeightOverrides)
+    children.push(childBox)
+    cursorX += colWidth + gap
+  })
+
+  return {
+    nodeId: node.id,
+    nodeType: "flow-row",
     x,
     y,
     width,

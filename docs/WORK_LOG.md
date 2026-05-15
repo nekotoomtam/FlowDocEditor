@@ -18,7 +18,546 @@ Each entry should include:
 
 ---
 
+## 2026-05-15
+
+### Flow Stack Phase C-C-B Responsive Draft Snapshot
+
+Goal: Keep split `flow-stack` draft pagination close to key-repeat input so
+downstream layout has a chance to update while the key is still held, without
+adding a separate local cross-page layout preview.
+
+Completed:
+
+- Added a WYSIWYG draft-pagination source helper that prefers the latest
+  synchronous draft snapshot over the React session ref when pagination fires.
+- Stored the latest draft text/caret snapshot immediately in
+  `handleWysiwygTextDraftChange`, before React state/effects need to catch up.
+- Updated the responsive draft pagination timer to paginate from that latest
+  snapshot and reschedule if a newer snapshot arrives during pagination.
+- Kept the existing authoritative draft-pagination path; no document schema,
+  undo/redo, export, or custom cross-page local preview behavior changed.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/editorPageFollow.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- Manual follow-up: in an already split `flow-stack` paragraph with another node
+  below, hold Backspace and confirm the downstream node reflows during the key
+  repeat rather than only after key release.
+- User manual feedback after this patch: downstream nodes still waited until key
+  release, so stale draft source alone was not the root cause.
+
+Follow-up:
+
+- Added a frame-based responsive pagination pump for the same C-C-B goal:
+  responsive `flow-stack` draft pagination now uses `requestAnimationFrame`
+  when available instead of relying only on a short timer.
+- Added coverage for choosing the frame path only for responsive pagination and
+  keeping normal settled pagination on timers.
+- Re-ran verification after the frame pump:
+  - `npm.cmd test -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/editorPageFollow.test.ts`
+  - `npm.cmd run type-check`
+  - `git diff --check`
+- Added core evidence after the user clarified the failing node is a body
+  paragraph outside the `flow-row`: core pagination already pulls following body
+  blocks upward when a split `flow-row` shrinks.
+  - `packages/core/src/pagination/__tests__/flowRowStack.test.ts`
+  - `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowRowStack.test.ts`
+- Current review read: the remaining C-C-B failure is in the live editor
+  update/render path, not in core pagination. The next patch should either add
+  focused editor-path diagnostics or make a tightly scoped responsive
+  draft-pagination paint policy; do not change the `flow-row` pagination model
+  for this symptom without new evidence.
+
+---
+
+### Flow Stack Phase C-C-A Caret Page Follow
+
+Goal: When responsive draft pagination moves the active `flow-stack` edit
+fragment to another page, intentionally follow that page without reintroducing
+the edit-entry focus jump.
+
+Completed:
+
+- Added small page-follow helpers for:
+  - detecting a real active edit page transition;
+  - resolving the rendered page key from `PaginatedDocument`;
+  - scrolling the target page with nearest alignment and an older-browser
+    fallback.
+- Updated `EditorShell` so WYSIWYG draft pagination and caret-page relocation
+  request a viewport follow only when the edit session already had a previous
+  page and then moves to a different page.
+- Kept first edit entry/click behavior out of this auto-follow path so C-B's
+  no-forced-focus-scroll behavior remains intact.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/editorPageFollow.ts`
+- `src/app/editor/_components/__tests__/editorPageFollow.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/editorPageFollow.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- Manual follow-up: type in a `flow-stack` paragraph until the caret moves to a
+  continuation page; the editor should follow the target page. Clicking into an
+  already visible paragraph should still avoid the old focus jump.
+- C-C-B remains open: already split `flow-stack` deletion with other downstream
+  nodes below should be reviewed separately to ensure those nodes move during
+  key-repeat, not only after key release.
+
+---
+
+### Flow Stack Phase C-B Focus Scroll Guard
+
+Goal: Reduce the edit-entry viewport jump for `flow-stack` WYSIWYG editing
+without weakening active caret/page tracking during cross-page typing.
+
+Completed:
+
+- Added a small focus helper that focuses the hidden text-engine bridge and
+  legacy textarea with `preventScroll: true`, with a fallback for browsers that
+  do not accept focus options.
+- Routed the WYSIWYG text-engine edit-entry, pointer-placement, word-selection,
+  and legacy textarea focus paths through the helper.
+- Added focused unit coverage for the helper so future edits keep the
+  no-forced-scroll behavior.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This intentionally does not remove active fragment/page tracking. Typing at a
+  page boundary should still follow the caret and keep the continuation
+  responsive.
+- Manual follow-up: click into an already visible `flow-stack` line should no
+  longer jump just because the editor focuses its bridge input; typing across a
+  page boundary should still move/follow the active caret.
+
+---
+
+### Flow Stack Phase C-A Re-Entered Split Draft Pagination
+
+Goal: Keep a `flow-stack` paragraph that already spans multiple page slices on
+the responsive draft-pagination path after the user exits edit mode and
+re-enters the paragraph.
+
+Completed:
+
+- Added a focused helper for deciding when a `flow-stack` paragraph should use
+  responsive draft pagination:
+  - active first page-boundary handoff still qualifies;
+  - re-entered already split `flow-stack` paragraphs qualify based on the
+    current paginated fragment count;
+  - non-`flow-stack` split paragraphs are not promoted into this path.
+- Updated the WYSIWYG draft-change handler to use the helper so typing or
+  deletion in a re-entered split `flow-stack` paragraph schedules draft
+  pagination even when the previous `wysiwygDraftPaginationNodeId` marker was
+  cleared on edit exit.
+- Updated the cross-page behavior contract to distinguish this C-A responsive
+  draft-pagination path from full live cross-page caret/selection behavior.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts`
+- `npm.cmd run type-check`
+- User manual smoke:
+  - re-entered split `flow-stack` paragraph accepted typing/deletion;
+  - draft changes visibly pushed/reflowed the continuation while edit was still
+    active;
+  - commit/blur final layout was stable with no reported missing or duplicated
+    text.
+
+Notes:
+
+- This is not a full Phase C implementation. Cross-page caret/selection polish
+  and adaptive long-document performance remain follow-up work.
+- UX follow-up: active draft pagination can move the editing viewport/page
+  aggressively toward the active fragment. Prefer preventing focus-induced
+  scroll or preserving viewport position before removing page tracking entirely.
+
+---
+
+### Flow Stack Phase B Scope Lock Tests
+
+Goal: Lock the remaining Phase B `flow-stack` WYSIWYG behavior without
+claiming full live cross-page editing.
+
+Completed:
+
+- Added coverage for same-page `flow-stack` shrink after inline deletion so the
+  edited paragraph, owning `flow-row`, sibling `flow-stack` fragments, later
+  stack children, and following body fragments all move together.
+- Added coverage that `flow-stack` same-page line-count changes may opt into the
+  local height patch path while still queuing settled pagination.
+- Added coverage that draft preview documents can update paragraph text inside a
+  `flow-stack` without mutating the authored source document.
+- Added coverage that committing a WYSIWYG draft inside a `flow-stack` updates
+  only the paragraph text, preserves the `flow-row` / `flow-stack` tree, records
+  one history entry, and clears redo state.
+- Updated the cross-page behavior contract to describe same-page growth and
+  shrink as Phase B behavior while keeping full live cross-page editing deferred.
+
+Files changed:
+
+- `src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts`
+- `npm.cmd test -- src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts src/app/editor/_components/__tests__/wysiwygDraftPersistence.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check` (passed with line-ending warnings only)
+- User manual smoke with WYSIWYG flags enabled:
+  - flow-row/flow-stack placement passed;
+  - same-page typing growth passed;
+  - same-page deletion shrink passed;
+  - page-boundary handoff passed with screenshot evidence;
+  - commit/blur and edit re-entry within the same page passed.
+
+Notes:
+
+- This is a Phase B test/contract lock. Already-split live `flow-stack`
+  typing/deletion remains Phase C.
+- Manual smoke pass does not include already-split live editing in continuation
+  slices; that remains Phase C.
+
+---
+
+### Flow Stack Page-Boundary Draft Pagination Handoff
+
+Goal: Reduce the visible pause when a flagged WYSIWYG edit inside a
+`flow-stack` paragraph reaches the page boundary, without claiming full live
+cross-page editing.
+
+Completed:
+
+- Added a shared `isParagraphInsideFlowStack(...)` helper for editor text-engine
+  decisions.
+- Kept same-page `flow-stack` height preview behavior on the local preview path.
+- Routed `flow-stack` hard page-boundary edits to a short draft-pagination
+  delay so core pagination can create the next `flow-row` / `flow-stack` slice.
+- Kept an already pending responsive `flow-stack` draft-pagination timer alive
+  during key-repeat deletion so shrink-back cannot be starved until key release.
+- Kept non-`flow-stack` draft pagination on the existing settling delay.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/wysiwygTextEligibility.ts`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts`
+- `npm.cmd test -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Browser reload smoke on `http://localhost:4000/editor`; WYSIWYG text engine
+  flag was `true` and no console warnings/errors were observed.
+
+Notes:
+
+- This remains a Phase B handoff. It does not implement full live cross-page
+  `flow-stack` caret/selection behavior.
+
+---
+
+### Flow Stack Same-Page Live Reflow Preview
+
+Goal: Make the first `flow-row` / `flow-stack` authoring path feel responsive
+while typing without changing core pagination or claiming full live cross-page
+WYSIWYG support.
+
+Completed:
+
+- Allowed WYSIWYG text-engine hard-local reflow inside `flow-stack` paragraphs
+  to patch same-page paragraph height while still queuing settled pagination.
+- Extended inline edit height preview to recognize
+  `paragraph -> flow-stack -> flow-row` parent chains.
+- Kept sibling `flow-stack` fragments aligned to the edited `flow-row` slice
+  height during same-page preview growth.
+- Shifted later fragments inside the edited `flow-stack` and blocks below the
+  `flow-row` by the local preview delta.
+
+Files changed:
+
+- `src/app/editor/_components/inlineEditHeightPreview.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- Browser reload smoke on `http://localhost:4000/editor`; no console warnings or
+  errors observed after reload.
+
+Notes:
+
+- This is the A-phase same-page preview patch only. Page-boundary handoff and
+  full live cross-page `flow-stack` editing remain separate follow-ups.
+
+---
+
+### Flow Row / Flow Stack 0.5.0 Acceptance
+
+Goal: Complete the static `flow-row` / `flow-stack` milestone review and bump
+the project release marker to `0.5.0`.
+
+Completed:
+
+- Recorded a PASS/RISK/UNKNOWN acceptance review for the static milestone.
+- Bumped the root project version marker from `0.4.0` to `0.5.0`.
+- Kept persisted package/document schema versions unchanged.
+- Added a version consistency test so `package.json` and `package-lock.json`
+  cannot drift silently.
+- Documented that browser/manual smoke, sibling-safe resize controls,
+  add-flow-stack controls, and DOCX exact visual fidelity remain `0.5.x`
+  follow-up work.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `docs/FLOW_ROW_STACK_ACCEPTANCE_REVIEW.md`
+- `docs/FLOW_ROW_STACK_ROADMAP.md`
+- `docs/VERSIONING.md`
+- `docs/DOCS_INDEX.md`
+- `docs/WORK_LOG.md`
+- `src/app/__tests__/projectVersion.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core --`
+- `npm.cmd test -- src/app/__tests__/projectVersion.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+
+Notes:
+
+- This is a release-readiness marker only. It does not change persisted
+  `packageVersion`, `document.version`, or production WYSIWYG defaults.
+
+---
+
+### Flow Row / Flow Stack 0.5.0 Design Draft
+
+Goal: Record the decision to keep existing `row` / `stack` atomic while planning
+a parallel `flow-row` / `flow-stack` primitive for long-form cross-page
+row/column layout.
+
+Completed:
+
+- Added a draft design/spec for `flow-row` / `flow-stack` as the planned `0.5.0`
+  milestone.
+- Updated version semantics so `0.5.0` maps to static flow-row/flow-stack
+  fragmentation rather than a generic stability bump.
+- Linked the new design from the docs index and cross-page behavior contract.
+- Kept this as design documentation only; no schema, pagination, renderer, or
+  editor behavior changed.
+
+Files changed:
+
+- `docs/FLOW_ROW_STACK_SPEC.md`
+- `docs/VERSIONING.md`
+- `docs/DOCS_INDEX.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; not run.
+
+Notes:
+
+- Implementation should begin with schema and core pagination tests before any
+  editor live-edit behavior.
+
+---
+
 ## 2026-05-14
+
+### WYSIWYG Server Trial Config Reminder
+
+Goal: Record the local/self-use WYSIWYG flag lesson and prevent a future staging
+or server trial from silently exercising the legacy textarea path.
+
+Completed:
+
+- Added a production-gate reminder that local/manual WYSIWYG parity evidence must
+  first confirm `data-wysiwyg-text-engine-enabled="true"`.
+- Documented that a staging/server trial must set the public WYSIWYG flags before
+  the client bundle is built.
+- Kept this as documentation only; no deploy tooling or default-on behavior was
+  added because the editor is still in self-use/experimental validation.
+
+Files changed:
+
+- `docs/WYSIWYG_PRODUCTION_GATE.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; not run.
+
+Notes:
+
+- Future production acknowledgement still requires the release checklist in
+  `docs/WYSIWYG_PRODUCTION_GATE.md`.
+
+---
+
+### Persist Active WYSIWYG Drafts Before Local Reload
+
+Goal: Prevent a localStorage reload or browser close from reopening the previous
+committed paragraph text while an active WYSIWYG text draft was still visible in
+the editor.
+
+Completed:
+
+- Added a persistable WYSIWYG draft helper that applies the active draft text to
+  a normalized document snapshot without storing computed layout geometry.
+- Updated editor autosave to save that draft-aware snapshot while a WYSIWYG text
+  session is active.
+- Added `pagehide` and hidden-visibility flush handling so closing/reloading the
+  page writes the latest active draft to localStorage before the next open.
+- Kept undo/redo and document state unchanged during active typing; this only
+  affects the persisted snapshot used after reload.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygDraftPersistence.ts`
+- `src/app/editor/_components/__tests__/wysiwygDraftPersistence.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygDraftPersistence.test.ts src/app/editor/_components/__tests__/editorTextMeasurerState.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/fontMeasurerParity.test.ts src/app/editor/_components/__tests__/editorTextMeasurerState.test.ts src/app/editor/_components/__tests__/wysiwygDraftPersistence.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts`
+
+Notes:
+
+- Browser smoke with a separate WYSIWYG-enabled dev server could not run while
+  the existing Next dev server for this repo was active; Next blocked the second
+  dev server. Do not kill the user's running server automatically.
+
+---
+
+### Guard WYSIWYG Edit-Enter From Draft Layout Recalculation
+
+Goal: Prevent a plain click into WYSIWYG text edit mode from recalculating and
+patching paragraph lines before the user has actually changed the draft text.
+
+Completed:
+
+- Added an explicit draft-change check so the WYSIWYG text engine keeps the
+  existing `fragment.lines` on edit enter.
+- Deferred local draft layout measurement until `draftText` differs from the
+  current document text.
+- Added a focused helper test for the edit-enter/no-change case.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts src/app/editor/_components/__tests__/wysiwygDraftPersistence.test.ts`
+
+Notes:
+
+- Local browser inspection of `http://localhost:4000/editor` reported
+  `data-wysiwyg-text-engine-enabled="false"`, so that running dev server was
+  still using the legacy textarea edit path. Restart the dev server with
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1` before manually validating this
+  path.
+
+---
+
+### Note Deferred Page-Boundary Live Preview Polish
+
+Goal: Preserve the user's page-boundary UX observation without changing
+pagination behavior immediately.
+
+Completed:
+
+- Added a deferred polish note for active WYSIWYG page-boundary typing.
+- Captured the distinction between current settled-layout correctness and
+  preferred live-typing feel:
+  - current live preview mirrors settled widow/orphan splitting and can pull one
+    already-visible line down when the draft first crosses a page boundary;
+  - preferred active typing should move only newly overflowing lines, then
+    reconcile to settled widow/orphan pagination after debounce, blur, or edit
+    exit.
+- Kept this classified as UX polish/RISK rather than a blocker.
+
+Files changed:
+
+- `docs/WYSIWYG_PARITY_PLAN.md`
+- `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only note; no tests run.
+
+Notes:
+
+- Do not change this behavior without a focused page-boundary preview design,
+  because the previous widow/orphan alignment fixed edit/re-enter drift.
+
+---
 
 ### WYSIWYG Re-Enter User-Like Variants And Split Preview Fix
 

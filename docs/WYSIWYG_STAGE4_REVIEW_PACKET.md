@@ -75,7 +75,11 @@ Out of scope:
 
 - User-perceived typing smoothness at page boundaries still needs manual review.
   The automated smoke protects structure, focus, text path, and overlap, but it
-  cannot fully score perceived rhythm.
+  cannot fully score perceived rhythm. Deferred polish: live preview currently
+  mirrors settled widow/orphan splitting, which can pull one already-visible
+  line down when the draft first crosses a page. The desired active-typing feel
+  is to move only newly overflowing lines, then reconcile to settled
+  widow/orphan pagination after debounce, blur, or edit exit.
 - Real Windows Thai IME remains a manual gate. Automation covers synthetic
   composition duplicate suppression only.
 - Row/stack content is still governed by the current atomic row contract. This

@@ -26,15 +26,34 @@ below is fully PASS.
 In development and test, `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1` is enough
 to run the experimental lane for verification.
 
-In production, two separate variables are required:
+For local self-use, prefer a local env file or a dedicated dev command so the
+editor does not silently fall back to the legacy textarea path after restarting
+the dev server. Before using any screenshot or manual repro as WYSIWYG parity
+evidence, verify the editor shell reports:
+
+```text
+data-wysiwyg-text-engine-enabled="true"
+```
+
+Before the first staging/server trial, pause and confirm the deployment build
+environment is intentionally exercising the WYSIWYG edit path. The public flags
+must be present before the client bundle is built:
+
+```powershell
+$env:NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE="1"
+$env:NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT="1"
+```
+
+In production, the text engine also requires a separate release
+acknowledgement:
 
 ```powershell
 $env:NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE="1"
 $env:NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE_PRODUCTION_ACK="1"
 ```
 
-The second variable is a deliberate release acknowledgement. It should only be
-set after this document's release checklist is complete for the target release.
+The acknowledgement variable is deliberate. It should only be set after this
+document's release checklist is complete for the target release.
 
 Safe fallback switch:
 

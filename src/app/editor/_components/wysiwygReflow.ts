@@ -22,6 +22,53 @@ export interface WysiwygTextReflowDecision {
   shouldQueueSettledPagination: boolean
 }
 
+export interface WysiwygDraftPaginationDelayInput {
+  reflow?: WysiwygTextReflowDecision | null
+  isFlowStackParagraph: boolean
+  draftPaginationActive?: boolean
+  defaultDelayMs: number
+  flowStackBoundaryDelayMs: number
+}
+
+export interface WysiwygDraftPaginationCoalesceInput {
+  pendingDelayMs: number | null
+  nextDelayMs: number
+  responsiveDelayMs: number
+}
+
+export interface WysiwygResponsiveFlowStackDraftPaginationInput {
+  isFlowStackParagraph: boolean
+  draftPaginationActive: boolean
+  currentFragmentCount: number
+}
+
+export interface WysiwygDraftPaginationSessionSource {
+  nodeId: string | null
+  draftText: string
+  caretOffset: number | null
+  dirtyVersion: number
+}
+
+export interface WysiwygDraftPaginationLatestSnapshot {
+  nodeId: string
+  draftText: string
+  caretOffset: number | null
+  revision: number
+}
+
+export interface WysiwygDraftPaginationSource {
+  nodeId: string
+  draftText: string
+  caretOffset: number | null
+  revision: number
+}
+
+export interface WysiwygDraftPaginationFrameInput {
+  nextDelayMs: number
+  responsiveDelayMs: number
+  canUseAnimationFrame: boolean
+}
+
 const HEIGHT_EPSILON = 0.5
 
 function fragmentLineCount(fragment: PageFragment): number {
@@ -37,6 +84,7 @@ export function classifyWysiwygTextReflow(input: {
   draftHeight?: number | null
   pageContentBottom?: number | null
   supportsLocalDraftLayout: boolean
+  supportsSamePageHeightPatch?: boolean
 }): WysiwygTextReflowDecision {
   if (!input.supportsLocalDraftLayout) {
     return {
@@ -75,7 +123,7 @@ export function classifyWysiwygTextReflow(input: {
       kind: "hard-local",
       reason: "line-count-changed",
       shouldPatchActiveLines: true,
-      shouldPatchSamePageHeight: false,
+      shouldPatchSamePageHeight: input.supportsSamePageHeightPatch === true,
       shouldQueueSettledPagination: true,
     }
   }
@@ -85,7 +133,7 @@ export function classifyWysiwygTextReflow(input: {
       kind: "hard-local",
       reason: "height-changed",
       shouldPatchActiveLines: true,
-      shouldPatchSamePageHeight: false,
+      shouldPatchSamePageHeight: input.supportsSamePageHeightPatch === true,
       shouldQueueSettledPagination: true,
     }
   }
@@ -96,5 +144,56 @@ export function classifyWysiwygTextReflow(input: {
     shouldPatchActiveLines: true,
     shouldPatchSamePageHeight: false,
     shouldQueueSettledPagination: false,
+  }
+}
+
+export function resolveWysiwygDraftPaginationDelayMs(input: WysiwygDraftPaginationDelayInput): number {
+  if (!input.isFlowStackParagraph) return input.defaultDelayMs
+  if (input.draftPaginationActive) return input.flowStackBoundaryDelayMs
+  if (
+    input.reflow?.kind === "hard-page-boundary" &&
+    input.reflow.shouldQueueSettledPagination
+  ) {
+    return input.flowStackBoundaryDelayMs
+  }
+  return input.defaultDelayMs
+}
+
+export function shouldCoalesceWysiwygDraftPaginationRequest(input: WysiwygDraftPaginationCoalesceInput): boolean {
+  return input.pendingDelayMs !== null &&
+    input.pendingDelayMs <= input.responsiveDelayMs &&
+    input.nextDelayMs <= input.responsiveDelayMs
+}
+
+export function shouldUseWysiwygDraftPaginationFrame(input: WysiwygDraftPaginationFrameInput): boolean {
+  return input.canUseAnimationFrame && input.nextDelayMs <= input.responsiveDelayMs
+}
+
+export function shouldScheduleResponsiveFlowStackDraftPagination(
+  input: WysiwygResponsiveFlowStackDraftPaginationInput,
+): boolean {
+  return input.isFlowStackParagraph &&
+    (input.draftPaginationActive || input.currentFragmentCount > 1)
+}
+
+export function resolveWysiwygDraftPaginationSource(input: {
+  nodeId: string
+  session: WysiwygDraftPaginationSessionSource
+  latestSnapshot?: WysiwygDraftPaginationLatestSnapshot | null
+}): WysiwygDraftPaginationSource | null {
+  if (input.latestSnapshot?.nodeId === input.nodeId) {
+    return {
+      nodeId: input.nodeId,
+      draftText: input.latestSnapshot.draftText,
+      caretOffset: input.latestSnapshot.caretOffset,
+      revision: input.latestSnapshot.revision,
+    }
+  }
+  if (input.session.nodeId !== input.nodeId) return null
+  return {
+    nodeId: input.nodeId,
+    draftText: input.session.draftText,
+    caretOffset: input.session.caretOffset,
+    revision: input.session.dirtyVersion,
   }
 }

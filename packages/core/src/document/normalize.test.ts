@@ -67,4 +67,40 @@ describe("normalizeDocument", () => {
     if (row.type !== "row") return
     expect(row.props.minHeight).toBe(96)
   })
+
+  it("preserves flow-row and flow-stack props", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: { gap: 6, minHeight: 96 }, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100, minHeight: 24 }, childIds: [] },
+    }, ["fr1"])
+
+    const nodes = normalizeDocument(doc).document.sections[0].nodes
+    const row = nodes.fr1
+    const stack = nodes.fs1
+    expect(row.type).toBe("flow-row")
+    expect(stack.type).toBe("flow-stack")
+    if (row.type !== "flow-row" || stack.type !== "flow-stack") return
+    expect(row.props.gap).toBe(6)
+    expect(row.props.minHeight).toBe(96)
+    expect(stack.props.widthShare).toBe(100)
+    expect(stack.props.minHeight).toBe(24)
+  })
+
+  it("normalizes flow-row width shares without assuming two stacks", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2", "fs3"] },
+      fs1: { id: "fs1", type: "flow-stack", props: {}, childIds: [] },
+      fs2: { id: "fs2", type: "flow-stack", props: {}, childIds: [] },
+      fs3: { id: "fs3", type: "flow-stack", props: {}, childIds: [] },
+    }, ["fr1"])
+
+    const nodes = normalizeDocument(doc).document.sections[0].nodes
+    const shares = ["fs1", "fs2", "fs3"].map((id) => {
+      const node = nodes[id]
+      expect(node.type).toBe("flow-stack")
+      return node.type === "flow-stack" ? node.props.widthShare ?? 0 : 0
+    })
+    expect(shares.reduce((sum, share) => sum + share, 0)).toBe(100)
+    expect(shares).toEqual([33.33, 33.33, 33.34])
+  })
 })

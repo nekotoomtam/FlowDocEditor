@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "1.0.0",
+  "version": "0.5.0",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -24,7 +24,8 @@
     "smoke:wysiwyg-stage4c": "node scripts/wysiwyg-stage4c-smoke.mjs",
     "smoke:wysiwyg-reenter": "node scripts/wysiwyg-reenter-drift-probe.mjs",
     "smoke:wysiwyg-thai-repeat": "node scripts/wysiwyg-thai-repeat-reenter-probe.mjs",
-    "smoke:wysiwyg-smoothness": "node scripts/wysiwyg-smoothness-probe.mjs"
+    "smoke:wysiwyg-smoothness": "node scripts/wysiwyg-smoothness-probe.mjs",
+    "diagnose:wysiwyg-click": "node scripts/wysiwyg-click-diagnostic.mjs"
   },
   "keywords": [],
   "author": "",

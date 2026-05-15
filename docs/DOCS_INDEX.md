@@ -26,6 +26,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Per-task handoff template | `docs/agent/TASK_HANDOFF.md` |
 | Pass/fail review standard | `docs/agent/REVIEW_GATE.md` |
 | Product north star and long-term direction | `docs/PRODUCT_DIRECTION.md` |
+| Project versioning and v1 readiness semantics | `docs/VERSIONING.md` |
 | Engineering boundaries and principles | `docs/ENGINEERING_PRINCIPLES.md` |
 | System/layer overview | `docs/ARCHITECTURE_OVERVIEW.md` |
 | Test levels and Definition of Done | `docs/TEST_STRATEGY.md` |
@@ -43,6 +44,9 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Stage 4C WYSIWYG IME evidence log | `docs/WYSIWYG_STAGE4C_IME_RESULTS.md` |
 | Layout/pagination engine rules | `docs/LAYOUT_ENGINE_SPEC.md` |
 | Page-boundary behavior | `docs/CROSS_PAGE_BEHAVIOR.md` |
+| Planned flow-row/flow-stack cross-page primitive | `docs/FLOW_ROW_STACK_SPEC.md` |
+| Flow-row/flow-stack 0.5.0 implementation roadmap | `docs/FLOW_ROW_STACK_ROADMAP.md` |
+| Flow-row/flow-stack 0.5.0 acceptance review | `docs/FLOW_ROW_STACK_ACCEPTANCE_REVIEW.md` |
 | Table authoring and table operations | `docs/TABLE_EDITING_CONTRACT.md` |
 | Export/API/PDF/DOCX renderer contract | `docs/EXPORT_RENDERER_CONTRACT.md` |
 | Persisted/editor JSON package contract | `docs/FLOWDOC_PACKAGE_CONTRACT.md` |

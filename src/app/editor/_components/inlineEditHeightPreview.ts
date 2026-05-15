@@ -1,6 +1,22 @@
 import { DEFAULT_STACK_MIN_HEIGHT } from "@/document"
-import type { DocumentNode } from "@/schema"
+import type { DocumentNode, LayoutNode } from "@/schema"
 import type { PageFragment, PaginatedDocument } from "@/pagination"
+
+function findDocumentNode(doc: DocumentNode, nodeId: string): LayoutNode | undefined {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[nodeId]
+    if (node) return node
+  }
+  return undefined
+}
+
+function shiftFragmentY(fragment: PageFragment, delta: number): PageFragment {
+  return {
+    ...fragment,
+    y: fragment.y + delta,
+    lines: fragment.lines?.map((line) => ({ ...line, y: line.y + delta })),
+  }
+}
 
 export function resizeFragmentHeightAndShift(
   paginated: PaginatedDocument,
@@ -56,8 +72,15 @@ export function resizeFragmentHeightAndShift(
 
         const stackAncestor = target?.parentNodeId ? byId.get(target.parentNodeId) : null
         const rowAncestor = stackAncestor?.parentNodeId ? byId.get(stackAncestor.parentNodeId) : null
+        const rowStackKind = target && stackAncestor && rowAncestor
+          ? stackAncestor.nodeType === "stack" && rowAncestor.nodeType === "row"
+            ? { stackType: "stack" as const, rowType: "row" as const }
+            : stackAncestor.nodeType === "flow-stack" && rowAncestor.nodeType === "flow-row"
+              ? { stackType: "flow-stack" as const, rowType: "flow-row" as const }
+              : null
+          : null
 
-        if (target && stackAncestor?.nodeType === "stack" && rowAncestor?.nodeType === "row") {
+        if (target && stackAncestor && rowAncestor && rowStackKind) {
           const isLaterInEditedStack = (fragment: PageFragment): boolean => (
             fragment.nodeId !== target.nodeId &&
             fragment.y > target.y &&
@@ -66,22 +89,26 @@ export function resizeFragmentHeightAndShift(
           const adjustedY = (fragment: PageFragment): number => (
             isLaterInEditedStack(fragment) ? fragment.y + delta : fragment.y
           )
-          const rowNode = doc.document.sections
-            .map((docSection) => docSection.nodes[rowAncestor.nodeId])
-            .find((node) => node?.type === "row")
-          const rowMinHeight = rowNode?.type === "row" ? Math.max(0, rowNode.props.minHeight ?? 0) : 0
+          const rowNode = findDocumentNode(doc, rowAncestor.nodeId)
+          const rowMinHeight =
+            rowStackKind.rowType === "row" && rowNode?.type === "row"
+              ? Math.max(0, rowNode.props.minHeight ?? 0)
+              : rowStackKind.rowType === "flow-row" && rowNode?.type === "flow-row" && (rowAncestor.fragmentIndex ?? 0) === 0
+                ? Math.max(0, rowNode.props.minHeight ?? 0)
+                : 0
           const stackFragments = page.fragments.filter((fragment) =>
             fragment.parentNodeId === rowAncestor.nodeId &&
-            fragment.nodeType === "stack"
+            fragment.nodeType === rowStackKind.stackType
           )
 
           const stackHeight = (stack: PageFragment): number => {
-            const stackNode = doc.document.sections
-              .map((docSection) => docSection.nodes[stack.nodeId])
-              .find((node) => node?.type === "stack")
-            const stackMinHeight = stackNode?.type === "stack"
-              ? Math.max(DEFAULT_STACK_MIN_HEIGHT, stackNode.props.minHeight ?? 0)
-              : DEFAULT_STACK_MIN_HEIGHT
+            const stackNode = findDocumentNode(doc, stack.nodeId)
+            const stackMinHeight =
+              rowStackKind.stackType === "stack" && stackNode?.type === "stack"
+                ? Math.max(DEFAULT_STACK_MIN_HEIGHT, stackNode.props.minHeight ?? 0)
+                : rowStackKind.stackType === "flow-stack" && stackNode?.type === "flow-stack" && (stack.fragmentIndex ?? 0) === 0
+                  ? Math.max(0, stackNode.props.minHeight ?? 0)
+                  : 0
             const contentBottom = page.fragments.reduce((bottom, fragment) => {
               if (!isDescendantOf(fragment, stack.nodeId)) return bottom
               const fragmentHeight = fragment.nodeId === nodeId ? height : fragment.height
@@ -100,8 +127,8 @@ export function resizeFragmentHeightAndShift(
               const isTarget = fragment.nodeId === nodeId &&
                 fragment.nodeType === "paragraph" &&
                 (pageIndex == null || fragment.pageIndex === pageIndex)
-              const isRow = fragment.nodeId === rowAncestor.nodeId && fragment.nodeType === "row"
-              const isRowStack = fragment.parentNodeId === rowAncestor.nodeId && fragment.nodeType === "stack"
+              const isRow = fragment.nodeId === rowAncestor.nodeId && fragment.nodeType === rowStackKind.rowType
+              const isRowStack = fragment.parentNodeId === rowAncestor.nodeId && fragment.nodeType === rowStackKind.stackType
               const isInsideRow = isDescendantOf(fragment, rowAncestor.nodeId)
               const shouldShiftBelowRow = !isRow && !isInsideRow && fragment.y >= rowBottom - 0.5
               const shouldShiftInsideStack = isLaterInEditedStack(fragment)
@@ -109,18 +136,10 @@ export function resizeFragmentHeightAndShift(
               if (isTarget) return { ...fragment, height }
               if (isRow || isRowStack) return { ...fragment, height: nextRowHeight }
               if (shouldShiftInsideStack && Math.abs(delta) >= 0.5) {
-                return {
-                  ...fragment,
-                  y: fragment.y + delta,
-                  lines: fragment.lines?.map((line) => ({ ...line, y: line.y + delta })),
-                }
+                return shiftFragmentY(fragment, delta)
               }
               if (!shouldShiftBelowRow || Math.abs(rowDelta) < 0.5) return fragment
-              return {
-                ...fragment,
-                y: fragment.y + rowDelta,
-                lines: fragment.lines?.map((line) => ({ ...line, y: line.y + rowDelta })),
-              }
+              return shiftFragmentY(fragment, rowDelta)
             }),
           }
         }
@@ -133,11 +152,7 @@ export function resizeFragmentHeightAndShift(
               (pageIndex == null || fragment.pageIndex === pageIndex)
             if (isTarget) return { ...fragment, height }
             if (fragment.y <= targetY) return fragment
-            return {
-              ...fragment,
-              y: fragment.y + delta,
-              lines: fragment.lines?.map((line) => ({ ...line, y: line.y + delta })),
-            }
+            return shiftFragmentY(fragment, delta)
           }),
         }
       }),

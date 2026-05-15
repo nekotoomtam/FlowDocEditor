@@ -3,6 +3,8 @@ import type {
   DocumentNode,
   DocumentSection,
   FieldRefInline,
+  FlowRowNode,
+  FlowStackNode,
   InlineNode,
   LayoutNode,
   ParagraphNode,
@@ -174,6 +176,23 @@ function normalizeStackNode(input: LayoutNode & { type: "stack" }): StackNode {
   }
 }
 
+// ─── Flow Stack ───────────────────────────────────────────────────────────────
+
+function normalizeFlowStackNode(input: LayoutNode & { type: "flow-stack" }): FlowStackNode {
+  const props = (input.props ?? {}) as Record<string, unknown>
+  return {
+    id: input.id,
+    type: "flow-stack",
+    props: {
+      minHeight: props["minHeight"] != null
+        ? normalizePositiveNumber(props["minHeight"], DEFAULT_STACK_MIN_HEIGHT)
+        : undefined,
+      widthShare: normalizeWidthShare(props["widthShare"]),
+    },
+    childIds: Array.isArray(input.childIds) ? input.childIds.filter((id) => typeof id === "string" && id.length > 0) : [],
+  }
+}
+
 // ─── Body ─────────────────────────────────────────────────────────────────────
 
 function normalizeBodyNode(input: LayoutNode & { type: "body" }): BodyNode {
@@ -240,6 +259,47 @@ function normalizeRowNode(input: LayoutNode & { type: "row" }): RowNode {
   }
 }
 
+// ─── Flow Row ─────────────────────────────────────────────────────────────────
+
+function normalizeFlowRowWidthShares(nodes: Record<string, LayoutNode>, row: FlowRowNode): Record<string, LayoutNode> {
+  const stackChildren = row.childIds
+    .map((id) => nodes[id])
+    .filter((n): n is FlowStackNode => n?.type === "flow-stack")
+
+  const hasAllShares = stackChildren.every((s) => typeof s.props.widthShare === "number")
+  if (hasAllShares) {
+    const total = Number(
+      stackChildren.reduce((sum, s) => sum + (s.props.widthShare ?? 0), 0).toFixed(2),
+    )
+    if (total === 100) return nodes
+  }
+
+  const shares = getEqualWidthShares(stackChildren.length)
+  const updated = { ...nodes }
+  stackChildren.forEach((stack, index) => {
+    updated[stack.id] = {
+      ...stack,
+      props: { ...stack.props, widthShare: shares[index] },
+    }
+  })
+  return updated
+}
+
+function normalizeFlowRowNode(input: LayoutNode & { type: "flow-row" }): FlowRowNode {
+  const props = (input.props ?? {}) as Record<string, unknown>
+  return {
+    id: input.id,
+    type: "flow-row",
+    props: {
+      gap: props["gap"] != null ? normalizeNonNegativeNumber(props["gap"], 0) : undefined,
+      minHeight: props["minHeight"] != null
+        ? normalizePositiveNumber(props["minHeight"], 0)
+        : undefined,
+    },
+    childIds: Array.isArray(input.childIds) ? input.childIds.filter((id) => typeof id === "string" && id.length > 0) : [],
+  }
+}
+
 // ─── Section ──────────────────────────────────────────────────────────────────
 
 function normalizeNode(node: LayoutNode): LayoutNode {
@@ -247,6 +307,8 @@ function normalizeNode(node: LayoutNode): LayoutNode {
     case "body": return normalizeBodyNode(node)
     case "stack": return normalizeStackNode(node)
     case "row": return normalizeRowNode(node)
+    case "flow-stack": return normalizeFlowStackNode(node)
+    case "flow-row": return normalizeFlowRowNode(node)
     case "paragraph": return normalizeParagraphNode(node)
     case "spacer": return normalizeSpacerNode(node)
     case "table": return node
@@ -265,6 +327,8 @@ function normalizeSection(section: DocumentSection): DocumentSection {
   Object.values(nodes).forEach((node) => {
     if (node.type === "row") {
       nodes = normalizeRowWidthShares(nodes, node)
+    } else if (node.type === "flow-row") {
+      nodes = normalizeFlowRowWidthShares(nodes, node)
     }
   })
 

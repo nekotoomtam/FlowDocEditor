@@ -29,7 +29,11 @@ import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
 import { SAMPLE_FIELD_REGISTRY_V1 } from "@/app/_lib/fieldRegistry"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
-import { createBrowserFontkitMeasurer, loadBrowserFontBuffer } from "./browserFontkitMeasurer"
+import {
+  isEditorTextMeasurerReady,
+  resolveBrowserEditorTextMeasurer,
+  type EditorTextMeasurerStatus,
+} from "./editorTextMeasurerState"
 import type { TextMeasurer } from "@/layout"
 import { comparePagination } from "./comparePagination"
 import {
@@ -62,7 +66,7 @@ import {
 } from "./wysiwygDraftPreview"
 import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
 import { resolveEditorTestScenarioFromLocation } from "./wysiwygStage3StressScenarios"
-import { isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
+import { isParagraphInsideFlowStack, isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
 import { commitWysiwygTextEditState, getPlainParagraphTextFromDocument } from "./wysiwygTextCommit"
 import { useInlineEditSession } from "./useInlineEditSession"
 import {
@@ -70,7 +74,21 @@ import {
   useWysiwygTextSession,
   WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
-import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
+import { resolvePersistableWysiwygDocument } from "./wysiwygDraftPersistence"
+import {
+  findEditorPageKeyByPageIndex,
+  scrollElementIntoNearestView,
+  shouldFollowInlineEditPageChange,
+} from "./editorPageFollow"
+import {
+  resolveWysiwygDraftPaginationSource,
+  resolveWysiwygDraftPaginationDelayMs,
+  shouldCoalesceWysiwygDraftPaginationRequest,
+  shouldScheduleResponsiveFlowStackDraftPagination,
+  shouldUseWysiwygDraftPaginationFrame,
+  type WysiwygDraftPaginationLatestSnapshot,
+  type WysiwygTextReflowDecision,
+} from "./wysiwygReflow"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -168,6 +186,9 @@ const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 0
 // Keep hard reflow from settling between real key-repeat events; live echo
 // carries immediate feedback until the typing burst pauses.
 const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 450
+// Flow-stack page-boundary edits do not have a safe same-page local preview.
+// Keep the authoritative draft pagination close to the input frame instead.
+const FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS = 16
 const FLOWDOC_FONT_HEADER = "X-FlowDoc-Font"
 const FLOWDOC_FONT_FALLBACK_VALUE = "fallback"
 
@@ -473,14 +494,16 @@ export default function EditorShell() {
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit")
   const [state, dispatch] = useReducer(reducer, initialTestScenario?.document ?? null, createInitialEditorState)
   const [editorTextMeasurer, setEditorTextMeasurer] = useState<TextMeasurer>(() => createBrowserTextMeasurer())
+  const [editorTextMeasurerStatus, setEditorTextMeasurerStatus] = useState<EditorTextMeasurerStatus>("loading")
+  const [initialLayoutReady, setInitialLayoutReady] = useState(false)
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
   useEffect(() => {
     let cancelled = false
-    loadBrowserFontBuffer().then(async (buffer) => {
-      if (cancelled || !buffer) return
-      const fontkitMeasurer = await createBrowserFontkitMeasurer(buffer)
-      if (cancelled || !fontkitMeasurer) return
-      setEditorTextMeasurer(fontkitMeasurer)
+    const fallbackMeasurer = createBrowserTextMeasurer()
+    resolveBrowserEditorTextMeasurer(fallbackMeasurer).then((next) => {
+      if (cancelled) return
+      setEditorTextMeasurer(next.measurer)
+      setEditorTextMeasurerStatus(next.status)
       setFontReadyVersion((v) => v + 1)
     })
     return () => { cancelled = true }
@@ -503,6 +526,7 @@ export default function EditorShell() {
       : bindDocumentWithSnapshot(doc, { registry: packageFieldRegistry, snapshot: dataSnapshot }).doc
   ), [dataSnapshot, isTemplateMode, packageFieldRegistry])
   const previewDoc = useMemo(() => resolvePreviewDoc(state.doc), [resolvePreviewDoc, state.doc])
+  const isInitialLayoutPreparing = !initialLayoutReady
   const dataReadiness = useMemo(() => assessDocumentDataReadiness({
     doc: state.doc,
     registry: packageFieldRegistry,
@@ -529,12 +553,20 @@ export default function EditorShell() {
   useEffect(() => { showDriftRef.current = showDrift }, [showDrift])
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const docRef = useRef(state.doc)
+  const packageFieldRegistryRef = useRef(packageFieldRegistry)
+  const dataSnapshotRef = useRef(dataSnapshot)
   const paginatedRef = useRef(state.paginated)
   const wasInlineEditingRef = useRef(false)
   const wysiwygDraftPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wysiwygDraftPaginationFrameRef = useRef<number | null>(null)
+  const wysiwygDraftPaginationDelayRef = useRef<number | null>(null)
   const wysiwygDraftPaginationGenerationRef = useRef(0)
+  const wysiwygDraftPaginationSnapshotRevisionRef = useRef(0)
+  const wysiwygLatestDraftPaginationSnapshotRef = useRef<WysiwygDraftPaginationLatestSnapshot | null>(null)
 
   useEffect(() => { docRef.current = state.doc }, [state.doc])
+  useEffect(() => { packageFieldRegistryRef.current = packageFieldRegistry }, [packageFieldRegistry])
+  useEffect(() => { dataSnapshotRef.current = dataSnapshot }, [dataSnapshot])
   useEffect(() => { paginatedRef.current = state.paginated })
 
   useEffect(() => {
@@ -579,6 +611,20 @@ export default function EditorShell() {
     commitInlineTextEdit: (payload) => dispatch({ type: "COMMIT_INLINE_TEXT_EDIT", ...payload }),
     setPaginated: (paginated) => dispatch({ type: "SET_PAGINATED", paginated }),
   })
+  const inlineEditPageIndexRef = useRef<number | null>(inlineEditPageIndex)
+  useEffect(() => { inlineEditPageIndexRef.current = inlineEditPageIndex }, [inlineEditPageIndex])
+  const requestInlineEditPageFollow = useCallback((pageIndex: number) => {
+    const pageKey = findEditorPageKeyByPageIndex(paginatedRef.current, pageIndex)
+    if (!pageKey) return
+    const scrollPage = () => {
+      scrollElementIntoNearestView(pageRefs.current.get(pageKey))
+    }
+    if (typeof requestAnimationFrame === "undefined") {
+      scrollPage()
+      return
+    }
+    requestAnimationFrame(scrollPage)
+  }, [])
 
   const {
     state: wysiwygTextSessionState,
@@ -598,28 +644,60 @@ export default function EditorShell() {
   const [wysiwygDraftPaginationNodeId, setWysiwygDraftPaginationNodeId] = useState<string | null>(null)
   useEffect(() => { wysiwygTextSessionStateRef.current = wysiwygTextSessionState }, [wysiwygTextSessionState])
 
+  const getPersistableDocumentSnapshot = useCallback(() => {
+    try {
+      return resolvePersistableWysiwygDocument(
+        docRef.current,
+        wysiwygTextSessionStateRef.current,
+        WYSIWYG_TEXT_ENGINE_ENABLED,
+      )
+    } catch (error) {
+      console.error("WYSIWYG draft persistence produced invalid document:", error)
+      return docRef.current
+    }
+  }, [])
+
   const clearWysiwygDraftPagination = useCallback(() => {
     if (wysiwygDraftPaginationDebounceRef.current) clearTimeout(wysiwygDraftPaginationDebounceRef.current)
+    if (wysiwygDraftPaginationFrameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(wysiwygDraftPaginationFrameRef.current)
+    }
     wysiwygDraftPaginationDebounceRef.current = null
+    wysiwygDraftPaginationFrameRef.current = null
+    wysiwygDraftPaginationDelayRef.current = null
+    wysiwygLatestDraftPaginationSnapshotRef.current = null
     wysiwygDraftPaginationGenerationRef.current += 1
     setWysiwygDraftPaginationNodeId(null)
   }, [])
   useEffect(() => () => {
     if (wysiwygDraftPaginationDebounceRef.current) clearTimeout(wysiwygDraftPaginationDebounceRef.current)
+    if (wysiwygDraftPaginationFrameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(wysiwygDraftPaginationFrameRef.current)
+    }
+    wysiwygDraftPaginationFrameRef.current = null
+    wysiwygDraftPaginationDelayRef.current = null
+    wysiwygLatestDraftPaginationSnapshotRef.current = null
   }, [])
 
-  const scheduleWysiwygDraftPagination = useCallback((nodeId: string) => {
+  const scheduleWysiwygDraftPagination = useCallback((nodeId: string, debounceMs = WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS) => {
     if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
-    if (wysiwygDraftPaginationDebounceRef.current) clearTimeout(wysiwygDraftPaginationDebounceRef.current)
-    const generation = ++wysiwygDraftPaginationGenerationRef.current
-    wysiwygDraftPaginationDebounceRef.current = setTimeout(() => {
+    const paginationDelayMs = Math.max(0, debounceMs)
+    const runDraftPagination = (generation: number) => {
       if (generation !== wysiwygDraftPaginationGenerationRef.current) return
+      wysiwygDraftPaginationDebounceRef.current = null
+      wysiwygDraftPaginationFrameRef.current = null
+      wysiwygDraftPaginationDelayRef.current = null
       const session = wysiwygTextSessionStateRef.current
-      if (session.nodeId !== nodeId) return
+      const source = resolveWysiwygDraftPaginationSource({
+        nodeId,
+        session,
+        latestSnapshot: wysiwygLatestDraftPaginationSnapshotRef.current,
+      })
+      if (!source) return
       const draftDoc = buildWysiwygTextDraftPreviewDocument({
         doc: docRef.current,
         nodeId,
-        draftText: session.draftText,
+        draftText: source.draftText,
       })
       try {
         assertDocument(draftDoc)
@@ -631,32 +709,75 @@ export default function EditorShell() {
       const paginated = paginatePreviewDoc(draftDoc)
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
         nodeId,
-        draftVersion: session.dirtyVersion,
+        draftVersion: source.revision,
         ...summarizePaginatedForWysiwygPerf(paginated),
       })
       if (generation !== wysiwygDraftPaginationGenerationRef.current) return
-      const nextSession = wysiwygTextSessionStateRef.current
-      if (nextSession.nodeId !== nodeId || nextSession.dirtyVersion !== session.dirtyVersion) {
-        scheduleWysiwygDraftPagination(nodeId)
+      const nextSource = resolveWysiwygDraftPaginationSource({
+        nodeId,
+        session: wysiwygTextSessionStateRef.current,
+        latestSnapshot: wysiwygLatestDraftPaginationSnapshotRef.current,
+      })
+      if (!nextSource) return
+      if (nextSource.revision !== source.revision) {
+        scheduleWysiwygDraftPagination(nodeId, paginationDelayMs)
         return
       }
       const ranges = getWysiwygParagraphFragmentRanges(paginated, nodeId)
-      const nextPageIndex = nextSession.caretOffset == null
+      const nextPageIndex = source.caretOffset == null
         ? null
-        : findWysiwygPageIndexInFragmentRanges(ranges, nextSession.caretOffset)
-      if (nextPageIndex !== null) {
-        setInlineEditPageIndex(nextPageIndex)
-      }
+        : findWysiwygPageIndexInFragmentRanges(ranges, source.caretOffset)
       paginatedRef.current = paginated
       optimisticLayoutRef.current = { doc: draftDoc, paginated }
+      if (nextPageIndex !== null) {
+        const previousPageIndex = inlineEditPageIndexRef.current
+        inlineEditPageIndexRef.current = nextPageIndex
+        setInlineEditPageIndex(nextPageIndex)
+        if (shouldFollowInlineEditPageChange({ previousPageIndex, nextPageIndex })) {
+          requestInlineEditPageFollow(nextPageIndex)
+        }
+      }
       setWysiwygDraftPaginationNodeId(countWysiwygTextDraftFragments(paginated, nodeId) > 1 ? nodeId : null)
       dispatch({ type: "SET_PAGINATED", paginated })
       markInlineEditVisualFresh(inlineEditDraftVersionRef.current)
-    }, WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS)
+    }
+
+    const useAnimationFrame = shouldUseWysiwygDraftPaginationFrame({
+      nextDelayMs: paginationDelayMs,
+      responsiveDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+      canUseAnimationFrame: typeof requestAnimationFrame !== "undefined",
+    })
+    if (useAnimationFrame) {
+      if (wysiwygDraftPaginationDebounceRef.current) {
+        clearTimeout(wysiwygDraftPaginationDebounceRef.current)
+        wysiwygDraftPaginationDebounceRef.current = null
+      }
+      wysiwygDraftPaginationDelayRef.current = paginationDelayMs
+      if (wysiwygDraftPaginationFrameRef.current !== null) return
+      const generation = ++wysiwygDraftPaginationGenerationRef.current
+      wysiwygDraftPaginationFrameRef.current = requestAnimationFrame(() => runDraftPagination(generation))
+      return
+    }
+
+    if (wysiwygDraftPaginationFrameRef.current !== null) return
+    if (wysiwygDraftPaginationDebounceRef.current) {
+      if (shouldCoalesceWysiwygDraftPaginationRequest({
+        pendingDelayMs: wysiwygDraftPaginationDelayRef.current,
+        nextDelayMs: paginationDelayMs,
+        responsiveDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+      })) {
+        return
+      }
+      clearTimeout(wysiwygDraftPaginationDebounceRef.current)
+    }
+    const generation = ++wysiwygDraftPaginationGenerationRef.current
+    wysiwygDraftPaginationDelayRef.current = paginationDelayMs
+    wysiwygDraftPaginationDebounceRef.current = setTimeout(() => runDraftPagination(generation), paginationDelayMs)
   }, [
     inlineEditDraftVersionRef,
     markInlineEditVisualFresh,
     paginatePreviewDoc,
+    requestInlineEditPageFollow,
     setInlineEditPageIndex,
   ])
 
@@ -747,6 +868,14 @@ export default function EditorShell() {
 
   const handleWysiwygTextDraftChange = useCallback((nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => {
     if (wysiwygTextSessionState.nodeId !== nodeId) return
+    const nextSnapshotRevision = wysiwygDraftPaginationSnapshotRevisionRef.current + 1
+    wysiwygDraftPaginationSnapshotRevisionRef.current = nextSnapshotRevision
+    wysiwygLatestDraftPaginationSnapshotRef.current = {
+      nodeId,
+      draftText: text,
+      caretOffset: caretIndex,
+      revision: nextSnapshotRevision,
+    }
     if (text === wysiwygTextSessionState.draftText) {
       moveWysiwygTextCaret(caretIndex, selection)
     } else {
@@ -759,8 +888,19 @@ export default function EditorShell() {
       })
     }
     handleInlineEditCaretChange(nodeId, caretIndex)
-    if (wysiwygDraftPaginationNodeId === nodeId) {
-      scheduleWysiwygDraftPagination(nodeId)
+    const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
+    const useResponsiveFlowStackDraftPagination = shouldScheduleResponsiveFlowStackDraftPagination({
+      isFlowStackParagraph,
+      draftPaginationActive: wysiwygDraftPaginationNodeId === nodeId,
+      currentFragmentCount: countWysiwygTextDraftFragments(paginatedRef.current, nodeId),
+    })
+    if (useResponsiveFlowStackDraftPagination) {
+      scheduleWysiwygDraftPagination(nodeId, resolveWysiwygDraftPaginationDelayMs({
+        draftPaginationActive: true,
+        isFlowStackParagraph,
+        defaultDelayMs: WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS,
+        flowStackBoundaryDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+      }))
     }
   }, [
     changeWysiwygTextDraft,
@@ -782,7 +922,12 @@ export default function EditorShell() {
   const handleWysiwygTextReflowDecision = useCallback((nodeId: string, reflow: WysiwygTextReflowDecision) => {
     if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionState.nodeId !== nodeId) return
     if (!reflow.shouldQueueSettledPagination) return
-    scheduleWysiwygDraftPagination(nodeId)
+    scheduleWysiwygDraftPagination(nodeId, resolveWysiwygDraftPaginationDelayMs({
+      reflow,
+      isFlowStackParagraph: isParagraphInsideFlowStack(docRef.current, nodeId),
+      defaultDelayMs: WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS,
+      flowStackBoundaryDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+    }))
   }, [scheduleWysiwygDraftPagination, wysiwygTextSessionState.nodeId])
 
   // ─── Auto-save ───────────────────────────────────────────────────────────────
@@ -790,12 +935,40 @@ export default function EditorShell() {
     if (initialTestScenario) return
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(() => {
-      saveToStorage(state.doc, packageFieldRegistry, dataSnapshot)
+      saveToStorage(getPersistableDocumentSnapshot(), packageFieldRegistry, dataSnapshot)
       setSavedAt(new Date())
     }, 500)
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataSnapshot, initialTestScenario, packageFieldRegistry, state.doc])
+  }, [
+    dataSnapshot,
+    getPersistableDocumentSnapshot,
+    initialTestScenario,
+    packageFieldRegistry,
+    state.doc,
+    wysiwygTextSessionState.dirtyVersion,
+    wysiwygTextSessionState.nodeId,
+  ])
+
+  useEffect(() => {
+    if (initialTestScenario) return
+    const flushDraftToStorage = () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+        saveTimeoutRef.current = null
+      }
+      saveToStorage(getPersistableDocumentSnapshot(), packageFieldRegistryRef.current, dataSnapshotRef.current)
+    }
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") flushDraftToStorage()
+    }
+    window.addEventListener("pagehide", flushDraftToStorage)
+    document.addEventListener("visibilitychange", flushWhenHidden)
+    return () => {
+      window.removeEventListener("pagehide", flushDraftToStorage)
+      document.removeEventListener("visibilitychange", flushWhenHidden)
+    }
+  }, [getPersistableDocumentSnapshot, initialTestScenario])
 
   const importRef = useRef<HTMLInputElement>(null)
 
@@ -1075,7 +1248,12 @@ export default function EditorShell() {
     if (inlineEditVisualLocked || !inlineEditDocumentVisualReady) return
     const nextPageIndex = findWysiwygPageIndexInFragmentRanges(inlineEditFragmentRanges, inlineEditCaretIndex)
     if (nextPageIndex === null || nextPageIndex === inlineEditPageIndex) return
+    const previousPageIndex = inlineEditPageIndexRef.current
+    inlineEditPageIndexRef.current = nextPageIndex
     setInlineEditPageIndex(nextPageIndex)
+    if (shouldFollowInlineEditPageChange({ previousPageIndex, nextPageIndex })) {
+      requestInlineEditPageFollow(nextPageIndex)
+    }
   }, [
     inlineEditCaretIndex,
     inlineEditDocumentVisualReady,
@@ -1083,6 +1261,7 @@ export default function EditorShell() {
     inlineEditNodeId,
     inlineEditPageIndex,
     inlineEditVisualLocked,
+    requestInlineEditPageFollow,
   ])
 
   // Inline edit contract:
@@ -1188,6 +1367,9 @@ export default function EditorShell() {
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
       optimisticLayoutRef.current = { doc: previewDoc, paginated }
       dispatch({ type: "SET_PAGINATED", paginated })
+      if (isEditorTextMeasurerReady(editorTextMeasurerStatus)) {
+        setInitialLayoutReady(true)
+      }
       if (inlineEditDraftVersionAtSchedule !== null) {
         markInlineEditVisualFresh(inlineEditDraftVersionAtSchedule)
       }
@@ -1195,7 +1377,7 @@ export default function EditorShell() {
 
     return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorTextMeasurer, fontReadyVersion, markInlineEditVisualFresh, previewDoc])
+  }, [editorTextMeasurer, editorTextMeasurerStatus, fontReadyVersion, markInlineEditVisualFresh, previewDoc])
 
   // Server pagination — export layout truth. The editor canvas
   // keeps the browser preview so normal display and inline editing share the
@@ -1822,10 +2004,13 @@ export default function EditorShell() {
               saved {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </span>
           )}
-          {isLayoutLoading && !state.drag && !inlineEditNodeId && (
+          {isInitialLayoutPreparing && !state.drag && !inlineEditNodeId && (
+            <span data-testid="initial-layout-status" style={{ fontSize: 10, color: "#9ca3af" }}>preparing layout…</span>
+          )}
+          {!isInitialLayoutPreparing && isLayoutLoading && !state.drag && !inlineEditNodeId && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>↻ layout…</span>
           )}
-          {!isLayoutLoading && layoutStatus === "optimistic" && !state.drag && !inlineEditNodeId && (
+          {!isInitialLayoutPreparing && !isLayoutLoading && layoutStatus === "optimistic" && !state.drag && !inlineEditNodeId && (
             <span style={{ fontSize: 10, color: "#9ca3af" }}>preview layout</span>
           )}
           {exportError && (
@@ -1894,50 +2079,60 @@ export default function EditorShell() {
             </div>
           )}
         </div>
-        <EditorCanvas
-          paginated={state.paginated}
-          doc={previewDoc}
-          drag={isTemplateMode ? state.drag : null}
-          scale={scale}
-          selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
-          isLayoutLoading={isLayoutLoading}
-          textMeasurer={editorTextMeasurer}
-          inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
-          inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
-          inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
-          inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
-          onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
-          onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
-          onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
-          onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
-          onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightPreviewChange : () => undefined}
-          onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
-          onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
-          onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
-          setPageRef={setPageRef}
-          onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
-          onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
-          onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
-          resizeDrag={isTemplateMode ? resizeDrag : null}
-          minHeightDrag={isTemplateMode ? minHeightDrag : null}
-          onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
-          marginDrag={isTemplateMode ? marginDrag : null}
-          onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
-          onScaleChange={handleCanvasScaleChange}
-          autoFitScale={zoomMode === "fit"}
-          showTextSegments={showTextSegments}
-          showDrift={showDrift}
-          driftMap={driftReport?.driftMap ?? null}
-          wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
-          wysiwygTextEngineEnabled={WYSIWYG_TEXT_ENGINE_ENABLED}
-          wysiwygTextDraftNodeId={wysiwygTextSessionState.nodeId}
-          wysiwygTextDraftText={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.draftText : null}
-          wysiwygTextCaretOffset={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.caretOffset : null}
-          wysiwygTextSelection={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
-          wysiwygTextDraftPaginationActive={wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
-          onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
-          onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
-        />
+        {isInitialLayoutPreparing ? (
+          <div
+            data-testid="initial-layout-loading"
+            aria-live="polite"
+            style={{ flex: 1, display: "grid", placeItems: "center", overflow: "auto", padding: 24, background: "#f3f4f6", color: "#6b7280", fontSize: 12 }}
+          >
+            Preparing layout...
+          </div>
+        ) : (
+          <EditorCanvas
+            paginated={state.paginated}
+            doc={previewDoc}
+            drag={isTemplateMode ? state.drag : null}
+            scale={scale}
+            selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
+            isLayoutLoading={isLayoutLoading}
+            textMeasurer={editorTextMeasurer}
+            inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
+            inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
+            inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
+            inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
+            onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
+            onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
+            onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
+            onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
+            onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightPreviewChange : () => undefined}
+            onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
+            onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
+            onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
+            setPageRef={setPageRef}
+            onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
+            onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
+            onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
+            resizeDrag={isTemplateMode ? resizeDrag : null}
+            minHeightDrag={isTemplateMode ? minHeightDrag : null}
+            onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
+            marginDrag={isTemplateMode ? marginDrag : null}
+            onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
+            onScaleChange={handleCanvasScaleChange}
+            autoFitScale={zoomMode === "fit"}
+            showTextSegments={showTextSegments}
+            showDrift={showDrift}
+            driftMap={driftReport?.driftMap ?? null}
+            wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
+            wysiwygTextEngineEnabled={WYSIWYG_TEXT_ENGINE_ENABLED}
+            wysiwygTextDraftNodeId={wysiwygTextSessionState.nodeId}
+            wysiwygTextDraftText={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.draftText : null}
+            wysiwygTextCaretOffset={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.caretOffset : null}
+            wysiwygTextSelection={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
+            wysiwygTextDraftPaginationActive={wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
+            onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
+            onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
+          />
+        )}
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>
           {isTemplateMode ? (
             <div style={{ flexShrink: 0 }}>

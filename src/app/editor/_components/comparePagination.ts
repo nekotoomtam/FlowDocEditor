@@ -60,7 +60,7 @@ interface LayoutSnapshot {
 
 // Node types whose page movement and geometry drift should be tracked
 const TRACKED_TEXT_TYPES = new Set(["paragraph", "toc"])
-const TRACKED_LAYOUT_TYPES = new Set(["row", "stack", "table", "table-cell", "table-row", "toc", "spacer"])
+const TRACKED_LAYOUT_TYPES = new Set(["row", "stack", "flow-row", "flow-stack", "table", "table-cell", "table-row", "toc", "spacer"])
 
 function getPageZoneFragments(page: PaginatedDocument["sections"][number]["pages"][number]): Array<{
   fragment: PageFragment
