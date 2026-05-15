@@ -6,12 +6,14 @@ import {
   applyPlacementOperation,
   addTableColumn,
   addTableRow,
+  addFlowStackColumn,
   deleteNode,
   mergeParagraphWithPrevious,
   removeTableColumn,
   removeTableRow,
   splitParagraphAtIndex,
   updateFieldRefInline,
+  updateParagraphBoxStyle,
   updateParagraphText,
 } from "./operations"
 
@@ -243,6 +245,101 @@ describe("paragraph text operations", () => {
   })
 })
 
+describe("paragraph box style operations", () => {
+  it("updates body paragraph box style without changing text content", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Box me" }])
+    const result = updateParagraphBoxStyle(makeDoc({ p1: p }, ["p1"]), "p1", {
+      fill: "F8FAFC",
+      padding: {
+        top: pt(4),
+        right: pt(5),
+        bottom: pt(6),
+        left: pt(7),
+      },
+      border: {
+        top: { style: "solid", width: pt(1), color: "111111" },
+        right: { style: "dashed", width: pt(2), color: "222222" },
+      },
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(() => assertDocument(result)).not.toThrow()
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(paragraphText(updated)).toBe("Box me")
+    expect(updated.props.box).toEqual({
+      fill: "F8FAFC",
+      padding: { top: pt(4), right: pt(5), bottom: pt(6), left: pt(7) },
+      border: {
+        top: { style: "solid", width: pt(1), color: "111111" },
+        right: { style: "dashed", width: pt(2), color: "222222" },
+      },
+    })
+  })
+
+  it("merges partial box changes and prunes zero/none values", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Box me" }])
+    const withBox = updateParagraphBoxStyle(makeDoc({ p1: p }, ["p1"]), "p1", {
+      padding: { top: pt(8), left: pt(3) },
+      border: {
+        bottom: { style: "solid", width: pt(2), color: "333333" },
+      },
+    })
+    const result = updateParagraphBoxStyle(withBox, "p1", {
+      padding: { left: pt(0) },
+      border: {
+        bottom: { style: "none", width: pt(2), color: "333333" },
+      },
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(() => assertDocument(result)).not.toThrow()
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.props.box).toEqual({
+      padding: { top: pt(8), right: pt(0), bottom: pt(0), left: pt(0) },
+    })
+  })
+
+  it("removes an empty paragraph box when all channels are cleared", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Box me" }])
+    const withBox = updateParagraphBoxStyle(makeDoc({ p1: p }, ["p1"]), "p1", {
+      fill: "FFFFFF",
+      padding: { top: pt(2) },
+      border: { left: { style: "solid", width: pt(1), color: "111111" } },
+    })
+    const result = updateParagraphBoxStyle(withBox, "p1", {
+      fill: null,
+      padding: null,
+      border: null,
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(() => assertDocument(result)).not.toThrow()
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.props.box).toBeUndefined()
+  })
+
+  it("updates paragraph box style inside a table cell", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Cell" }])
+    const result = updateParagraphBoxStyle(makeTableDoc(p), "p1", {
+      fill: "E0F2FE",
+      padding: { left: pt(9) },
+    })
+    const table = result.document.sections[0].nodes.table as unknown as TableNode
+    const updated = table.nodes.p1
+
+    expect(() => assertDocument(result)).not.toThrow()
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.props.box).toEqual({
+      fill: "E0F2FE",
+      padding: { top: pt(0), right: pt(0), bottom: pt(0), left: pt(9) },
+    })
+  })
+})
+
 describe("field reference operations", () => {
   it("updates fieldRef label and fallback without changing its key", () => {
     const p = makeParagraph("p1", [
@@ -412,6 +509,184 @@ describe("flow-row / flow-stack operations", () => {
     if (stack.type !== "flow-stack") return
     expect(stack.childIds).toHaveLength(1)
     expect(section.nodes[stack.childIds[0]]?.type).toBe("paragraph")
+  })
+
+  it("inserts a paragraph into the second flow-stack without moving sibling content", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: [] },
+      p1,
+    }, ["fr1"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "insert-into-container", containerId: "fs2", containerType: "flow-stack", index: 0 },
+      { source: "palette", blockType: "paragraph" },
+    )
+    const section = updated.document.sections[0]
+    const leftStack = section.nodes.fs1
+    const rightStack = section.nodes.fs2
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(leftStack.type).toBe("flow-stack")
+    expect(rightStack.type).toBe("flow-stack")
+    if (leftStack.type !== "flow-stack" || rightStack.type !== "flow-stack") return
+    expect(leftStack.childIds).toEqual(["p1"])
+    expect(rightStack.childIds).toHaveLength(1)
+    expect(section.nodes[rightStack.childIds[0]]?.type).toBe("paragraph")
+  })
+
+  it("keeps flow-stack topology stable across insert and delete snapshots", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Right" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] },
+      p1,
+      p2,
+    }, ["fr1"])
+
+    const inserted = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "insert-into-container", containerId: "fs2", containerType: "flow-stack", index: 1 },
+      { source: "palette", blockType: "paragraph" },
+    )
+    const insertedSection = inserted.document.sections[0]
+    const insertedLeftStack = insertedSection.nodes.fs1
+    const insertedRightStack = insertedSection.nodes.fs2
+
+    expect(() => assertDocument(inserted)).not.toThrow()
+    expect(insertedLeftStack.type).toBe("flow-stack")
+    expect(insertedRightStack.type).toBe("flow-stack")
+    if (insertedLeftStack.type !== "flow-stack" || insertedRightStack.type !== "flow-stack") return
+    expect(insertedLeftStack.childIds).toEqual(["p1"])
+    expect(insertedRightStack.childIds[0]).toBe("p2")
+    expect(insertedRightStack.childIds).toHaveLength(2)
+    expect(insertedSection.nodes[insertedRightStack.childIds[1]]?.type).toBe("paragraph")
+
+    const deleted = deleteNode(inserted, insertedRightStack.childIds[1])
+    const deletedSection = deleted.document.sections[0]
+    const deletedLeftStack = deletedSection.nodes.fs1
+    const deletedRightStack = deletedSection.nodes.fs2
+
+    expect(() => assertDocument(deleted)).not.toThrow()
+    expect(deletedLeftStack.type).toBe("flow-stack")
+    expect(deletedRightStack.type).toBe("flow-stack")
+    if (deletedLeftStack.type !== "flow-stack" || deletedRightStack.type !== "flow-stack") return
+    expect(deletedLeftStack.childIds).toEqual(["p1"])
+    expect(deletedRightStack.childIds).toEqual(["p2"])
+  })
+
+  it("adds a flow-stack column by splitting the selected stack width", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Right" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] },
+      p1,
+      p2,
+    }, ["fr1"])
+
+    const updated = addFlowStackColumn(doc, "fr1", "fs1")
+    const section = updated.document.sections[0]
+    const row = section.nodes.fr1
+    const leftStack = section.nodes.fs1
+    const rightStack = section.nodes.fs2
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(3)
+    expect(row.childIds[0]).toBe("fs1")
+    expect(row.childIds[2]).toBe("fs2")
+
+    const insertedStack = section.nodes[row.childIds[1]]
+    expect(leftStack.type).toBe("flow-stack")
+    expect(insertedStack.type).toBe("flow-stack")
+    expect(rightStack.type).toBe("flow-stack")
+    if (leftStack.type !== "flow-stack" || insertedStack.type !== "flow-stack" || rightStack.type !== "flow-stack") return
+    expect(leftStack.props.widthShare).toBe(25)
+    expect(insertedStack.props.widthShare).toBe(25)
+    expect(insertedStack.childIds).toEqual([])
+    expect(rightStack.props.widthShare).toBe(50)
+    expect(leftStack.childIds).toEqual(["p1"])
+    expect(rightStack.childIds).toEqual(["p2"])
+  })
+
+  it("adds a balanced flow-stack column when the flow-row is selected", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2", "fs3"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 20 }, childIds: [] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 60 }, childIds: [] },
+      fs3: { id: "fs3", type: "flow-stack", props: { widthShare: 20 }, childIds: [] },
+    }, ["fr1"])
+
+    const updated = addFlowStackColumn(doc, "fr1")
+    const section = updated.document.sections[0]
+    const row = section.nodes.fr1
+    const firstStack = section.nodes.fs1
+    const secondStack = section.nodes.fs2
+    const thirdStack = section.nodes.fs3
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(4)
+    expect(row.childIds.slice(0, 3)).toEqual(["fs1", "fs2", "fs3"])
+
+    const insertedStack = section.nodes[row.childIds[3]]
+    expect(firstStack.type).toBe("flow-stack")
+    expect(secondStack.type).toBe("flow-stack")
+    expect(thirdStack.type).toBe("flow-stack")
+    expect(insertedStack.type).toBe("flow-stack")
+    if (firstStack.type !== "flow-stack" || secondStack.type !== "flow-stack" || thirdStack.type !== "flow-stack" || insertedStack.type !== "flow-stack") return
+    expect(firstStack.props.widthShare).toBe(25)
+    expect(secondStack.props.widthShare).toBe(25)
+    expect(thirdStack.props.widthShare).toBe(25)
+    expect(insertedStack.props.widthShare).toBe(25)
+  })
+
+  it("adds a flow-stack column before a selected stack", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Right" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] },
+      p1,
+      p2,
+    }, ["fr1"])
+
+    const updated = addFlowStackColumn(doc, "fr1", "fs2", "before")
+    const section = updated.document.sections[0]
+    const row = section.nodes.fr1
+    const firstStack = section.nodes.fs1
+    const targetStack = section.nodes.fs2
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(3)
+    expect(row.childIds[0]).toBe("fs1")
+    expect(row.childIds[2]).toBe("fs2")
+
+    const insertedStack = section.nodes[row.childIds[1]]
+    expect(firstStack.type).toBe("flow-stack")
+    expect(insertedStack.type).toBe("flow-stack")
+    expect(targetStack.type).toBe("flow-stack")
+    if (firstStack.type !== "flow-stack" || insertedStack.type !== "flow-stack" || targetStack.type !== "flow-stack") return
+    expect(firstStack.props.widthShare).toBe(50)
+    expect(insertedStack.props.widthShare).toBe(25)
+    expect(targetStack.props.widthShare).toBe(25)
+    expect(insertedStack.childIds).toEqual([])
+    expect(firstStack.childIds).toEqual(["p1"])
+    expect(targetStack.childIds).toEqual(["p2"])
   })
 
   it("transfers a deleted flow-stack width share to the nearest sibling", () => {

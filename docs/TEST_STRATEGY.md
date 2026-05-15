@@ -146,9 +146,13 @@ Protects:
 - DOCX generation does not throw and emits a ZIP header
 - multi-section structure remains serializable
 - product DOCX table structure is present in generated XML
+- opt-in PDF raster checks can verify selected pixels when a local rasterizer
+  such as `pdftoppm` or ImageMagick plus Ghostscript is available
 
-Renderer smoke tests do not prove pixel-perfect output. PDF/editor visual parity
-and DOCX semantic style checks are separate future coverage.
+Renderer smoke tests do not prove pixel-perfect output. Focused PDF raster
+visual regression is available behind `FLOWDOC_PDF_VISUAL_REGRESSION=1` for
+small renderer fixtures, but broad PDF/editor visual parity and DOCX semantic
+style checks are separate future coverage.
 
 ### Level 4: App-Level Unit Tests
 
@@ -247,7 +251,7 @@ For meaningful work, the session should answer:
 Current strengths:
 
 - Core pagination has broad regression coverage. Current full suite:
-  28 core test files / 344 core tests, plus 25 app test files / 232 app tests.
+  33 core test files / 414 core tests, plus 35 app test files / 311 app tests.
 - Product scenarios have executable fixtures for the main customs/report cases,
   including pagination-level page-count golden baselines.
 - Fixture ownership is cataloged in `docs/FIXTURE_CATALOG.md`.
@@ -270,7 +274,13 @@ Current strengths:
 - Table operation coverage protects row/column structural edits, subtree
   cleanup, total-width preservation, header-row clamping, and last-row/column
   deletion guards.
-- Renderer smoke tests protect PDF/DOCX from obvious breakage.
+- Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
+  preview coverage protects paragraph box fill and border drawing from the
+  same paginated primitive metadata used by PDF. Focused PDF raster visual
+  regression protects paragraph box fill and border pixels when
+  `FLOWDOC_PDF_VISUAL_REGRESSION=1` is enabled on a machine with `pdftoppm` or
+  ImageMagick plus Ghostscript; the normal suite keeps this raster assertion
+  skipped because PDF rasterizers are environment-specific.
 - Product export golden smoke protects PDF page-count parity for customs/report
   fixtures and DOCX table row structure for the customs fixture.
 - User-level report fixture coverage protects saved FlowDoc package v2 fixtures
@@ -318,7 +328,7 @@ Current strengths:
 
 Known gaps:
 
-- No visual regression suite for PDF/editor parity yet.
+- No broad visual regression suite for PDF/editor parity yet.
 - No broad automated browser regression suite for every key editor workflow yet.
 - DOCX semantic style coverage is still limited.
 - Some editor UX qualities, such as flicker or perceived smoothness, still rely
@@ -378,4 +388,7 @@ Avoid:
 - Focused core test:
   - Windows PowerShell: `npm.cmd run test -w packages/core -- <test-file-or-filter>`
   - Non-Windows: `npm run test -w packages/core -- <test-file-or-filter>`
+- Opt-in PDF raster visual regression:
+  - Windows PowerShell: `$env:FLOWDOC_PDF_VISUAL_REGRESSION='1'; npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+  - Non-Windows: `FLOWDOC_PDF_VISUAL_REGRESSION=1 npm run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
 - Diff hygiene: `git diff --check`

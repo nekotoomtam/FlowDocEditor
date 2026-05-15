@@ -13,6 +13,7 @@ import {
   WidthType,
   PageOrientation,
   SectionType,
+  ShadingType,
 } from "docx"
 import type { PaginatedDocument, PageFragment, ResolvedBorderSide, ResolvedCellBorder } from "../../pagination"
 import type { ParagraphRenderProps } from "../../pagination"
@@ -159,15 +160,42 @@ function buildCellBorders(border: ResolvedCellBorder) {
   }
 }
 
+function toParagraphBorderOpts(side: ResolvedBorderSide | undefined, space = 0) {
+  const opts = toBorderOpts(side)
+  return space > 0 ? { ...opts, space: Math.round(space) } : opts
+}
+
+function buildParagraphBorders(fragment: PageFragment) {
+  const props = fragment.renderProps
+  const box = props?.box
+  if (!props || !box) return undefined
+
+  const isFirstFragment = fragment.continuesFrom !== true
+  const isLastFragment = fragment.isContinued !== true
+  return {
+    top: isFirstFragment ? toParagraphBorderOpts(box.border.top, box.padding.top) : NO_BORDER,
+    right: toParagraphBorderOpts(box.border.right, box.padding.right),
+    bottom: isLastFragment ? toParagraphBorderOpts(box.border.bottom, box.padding.bottom) : NO_BORDER,
+    left: toParagraphBorderOpts(box.border.left, box.padding.left),
+    between: NO_BORDER,
+  }
+}
+
+function buildParagraphShading(fragment: PageFragment) {
+  const fill = fragment.renderProps?.box?.fill
+  return fill ? { type: ShadingType.CLEAR, fill, color: "auto" } : undefined
+}
+
 // ─── Builders ─────────────────────────────────────────────────────────────────
 
 function buildParagraph(fragment: PageFragment): Paragraph | null {
   if (!fragment.lines?.length || !fragment.renderProps) return null
   const props = fragment.renderProps
   const text = fragment.lines.map((l) => l.text).join(" ").trim()
-  if (!text) return null
+  if (!text && !props.box) return null
 
   return new Paragraph({
+    includeIfEmpty: Boolean(props.box),
     children: [new TextRun({
       text,
       size: ptToHalfPoints(props.fontSize),
@@ -185,6 +213,8 @@ function buildParagraph(fragment: PageFragment): Paragraph | null {
       right: ptToTwips(props.indentRight),
       firstLine: ptToTwips(props.textIndent),
     },
+    border: buildParagraphBorders(fragment),
+    shading: buildParagraphShading(fragment),
   })
 }
 

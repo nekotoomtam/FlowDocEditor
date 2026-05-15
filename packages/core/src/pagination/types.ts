@@ -57,6 +57,17 @@ export interface TableCellRenderProps {
 
 // ─── Render Props ─────────────────────────────────────────────────────────────
 
+export interface ParagraphBoxRenderProps {
+  fill?: string
+  padding: {
+    top: number
+    right: number
+    bottom: number
+    left: number
+  }
+  border: ResolvedCellBorder
+}
+
 // ข้อมูลที่ renderer ต้องการสำหรับ paragraph — ค่าทุกอย่างแปลงเป็น abstract pt แล้ว
 export interface ParagraphRenderProps {
   fontSize: number
@@ -68,6 +79,7 @@ export interface ParagraphRenderProps {
   textIndent: number
   indentLeft: number
   indentRight: number
+  box?: ParagraphBoxRenderProps
 }
 
 // ─── Page Fragments ───────────────────────────────────────────────────────────

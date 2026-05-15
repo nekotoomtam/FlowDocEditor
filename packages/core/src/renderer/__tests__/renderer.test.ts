@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import JSZip from "jszip"
-import { PdfRenderer } from "../pdf"
+import { PdfRenderer, resolveParagraphBoxDrawingPrimitives } from "../pdf"
 import { DocxRenderer } from "../docx"
 import { paginateDocument } from "../../pagination"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
@@ -15,7 +15,7 @@ const PAGE = {
   margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
 }
 
-function makePara(id: string, text: string): ParagraphNode {
+function makePara(id: string, text: string, overrides: Partial<ParagraphNode["props"]> = {}): ParagraphNode {
   return {
     id,
     type: "paragraph",
@@ -29,6 +29,7 @@ function makePara(id: string, text: string): ParagraphNode {
       textIndent: pt(0),
       indentLeft: pt(0),
       indentRight: pt(0),
+      ...overrides,
     },
     children: [{ id: `${id}-t`, type: "text", text }],
   }
@@ -142,6 +143,78 @@ describe("PdfRenderer smoke tests", () => {
     const p = makePara("p1", "")
     const result = await pdf.render(paginate(makeDoc(["p1"], { p1: p })))
     expect(result.buffer.length).toBeGreaterThan(0)
+  })
+
+  it("renders boxed paragraph without throwing", async () => {
+    const p = makePara("p1", "Boxed", {
+      box: {
+        fill: "F8FAFC",
+        padding: { top: pt(3), right: pt(4), bottom: pt(5), left: pt(6) },
+        border: {
+          top: { style: "solid", width: pt(1), color: "111111" },
+          right: { style: "dashed", width: pt(1), color: "222222" },
+          bottom: { style: "dotted", width: pt(1), color: "333333" },
+          left: { style: "solid", width: pt(1), color: "444444" },
+        },
+      },
+    })
+    const result = await pdf.render(paginate(makeDoc(["p1"], { p1: p })))
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("resolves paragraph box drawing primitives without including outside spacing", () => {
+    const p = makePara("p1", "Boxed", {
+      spacingBefore: pt(3),
+      spacingAfter: pt(4),
+      box: {
+        fill: "F8FAFC",
+        padding: { top: pt(2), right: pt(2), bottom: pt(2), left: pt(2) },
+        border: {
+          top: { style: "solid", width: pt(1), color: "111111" },
+          right: { style: "solid", width: pt(1), color: "222222" },
+          bottom: { style: "solid", width: pt(1), color: "333333" },
+          left: { style: "solid", width: pt(1), color: "444444" },
+        },
+      },
+    })
+    const page = paginate(makeDoc(["p1"], { p1: p })).sections[0].pages[0]
+    const fragment = page.fragments.find((f) => f.nodeId === "p1")!
+    const primitives = resolveParagraphBoxDrawingPrimitives(fragment, page.height)
+
+    expect(primitives?.fill).toMatchObject({
+      x: fragment.x,
+      width: fragment.width,
+      height: fragment.height - 3 - 4,
+      color: "F8FAFC",
+    })
+    expect(primitives?.fill?.y).toBeCloseTo(page.height - fragment.y - fragment.height + 4)
+    expect(primitives?.borders.map((line) => line.side).sort()).toEqual(["bottom", "left", "right", "top"])
+  })
+
+  it("resolves split paragraph box borders as sliced logical box edges", () => {
+    const p = makePara("p1", Array.from({ length: 70 }, () => "A").join("\n"), {
+      box: {
+        fill: "F8FAFC",
+        padding: { top: pt(3), right: pt(0), bottom: pt(4), left: pt(0) },
+        border: {
+          top: { style: "solid", width: pt(1), color: "111111" },
+          right: { style: "solid", width: pt(1), color: "222222" },
+          bottom: { style: "solid", width: pt(1), color: "333333" },
+          left: { style: "solid", width: pt(1), color: "444444" },
+        },
+      },
+    })
+    const pages = paginate(makeDoc(["p1"], { p1: p })).sections[0].pages
+    const fragments = pages.flatMap((page) => page.fragments.map((fragment) => ({ page, fragment }))).filter((entry) => entry.fragment.nodeId === "p1")
+
+    expect(fragments.length).toBeGreaterThanOrEqual(2)
+    const firstSides = resolveParagraphBoxDrawingPrimitives(fragments[0].fragment, fragments[0].page.height)?.borders.map((line) => line.side).sort()
+    const last = fragments[fragments.length - 1]
+    const lastSides = resolveParagraphBoxDrawingPrimitives(last.fragment, last.page.height)?.borders.map((line) => line.side).sort()
+
+    expect(firstSides).toEqual(["left", "right", "top"])
+    expect(lastSides).toEqual(["bottom", "left", "right"])
   })
 })
 
@@ -313,5 +386,30 @@ describe("DocxRenderer smoke tests", () => {
     const p = makePara("p1", "")
     const result = await docx.render(paginate(makeDoc(["p1"], { p1: p })))
     expect(result.buffer.length).toBeGreaterThan(0)
+  })
+
+  it("emits paragraph box shading, borders, and border spacing", async () => {
+    const p = makePara("p1", "Boxed", {
+      box: {
+        fill: "F8FAFC",
+        padding: { top: pt(3), right: pt(4), bottom: pt(5), left: pt(6) },
+        border: {
+          top: { style: "solid", width: pt(1), color: "111111" },
+          right: { style: "dashed", width: pt(1), color: "222222" },
+          bottom: { style: "dotted", width: pt(1), color: "333333" },
+          left: { style: "solid", width: pt(1), color: "444444" },
+        },
+      },
+    })
+    const result = await docx.render(paginate(makeDoc(["p1"], { p1: p })))
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(xml).toContain('w:fill="F8FAFC"')
+    expect(xml).toContain("<w:pBdr>")
+    expect(xml).toContain('w:color="111111"')
+    expect(xml).toContain('w:color="222222"')
+    expect(xml).toContain('w:color="333333"')
+    expect(xml).toContain('w:color="444444"')
+    expect(xml).toContain('w:space="6"')
   })
 })

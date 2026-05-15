@@ -98,6 +98,8 @@ PDF should:
   `page.footerFragments` in the same pagination output the editor preview shows
 - draw paragraph, row, stack, table, table-row, and table-cell fragments from
   paginated geometry
+- draw authored paragraph box fill, padding, and border from paginated paragraph
+  metadata when paragraph box style is enabled
 - preserve repeated headers and table split slices produced by pagination
 - treat renderer smoke failures as product-blocking for export work
 
@@ -113,6 +115,8 @@ DOCX should:
 - preserve document order and section boundaries
 - preserve editable paragraphs, headings, simple tables, headers, footers, and
   TOC text where possible
+- preserve paragraph box fill and border where possible, and approximate
+  paragraph padding only through documented Word-compatible formatting
 - emit valid DOCX ZIP output
 - keep page/section structure useful for review workflows
 - document where Word/LibreOffice may reflow content after opening
@@ -186,12 +190,14 @@ Choose the smallest verification that protects the changed layer.
 
 Current automated coverage includes API route contract smoke, PDF/DOCX smoke,
 product PDF page-count parity smoke, product DOCX table-row structure smoke,
-and multi-section DOCX structure tests. Missing coverage includes pixel-level
+multi-section DOCX structure tests, focused paragraph box PDF drawing primitive
+tests, and an opt-in paragraph box PDF raster visual regression gate when a
+local PDF rasterizer is available. Missing coverage includes broad pixel-level
 PDF/editor parity and deeper DOCX semantic style checks.
 
 ## Deferred Work
 
-- Visual regression tests for representative PDF fixtures.
+- Broader visual regression tests for representative PDF fixtures.
 - Automated browser-to-export parity checks.
 - DOCX semantic heading/style assertions beyond current structural checks.
 - Clearer per-run font fallback reporting for mixed-font documents.

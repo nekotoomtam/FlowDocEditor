@@ -18,7 +18,692 @@ Each entry should include:
 
 ---
 
+## 2026-05-16
+
+### Add Paragraph Box Editor Preview Rendering
+
+Goal: Make the editor canvas display authored paragraph box fill and borders
+from paginated metadata before exposing any property-panel controls.
+
+Completed:
+
+- Added shared paragraph box layout primitives in pagination coordinates.
+- Updated the PDF renderer helper to consume the shared primitive logic and
+  only adapt coordinates for PDF's bottom-left origin.
+- Added editor canvas rendering for paragraph box fill and four border sides.
+- Kept authored paragraph box drawing separate from selection/hover/editor node
+  chrome so selected boxes still show an editor outline.
+- Added focused editor tests for fill/border rendering and split-fragment
+  top/bottom-open policy.
+
+Files changed:
+
+- `packages/core/src/pagination/paragraphBoxPrimitives.ts`
+- `packages/core/src/pagination/index.ts`
+- `packages/core/src/renderer/pdf/index.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `npm.cmd run test -w packages/core --`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This intentionally does not add property-panel controls for paragraph box
+  fill, padding, or border yet.
+- This intentionally does not change the document schema, normalization,
+  pagination semantics, PDF output intent, or DOCX output intent from the
+  already-approved paragraph box foundation.
+
+---
+
+### Add Paragraph Box PDF Visual Regression Gate
+
+Goal: Add the first two layers of paragraph box PDF visual protection without
+making the default test suite depend on machine-specific PDF rasterizers.
+
+Completed:
+
+- Added an opt-in PDF raster visual regression test for paragraph box fill and
+  four border sides.
+- Kept the test off by default behind `FLOWDOC_PDF_VISUAL_REGRESSION=1`.
+- Let the raster test use `pdftoppm` when available, or ImageMagick only when
+  Ghostscript is also available.
+- Sampled rasterized PDF pixels against the paginated drawing primitives so the
+  test checks actual PDF output without adding new npm dependencies.
+- Documented the rasterizer requirement and updated renderer/test fixture
+  coverage notes.
+
+Files changed:
+
+- `packages/core/src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `$env:FLOWDOC_PDF_VISUAL_REGRESSION='1'; npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+  - expected local failure: this machine has no `pdftoppm` and no Ghostscript
+    for ImageMagick PDF input.
+- `npm.cmd run test -w packages/core --`
+- `npm.cmd run test:app`
+
+Notes:
+
+- This does not claim broad PDF/editor pixel parity yet.
+- The actual raster assertion should run in CI or reviewer machines only after
+  installing `pdftoppm` or ImageMagick with Ghostscript.
+
+---
+
+### Add Paragraph Box Export Renderer Support
+
+Goal: Make export renderers consume paragraph box metadata from
+`PaginatedDocument` without adding property-panel controls or editor UI yet.
+
+Completed:
+
+- Added PDF paragraph box drawing from `fragment.renderProps.box`.
+- Kept PDF fill inside the paragraph box rect, excluding external
+  `spacingBefore` and `spacingAfter`.
+- Applied paragraph box split policy in PDF: side borders on every slice, top
+  border only on the first fragment, bottom border only on the final fragment.
+- Added DOCX best-effort paragraph shading, borders, and border spacing for
+  paragraph box fill, border, and padding.
+- Kept renderers consuming `PaginatedDocument` only; no schema, measurement, or
+  pagination imports were added to renderer production code.
+- Added focused renderer tests for PDF primitive geometry, split box borders,
+  boxed PDF smoke, and DOCX XML shading/border output.
+
+Files changed:
+
+- `packages/core/src/renderer/pdf/index.ts`
+- `packages/core/src/renderer/docx/index.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd test -w packages/core -- src/renderer/__tests__/textFlow.test.ts`
+- `npm.cmd test -w packages/core -- src/renderer/__tests__/multiSection.test.ts`
+- `npm.cmd test -w packages/core -- src/pagination/__tests__/paginator.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This intentionally does not add editor canvas preview rendering yet.
+- This intentionally does not add property-panel controls yet.
+- DOCX padding remains best-effort through Word paragraph border spacing.
+
+---
+
 ## 2026-05-15
+
+### Define Paragraph Box Style Contract
+
+Goal: Lock the v1 paragraph box-style scope before changing schema,
+pagination, editor rendering, PDF export, or DOCX export.
+
+Completed:
+
+- Added a paragraph box style contract that limits v1 to fill, four-sided
+  padding, and four-sided border.
+- Explicitly deferred rounded corners, shadows, opacity, gradients, image
+  fills, and CSS-like decoration.
+- Defined spacing-vs-padding semantics, horizontal measurement rules, total
+  height rules, and split paragraph first/middle/final fragment behavior.
+- Documented renderer expectations: PDF/editor must follow authoritative
+  paginated geometry, while DOCX remains best-effort for paragraph padding.
+- Added the contract to the docs index and linked it from editor and export
+  contracts.
+
+Files changed:
+
+- `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md`
+- `docs/DOCS_INDEX.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- Documentation-only change; no automated tests required.
+
+Notes:
+
+- This intentionally does not change `DocumentNode`, pagination, editor
+  rendering, PDF rendering, DOCX rendering, or property-panel controls yet.
+
+---
+
+### Add Paragraph Box Schema And Normalization
+
+Goal: Add the authored document-model entry point for paragraph box style
+without changing layout, editor rendering, export, or property-panel behavior.
+
+Completed:
+
+- Added paragraph box schema support for fill, four-sided padding, and
+  four-sided border.
+- Kept rounded corners, shadows, opacity, gradients, and CSS-like decoration
+  out of the schema.
+- Added non-negative unit guards for paragraph box padding and border widths.
+- Normalized valid paragraph box style data while safely removing or repairing
+  unsafe imported values.
+- Added focused normalization coverage for valid box props and unsafe raw input.
+
+Files changed:
+
+- `packages/core/src/schema/block.ts`
+- `packages/core/src/document/normalize.ts`
+- `packages/core/src/document/normalize.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/document/normalize.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This intentionally does not change paragraph measurement, pagination
+  metadata, editor preview rendering, PDF rendering, DOCX rendering, or
+  property-panel controls yet.
+- User-facing controls should remain hidden until the box style has layout,
+  editor, PDF, and DOCX coverage as defined in
+  `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md`.
+
+---
+
+### Add Paragraph Box Layout And Pagination Geometry
+
+Goal: Make paragraph box style affect core measurement and paginated geometry
+before exposing editor controls or renderer drawing behavior.
+
+Completed:
+
+- Added measured paragraph box metadata for fill, padding, border, content
+  width, and total height.
+- Measured paragraph lines against the inner content width after horizontal
+  padding and border are removed.
+- Shifted paginated line x/y positions into the paragraph content box.
+- Applied top padding/border only on the first paragraph fragment and bottom
+  padding/border only on the final fragment.
+- Passed resolved box metadata through `ParagraphRenderProps` for future
+  editor/PDF/DOCX renderer work.
+- Added focused layout and pagination tests for measurement width, split
+  fragment insets, and render metadata.
+
+Files changed:
+
+- `packages/core/src/layout/types.ts`
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/layout/__tests__/measure.test.ts`
+- `packages/core/src/pagination/types.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/paginator.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/layout/__tests__/measure.test.ts`
+- `npm.cmd test -w packages/core -- src/pagination/__tests__/paginator.test.ts`
+- `npm.cmd test -w packages/core -- src/document/normalize.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This intentionally does not draw paragraph fill or border in the editor/PDF
+  renderer yet.
+- This intentionally does not expose paragraph box property-panel controls yet.
+
+---
+
+### Add Paragraph Box Core Operation
+
+Goal: Provide a small history-safe document operation for future paragraph box
+controls without requiring UI code to hand-merge nested box state.
+
+Completed:
+
+- Added `updateParagraphBoxStyle(...)` for fill, four-sided padding, and
+  four-sided border updates.
+- Supported body paragraphs and paragraphs inside table cells.
+- Preserved paragraph text/content while updating only `props.box`.
+- Pruned empty box state after fill, padding, and border channels are cleared.
+- Removed ineffective border sides when style is `none` or width resolves to
+  zero.
+- Added focused operation coverage for body paragraphs, table-cell paragraphs,
+  partial patch merging, and clearing all box channels.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd test -w packages/core -- src/document/normalize.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This intentionally does not add property-panel controls yet.
+- Editor code can still use the generic `UPDATE_PROPS` path, but future UI
+  should prefer this operation to avoid losing nested padding/border state.
+
+---
+
+### Add Balanced Flow Row Column Action
+
+Goal: Make the `flow-row` property-panel column action behave like a row-level
+operation instead of silently splitting the last column.
+
+Completed:
+
+- Changed row-level `addFlowStackColumn(doc, rowId)` to append one empty
+  `flow-stack` and rebalance all direct child stack `widthShare` values equally.
+- Preserved selected-`flow-stack` before/after insertion as the local action
+  that splits only the selected stack's width share.
+- Updated the row property-panel button to `+ Balanced col`.
+- Updated the row column hint to explain the difference between balanced
+  row-level add and selected-stack edge insertion.
+- Added core regression coverage for `20 / 60 / 20 -> 25 / 25 / 25 / 25`.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/FLOW_ROW_STACK_SPEC.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This intentionally changes only the row-selected action. Stack edge buttons
+  remain the precise before/after local insertion path.
+
+---
+
+### Keep Empty Flow Stack Chrome Visible
+
+Goal: Prevent active `flow-row` slices from showing row-blue blank areas where
+empty authored `flow-stack` columns should remain visible and droppable.
+
+Completed:
+
+- Updated flow-row pagination so every emitted row slice includes a visual
+  `flow-stack` fragment for each authored direct child stack.
+- Kept paragraph/spacer child fragments limited to stacks that actually have
+  content progress in that slice.
+- Added regression coverage for a four-column row with content in only one
+  stack.
+- Strengthened the long three-stack pagination check so every visible row slice
+  carries all authored stack chrome.
+- Documented the visual-stack-fragment rule in the flow-row/flow-stack spec.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/flowRowStack.test.ts`
+- `docs/FLOW_ROW_STACK_SPEC.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/pagination/__tests__/flowRowStack.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This changes visual/layout fragments only. It does not add paragraph/spacer
+  content to empty stacks and should not create extra empty row continuation
+  slices because the row loop still runs only while some stack has remaining
+  content.
+
+---
+
+### Add Property Panel Info Hints
+
+Goal: Reduce right-panel hint clutter while keeping editor constraints
+discoverable near the controls they affect.
+
+Completed:
+
+- Added a reusable `InfoHint` button for compact explanatory help.
+- Rendered the hint bubble in the document body with fixed positioning so the
+  property-panel scroll container cannot clip it.
+- Removed the native browser `title` tooltip from the `InfoHint` button so the
+  custom tooltip is the only hover surface.
+- Moved repeated property-panel rule text into `InfoHint` for row min height,
+  flow-row column/min-height behavior, legacy stack resize status, flow-stack
+  column insertion, flow-stack pair resize, and flow-stack width/min-height
+  constraints.
+- Kept primary labels, current values, buttons, and destructive actions visible.
+- Documented when property-panel help may use compact hints.
+
+Files changed:
+
+- `src/app/editor/_components/InfoHint.tsx`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/__tests__/InfoHint.test.ts`
+- `src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/InfoHint.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- The row-level `+ Col` behavior still uses the current implementation text.
+  Balanced row add remains a separate design/implementation task.
+
+---
+
+### Add Flow Stack Pair Resize Guard
+
+Goal: Let users adjust `flow-stack` width shares from the property panel while
+keeping the authored `flow-row` width total valid and preventing columns from
+collapsing during the interaction.
+
+Completed:
+
+- Added a focused `flowStackResize` helper for pairwise share math.
+- Set the preferred `flow-stack` resize minimum to `8%` per column.
+- Added an adaptive effective minimum for already narrow pairs so existing
+  narrow documents remain adjustable instead of becoming stuck.
+- Added a selected-`flow-stack` property-panel resize control where the user
+  chooses the left or right neighbor, then adjusts only that selected pair.
+- Reused the existing `RESIZE_COLUMNS` reducer action so the resize path stays
+  history-backed and schema-valid.
+- Documented that property-panel pair resize is the current safe path; canvas
+  drag resize for `flow-row` / `flow-stack` remains deferred.
+
+Files changed:
+
+- `src/app/editor/_components/flowStackResize.ts`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/flowStackResize.test.ts`
+- `src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/flowStackResize.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts src/app/editor/_components/__tests__/selectionContext.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts src/app/editor/_components/__tests__/flowStackResize.test.ts src/app/editor/_components/__tests__/selectionContext.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- In-app browser smoke on `http://localhost:4000/editor`: dragged `Flow cols`
+  onto the canvas, selected the left `flow-stack`, confirmed the resize control
+  shows `min 8%`, and used `+ 1%` to update the pair from `50/50` to `51/49`.
+
+Notes:
+
+- The minimum is an interaction guard, not a content-aware minimum width.
+- The resize operation changes only the selected sibling pair and relies on the
+  existing document assertion that `flow-row` widths total exactly `100`.
+- Broader manual feel check is still recommended for slider dragging and
+  narrow-column edge cases.
+
+---
+
+### Add Property Panel Selection Context Picker
+
+Goal: Let users quickly inspect and switch between the node they clicked and
+its local parents from the right-side property panel without replacing the
+document outline or changing document/layout semantics.
+
+Completed:
+
+- Added a small `path` trigger beside the property-panel title when the selected
+  node has visible local context.
+- Added a popover-style context list ordered from topmost parent to deepest
+  clicked node, such as `Flow row -> Flow stack -> Paragraph`.
+- Kept the context anchored to the latest selected/clicked node so users can
+  switch to a parent panel without losing the original local context.
+- Added a shared selection-context helper that can describe flow, row/stack,
+  and existing table parent chains while hiding `body`.
+- Selecting a normal inline-edit paragraph now also selects that paragraph so
+  the property panel can expose its local context while preserving the existing
+  inline-edit start path.
+- Moved flow-stack add-column affordances out of the canvas and into the right
+  property panel as a center-column control with left/right edge buttons.
+
+Files changed:
+
+- `src/app/editor/_components/selectionContext.ts`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/selectionContext.test.ts`
+- `src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/selectionContext.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts src/app/editor/_components/__tests__/selectionContext.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This is a local-context picker, not a replacement for `OUTLINE`.
+- Browser/manual check still needed for click feel and popover placement.
+- Canvas-side add-column handles are intentionally removed; column insertion now
+  lives in the property panel.
+
+---
+
+### Add Flow Row Column Control
+
+Goal: Let users add a new `flow-stack` column to an existing `flow-row` without
+changing old `row` / `stack` semantics or introducing a new layout path.
+
+Completed:
+
+- Added `addFlowStackColumn(...)` as a core document operation.
+- When adding after a selected `flow-stack`, the operation splits that stack's
+  `widthShare` and leaves other sibling columns unchanged.
+- When adding from a selected `flow-row`, the operation adds after the last
+  stack by splitting the last stack's `widthShare`.
+- Added property-panel controls for `flow-row` and `flow-stack` selections.
+- Added selected-`flow-stack` property-panel edge controls for inserting a
+  column before or after the selected stack.
+- Extended the core operation to support both before/after insertion while
+  still splitting only the target stack's `widthShare`.
+- Added focused operation tests for adding after a selected stack and adding
+  from the row-level control.
+- Added property-panel coverage for the selected-stack column edge controls.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/exportReadiness.test.ts src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `git diff --check`
+
+Notes:
+
+- Resize remains the existing pairwise drag behavior; no new reorder, span, or
+  nested-flow behavior was added.
+- Top/bottom add-row handles, drag-to-add-column, and keyboard path remain
+  deferred UX levels for later slices.
+- Manual browser check still needed for the property-panel button feel; the
+  local dev server could not be started cleanly from this sandbox session.
+
+---
+
+### Stabilize Editor Toolbar Status Slot
+
+Goal: Reduce visible toolbar flicker/jump when layout, export, document IO, and
+drag status messages appear or disappear quickly.
+
+Completed:
+
+- Added a fixed status region on the right side of the editor toolbar.
+- Kept status messages single-line with overflow/ellipsis inside the reserved
+  slot instead of letting them push the toolbar layout.
+- Moved the drag helper text into the same status slot so drag feedback uses
+  the stabilized area.
+- Removed transient toolbar messages for autosave time, initial layout,
+  reconciling layout, and preview layout to avoid short-lived visual flashes.
+- Suppressed the export-readiness toolbar text for transient server-layout
+  pending states while still showing non-transient export blockers.
+- Did not change document state, pagination, save/load, export rules, or
+  undo/redo behavior.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- Manual check still needed: confirm the status slot reduces the perceived
+  flicker during flow-row typing/dragging on the real editor canvas.
+
+---
+
+### Flow Row Persistence And Snapshot Verification
+
+Goal: Lock focused evidence that authored `flow-row` / `flow-stack` content can
+survive package persistence and core insert/delete snapshots without flattening
+or moving column content.
+
+Completed:
+
+- Added a localStorage round-trip regression test for a two-stack `flow-row`
+  with multiple paragraphs in both columns.
+- Verified that package v2 persistence keeps `body -> flow-row -> flow-stack`
+  topology, `widthShare`, child order, and paragraph text intact after reload.
+- Added a core operation snapshot test that inserts into the second
+  `flow-stack`, then deletes the inserted paragraph while preserving sibling
+  stack topology.
+
+Files changed:
+
+- `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `packages/core/src/document/operations.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `npm.cmd test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- `EditorShell` undo/redo evidence remains code-inspection/manual-browser
+  scope for this slice: reducer history stores `{ doc, paginated }` snapshots,
+  but no reducer export or broad app harness was added just to test it.
+- Browser smoke was not re-run in this slice.
+
+---
+
+### Flow Row Placement Targeting
+
+Goal: Make `flow-row` column hit-testing route paragraph drops into the intended
+`flow-stack` instead of falling back to a body-level placement below the row.
+
+Completed:
+
+- Extended placement geometry so `flow-row` uses row-like column hit-testing and
+  computes column rectangles from `flow-stack.widthShare`.
+- Updated placement law so `row-stack-inner` can target `flow-stack` centers for
+  paragraph/spacer insertion while keeping `flow-row` edge column insertion
+  explicitly unsupported.
+- Updated the editor drop highlight to draw against the actual targeted
+  `flow-stack` column when the semantic target is `row-stack-inner`.
+- Added focused regression coverage for right-column `flow-stack` targeting and
+  second-stack paragraph insertion.
+
+Files changed:
+
+- `packages/core/src/placement/geometry.ts`
+- `packages/core/src/placement/law.ts`
+- `packages/core/src/placement/geometry.test.ts`
+- `packages/core/src/placement/law.test.ts`
+- `packages/core/src/document/operations.test.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/placement/geometry.test.ts src/placement/law.test.ts src/document/operations.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `git diff --check`
+
+Notes:
+
+- User manual feedback confirmed left/right `flow-stack` placement, insertion
+  between existing paragraphs, and post-drop typing behavior are broadly OK.
+- Follow-up polish patch: separated drop-preview color from selection blue,
+  softened `flow-row` / `flow-stack` backgrounds, and made paragraphs inside
+  `flow-stack` use container-tight visual chrome so they do not appear to
+  protrude beyond the aligned stack area.
+- Follow-up polish adjustment: center drops into a row/flow stack now preview as
+  a compact insertion line after the last visible child instead of a large ghost
+  block across the remaining empty stack area.
+- Browser smoke remains not verified in this session because the in-app browser
+  rendered a black/empty page and the project smoke script could not attach to
+  the existing dev server.
+
+---
 
 ### Flow Stack Phase C-C-B Responsive Draft Snapshot
 
@@ -78,6 +763,11 @@ Follow-up:
   focused editor-path diagnostics or make a tightly scoped responsive
   draft-pagination paint policy; do not change the `flow-row` pagination model
   for this symptom without new evidence.
+- Follow-up patch: keep the responsive `flow-stack` draft-pagination marker
+  active once a split/re-entered split edit has entered that path, even if the
+  latest draft pagination temporarily shrinks the edited paragraph back to one
+  fragment. This avoids dropping back to the 450ms settled delay while body
+  siblings below the `flow-row` may still need cross-page draft pagination.
 
 ---
 
@@ -8458,3 +9148,432 @@ Notes:
 - Production-stable WYSIWYG remains deferred; selection overlay, clipboard
   model, real OS IME stress, accessibility hardening, and missing-geometry
   browser mutation checks are not implemented in this slice.
+
+---
+
+### Expose Paragraph Box Controls In Property Panel
+
+Goal: Open the first user-facing paragraph box style controls now that the
+schema, normalization, pagination, editor preview, PDF renderer, DOCX
+best-effort path, and focused tests exist.
+
+Completed:
+
+- Added a `Box` section for selected paragraphs in `PropertyPanel`, with fill
+  color, four-sided padding, side-selectable border controls, and reset actions.
+- Routed box edits through `updateParagraphBoxStyle(...)` via a dedicated
+  `UPDATE_PARAGRAPH_BOX_STYLE` editor action so authored box edits go through
+  normal document validation and undo history.
+- Kept the UI scope to paragraph box v1: fill, padding, and border only.
+  Rounded corners, shadow, opacity, gradient, and canvas resize interactions
+  remain deferred.
+- Added a focused property-panel render test for the paragraph box controls.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+
+Notes:
+
+- The first control surface intentionally favors all-active border editing plus
+  side toggles. Fully independent per-side style editing can be added later if
+  the real document workflow needs it.
+
+---
+
+### Make Paragraph Box Controls Collapsible
+
+Goal: Reduce visual density in the first paragraph box property-panel controls
+without changing document semantics or inner control behavior.
+
+Completed:
+
+- Wrapped the `Fill`, `Padding`, and `Border` paragraph box groups in compact
+  collapsible cards.
+- Kept all cards expanded by default so newly exposed controls remain visible.
+- Added card summaries for quick scanning: fill color, padding values, and
+  active border side count.
+- Updated the focused property-panel render test to lock the card structure.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This is only the outer UX shell. The control layout inside each card remains
+  intentionally unchanged for the next tuning pass.
+
+---
+
+### Tune Paragraph Box Padding And Border Layout Controls
+
+Goal: Make the `Padding` and `Border` controls communicate their four-sided
+document meaning directly in the property panel.
+
+Completed:
+
+- Replaced the padding 2x2 grid with a positional control layout:
+  `Top`, `Left`, `All`, `Right`, and `Bottom`.
+- Added a center `All` padding input that applies one value to all four sides.
+- Replaced the border side row with a positional border compass:
+  `Top`, `Left`, `All`, `Right`, and `Bottom`.
+- Added a center `All` border action that applies the current border settings
+  to all four sides while keeping explicit `Clear border` as the destructive
+  reset path.
+- Updated the focused property-panel test to lock the new compass controls.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This remains UI-only. The authored paragraph box model and
+  `updateParagraphBoxStyle(...)` semantics were not changed.
+
+---
+
+### Replace Border Side Text Buttons With Glyphs
+
+Goal: Make paragraph border side selection communicate visually instead of
+requiring users to read `T`, `R`, `B`, and `L` labels.
+
+Completed:
+
+- Replaced border compass text labels with CSS border glyphs that emphasize the
+  actual side being toggled.
+- Changed border compass buttons to equal-size square controls.
+- Kept accessible labels and pressed states on the glyph buttons.
+- Updated the focused property-panel render test to cover the glyph markup and
+  labels.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This is editor-control chrome only. It does not affect authored paragraph
+  box data, pagination, PDF, or DOCX rendering.
+
+---
+
+### Make Border All Button Toggle Clear
+
+Goal: Make the paragraph border `All` control behave like a clear toggle when
+all four sides are already active.
+
+Completed:
+
+- Changed the border `All` button so it applies all sides when not all borders
+  are active and clears all four sides when all four are active.
+- Changed the accessible label/title from apply to clear in the all-active
+  state.
+- Added a small clear mark to the all-sides glyph when pressing it would clear
+  all borders.
+- Updated the focused property-panel render test for the clear state.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This only changes the property-panel interaction. It still routes through
+  `updateParagraphBoxStyle(...)`; document schema, pagination, and renderers are
+  unchanged.
+
+---
+
+### Add Drafted Color Picker Preview For Paragraph Box
+
+Goal: Make fill and border color picking smoother by avoiding document commits
+on every native color-picker tick.
+
+Completed:
+
+- Added local draft state for paragraph box fill color and border color in the
+  property panel.
+- Changed color input `onChange` to update only the local preview/draft.
+- Added mini previews for fill and border color/style/width feedback inside the
+  panel.
+- Added explicit `Apply` buttons, while also committing drafts on blur or
+  Enter.
+- Kept swatch and clear actions as immediate discrete commits.
+- Updated the focused property-panel render test to cover the preview controls.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This is a property-panel interaction change only. It intentionally does not
+  add live canvas color preview while dragging; document updates still commit
+  through `updateParagraphBoxStyle(...)`.
+
+---
+
+### Polish Paragraph Border Style And Width Controls
+
+Goal: Reduce typing and extra clicks in paragraph box border controls while
+keeping document commits discrete.
+
+Completed:
+
+- Replaced the border style dropdown with four icon buttons for none, solid,
+  dashed, and dotted.
+- Changed border width editing to a `0..5 pt` slider plus numeric input.
+- Kept width changes in local draft state while dragging, committing on
+  pointer release, blur, or Enter.
+- Updated the focused property-panel render test for the new controls.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Headless browser smoke on `http://localhost:4000/editor`: selected a
+  paragraph and confirmed the border style group plus width slider render in
+  the property panel.
+
+Notes:
+
+- This is property-panel UX only. It does not change paragraph box schema,
+  pagination, PDF, or DOCX behavior.
+
+---
+
+### Split Paragraph Property Panel Into Text And Box Tabs
+
+Goal: Keep paragraph text/typography controls separate from authored box
+styling so users do not have to scroll through unrelated controls.
+
+Completed:
+
+- Added paragraph-level `Text` and `Box` tabs in the property panel.
+- Kept `Text` as the default tab when selecting a paragraph.
+- Moved textarea, field references, typography, spacing, alignment, and heading
+  controls under `Text`.
+- Moved paragraph box fill, padding, border, and reset controls under `Box`.
+- Kept `Box` internals as collapsible sections, matching the paragraph box UX
+  contract.
+- Updated the focused property-panel render test to cover the new tab shell.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Headless browser smoke on `http://localhost:4000/editor`: selected a
+  paragraph, confirmed `Text` is selected by default, then switched to `Box`
+  and confirmed paragraph box controls become visible.
+
+Notes:
+
+- This is property-panel organization only. It intentionally does not change
+  paragraph schema, layout, pagination, undo/redo, PDF, or DOCX behavior.
+
+---
+
+### Split Right Rail Properties And Outline Panes
+
+Goal: Keep the document outline visible without letting long property controls
+consume the entire right rail.
+
+Completed:
+
+- Split the editor right rail into a 60% properties pane and a 40% outline
+  pane.
+- Kept the properties pane and outline pane as independent scroll owners.
+- Made `PropertyPanel` fill its assigned pane so its header/delete footer can
+  remain stable while the detail area scrolls.
+- Made `FillingPanel` use the same pane-filling shell in fill mode.
+- Added right-rail test ids for future browser and UI checks.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Headless browser smoke on `http://localhost:4000/editor`: confirmed the right
+  rail renders at roughly 60% properties / 40% outline, with property title,
+  delete button, and OUTLINE header visible after selecting a paragraph.
+
+Notes:
+
+- This is editor shell layout only. It does not change document schema,
+  pagination, undo/redo, PDF, or DOCX behavior.
+- Future OUTLINE focus modes such as 40/80/100 remain deferred.
+
+---
+
+### Keep Paragraph Property Tabs Sticky
+
+Goal: Keep the paragraph `Text` / `Box` mode switch visible while scrolling
+long property content.
+
+Completed:
+
+- Made the paragraph property tab list sticky inside the property detail scroll
+  area.
+- Added a solid background and divider so scrolled controls do not visually
+  bleed behind the tabs.
+- Updated the property-panel render test to lock the sticky tab shell.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Headless browser smoke on `http://localhost:4000/editor`: selected a
+  paragraph, switched to `Box`, scrolled the property detail area, and
+  confirmed the tab list stayed at the same top position.
+
+Notes:
+
+- This is property-panel chrome only. It does not change document schema,
+  layout, pagination, undo/redo, PDF, or DOCX behavior.
+
+---
+
+### Replace Right Rail Split With Icon Sidebar
+
+Goal: Stop Properties and OUTLINE from competing for vertical space by making
+the right rail show one panel at a time behind an icon-only sidebar.
+
+Completed:
+
+- Replaced the static 60/40 right-rail split with a vertical icon sidebar.
+- Added icon-only controls for collapse, Properties, and OUTLINE.
+- Kept `Properties` as the default right-rail mode.
+- Made the content area render either `PropertyPanel`/`FillingPanel` or
+  `OutlinePanel`, not both at once.
+- Selecting an item from OUTLINE in template mode returns the rail to
+  Properties so the selected node can be edited immediately.
+- Kept paragraph `Text` / `Box` as a horizontal sub-tab inside Properties.
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Headless browser smoke on `http://localhost:4000/editor`: confirmed
+  Properties is the default mode, OUTLINE swaps into the content area, collapse
+  narrows the rail to icon-only, clicking Properties expands it again, and
+  clicking an OUTLINE paragraph returns to Properties.
+
+Notes:
+
+- This is editor shell chrome only. It does not change document schema,
+  layout, pagination, undo/redo, PDF, or DOCX behavior.
+
+---
+
+### Add Page Room To Right Rail
+
+Goal: Give page-level settings their own right-rail room instead of leaving the
+Properties panel empty when no document node is selected.
+
+Completed:
+
+- Added `Page` as a top-level right-rail mode alongside OUTLINE and Properties.
+- Reordered the icon sidebar to Collapse, Page, OUTLINE, Properties.
+- Added hover titles and aria labels for the right-rail mode controls.
+- Added a first `PagePanel` focused on section margin controls only.
+- Wired margin edits through the existing `UPDATE_MARGIN` editor action and
+  core `updateSectionMargin` operation.
+- Kept Page settings read-only when the editor is in Fill mode.
+- Kept switching into Fill mode pointed at the existing filling panel, while
+  still allowing Page to be opened manually as read-only.
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `git diff --check`
+- In-app browser smoke on `http://localhost:4000/editor`: confirmed Page is
+  the default right-rail room, OUTLINE swaps into the content area, clicking an
+  existing paragraph switches to Properties, and Page can still be opened
+  manually while a paragraph is selected.
+- Headless Playwright smoke on `http://localhost:4000/editor`: confirmed the
+  Page panel title renders, Fill mode opens the existing filling panel, Page is
+  read-only when manually opened in Fill mode, and changing the top margin to
+  `80` in Template mode enables undo through the existing history path.
+
+Notes:
+
+- This is editor shell wiring only. It intentionally does not change document
+  schema, pagination semantics, export behavior, header/footer editing, or page
+  background authoring.
+
+---
+
+### Restyle Page Panel Sections
+
+Goal: Make the new Page room visually follow the property-panel section
+language before adding more page-level controls.
+
+Completed:
+
+- Changed the Page room body to use collapsible sections instead of loose
+  standalone margin fields.
+- Kept the `PAGE` title as the stable top header.
+- Added a compact `Page setup` section for size and orientation display.
+- Changed `Margins` to a compass layout matching the paragraph-box padding
+  control shape: top, left, all, right, bottom.
+- Kept margin edits on the existing blur/Enter commit path.
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `git diff --check`
+- Headless Playwright smoke on `http://localhost:4000/editor`: confirmed the
+  `PAGE` title, collapsible `Margins` section, and `All` margin input updating
+  top/right/bottom/left to `90` while enabling undo.
+
+Notes:
+
+- This is Page panel UX only. It does not change document schema, pagination,
+  undo/redo semantics, PDF, or DOCX behavior.
+
+---
+
+### Bump Self-Use Baseline To 0.5.1
+
+Goal: Mark the accepted flow-row/flow-stack hardening and right-rail/page-panel
+follow-up work as the next conservative `0.5.x` patch baseline.
+
+Completed:
+
+- Bumped the project version marker from `0.5.0` to `0.5.1`.
+- Updated the lockfile root package version to match.
+- Updated versioning docs so the current baseline points at `0.5.1`.
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- This remains a `0.5.x` patch baseline, not a new `0.6.0` milestone and not a
+  `v1` readiness claim.

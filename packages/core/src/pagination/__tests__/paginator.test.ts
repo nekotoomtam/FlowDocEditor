@@ -123,6 +123,35 @@ describe("paginator — geometry", () => {
     expect(sp.height).toBe(50)
     expect(sp.width).toBe(CW)
   })
+
+  it("places paragraph text inside paragraph box padding and border", () => {
+    const p = makePara("p1", "Hi", {
+      box: {
+        fill: "F5F7FA",
+        padding: {
+          top: pt(3),
+          right: pt(4),
+          bottom: pt(5),
+          left: pt(6),
+        },
+        border: {
+          top: { style: "solid", width: pt(1), color: "111111" },
+          right: { style: "solid", width: pt(3), color: "222222" },
+          bottom: { style: "solid", width: pt(4), color: "333333" },
+          left: { style: "solid", width: pt(2), color: "444444" },
+        },
+      },
+    })
+    const frags = getFragments(makeDoc(["p1"], { p1: p }))
+    const f = frags.find((f) => f.nodeId === "p1")!
+
+    expect(f.height).toBe(LH + 1 + 3 + 5 + 4)
+    expect(f.lines?.[0]?.x).toBe(CX + 2 + 6)
+    expect(f.lines?.[0]?.y).toBe(CY + 1 + 3)
+    expect(f.renderProps?.box?.fill).toBe("F5F7FA")
+    expect(f.renderProps?.box?.padding.left).toBe(6)
+    expect(f.renderProps?.box?.border.left?.width).toBe(2)
+  })
 })
 
 describe("paginator — page breaks", () => {
@@ -174,6 +203,35 @@ describe("paginator — page breaks", () => {
     const p1Frag = pages[0].fragments.find((f) => f.nodeId === "p1")
     expect(p1Frag).toBeDefined()
     expect(p1Frag!.y).toBe(CY)
+  })
+
+  it("applies paragraph box top inset only to the first split fragment and bottom inset only to the last", () => {
+    const text = Array.from({ length: 60 }, () => "A").join("\n")
+    const p = makePara("p1", text, {
+      box: {
+        padding: {
+          top: pt(6),
+          right: pt(0),
+          bottom: pt(15),
+          left: pt(0),
+        },
+        border: {
+          top: { style: "solid", width: pt(4), color: "111111" },
+          bottom: { style: "solid", width: pt(5), color: "222222" },
+        },
+      },
+    })
+    const pages = getPages(makeDoc(["p1"], { p1: p }))
+    const frags = pages.flatMap((page) => page.fragments).filter((f) => f.nodeId === "p1")
+
+    expect(frags).toHaveLength(2)
+    expect(frags[0].lines).toHaveLength(57)
+    expect(frags[0].height).toBe(10 + 57 * LH)
+    expect(frags[0].lines?.[0]?.y).toBe(CY + 10)
+    expect(frags[1].lines).toHaveLength(3)
+    expect(frags[1].height).toBe(3 * LH + 20)
+    expect(frags[1].lines?.[0]?.y).toBe(CY)
+    expect(() => assertPaginatedDocument(paginateDocument(makeDoc(["p1"], { p1: p }), defaultTextMeasurer, defaultWordBreaker))).not.toThrow()
   })
 })
 

@@ -123,6 +123,23 @@ describe("flow-row / flow-stack pagination", () => {
     expect(stacks.reduce((sum, fragment) => sum + fragment.width, 0)).toBeCloseTo(CW, 0)
   })
 
+  it("keeps empty authored flow-stack chrome visible beside active content", () => {
+    const p1 = makePara("p1", "Left only")
+    const fragments = allFragments(makeDoc(["fr1"], {
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2", "fs3", "fs4"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 25 }, childIds: [] },
+      fs3: { id: "fs3", type: "flow-stack", props: { widthShare: 12.5 }, childIds: [] },
+      fs4: { id: "fs4", type: "flow-stack", props: { widthShare: 12.5 }, childIds: [] },
+      p1,
+    }))
+
+    const stacks = fragments.filter((fragment) => fragment.parentNodeId === "fr1" && fragment.nodeType === "flow-stack")
+    expect(stacks.map((fragment) => fragment.nodeId)).toEqual(["fs1", "fs2", "fs3", "fs4"])
+    expect(stacks.reduce((sum, fragment) => sum + fragment.width, 0)).toBeCloseTo(CW, 0)
+    expect(fragments.filter((fragment) => fragment.nodeType === "paragraph")).toHaveLength(1)
+  })
+
   it("keeps three-stack width math general", () => {
     const p1 = makePara("p1", "A")
     const p2 = makePara("p2", "B")
@@ -280,8 +297,8 @@ describe("flow-row / flow-stack long document hardening", () => {
       const rowFragments = page.fragments.filter((fragment) => fragment.nodeId === "fr1" && fragment.nodeType === "flow-row")
       const stackFragments = page.fragments.filter((fragment) => fragment.parentNodeId === "fr1" && fragment.nodeType === "flow-stack")
       expect(rowFragments).toHaveLength(1)
-      expect(stackFragments.length).toBeGreaterThan(0)
-      expect(stackFragments.reduce((sum, fragment) => sum + fragment.width, 0)).toBeLessThanOrEqual(CW)
+      expect(stackFragments.map((fragment) => fragment.nodeId)).toEqual(["fs1", "fs2", "fs3"])
+      expect(stackFragments.reduce((sum, fragment) => sum + fragment.width, 0)).toBeCloseTo(CW - 16, 0)
     }
 
     const fragments = result.sections[0].pages.flatMap((page) => page.fragments)

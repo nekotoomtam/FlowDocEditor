@@ -218,6 +218,16 @@ function isFlowStackContentSource(document: DocumentNode, source?: DragSource | 
   return sourceType === "paragraph" || sourceType === "spacer"
 }
 
+function isRowStackTarget(location: NodeLocation | null, rowId: string): location is NodeLocation & {
+  node: Extract<LayoutNode, { type: "stack" | "flow-stack" }>
+  parent: Extract<LayoutNode, { type: "row" | "flow-row" }> & { childIds: string[] }
+} {
+  if (location == null) return false
+  if (location.node.type === "stack" && location.parent?.type === "row" && location.parent.id === rowId) return true
+  if (location.node.type === "flow-stack" && location.parent?.type === "flow-row" && location.parent.id === rowId) return true
+  return false
+}
+
 // ─── Subtree Check ────────────────────────────────────────────────────────────
 
 function rejectSubtree(
@@ -419,7 +429,7 @@ function resolveRowOuterLaw(document: DocumentNode, rawIntent: RawPlacementInten
   }
 
   const rowLocation = findLocation(document, target.rowId)
-  if (rowLocation?.node.type !== "row") return err(rawIntent, "invalid-target", "Row not found.")
+  if (rowLocation?.node.type !== "row" && rowLocation?.node.type !== "flow-row") return err(rawIntent, "invalid-target", "Row not found.")
   if (rowLocation.parent?.type !== "body" && rowLocation.parent?.type !== "stack") {
     return err(rawIntent, "invalid-target", "Row must be under body or stack.")
   }
@@ -444,9 +454,11 @@ function resolveRowStackLaw(document: DocumentNode, rawIntent: RawPlacementInten
   if (target.kind !== "row-stack-inner") return err(rawIntent, "invalid-target", "Expected row-stack-inner target.")
 
   const stackLocation = findLocation(document, target.stackId)
-  if (stackLocation?.node.type !== "stack" || stackLocation.parent?.type !== "row" || stackLocation.parent.id !== target.rowId) {
+  if (!isRowStackTarget(stackLocation, target.rowId)) {
     return err(rawIntent, "invalid-target", "Stack is not a child of the target row.")
   }
+  const rowType = stackLocation.parent.type
+  const stackType = stackLocation.node.type
 
   const sourceNodeId = getSourceNodeId(source)
   const paletteBlockType = getPaletteBlockType(source)
@@ -455,6 +467,10 @@ function resolveRowStackLaw(document: DocumentNode, rawIntent: RawPlacementInten
   if (subtreeErr != null) return subtreeErr
 
   if (zone === "left" || zone === "right") {
+    if (rowType === "flow-row") {
+      return err(rawIntent, "invalid-zone", "Flow-row column insertion requires an explicit flow-stack operation.")
+    }
+
     const stackInsertCount = getPaletteStackInsertCount(source)
     if (stackInsertCount != null) {
       const intent = makeIntent(rawIntent, target.stackId, target.rowId, "row")
@@ -482,16 +498,19 @@ function resolveRowStackLaw(document: DocumentNode, rawIntent: RawPlacementInten
     if (isRowLikeSource(document, source)) {
       return err(rawIntent, "invalid-zone", "Row-like source cannot be inserted into row stack center.")
     }
+    if (stackType === "flow-stack" && !isFlowStackContentSource(document, source)) {
+      return err(rawIntent, "invalid-parent", "Flow stack can only contain paragraph or spacer nodes.")
+    }
     if (paletteBlockType === "columns" && isNestedInRow(document, target.stackId)) {
       return err(rawIntent, "invalid-parent", "Columns cannot be inserted into a stack already in a row.")
     }
 
     const node = stackLocation.node as LayoutNode & { childIds: string[] }
-    const intent = makeIntent(rawIntent, target.stackId, target.stackId, "stack")
+    const intent = makeIntent(rawIntent, target.stackId, target.stackId, stackType)
     return ok(intent, {
       kind: "insert-into-container",
       containerId: target.stackId,
-      containerType: "stack",
+      containerType: stackType,
       index: node.childIds.length,
     })
   }

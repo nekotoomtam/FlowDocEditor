@@ -26,6 +26,25 @@ function makeDoc(nodes: Record<string, LayoutNode>, childIds: string[]): Documen
   }
 }
 
+function makeParagraph(id: string, text: string): LayoutNode {
+  return {
+    id,
+    type: "paragraph",
+    props: {
+      align: "left",
+      fontSize: pt(12),
+      fontFamilyKey: "default",
+      lineHeight: 1.5,
+      spacingBefore: pt(0),
+      spacingAfter: pt(0),
+      textIndent: pt(0),
+      indentLeft: pt(0),
+      indentRight: pt(0),
+    },
+    children: [{ id: `${id}-text`, type: "text", text }],
+  }
+}
+
 describe("placement law flow-row / flow-stack sources", () => {
   it("allows flow-columns palette insertion into the body", () => {
     const doc = makeDoc({}, [])
@@ -173,5 +192,55 @@ describe("placement law flow-row / flow-stack sources", () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error.code).toBe("invalid-parent")
+  })
+
+  it("allows paragraph insertion into a flow-stack through a flow-row column target", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: [] },
+      p1: makeParagraph("p1", "Left"),
+    }, ["fr1"])
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "center",
+        intent: "insertInside",
+        target: { kind: "row-stack-inner", rowId: "fr1", stackId: "fs2" },
+      },
+      { source: "palette", blockType: "paragraph" },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.operation).toEqual({
+      kind: "insert-into-container",
+      containerId: "fs2",
+      containerType: "flow-stack",
+      index: 0,
+    })
+  })
+
+  it("does not expand a flow-row from a paragraph drag on a column edge", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: [] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: [] },
+    }, ["fr1"])
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "right",
+        intent: "insertRight",
+        target: { kind: "row-stack-inner", rowId: "fr1", stackId: "fs1" },
+      },
+      { source: "palette", blockType: "paragraph" },
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe("invalid-zone")
   })
 })

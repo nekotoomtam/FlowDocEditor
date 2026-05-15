@@ -88,6 +88,16 @@ export interface RowGeometry {
   stackRects: RowStackRect[]
 }
 
+function isPlacementRowNode(node: LayoutNode | undefined): node is Extract<LayoutNode, { type: "row" | "flow-row" }> {
+  return node?.type === "row" || node?.type === "flow-row"
+}
+
+function stackWidthShareForRow(rowType: "row" | "flow-row", stack: LayoutNode | undefined): number {
+  if (rowType === "row" && stack?.type === "stack") return stack.props.widthShare ?? 0
+  if (rowType === "flow-row" && stack?.type === "flow-stack") return stack.props.widthShare ?? 0
+  return 0
+}
+
 function getRowColumnWidths(
   document: DocumentNode,
   rowId: string,
@@ -96,7 +106,7 @@ function getRowColumnWidths(
   // หา section ที่มี row นี้
   for (const section of document.document.sections) {
     const row = section.nodes[rowId]
-    if (row?.type !== "row") continue
+    if (!isPlacementRowNode(row)) continue
 
     const gap = Math.max(0, row.props.gap ?? 0)
     const totalGap = gap * Math.max(0, row.childIds.length - 1)
@@ -104,9 +114,7 @@ function getRowColumnWidths(
 
     const shares = row.childIds.map((childId) => {
       const child = section.nodes[childId]
-      return child?.type === "stack" && typeof child.props.widthShare === "number"
-        ? child.props.widthShare
-        : 0
+      return stackWidthShareForRow(row.type, child)
     })
 
     const totalShare = shares.reduce((sum, s) => sum + s, 0)
@@ -142,8 +150,8 @@ export function getRowGeometry(
   const columns = getRowColumnWidths(document, rowId, width)
   const row = document.document.sections
     .map((section) => section.nodes[rowId])
-    .find((node) => node?.type === "row")
-  const gap = row?.type === "row" ? Math.max(0, row.props.gap ?? 0) : 0
+    .find(isPlacementRowNode)
+  const gap = isPlacementRowNode(row) ? Math.max(0, row.props.gap ?? 0) : 0
   let x = 0
   const stackRects: RowStackRect[] = columns.map(({ stackId, width: colWidth }) => {
     const rect = { stackId, left: x, top: innerTop, width: colWidth, height: innerHeight }
@@ -183,6 +191,7 @@ function shouldRejectCenterOnEmptyStack(
   for (const section of document.document.sections) {
     const stack = section.nodes[stackId]
     if (stack?.type === "stack") return stack.childIds.length === 0
+    if (stack?.type === "flow-stack") return stack.childIds.length === 0
   }
   return false
 }
@@ -245,7 +254,10 @@ function findNearestRowStack(document: DocumentNode, nodeId: string): { rowId: s
     // หา parent chain
     const findParent = (childId: string): string | null => {
       for (const [id, node] of Object.entries(section.nodes)) {
-        if ((node.type === "body" || node.type === "stack" || node.type === "row") && node.childIds.includes(childId)) {
+        if (
+          (node.type === "body" || node.type === "stack" || node.type === "row" || node.type === "flow-row" || node.type === "flow-stack") &&
+          node.childIds.includes(childId)
+        ) {
           return id
         }
       }
@@ -261,6 +273,9 @@ function findNearestRowStack(document: DocumentNode, nodeId: string): { rowId: s
       if (current?.type === "stack" && parent?.type === "row") {
         return { rowId: parentId, stackId: currentId }
       }
+      if (current?.type === "flow-stack" && parent?.type === "flow-row") {
+        return { rowId: parentId, stackId: currentId }
+      }
       currentId = parentId
     }
   }
@@ -273,7 +288,7 @@ export function detectPlacementTarget(input: DetectTargetInput): { zone: Placeme
   if (nodeType == null) return null
 
   // row node — ใช้ row geometry
-  if (nodeType === "row") {
+  if (nodeType === "row" || nodeType === "flow-row") {
     return detectRowTarget(document, hoveredNodeId, localX, localY, width, height, source)
   }
 

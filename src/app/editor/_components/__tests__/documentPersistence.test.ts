@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createDefaultDocument, DEFAULT_PARAGRAPH_PROPS } from "@/document"
-import type { ParagraphNode } from "@/schema"
+import type { DocumentNode, LayoutNode, ParagraphNode } from "@/schema"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DataSnapshotV1 } from "@/dataSnapshot"
 import {
@@ -51,6 +51,103 @@ function dataSnapshot(values: DataSnapshotV1["values"]): DataSnapshotV1 {
     updatedAt: "2026-05-12T00:00:00.000Z",
     values,
   }
+}
+
+function makeParagraphNode(id: string, text: string): ParagraphNode {
+  return {
+    id,
+    type: "paragraph",
+    props: { ...DEFAULT_PARAGRAPH_PROPS },
+    children: [{ id: `${id}-text`, type: "text", text }],
+  }
+}
+
+function makeFlowRowDocument(): DocumentNode {
+  const doc = createDefaultDocument("Flow Row Storage")
+  const section = doc.document.sections[0]
+  const body = section.nodes[section.bodyRootId]
+
+  if (!body || body.type !== "body") {
+    throw new Error("Expected default document body")
+  }
+
+  const nodes: Record<string, LayoutNode> = {
+    [body.id]: { ...body, childIds: ["flow-row-1"] },
+    "flow-row-1": {
+      id: "flow-row-1",
+      type: "flow-row",
+      props: {},
+      childIds: ["flow-stack-left", "flow-stack-right"],
+    },
+    "flow-stack-left": {
+      id: "flow-stack-left",
+      type: "flow-stack",
+      props: { widthShare: 50 },
+      childIds: ["left-1", "left-2"],
+    },
+    "flow-stack-right": {
+      id: "flow-stack-right",
+      type: "flow-stack",
+      props: { widthShare: 50 },
+      childIds: ["right-1", "right-2"],
+    },
+    "left-1": makeParagraphNode("left-1", "Left paragraph 1"),
+    "left-2": makeParagraphNode("left-2", "Left paragraph 2"),
+    "right-1": makeParagraphNode("right-1", "Right paragraph 1"),
+    "right-2": makeParagraphNode("right-2", "Right paragraph 2"),
+  }
+
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      sections: [{ ...section, nodes }],
+    },
+  }
+}
+
+function expectFlowRowTree(doc: DocumentNode) {
+  const section = doc.document.sections[0]
+  const body = section.nodes[section.bodyRootId]
+  const row = section.nodes["flow-row-1"]
+  const leftStack = section.nodes["flow-stack-left"]
+  const rightStack = section.nodes["flow-stack-right"]
+  const paragraphText = (nodeId: string) => {
+    const node = section.nodes[nodeId]
+    expect(node?.type).toBe("paragraph")
+    if (node?.type !== "paragraph") return undefined
+
+    const firstChild = node.children[0]
+    expect(firstChild?.type).toBe("text")
+    return firstChild?.type === "text" ? firstChild.text : undefined
+  }
+
+  expect(body?.type).toBe("body")
+  if (body?.type === "body") {
+    expect(body.childIds).toEqual(["flow-row-1"])
+  }
+
+  expect(row?.type).toBe("flow-row")
+  if (row?.type === "flow-row") {
+    expect(row.childIds).toEqual(["flow-stack-left", "flow-stack-right"])
+  }
+
+  expect(leftStack?.type).toBe("flow-stack")
+  if (leftStack?.type === "flow-stack") {
+    expect(leftStack.childIds).toEqual(["left-1", "left-2"])
+    expect(leftStack.props.widthShare).toBe(50)
+  }
+
+  expect(rightStack?.type).toBe("flow-stack")
+  if (rightStack?.type === "flow-stack") {
+    expect(rightStack.childIds).toEqual(["right-1", "right-2"])
+    expect(rightStack.props.widthShare).toBe(50)
+  }
+
+  expect(paragraphText("left-1")).toBe("Left paragraph 1")
+  expect(paragraphText("left-2")).toBe("Left paragraph 2")
+  expect(paragraphText("right-1")).toBe("Right paragraph 1")
+  expect(paragraphText("right-2")).toBe("Right paragraph 2")
 }
 
 describe("document persistence", () => {
@@ -141,6 +238,29 @@ describe("document persistence", () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.doc.document.meta?.title).toBe("Storage")
+    expect(result.package?.packageVersion).toBe(CURRENT_STORAGE_PACKAGE_VERSION)
+  })
+
+  it("round-trips flow-row stack content through localStorage without flattening columns", () => {
+    const items = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        items.set(key, value)
+      },
+    }
+    const doc = makeFlowRowDocument()
+
+    expect(saveDocumentToStorage(storage, doc, { now: "2026-05-15T12:00:00.000Z" })).toEqual({ ok: true })
+
+    const storedPackage = JSON.parse(items.get(STORAGE_KEY)!)
+    expect(storedPackage.packageVersion).toBe(CURRENT_STORAGE_PACKAGE_VERSION)
+    expectFlowRowTree(storedPackage.document)
+
+    const result = loadDocumentFromStorage(storage)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expectFlowRowTree(result.doc)
     expect(result.package?.packageVersion).toBe(CURRENT_STORAGE_PACKAGE_VERSION)
   })
 

@@ -1,4 +1,18 @@
-import type { DocumentNode, FieldRefInline, LayoutNode, ParagraphNode, TableNode, TableRowNode, TableCellNode, TextRun } from "../schema"
+import type {
+  DocumentNode,
+  FieldRefInline,
+  LayoutNode,
+  ParagraphBoxBorder,
+  ParagraphBoxBorderSide,
+  ParagraphBoxPadding,
+  ParagraphBoxStyle,
+  ParagraphNode,
+  TableNode,
+  TableRowNode,
+  TableCellNode,
+  TextRun,
+  UnitValue,
+} from "../schema"
 import { pt } from "../schema"
 import type { DragSource, PlacementOperation } from "../placement/types"
 import {
@@ -7,6 +21,7 @@ import {
   createRowSubtree,
   createColumnsSubtree,
   createFlowColumnsSubtree,
+  createFlowStackNode,
   createStackNode,
   getEqualWidthShares,
   DEFAULT_STACK_MIN_HEIGHT,
@@ -28,6 +43,14 @@ interface ParentInfo {
 export interface FieldRefInlineChanges {
   label?: string
   fallback?: string
+}
+
+export type ParagraphBoxEdge = keyof ParagraphBoxPadding
+
+export interface ParagraphBoxStyleChanges {
+  fill?: string | null
+  padding?: Partial<Record<ParagraphBoxEdge, UnitValue>> | null
+  border?: Partial<Record<ParagraphBoxEdge, ParagraphBoxBorderSide | null>> | null
 }
 
 // ─── Tree Helpers ──────────────────────────────────────────────────────────────
@@ -510,6 +533,226 @@ export function updateNodeProps(
       )
       return { ...doc, document: { ...doc.document, sections: newSections } }
     }
+  }
+  return doc
+}
+
+const PARAGRAPH_BOX_EDGES: ParagraphBoxEdge[] = ["top", "right", "bottom", "left"]
+const ZERO_PT: UnitValue = { value: 0, unit: "pt" }
+
+function hasOwn<T extends object>(obj: T, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key)
+}
+
+function isHexColor(value: string): boolean {
+  return /^[0-9A-Fa-f]{6}$/.test(value)
+}
+
+function nonNegativeUnitValue(value: UnitValue): UnitValue {
+  return { value: Math.max(0, value.value), unit: value.unit }
+}
+
+function zeroParagraphPadding(): ParagraphBoxPadding {
+  return {
+    top: { ...ZERO_PT },
+    right: { ...ZERO_PT },
+    bottom: { ...ZERO_PT },
+    left: { ...ZERO_PT },
+  }
+}
+
+function isZeroUnitValue(value: UnitValue): boolean {
+  return value.value === 0
+}
+
+function normalizeBoxBorderSide(side: ParagraphBoxBorderSide): ParagraphBoxBorderSide | undefined {
+  if (side.style === "none") return undefined
+  const width = nonNegativeUnitValue(side.width)
+  if (width.value === 0) return undefined
+  if (!isHexColor(side.color)) return undefined
+  return { ...side, width }
+}
+
+function isEmptyParagraphBox(box: ParagraphBoxStyle): boolean {
+  return box.fill == null && box.padding == null && box.border == null
+}
+
+function pruneParagraphBox(box: ParagraphBoxStyle): ParagraphBoxStyle | undefined {
+  const next: ParagraphBoxStyle = {}
+  if (box.fill && isHexColor(box.fill)) next.fill = box.fill
+  if (box.padding && PARAGRAPH_BOX_EDGES.some((edge) => !isZeroUnitValue(box.padding![edge]))) {
+    next.padding = box.padding
+  }
+  if (box.border && Object.keys(box.border).length > 0) {
+    next.border = box.border
+  }
+  return isEmptyParagraphBox(next) ? undefined : next
+}
+
+function applyParagraphBoxStyleChanges(node: ParagraphNode, changes: ParagraphBoxStyleChanges): ParagraphNode {
+  const current = node.props.box ?? {}
+  const next: ParagraphBoxStyle = {
+    ...current,
+    padding: current.padding ? { ...current.padding } : undefined,
+    border: current.border ? { ...current.border } : undefined,
+  }
+
+  if (hasOwn(changes, "fill")) {
+    if (changes.fill == null || changes.fill === "") delete next.fill
+    else if (isHexColor(changes.fill)) next.fill = changes.fill
+  }
+
+  if (hasOwn(changes, "padding")) {
+    if (changes.padding == null) {
+      delete next.padding
+    } else {
+      const padding = next.padding ? { ...next.padding } : zeroParagraphPadding()
+      PARAGRAPH_BOX_EDGES.forEach((edge) => {
+        const value = changes.padding?.[edge]
+        if (value != null) padding[edge] = nonNegativeUnitValue(value)
+      })
+      next.padding = padding
+    }
+  }
+
+  if (hasOwn(changes, "border")) {
+    if (changes.border == null) {
+      delete next.border
+    } else {
+      const border: ParagraphBoxBorder = next.border ? { ...next.border } : {}
+      PARAGRAPH_BOX_EDGES.forEach((edge) => {
+        if (!hasOwn(changes.border!, edge)) return
+        const side = changes.border?.[edge]
+        if (side == null) {
+          delete border[edge]
+          return
+        }
+        const normalized = normalizeBoxBorderSide(side)
+        if (normalized) border[edge] = normalized
+        else delete border[edge]
+      })
+      next.border = Object.keys(border).length > 0 ? border : undefined
+    }
+  }
+
+  const box = pruneParagraphBox(next)
+  return { ...node, props: { ...node.props, box } }
+}
+
+export function updateParagraphBoxStyle(
+  doc: DocumentNode,
+  paragraphId: string,
+  changes: ParagraphBoxStyleChanges,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[paragraphId]
+    if (node?.type === "paragraph") {
+      const updated: LayoutNode = applyParagraphBoxStyleChanges(node, changes)
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [paragraphId]: updated } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "table") continue
+      const table = n as unknown as TableNode
+      const inner = table.nodes[paragraphId]
+      if (inner?.type !== "paragraph") continue
+      const updated = applyParagraphBoxStyleChanges(inner, changes)
+      const newTable = { ...table, nodes: { ...table.nodes, [paragraphId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
+export function addFlowStackColumn(
+  doc: DocumentNode,
+  rowId: string,
+  stackId?: string,
+  position: "before" | "after" = "after",
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const row = section.nodes[rowId]
+    if (row?.type !== "flow-row") continue
+
+    let nodes: Nodes = { ...section.nodes }
+    const childIds = [...row.childIds]
+    if (stackId == null) {
+      const newStack = createFlowStackNode([], { widthShare: 100, minHeight: DEFAULT_STACK_MIN_HEIGHT })
+      const nextChildIds = [...childIds, newStack.id]
+      const shares = getEqualWidthShares(nextChildIds.length)
+      const balancedNodes = nextChildIds.reduce<Nodes>((acc, childId, index) => {
+        const child = childId === newStack.id ? newStack : acc[childId]
+        if (child?.type !== "flow-stack") return acc
+        return {
+          ...acc,
+          [childId]: {
+            ...child,
+            props: { ...child.props, widthShare: shares[index] },
+          } as LayoutNode,
+        }
+      }, { ...nodes, [newStack.id]: newStack })
+
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si
+          ? {
+              ...s,
+              nodes: {
+                ...balancedNodes,
+                [row.id]: { ...row, childIds: nextChildIds } as LayoutNode,
+              },
+            }
+          : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    const targetIndex = stackId != null
+      ? childIds.indexOf(stackId)
+      : childIds.length - 1
+    const targetStackId = targetIndex >= 0 ? childIds[targetIndex] : null
+    const targetStack = targetStackId ? nodes[targetStackId] : null
+    const insertAt = targetIndex >= 0
+      ? (position === "before" ? targetIndex : targetIndex + 1)
+      : childIds.length
+    const newStack = createFlowStackNode([], { widthShare: 100, minHeight: DEFAULT_STACK_MIN_HEIGHT })
+
+    if (targetStack?.type === "flow-stack") {
+      const { original, inserted } = splitWidthPercent(targetStack.props.widthShare ?? 100)
+      nodes = {
+        ...nodes,
+        [targetStack.id]: {
+          ...targetStack,
+          props: { ...targetStack.props, widthShare: original },
+        } as LayoutNode,
+        [newStack.id]: {
+          ...newStack,
+          props: { ...newStack.props, widthShare: inserted },
+        } as LayoutNode,
+      }
+    } else {
+      nodes = { ...nodes, [newStack.id]: newStack }
+    }
+
+    const nextChildIds = [...childIds]
+    nextChildIds.splice(insertAt, 0, newStack.id)
+    nodes = {
+      ...nodes,
+      [row.id]: { ...row, childIds: nextChildIds } as LayoutNode,
+    }
+
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes } : s,
+    )
+    return { ...doc, document: { ...doc.document, sections: newSections } }
   }
   return doc
 }

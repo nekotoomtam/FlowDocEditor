@@ -1,5 +1,15 @@
-import type { ParagraphNode, SpacerNode } from "../schema"
-import type { LineSegment, MeasuredLine, MeasuredParagraph, MeasuredSpacer, TextMeasurer, WordBreaker } from "./types"
+import type { ParagraphBoxBorderSide, ParagraphNode, SpacerNode } from "../schema"
+import type {
+  LineSegment,
+  MeasuredBoxEdges,
+  MeasuredLine,
+  MeasuredParagraph,
+  MeasuredParagraphBorderSide,
+  MeasuredParagraphBox,
+  MeasuredSpacer,
+  TextMeasurer,
+  WordBreaker,
+} from "./types"
 import { defaultWordBreaker } from "./types"
 
 /**
@@ -24,6 +34,75 @@ export function toAbstractUnit(value: number, unit: "pt" | "mm"): number {
 
 type SourceLineSegment = Omit<LineSegment, "x" | "breakableAfter">
 type FieldRange = { start: number; end: number }
+
+const ZERO_EDGES: MeasuredBoxEdges = { top: 0, right: 0, bottom: 0, left: 0 }
+
+function edgeSum(edges: MeasuredBoxEdges): number {
+  return edges.top + edges.right + edges.bottom + edges.left
+}
+
+function borderWidth(side: MeasuredParagraphBorderSide | undefined): number {
+  return side?.width ?? 0
+}
+
+function resolveParagraphBorderSide(side: ParagraphBoxBorderSide | undefined): MeasuredParagraphBorderSide | undefined {
+  if (!side || side.style === "none") return undefined
+  const width = toAbstractUnit(side.width.value, side.width.unit)
+  if (width <= 0) return undefined
+  return { style: side.style, width, color: side.color }
+}
+
+function resolveParagraphBox(node: ParagraphNode, availableWidth: number): MeasuredParagraphBox | undefined {
+  const box = node.props.box
+  if (!box) return undefined
+
+  const padding: MeasuredBoxEdges = box.padding
+    ? {
+        top: toAbstractUnit(box.padding.top.value, box.padding.top.unit),
+        right: toAbstractUnit(box.padding.right.value, box.padding.right.unit),
+        bottom: toAbstractUnit(box.padding.bottom.value, box.padding.bottom.unit),
+        left: toAbstractUnit(box.padding.left.value, box.padding.left.unit),
+      }
+    : { ...ZERO_EDGES }
+  const border = {
+    top: resolveParagraphBorderSide(box.border?.top),
+    right: resolveParagraphBorderSide(box.border?.right),
+    bottom: resolveParagraphBorderSide(box.border?.bottom),
+    left: resolveParagraphBorderSide(box.border?.left),
+  }
+  const hasBorder = Boolean(border.top || border.right || border.bottom || border.left)
+  const hasPadding = edgeSum(padding) > 0
+  const hasFill = Boolean(box.fill)
+  if (!hasBorder && !hasPadding && !hasFill) return undefined
+
+  const horizontalInset = padding.left + padding.right + borderWidth(border.left) + borderWidth(border.right)
+  return {
+    fill: box.fill,
+    padding,
+    border,
+    contentWidth: Math.max(0, availableWidth - horizontalInset),
+  }
+}
+
+export function paragraphBoxHorizontalInset(box: MeasuredParagraphBox | undefined): number {
+  if (!box) return 0
+  return box.padding.left + box.padding.right + borderWidth(box.border.left) + borderWidth(box.border.right)
+}
+
+export function paragraphBoxLeftInset(box: MeasuredParagraphBox | undefined): number {
+  if (!box) return 0
+  return box.padding.left + borderWidth(box.border.left)
+}
+
+export function paragraphBoxTopInset(box: MeasuredParagraphBox | undefined): number {
+  if (!box) return 0
+  return box.padding.top + borderWidth(box.border.top)
+}
+
+export function paragraphBoxBottomInset(box: MeasuredParagraphBox | undefined): number {
+  if (!box) return 0
+  return box.padding.bottom + borderWidth(box.border.bottom)
+}
 
 function getSegmentKind(
   text: string,
@@ -389,14 +468,16 @@ export function measureParagraph(
   const lineHeight = measurer.measureLineHeight(fontFamilyKey, fontSize, node.props.lineHeight)
   const spacingBefore = toAbstractUnit(node.props.spacingBefore.value, node.props.spacingBefore.unit)
   const spacingAfter = toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
+  const box = resolveParagraphBox(node, availableWidth)
+  const contentWidth = box?.contentWidth ?? availableWidth
 
   const { fullText, fieldRanges, pageNumberRanges } = buildParagraphFullText(node)
-  const rawLines = measureHardLines(fullText, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, pageNumberRanges)
+  const rawLines = measureHardLines(fullText, contentWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, pageNumberRanges)
   const lines: MeasuredLine[] = rawLines.map((line) => ({ ...line, height: lineHeight }))
   const contentHeight = lines.reduce((sum, line) => sum + line.height, 0)
-  const totalHeight = spacingBefore + contentHeight + spacingAfter
+  const totalHeight = spacingBefore + paragraphBoxTopInset(box) + contentHeight + paragraphBoxBottomInset(box) + spacingAfter
 
-  return { nodeId: node.id, lines, lineHeight, spacingBefore, spacingAfter, width: availableWidth, totalHeight }
+  return { nodeId: node.id, lines, lineHeight, spacingBefore, spacingAfter, width: availableWidth, contentWidth, box, totalHeight }
 }
 
 // Measures only the lines starting from the hard-line that contains `fromOffset`.
@@ -411,8 +492,10 @@ export function measureParagraphFrom(
   const fontSize = toAbstractUnit(node.props.fontSize.value, node.props.fontSize.unit)
   const fontFamilyKey = node.props.fontFamilyKey ?? "default"
   const lineHeight = measurer.measureLineHeight(fontFamilyKey, fontSize, node.props.lineHeight)
+  const box = resolveParagraphBox(node, availableWidth)
+  const contentWidth = box?.contentWidth ?? availableWidth
   const { fullText, fieldRanges, pageNumberRanges } = buildParagraphFullText(node)
-  const rawLines = measureHardLines(fullText, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, pageNumberRanges, fromOffset)
+  const rawLines = measureHardLines(fullText, contentWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, pageNumberRanges, fromOffset)
   const tailLines = rawLines.map((line) => ({ ...line, height: lineHeight }))
   return { tailLines, lineHeight }
 }

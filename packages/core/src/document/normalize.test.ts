@@ -56,6 +56,84 @@ describe("normalizeDocument", () => {
     expect(paragraph.props.keepWithNext).toBe(true)
   })
 
+  it("preserves valid paragraph box style props", () => {
+    const doc = makeDoc({
+      p1: {
+        id: "p1",
+        type: "paragraph",
+        props: {
+          align: "left",
+          fontSize: pt(12),
+          lineHeight: 1.5,
+          spacingBefore: pt(0),
+          spacingAfter: pt(8),
+          textIndent: pt(0),
+          indentLeft: pt(0),
+          indentRight: pt(0),
+          box: {
+            fill: "E0F2FE",
+            padding: { top: pt(2), right: pt(4), bottom: pt(6), left: pt(8) },
+            border: {
+              top: { style: "solid", width: pt(1), color: "0F172A" },
+              bottom: { style: "dashed", width: pt(0.5), color: "334155" },
+            },
+          },
+        },
+        children: [{ id: "t1", type: "text", text: "Boxed" }],
+      },
+    }, ["p1"])
+
+    const paragraph = normalizeDocument(doc).document.sections[0].nodes.p1
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.props.box).toEqual({
+      fill: "E0F2FE",
+      padding: { top: pt(2), right: pt(4), bottom: pt(6), left: pt(8) },
+      border: {
+        top: { style: "solid", width: pt(1), color: "0F172A" },
+        bottom: { style: "dashed", width: pt(0.5), color: "334155" },
+      },
+    })
+  })
+
+  it("normalizes unsafe paragraph box style values", () => {
+    const doc = makeDoc({
+      p1: {
+        id: "p1",
+        type: "paragraph",
+        props: {
+          align: "left",
+          fontSize: pt(12),
+          lineHeight: 1.5,
+          spacingBefore: pt(0),
+          spacingAfter: pt(8),
+          textIndent: pt(0),
+          indentLeft: pt(0),
+          indentRight: pt(0),
+          box: {
+            fill: "not-a-color",
+            padding: { top: pt(-2), right: pt(4), bottom: { value: 2, unit: "px" }, left: pt(8) },
+            border: {
+              top: { style: "solid", width: pt(-1), color: "bad" },
+              right: { style: "wavy", width: pt(1), color: "000000" },
+            },
+          },
+        },
+        children: [{ id: "t1", type: "text", text: "Boxed" }],
+      } as unknown as LayoutNode,
+    }, ["p1"])
+
+    const paragraph = normalizeDocument(doc).document.sections[0].nodes.p1
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.props.box).toEqual({
+      padding: { top: pt(0), right: pt(4), bottom: pt(0), left: pt(8) },
+      border: {
+        top: { style: "solid", width: pt(0), color: "000000" },
+      },
+    })
+  })
+
   it("preserves row minHeight", () => {
     const doc = makeDoc({
       row1: { id: "row1", type: "row", props: { minHeight: 96 }, childIds: ["st1"] },

@@ -40,6 +40,32 @@ Users should be able to:
 - Background clicks should clear selection and close inline edit through the
   normal edit transaction path.
 
+## Property Panel Rules
+
+- Primary labels, values, and commands should remain visible without requiring
+  hover help.
+- Repeated explanatory rule text may use a compact `InfoHint` beside the
+  relevant label when showing the full text would clutter the panel.
+- `InfoHint` should explain constraints, consequences, or safer alternatives.
+  It must not hide required field names, current authored values, or destructive
+  action warnings.
+
+## Paragraph Box Style Rules
+
+Paragraph box styling is defined in
+`docs/PARAGRAPH_BOX_STYLE_CONTRACT.md`.
+
+- Box style is authored document content, not editor-only chrome.
+- Version 1 is limited to fill, four-sided padding, and four-sided border.
+- Rounded corners, shadows, opacity, gradients, and CSS-like decoration are out
+  of scope for the first supported box style.
+- Property-panel box controls should be grouped separately from text controls.
+- Editor selection outlines must remain visually distinct from authored
+  paragraph borders.
+- PDF/editor preview should match authoritative paginated box geometry. DOCX is
+  allowed to be best-effort where Word paragraph formatting cannot match the
+  PDF/editor exactly.
+
 ## Inline Editing Rules
 
 - Inline editing should preserve visible text.
@@ -143,6 +169,22 @@ Table-specific interaction rules are defined in
 - table operations should not leave the editor in an invalid document state
 - margin resizing with tables should expose a visible, predictable drag affordance
   and enough feedback that users understand the table is being reflowed.
+
+## Flow Row Editing Rules
+
+- Adding a column from a selected `flow-row` is a global row action: it adds one
+  empty `flow-stack` and rebalances all direct child stack width shares equally.
+- Adding a column from a selected `flow-stack` edge is a local action: it inserts
+  before or after that stack by splitting only the selected stack width share.
+- `flow-stack` width changes should be sibling-safe: the user chooses the
+  neighboring column to resize against, only that pair changes, and the owning
+  `flow-row` width shares must still total exactly `100`.
+- The current `flow-stack` minimum width is an interaction guard, not a
+  content-measured layout minimum. The preferred minimum is `8%` per column,
+  with an adaptive lower effective minimum for already narrow sibling pairs.
+- Property-panel pair resize is the current safe path for `flow-stack` width
+  edits. Canvas drag resize for `flow-row` / `flow-stack` remains a separate
+  future interaction design.
 
 ## Preview And Authoritative Layout
 

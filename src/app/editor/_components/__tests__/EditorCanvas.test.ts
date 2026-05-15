@@ -37,7 +37,7 @@ function paragraphNode(id: string, text: string) {
   }
 }
 
-function textFragment(id: string, text: string, y: number): PageFragment {
+function textFragment(id: string, text: string, y: number, overrides: Partial<PageFragment> = {}): PageFragment {
   return {
     nodeId: id,
     nodeType: "paragraph",
@@ -54,6 +54,7 @@ function textFragment(id: string, text: string, y: number): PageFragment {
       height: 14,
     }],
     renderProps,
+    ...overrides,
   }
 }
 
@@ -168,7 +169,11 @@ function makeFlowPaginated(): PaginatedDocument {
   }
 }
 
-function renderCanvas(paginated: PaginatedDocument = makePaginated(), doc: DocumentNode = makeDoc()): string {
+function renderCanvas(
+  paginated: PaginatedDocument = makePaginated(),
+  doc: DocumentNode = makeDoc(),
+  selectedNodeId: string | null = null,
+): string {
   const noop = () => undefined
   return renderToStaticMarkup(createElement(EditorCanvas, {
     paginated,
@@ -178,7 +183,7 @@ function renderCanvas(paginated: PaginatedDocument = makePaginated(), doc: Docum
     minHeightDrag: null,
     marginDrag: null,
     scale: 1,
-    selectedNodeId: null,
+    selectedNodeId,
     isLayoutLoading: false,
     textMeasurer: defaultTextMeasurer,
     inlineEditVisualFresh: false,
@@ -250,5 +255,68 @@ describe("EditorCanvas flow-row / flow-stack static preview", () => {
     })
 
     expect(preview).toBeNull()
+  })
+})
+
+describe("EditorCanvas paragraph box preview", () => {
+  const boxedRenderProps: ParagraphRenderProps = {
+    ...renderProps,
+    spacingBefore: 3,
+    spacingAfter: 5,
+    box: {
+      fill: "E0F2FE",
+      padding: { top: 4, right: 6, bottom: 8, left: 10 },
+      border: {
+        top: { style: "solid", width: 2, color: "EF4444" },
+        right: { style: "dashed", width: 2, color: "16A34A" },
+        bottom: { style: "dotted", width: 2, color: "2563EB" },
+        left: { style: "solid", width: 2, color: "111827" },
+      },
+    },
+  }
+
+  it("renders authored paragraph box fill and borders from paginated metadata", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      textFragment("body-p", "Body text", 72, {
+        height: 40,
+        renderProps: boxedRenderProps,
+      }),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc())
+
+    expect(markup).toContain("data-paragraph-box=\"true\"")
+    expect(markup).toContain("data-paragraph-box-fill=\"true\"")
+    expect(markup).toContain("x=\"36\" y=\"75\" width=\"228\" height=\"32\" fill=\"#E0F2FE\"")
+    expect(markup).toContain("data-paragraph-box-side=\"top\"")
+    expect(markup).toContain("stroke=\"#EF4444\"")
+    expect(markup).toContain("data-paragraph-box-side=\"right\"")
+    expect(markup).toContain("stroke=\"#16A34A\"")
+    expect(markup).toContain("stroke-dasharray=\"6 4\"")
+    expect(markup).toContain("data-paragraph-box-side=\"bottom\"")
+    expect(markup).toContain("stroke=\"#2563EB\"")
+    expect(markup).toContain("stroke-linecap=\"round\"")
+    expect(markup).toContain("data-paragraph-box-side=\"left\"")
+    expect(markup).toContain("stroke=\"#111827\"")
+  })
+
+  it("keeps middle split paragraph box fragments open at the top and bottom", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      textFragment("body-p", "Body text", 72, {
+        height: 40,
+        continuesFrom: true,
+        isContinued: true,
+        renderProps: boxedRenderProps,
+      }),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc())
+
+    expect(markup).toContain("data-paragraph-box-side=\"left\"")
+    expect(markup).toContain("data-paragraph-box-side=\"right\"")
+    expect(markup).not.toContain("data-paragraph-box-side=\"top\"")
+    expect(markup).not.toContain("data-paragraph-box-side=\"bottom\"")
   })
 })

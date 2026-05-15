@@ -7,6 +7,10 @@ import type {
   FlowStackNode,
   InlineNode,
   LayoutNode,
+  ParagraphBoxBorder,
+  ParagraphBoxBorderSide,
+  ParagraphBoxPadding,
+  ParagraphBoxStyle,
   ParagraphNode,
   ParagraphProps,
   RowNode,
@@ -72,6 +76,16 @@ function normalizePositiveUnitValue(input: unknown, fallback: UnitValue): UnitVa
   return uv.value > 0 ? uv : { ...fallback }
 }
 
+function normalizeNonNegativeUnitValue(input: unknown, fallback: UnitValue): UnitValue {
+  const uv = normalizeUnitValue(input, fallback)
+  return uv.value >= 0 ? uv : { ...fallback }
+}
+
+function normalizeHexColor(value: unknown, fallback?: string): string | undefined {
+  if (typeof value === "string" && /^[0-9A-Fa-f]{6}$/.test(value)) return value
+  return fallback
+}
+
 // ─── Inline Nodes ─────────────────────────────────────────────────────────────
 
 function normalizeTextRun(input: unknown): TextRun {
@@ -102,6 +116,59 @@ function normalizeInlineNode(input: unknown): InlineNode {
 
 // ─── Paragraph ────────────────────────────────────────────────────────────────
 
+const ZERO_PT: UnitValue = { value: 0, unit: "pt" }
+
+function normalizeParagraphBoxPadding(input: unknown): ParagraphBoxPadding | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  return {
+    top: normalizeNonNegativeUnitValue(raw["top"], ZERO_PT),
+    right: normalizeNonNegativeUnitValue(raw["right"], ZERO_PT),
+    bottom: normalizeNonNegativeUnitValue(raw["bottom"], ZERO_PT),
+    left: normalizeNonNegativeUnitValue(raw["left"], ZERO_PT),
+  }
+}
+
+function normalizeParagraphBoxBorderSide(input: unknown): ParagraphBoxBorderSide | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const style = raw["style"]
+  if (style !== "solid" && style !== "dashed" && style !== "dotted" && style !== "none") return undefined
+  return {
+    style,
+    width: normalizeNonNegativeUnitValue(raw["width"], ZERO_PT),
+    color: normalizeHexColor(raw["color"], "000000")!,
+  }
+}
+
+function normalizeParagraphBoxBorder(input: unknown): ParagraphBoxBorder | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const border: ParagraphBoxBorder = {}
+  const top = normalizeParagraphBoxBorderSide(raw["top"])
+  const right = normalizeParagraphBoxBorderSide(raw["right"])
+  const bottom = normalizeParagraphBoxBorderSide(raw["bottom"])
+  const left = normalizeParagraphBoxBorderSide(raw["left"])
+  if (top) border.top = top
+  if (right) border.right = right
+  if (bottom) border.bottom = bottom
+  if (left) border.left = left
+  return Object.keys(border).length > 0 ? border : undefined
+}
+
+function normalizeParagraphBoxStyle(input: unknown): ParagraphBoxStyle | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const box: ParagraphBoxStyle = {}
+  const fill = normalizeHexColor(raw["fill"])
+  const padding = raw["padding"] != null ? normalizeParagraphBoxPadding(raw["padding"]) : undefined
+  const border = raw["border"] != null ? normalizeParagraphBoxBorder(raw["border"]) : undefined
+  if (fill) box.fill = fill
+  if (padding) box.padding = padding
+  if (border) box.border = border
+  return Object.keys(box).length > 0 ? box : undefined
+}
+
 function normalizeParagraphProps(input: unknown): ParagraphProps {
   const raw = (typeof input === "object" && input != null ? input : {}) as Record<string, unknown>
   const align = raw["align"]
@@ -122,6 +189,7 @@ function normalizeParagraphProps(input: unknown): ParagraphProps {
       ? raw["headingLevel"]
       : undefined,
     keepWithNext: typeof raw["keepWithNext"] === "boolean" ? raw["keepWithNext"] : undefined,
+    box: normalizeParagraphBoxStyle(raw["box"]),
   }
 }
 

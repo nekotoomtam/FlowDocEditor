@@ -98,6 +98,9 @@ Rules:
 - Keep add/remove/reorder/resize column behavior expressible as document
   operations on `flow-row.childIds` and `flow-stack.props`; future drag/drop UI
   should wrap those operations instead of creating a separate layout path.
+- Row-level add-column should add one empty `flow-stack` and rebalance every
+  direct child stack width share equally. Stack-level edge insertion should stay
+  local and split only the selected stack's width share.
 - Keep invalid mixes explicit: old `stack` must not become a silent alias for
   `flow-stack`, and old `row` must not gain partial flow behavior.
 - Avoid fragment metadata that only works for two siblings. Parent/child
@@ -201,6 +204,10 @@ Each page slice should preserve parent/child traceability:
   `flow-stack`;
 - each `flow-stack` slice has `parentNodeId` set to the owning `flow-row`;
 - each `flow-row` slice has `parentNodeId` set to the containing body/root.
+- every emitted `flow-row` slice includes a visual `flow-stack` fragment for
+  each authored direct child stack, even when that stack has no content in the
+  slice. Empty/inactive stacks remain selectable and visible as drop targets,
+  but do not emit extra paragraph/spacer child fragments.
 
 Continuation metadata should be explicit enough that renderers, drift reports,
 and future caret/selection work do not infer slice identity from object order

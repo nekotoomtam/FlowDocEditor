@@ -2,6 +2,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import type { PDFFont, PDFPage } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
 import type { PaginatedDocument, PaginatedPage, PageFragment, ResolvedBorderSide } from "../../pagination"
+import { resolveParagraphBoxLayoutPrimitives } from "../../pagination"
 import type { RenderResult, Renderer, FontProvider } from "../shared"
 
 /**
@@ -31,6 +32,28 @@ function hexToRgb(hex: string) {
 
 // ─── Border Drawing ───────────────────────────────────────────────────────────
 
+export interface PdfRectPrimitive {
+  x: number
+  y: number
+  width: number
+  height: number
+  color: string
+}
+
+export interface PdfLinePrimitive {
+  side: "top" | "right" | "bottom" | "left"
+  border: ResolvedBorderSide
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+export interface ParagraphBoxDrawingPrimitives {
+  fill?: PdfRectPrimitive
+  borders: PdfLinePrimitive[]
+}
+
 function drawBorderSide(
   pdfPage: PDFPage,
   side: ResolvedBorderSide | undefined,
@@ -43,6 +66,48 @@ function drawBorderSide(
     end: { x: x2, y: y2 },
     thickness: side.width,
     color: hexToRgb(side.color),
+  })
+}
+
+export function resolveParagraphBoxDrawingPrimitives(
+  fragment: PageFragment,
+  pageHeight: number,
+): ParagraphBoxDrawingPrimitives | null {
+  const layout = resolveParagraphBoxLayoutPrimitives(fragment)
+  if (!layout) return null
+
+  return {
+    fill: layout.fill
+      ? {
+          x: layout.fill.x,
+          y: pageHeight - layout.fill.y - layout.fill.height,
+          width: layout.fill.width,
+          height: layout.fill.height,
+          color: layout.fill.color,
+        }
+      : undefined,
+    borders: layout.borders.map((line) => ({
+      ...line,
+      y1: pageHeight - line.y1,
+      y2: pageHeight - line.y2,
+    })),
+  }
+}
+
+function drawParagraphBox(pdfPage: PDFPage, fragment: PageFragment, pageHeight: number): void {
+  const primitives = resolveParagraphBoxDrawingPrimitives(fragment, pageHeight)
+  if (!primitives) return
+  if (primitives.fill) {
+    pdfPage.drawRectangle({
+      x: primitives.fill.x,
+      y: primitives.fill.y,
+      width: primitives.fill.width,
+      height: primitives.fill.height,
+      color: hexToRgb(primitives.fill.color),
+    })
+  }
+  primitives.borders.forEach((line) => {
+    drawBorderSide(pdfPage, line.border, line.x1, line.y1, line.x2, line.y2)
   })
 }
 
@@ -101,6 +166,7 @@ export class PdfRenderer implements Renderer {
 
       if (fragment.nodeType !== "paragraph" && fragment.nodeType !== "toc") continue
       if (!fragment.lines?.length || !fragment.renderProps) continue
+      if (fragment.nodeType === "paragraph") drawParagraphBox(pdfPage, fragment, page.height)
 
       const font = await this.resolveFont(pdfDoc, fontCache, fragment.renderProps.fontFamilyKey)
       const defaultFontSize = fragment.renderProps.fontSize

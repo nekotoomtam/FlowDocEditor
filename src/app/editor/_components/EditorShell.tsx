@@ -1,11 +1,11 @@
 "use client"
 
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
-import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
+import { collectPaginatedLayoutWarnings, getPageDimensions, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
-import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious } from "@/document"
-import type { FieldRefInlineChanges } from "@/document"
+import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, updateParagraphBoxStyle, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious, addFlowStackColumn } from "@/document"
+import type { FieldRefInlineChanges, ParagraphBoxStyleChanges } from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
@@ -173,11 +173,16 @@ interface EditorState {
   paginated: PaginatedDocument
   drag: DragState | null
   selectedNodeId: string | null
+  selectionAnchorNodeId: string | null
   lastSplitNodeId: string | null
   mergeResult: { prevNodeId: string; caretIndex: number } | null
 }
 
 type ZoomMode = "fit" | "manual"
+type RightRailMode = "page" | "outline" | "properties"
+type PageMarginSide = "top" | "right" | "bottom" | "left"
+type PageMarginDraft = Record<PageMarginSide, number>
+type DocumentSection = DocumentNode["document"]["sections"][number]
 
 const MIN_SCALE = 0.3
 const MAX_SCALE = 4
@@ -191,9 +196,17 @@ const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 450
 const FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS = 16
 const FLOWDOC_FONT_HEADER = "X-FlowDoc-Font"
 const FLOWDOC_FONT_FALLBACK_VALUE = "fallback"
+const TRANSIENT_EXPORT_READINESS_REASONS = new Set([
+  "server layout has not checked the current document",
+  "server layout check is still running",
+])
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
+}
+
+function firstVisibleExportReadinessReason(reasons: string[]): string | null {
+  return reasons.find((reason) => !TRANSIENT_EXPORT_READINESS_REASONS.has(reason)) ?? null
 }
 
 type EditorAction =
@@ -201,10 +214,11 @@ type EditorAction =
   | { type: "DRAG_MOVE"; clientX: number; clientY: number; preview: PlacementPreview | null }
   | { type: "DRAG_COMMIT"; op: PlacementOperation; sectionId: string }
   | { type: "DRAG_CANCEL" }
-  | { type: "SELECT_NODE"; nodeId: string | null }
+  | { type: "SELECT_NODE"; nodeId: string | null; anchorNodeId?: string | null }
   | { type: "UPDATE_PROPS"; nodeId: string; changes: Record<string, unknown> }
   | { type: "UPDATE_TEXT"; nodeId: string; text: string }
   | { type: "UPDATE_FIELD_REF"; fieldRefId: string; changes: FieldRefInlineChanges }
+  | { type: "UPDATE_PARAGRAPH_BOX_STYLE"; nodeId: string; changes: ParagraphBoxStyleChanges }
   | { type: "UPDATE_INLINE_TEXT_DRAFT"; nodeId: string; text: string }
   | { type: "COMMIT_INLINE_TEXT_EDIT"; nodeId: string; beforeDoc: DocumentNode; beforePaginated: PaginatedDocument; beforeText: string; afterPaginated: PaginatedDocument }
   | { type: "COMMIT_WYSIWYG_TEXT_EDIT"; nodeId: string; text: string; beforeText: string; history?: HistoryEntry; afterPaginated: PaginatedDocument }
@@ -217,6 +231,7 @@ type EditorAction =
   | { type: "TABLE_REMOVE_ROW"; tableId: string; rowIndex: number }
   | { type: "TABLE_ADD_COL"; tableId: string; afterIndex?: number }
   | { type: "TABLE_REMOVE_COL"; tableId: string; colIndex: number }
+  | { type: "FLOW_ROW_ADD_COL"; rowId: string; stackId?: string; position?: "before" | "after" }
   | { type: "LOAD_DOCUMENT"; doc: DocumentNode; paginated?: PaginatedDocument }
   | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
@@ -299,6 +314,7 @@ function createInitialEditorState(initialDocOverride?: DocumentNode | null): Edi
     paginated: paginate(initialDoc),
     drag: null,
     selectedNodeId: null,
+    selectionAnchorNodeId: null,
     lastSplitNodeId: null,
     mergeResult: null,
   }
@@ -319,13 +335,19 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     case "DRAG_CANCEL":
       return { ...state, drag: null }
     case "SELECT_NODE":
-      return { ...state, selectedNodeId: action.nodeId }
+      return {
+        ...state,
+        selectedNodeId: action.nodeId,
+        selectionAnchorNodeId: action.anchorNodeId !== undefined ? action.anchorNodeId : action.nodeId,
+      }
     case "UPDATE_PROPS":
       return pushDoc(state, updateNodeProps(state.doc, action.nodeId, action.changes))
     case "UPDATE_TEXT":
       return pushDoc(state, updateParagraphText(state.doc, action.nodeId, action.text))
     case "UPDATE_FIELD_REF":
       return pushDoc(state, updateFieldRefInline(state.doc, action.fieldRefId, action.changes))
+    case "UPDATE_PARAGRAPH_BOX_STYLE":
+      return pushDoc(state, updateParagraphBoxStyle(state.doc, action.nodeId, action.changes))
     case "UPDATE_INLINE_TEXT_DRAFT":
       return setDocWithoutHistory(state, updateParagraphText(state.doc, action.nodeId, action.text))
     case "COMMIT_INLINE_TEXT_EDIT": {
@@ -345,7 +367,7 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return commitWysiwygTextEditState(state, action, MAX_HISTORY)
     }
     case "DELETE_NODE":
-      return { ...pushDoc(state, deleteNode(state.doc, action.nodeId)), selectedNodeId: null }
+      return { ...pushDoc(state, deleteNode(state.doc, action.nodeId)), selectedNodeId: null, selectionAnchorNodeId: null }
     case "SET_PAGINATED":
       return { ...state, paginated: action.paginated }
     case "SET_INLINE_EDIT_HEIGHT":
@@ -377,7 +399,7 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     }
     case "LOAD_DOCUMENT":
       const normalizedDoc = normalizeDocument(action.doc)
-      return { ...state, past: [], doc: normalizedDoc, future: [], paginated: action.paginated ?? paginate(normalizedDoc), selectedNodeId: null, drag: null }
+      return { ...state, past: [], doc: normalizedDoc, future: [], paginated: action.paginated ?? paginate(normalizedDoc), selectedNodeId: null, selectionAnchorNodeId: null, drag: null }
     case "TABLE_ADD_ROW":
       return pushDoc(state, addTableRow(state.doc, action.tableId, action.afterIndex))
     case "TABLE_REMOVE_ROW":
@@ -386,6 +408,8 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, addTableColumn(state.doc, action.tableId, action.afterIndex))
     case "TABLE_REMOVE_COL":
       return pushDoc(state, removeTableColumn(state.doc, action.tableId, action.colIndex))
+    case "FLOW_ROW_ADD_COL":
+      return pushDoc(state, addFlowStackColumn(state.doc, action.rowId, action.stackId, action.position))
     case "RESIZE_COLUMNS": {
       let doc = updateNodeProps(state.doc, action.leftStackId, { widthShare: action.leftShare })
       doc = updateNodeProps(doc, action.rightStackId, { widthShare: action.rightShare })
@@ -486,12 +510,336 @@ function findParagraphFragment(paginated: PaginatedDocument, nodeId: string, pag
   return null
 }
 
+function findSectionIndexForNode(doc: DocumentNode, nodeId: string | null): number {
+  if (!nodeId) return 0
+  for (let sectionIndex = 0; sectionIndex < doc.document.sections.length; sectionIndex += 1) {
+    const section = doc.document.sections[sectionIndex]
+    if (section.nodes[nodeId]) return sectionIndex
+    for (const candidate of Object.values(section.nodes)) {
+      if (candidate.type !== "table") continue
+      if ((candidate as unknown as TableNode).nodes[nodeId]) return sectionIndex
+    }
+  }
+  return 0
+}
+
+function readSectionMargin(section: DocumentSection): PageMarginDraft {
+  return {
+    top: section.page.margin.top.value,
+    right: section.page.margin.right.value,
+    bottom: section.page.margin.bottom.value,
+    left: section.page.margin.left.value,
+  }
+}
+
+function clampPageMarginValue(value: number, side: PageMarginSide, section: DocumentSection): number {
+  const { width, height } = getPageDimensions(section.page)
+  const pageExtent = side === "left" || side === "right" ? width : height
+  const max = Math.max(0, pageExtent / 2 - 36)
+  const numeric = Number.isFinite(value) ? value : 0
+  return Math.max(0, Math.min(max, Math.round(numeric * 100) / 100))
+}
+
+function clampPageMarginDraft(draft: PageMarginDraft, section: DocumentSection): PageMarginDraft {
+  return {
+    top: clampPageMarginValue(draft.top, "top", section),
+    right: clampPageMarginValue(draft.right, "right", section),
+    bottom: clampPageMarginValue(draft.bottom, "bottom", section),
+    left: clampPageMarginValue(draft.left, "left", section),
+  }
+}
+
+function arePageMarginsEqual(a: PageMarginDraft, b: PageMarginDraft): boolean {
+  return a.top === b.top && a.right === b.right && a.bottom === b.bottom && a.left === b.left
+}
+
+function formatPageMarginSummary(margin: PageMarginDraft): string {
+  return `${margin.top}/${margin.right}/${margin.bottom}/${margin.left} pt`
+}
+
+function PagePanelSection({
+  title,
+  summary,
+  children,
+  testId,
+  defaultOpen = true,
+}: {
+  title: string
+  summary?: string
+  children: React.ReactNode
+  testId?: string
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+
+  return (
+    <section data-testid={testId} style={pagePanelSection}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        style={pagePanelSectionHeader}
+      >
+        <span style={{ color: "#374151", fontWeight: 700 }}>{title}</span>
+        {summary && (
+          <span style={{ marginLeft: "auto", color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {summary}
+          </span>
+        )}
+        <span aria-hidden="true" style={{ color: "#6b7280", fontWeight: 700, width: 12, textAlign: "center" }}>
+          {open ? "-" : "+"}
+        </span>
+      </button>
+      {open && (
+        <div data-testid={testId ? `${testId}-body` : undefined} style={pagePanelSectionBody}>
+          {children}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function PagePanel({
+  doc,
+  sectionIndex,
+  editable,
+  onUpdateMargin,
+}: {
+  doc: DocumentNode
+  sectionIndex: number
+  editable: boolean
+  onUpdateMargin: (sectionIndex: number, margin: PageMarginDraft) => void
+}) {
+  const section = doc.document.sections[sectionIndex] ?? doc.document.sections[0]
+  const [draft, setDraft] = useState<PageMarginDraft>(() => section ? readSectionMargin(section) : { top: 0, right: 0, bottom: 0, left: 0 })
+
+  useEffect(() => {
+    if (!section) return
+    setDraft(readSectionMargin(section))
+  }, [
+    section?.id,
+    section?.page.margin.top.value,
+    section?.page.margin.right.value,
+    section?.page.margin.bottom.value,
+    section?.page.margin.left.value,
+  ])
+
+  const commitDraft = useCallback(() => {
+    if (!editable || !section) return
+    const next = clampPageMarginDraft(draft, section)
+    const current = readSectionMargin(section)
+    setDraft(next)
+    if (arePageMarginsEqual(next, current)) return
+    onUpdateMargin(sectionIndex, next)
+  }, [draft, editable, onUpdateMargin, section, sectionIndex])
+
+  const resetDraft = useCallback(() => {
+    if (!section) return
+    setDraft(readSectionMargin(section))
+  }, [section])
+
+  const setMarginSide = (side: PageMarginSide, value: string) => {
+    setDraft((prev) => ({ ...prev, [side]: Number(value) || 0 }))
+  }
+
+  const setAllMargins = (value: string) => {
+    const amount = Number(value) || 0
+    setDraft({ top: amount, right: amount, bottom: amount, left: amount })
+  }
+
+  const marginValues = [draft.top, draft.right, draft.bottom, draft.left]
+  const allMarginValue = marginValues.every((value) => value === marginValues[0]) ? marginValues[0] : null
+
+  const renderMarginInput = (side: PageMarginSide, gridArea: string) => (
+    <label key={side} style={{ ...pageCompassField, gridArea }}>
+      <span style={pageCompassControlLabel}>{side[0].toUpperCase() + side.slice(1)}</span>
+      <input
+        type="number"
+        min={0}
+        step={1}
+        value={draft[side]}
+        disabled={!editable || !section}
+        onChange={(event) => setMarginSide(side, event.target.value)}
+        onBlur={commitDraft}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur()
+          } else if (event.key === "Escape") {
+            resetDraft()
+            event.currentTarget.blur()
+          }
+        }}
+        style={{ ...pagePanelInput, background: editable ? "white" : "#f8fafc", color: editable ? "#111827" : "#94a3b8" }}
+      />
+    </label>
+  )
+
+  return (
+    <div data-testid="page-panel" style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", background: "#fff" }}>
+      <div
+        data-testid="page-panel-title"
+        style={{
+          flexShrink: 0,
+          padding: "12px 14px",
+          borderBottom: "1px solid #e5e7eb",
+          color: "#94a3b8",
+          fontSize: 12,
+          fontWeight: 700,
+          letterSpacing: 0,
+        }}
+      >
+        PAGE
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 14, display: "grid", alignContent: "start", gap: 10 }}>
+        {section ? (
+          <>
+            <PagePanelSection title="Page setup" summary={`${section.page.size} / ${section.page.orientation}`} testId="page-setup-card">
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div style={{ display: "grid", gap: 3 }}>
+                  <span style={pagePanelFieldLabel}>Size</span>
+                  <div style={pagePanelReadOnlyValue}>{section.page.size}</div>
+                </div>
+                <div style={{ display: "grid", gap: 3 }}>
+                  <span style={pagePanelFieldLabel}>Orientation</span>
+                  <div style={pagePanelReadOnlyValue}>{section.page.orientation}</div>
+                </div>
+              </div>
+            </PagePanelSection>
+
+            <PagePanelSection title="Margins" summary={formatPageMarginSummary(draft)} testId="page-margins-card">
+              <div
+                data-testid="page-margin-compass"
+                style={{
+                  ...pageCompassGrid,
+                  gridTemplateAreas: `
+                    ". top ."
+                    "left all right"
+                    ". bottom ."
+                  `,
+                }}
+              >
+                {renderMarginInput("top", "top")}
+                {renderMarginInput("left", "left")}
+                <label style={{ ...pageCompassField, gridArea: "all" }}>
+                  <span style={pageCompassControlLabel}>All</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={allMarginValue ?? ""}
+                    placeholder="mixed"
+                    disabled={!editable || !section}
+                    onChange={(event) => setAllMargins(event.target.value)}
+                    onBlur={commitDraft}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.currentTarget.blur()
+                      } else if (event.key === "Escape") {
+                        resetDraft()
+                        event.currentTarget.blur()
+                      }
+                    }}
+                    style={{ ...pagePanelInput, background: editable ? "white" : "#f8fafc", color: editable ? "#111827" : "#94a3b8", textAlign: "center" }}
+                  />
+                </label>
+                {renderMarginInput("right", "right")}
+                {renderMarginInput("bottom", "bottom")}
+              </div>
+              {!editable && (
+                <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 6 }}>
+                  Page settings are read-only in Fill mode.
+                </div>
+              )}
+            </PagePanelSection>
+          </>
+        ) : (
+          <div style={{ color: "#94a3b8", fontSize: 12 }}>No page section found.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const pagePanelSection: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 6,
+  overflow: "hidden",
+  background: "#f9fafb",
+}
+
+const pagePanelSectionHeader: React.CSSProperties = {
+  width: "100%",
+  border: "none",
+  borderBottom: "1px solid #e5e7eb",
+  background: "#f8fafc",
+  padding: "6px 7px",
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 10,
+  cursor: "pointer",
+  fontFamily: "monospace",
+  textAlign: "left",
+}
+
+const pagePanelSectionBody: React.CSSProperties = {
+  padding: 7,
+  background: "white",
+}
+
+const pagePanelFieldLabel: React.CSSProperties = {
+  fontSize: 9,
+  color: "#9ca3af",
+}
+
+const pagePanelReadOnlyValue: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 4,
+  padding: "4px 6px",
+  color: "#374151",
+  background: "#fafafa",
+  fontSize: 11,
+  fontFamily: "monospace",
+}
+
+const pagePanelInput: React.CSSProperties = {
+  width: "100%",
+  fontSize: 11,
+  border: "1px solid #e5e7eb",
+  borderRadius: 4,
+  padding: "4px 6px",
+  boxSizing: "border-box",
+  fontFamily: "monospace",
+}
+
+const pageCompassGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 58px 1fr",
+  gap: 5,
+  alignItems: "end",
+}
+
+const pageCompassField: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+  minWidth: 0,
+}
+
+const pageCompassControlLabel: React.CSSProperties = {
+  fontSize: 9,
+  color: "#9ca3af",
+  textAlign: "center",
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function EditorShell() {
   const initialTestScenario = useMemo(() => resolveEditorTestScenarioFromLocation(), [])
   const [scale, setScale] = useState(0.6)
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit")
+  const [rightRailMode, setRightRailMode] = useState<RightRailMode>("page")
+  const [rightRailCollapsed, setRightRailCollapsed] = useState(false)
   const [state, dispatch] = useReducer(reducer, initialTestScenario?.document ?? null, createInitialEditorState)
   const [editorTextMeasurer, setEditorTextMeasurer] = useState<TextMeasurer>(() => createBrowserTextMeasurer())
   const [editorTextMeasurerStatus, setEditorTextMeasurerStatus] = useState<EditorTextMeasurerStatus>("loading")
@@ -520,6 +868,9 @@ export default function EditorShell() {
       : fieldRegistryFromDocumentParseResult(loadDocumentFromStorage(localStorage))
   ))
   const isTemplateMode = mode === "template"
+  const activeSectionIndex = useMemo(() => (
+    findSectionIndexForNode(state.doc, state.selectedNodeId)
+  ), [state.doc, state.selectedNodeId])
   const resolvePreviewDoc = useCallback((doc: DocumentNode) => (
     isTemplateMode
       ? doc
@@ -545,7 +896,6 @@ export default function EditorShell() {
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [documentIoStatus, setDocumentIoStatus] = useState<{ type: "info" | "error"; message: string } | null>(null)
-  const [savedAt, setSavedAt] = useState<Date | null>(null)
   const [showTextSegments, setShowTextSegments] = useState(false)
   const [showDrift, setShowDrift] = useState(false)
   const [driftReport, setDriftReport] = useState<DriftReport | null>(null)
@@ -599,7 +949,10 @@ export default function EditorShell() {
     getCurrentPaginated: () => paginatedRef.current,
     getParagraphText: getParagraphTextFromDoc,
     paginatePreviewDoc,
-    selectNode: (nodeId) => dispatch({ type: "SELECT_NODE", nodeId }),
+    selectNode: (nodeId) => {
+      dispatch({ type: "SELECT_NODE", nodeId })
+      if (nodeId) setRightRailMode("properties")
+    },
     updateInlineTextDraft: (nodeId, text) => {
       const startedAt = startWysiwygPerfSpan()
       dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
@@ -641,7 +994,12 @@ export default function EditorShell() {
     [wysiwygTextSessionState],
   )
   const wysiwygTextSessionStateRef = useRef(wysiwygTextSessionState)
-  const [wysiwygDraftPaginationNodeId, setWysiwygDraftPaginationNodeId] = useState<string | null>(null)
+  const [wysiwygDraftPaginationNodeId, setWysiwygDraftPaginationNodeIdState] = useState<string | null>(null)
+  const wysiwygDraftPaginationNodeIdRef = useRef<string | null>(null)
+  const setWysiwygDraftPaginationNodeId = useCallback((nodeId: string | null) => {
+    wysiwygDraftPaginationNodeIdRef.current = nodeId
+    setWysiwygDraftPaginationNodeIdState(nodeId)
+  }, [])
   useEffect(() => { wysiwygTextSessionStateRef.current = wysiwygTextSessionState }, [wysiwygTextSessionState])
 
   const getPersistableDocumentSnapshot = useCallback(() => {
@@ -668,7 +1026,7 @@ export default function EditorShell() {
     wysiwygLatestDraftPaginationSnapshotRef.current = null
     wysiwygDraftPaginationGenerationRef.current += 1
     setWysiwygDraftPaginationNodeId(null)
-  }, [])
+  }, [setWysiwygDraftPaginationNodeId])
   useEffect(() => () => {
     if (wysiwygDraftPaginationDebounceRef.current) clearTimeout(wysiwygDraftPaginationDebounceRef.current)
     if (wysiwygDraftPaginationFrameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
@@ -737,7 +1095,12 @@ export default function EditorShell() {
           requestInlineEditPageFollow(nextPageIndex)
         }
       }
-      setWysiwygDraftPaginationNodeId(countWysiwygTextDraftFragments(paginated, nodeId) > 1 ? nodeId : null)
+      const currentFragmentCount = countWysiwygTextDraftFragments(paginated, nodeId)
+      setWysiwygDraftPaginationNodeId(shouldScheduleResponsiveFlowStackDraftPagination({
+        isFlowStackParagraph: isParagraphInsideFlowStack(docRef.current, nodeId),
+        draftPaginationActive: wysiwygDraftPaginationNodeIdRef.current === nodeId,
+        currentFragmentCount,
+      }) ? nodeId : null)
       dispatch({ type: "SET_PAGINATED", paginated })
       markInlineEditVisualFresh(inlineEditDraftVersionRef.current)
     }
@@ -779,6 +1142,7 @@ export default function EditorShell() {
     paginatePreviewDoc,
     requestInlineEditPageFollow,
     setInlineEditPageIndex,
+    setWysiwygDraftPaginationNodeId,
   ])
 
   const finalizeWysiwygTextSessionBeforeAction = useCallback((): boolean => {
@@ -895,6 +1259,7 @@ export default function EditorShell() {
       currentFragmentCount: countWysiwygTextDraftFragments(paginatedRef.current, nodeId),
     })
     if (useResponsiveFlowStackDraftPagination) {
+      setWysiwygDraftPaginationNodeId(nodeId)
       scheduleWysiwygDraftPagination(nodeId, resolveWysiwygDraftPaginationDelayMs({
         draftPaginationActive: true,
         isFlowStackParagraph,
@@ -907,6 +1272,7 @@ export default function EditorShell() {
     handleInlineEditCaretChange,
     moveWysiwygTextCaret,
     scheduleWysiwygDraftPagination,
+    setWysiwygDraftPaginationNodeId,
     wysiwygTextSessionState.draftText,
     wysiwygTextSessionState.nodeId,
     wysiwygDraftPaginationNodeId,
@@ -936,7 +1302,6 @@ export default function EditorShell() {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(() => {
       saveToStorage(getPersistableDocumentSnapshot(), packageFieldRegistry, dataSnapshot)
-      setSavedAt(new Date())
     }, 500)
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1165,6 +1530,7 @@ export default function EditorShell() {
     serverLayoutCheckedForCurrentPreview,
   ])
   const exportReadinessMessage = formatExportReadinessMessage(exportReadiness)
+  const exportReadinessStatusReason = firstVisibleExportReadinessReason(exportReadiness.reasons)
   useEffect(() => {
     browserPaginationGenerationRef.current += 1
   }, [inlineEditNodeId])
@@ -1493,9 +1859,11 @@ export default function EditorShell() {
     if (inlineEditNodeId) {
       finalizeInlineEditBeforeAction()
       dispatch({ type: "SELECT_NODE", nodeId: null })
+      setRightRailMode("page")
       return
     }
     dispatch({ type: "SELECT_NODE", nodeId: null })
+    setRightRailMode("page")
   }, [finalizeInlineEditBeforeAction, inlineEditNodeId])
 
   const handleResizeStart = useCallback((
@@ -1767,11 +2135,14 @@ export default function EditorShell() {
         const { source, clickAction } = pendingDragRef.current
         pendingDragRef.current = null
         if (clickAction?.type === "inline-edit") {
+          dispatch({ type: "SELECT_NODE", nodeId: clickAction.nodeId })
+          setRightRailMode("properties")
           handleInlineEditStart(clickAction.nodeId, clickAction.caretIndex, clickAction.pageIndex)
           return
         }
         if (source.source === "document") {
           dispatch({ type: "SELECT_NODE", nodeId: source.nodeId })
+          setRightRailMode("properties")
         }
         return
       }
@@ -1824,12 +2195,16 @@ export default function EditorShell() {
       }
       if (state.drag) dispatch({ type: "DRAG_CANCEL" })
       else if (pendingDragRef.current) pendingDragRef.current = null
-      else dispatch({ type: "SELECT_NODE", nodeId: null })
+      else {
+        dispatch({ type: "SELECT_NODE", nodeId: null })
+        setRightRailMode("page")
+      }
     }
     if (e.key === "Delete" && state.selectedNodeId && !state.drag) {
       if (isTextInput) return
       e.preventDefault()
       dispatch({ type: "DELETE_NODE", nodeId: state.selectedNodeId })
+      setRightRailMode("page")
     }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === "z") {
       if (isTextInput) return
@@ -1937,6 +2312,9 @@ export default function EditorShell() {
                   setResizeDrag(null)
                   setMinHeightDrag(null)
                   setMarginDrag(null)
+                  setRightRailMode("properties")
+                } else if (!state.selectedNodeId) {
+                  setRightRailMode("page")
                 }
               }}
               style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: mode === m ? "#dbeafe" : "white", color: mode === m ? "#1d4ed8" : "#374151", fontWeight: mode === m ? "bold" : "normal" }}>
@@ -1979,70 +2357,86 @@ export default function EditorShell() {
           </button>
         </div>
 
-        <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-          {fontFallback && (
-            <span data-testid="font-fallback-status" title="Server is using Helvetica fallback — Thai text layout may be incorrect" style={{ fontSize: 10, color: "#d97706", cursor: "help" }}>
-              ⚠ fallback font
-            </span>
-          )}
-          {layoutError && (
-            <span data-testid="layout-error-badge" title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help" }}>
-              ⚠ layout error
-            </span>
-          )}
-          {authoritativeLayoutWarnings.length > 0 && (
-            <span
-              data-testid="layout-warning-status"
-              title={authoritativeLayoutWarnings.map((warning) => `${layoutWarningSource} ${warning.count} ${warning.message}`).join("; ")}
-              style={{ fontSize: 10, color: "#d97706", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-            >
-              layout warning: {layoutWarningSource} {authoritativeLayoutWarnings[0].message}
-            </span>
-          )}
-          {savedAt && !isLayoutLoading && layoutStatus === "server-checked" && (
-            <span style={{ fontSize: 10, color: "#9ca3af" }}>
-              saved {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-            </span>
-          )}
-          {isInitialLayoutPreparing && !state.drag && !inlineEditNodeId && (
-            <span data-testid="initial-layout-status" style={{ fontSize: 10, color: "#9ca3af" }}>preparing layout…</span>
-          )}
-          {!isInitialLayoutPreparing && isLayoutLoading && !state.drag && !inlineEditNodeId && (
-            <span style={{ fontSize: 10, color: "#9ca3af" }}>↻ layout…</span>
-          )}
-          {!isInitialLayoutPreparing && !isLayoutLoading && layoutStatus === "optimistic" && !state.drag && !inlineEditNodeId && (
-            <span style={{ fontSize: 10, color: "#9ca3af" }}>preview layout</span>
-          )}
-          {exportError && (
-            <span data-testid="export-error" title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {exportError}
-            </span>
-          )}
-          {!exportReadiness.canExport && !exportError && (
-            <span
-              data-testid="export-readiness-status"
-              title={exportReadinessMessage ?? undefined}
-              style={{ fontSize: 10, color: "#d97706", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-            >
-              export blocked: {exportReadiness.reasons[0]}
-            </span>
-          )}
-          {documentIoStatus && (
-            <span
-              data-testid="document-io-status"
-              title={documentIoStatus.message}
-              style={{
-                fontSize: 10,
-                color: documentIoStatus.type === "error" ? "#dc2626" : "#2563eb",
-                maxWidth: 220,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {documentIoStatus.message}
-            </span>
-          )}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", minHeight: 24, minWidth: 0 }}>
+          <div
+            data-testid="editor-status-region"
+            style={{
+              width: 520,
+              maxWidth: "42vw",
+              minWidth: 180,
+              minHeight: 20,
+              display: "flex",
+              gap: 6,
+              alignItems: "center",
+              justifyContent: "flex-end",
+              overflow: "hidden",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {fontFallback && (
+              <span data-testid="font-fallback-status" title="Server is using Helvetica fallback — Thai text layout may be incorrect" style={{ fontSize: 10, color: "#d97706", cursor: "help", flexShrink: 0 }}>
+                ⚠ fallback font
+              </span>
+            )}
+            {layoutError && (
+              <span data-testid="layout-error-badge" title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help", flexShrink: 0 }}>
+                ⚠ layout error
+              </span>
+            )}
+            {authoritativeLayoutWarnings.length > 0 && (
+              <span
+                data-testid="layout-warning-status"
+                title={authoritativeLayoutWarnings.map((warning) => `${layoutWarningSource} ${warning.count} ${warning.message}`).join("; ")}
+                style={{ fontSize: 10, color: "#d97706", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                layout warning: {layoutWarningSource} {authoritativeLayoutWarnings[0].message}
+              </span>
+            )}
+            {exportError && (
+              <span data-testid="export-error" title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {exportError}
+              </span>
+            )}
+            {exportReadinessStatusReason && !exportError && (
+              <span
+                data-testid="export-readiness-status"
+                title={exportReadinessMessage ?? undefined}
+                style={{ fontSize: 10, color: "#d97706", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                export blocked: {exportReadinessStatusReason}
+              </span>
+            )}
+            {documentIoStatus && (
+              <span
+                data-testid="document-io-status"
+                title={documentIoStatus.message}
+                style={{
+                  fontSize: 10,
+                  color: documentIoStatus.type === "error" ? "#dc2626" : "#2563eb",
+                  maxWidth: 220,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {documentIoStatus.message}
+              </span>
+            )}
+            {state.drag && (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "#6b7280",
+                  maxWidth: 220,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                dragging {describeDragSource(state.drag.source)} — Esc to cancel
+              </span>
+            )}
+          </div>
           {(["pdf", "docx"] as const).map((fmt) => {
             const disabled = isExporting || !exportReadiness.canExport
             return (
@@ -2058,11 +2452,6 @@ export default function EditorShell() {
             )
           })}
         </div>
-        {state.drag && (
-          <span style={{ fontSize: 11, color: "#6b7280" }}>
-            dragging {describeDragSource(state.drag.source)} — Esc to cancel
-          </span>
-        )}
       </div>
 
       {/* Body */}
@@ -2133,43 +2522,169 @@ export default function EditorShell() {
             onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
           />
         )}
-        <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column", borderLeft: "1px solid #e5e7eb", overflow: "hidden" }}>
-          {isTemplateMode ? (
-            <div style={{ flexShrink: 0 }}>
-              <PropertyPanel
-                doc={state.doc}
-                registry={packageFieldRegistry}
-                selectedNodeId={state.selectedNodeId}
-                onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
-                onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
-                onUpdateFieldRef={(fieldRefId, changes) => dispatch({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
-                onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
-                tableOps={{
-                  addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
-                  removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
-                  addCol: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_COL", tableId, afterIndex }),
-                  removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
-                }}
-              />
-            </div>
-          ) : (
-            <FillingPanel
-              doc={state.doc}
-              registry={packageFieldRegistry}
-              snapshot={dataSnapshot}
-              readinessIssues={dataReadiness.issues}
-              onChange={(key, value) => setDataSnapshot((prev) => setDataSnapshotValue(prev, key, value))}
-            />
-          )}
-          <div style={{ flex: 1, overflow: "hidden" }}>
-            <OutlinePanel
-              doc={isTemplateMode ? state.doc : previewDoc}
-              selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
-              onSelect={(nodeId) => {
-                if (isTemplateMode) dispatch({ type: "SELECT_NODE", nodeId })
+        <div
+          data-testid="editor-right-rail"
+          style={{
+            width: rightRailCollapsed ? 36 : 260,
+            flexShrink: 0,
+            display: "flex",
+            borderLeft: "1px solid #e5e7eb",
+            overflow: "hidden",
+            background: "#fff",
+          }}
+        >
+          <div data-testid="editor-right-rail-sidebar" style={{ width: 36, flexShrink: 0, borderRight: rightRailCollapsed ? "none" : "1px solid #e5e7eb", background: "#f8fafc", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "8px 5px" }}>
+            <button
+              type="button"
+              data-testid="editor-right-rail-collapse"
+              aria-label={rightRailCollapsed ? "Expand right panel" : "Collapse right panel"}
+              title={rightRailCollapsed ? "Expand right panel" : "Collapse right panel"}
+              onClick={() => setRightRailCollapsed((value) => !value)}
+              style={{ width: 24, height: 24, border: "1px solid #d1d5db", borderRadius: 5, background: "white", color: "#475569", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
+            >
+              {rightRailCollapsed ? ">" : "<"}
+            </button>
+            <button
+              type="button"
+              data-testid="editor-right-rail-mode-page"
+              aria-label="Show page"
+              aria-pressed={!rightRailCollapsed && rightRailMode === "page"}
+              title="Page"
+              onClick={() => {
+                setRightRailCollapsed(false)
+                setRightRailMode("page")
               }}
-            />
+              style={{
+                width: 24,
+                height: 28,
+                border: "1px solid #d1d5db",
+                borderRadius: 5,
+                background: !rightRailCollapsed && rightRailMode === "page" ? "#dbeafe" : "white",
+                color: !rightRailCollapsed && rightRailMode === "page" ? "#1d4ed8" : "#64748b",
+                cursor: "pointer",
+                fontSize: 10,
+                fontWeight: 700,
+              }}
+            >
+              Pg
+            </button>
+            <button
+              type="button"
+              data-testid="editor-right-rail-mode-outline"
+              aria-label="Show outline"
+              aria-pressed={!rightRailCollapsed && rightRailMode === "outline"}
+              title="Outline"
+              onClick={() => {
+                setRightRailCollapsed(false)
+                setRightRailMode("outline")
+              }}
+              style={{
+                width: 24,
+                height: 28,
+                border: "1px solid #d1d5db",
+                borderRadius: 5,
+                background: !rightRailCollapsed && rightRailMode === "outline" ? "#dbeafe" : "white",
+                color: !rightRailCollapsed && rightRailMode === "outline" ? "#1d4ed8" : "#64748b",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              O
+            </button>
+            <button
+              type="button"
+              data-testid="editor-right-rail-mode-properties"
+              aria-label="Show properties"
+              aria-pressed={!rightRailCollapsed && rightRailMode === "properties"}
+              title="Properties"
+              onClick={() => {
+                setRightRailCollapsed(false)
+                setRightRailMode("properties")
+              }}
+              style={{
+                width: 24,
+                height: 28,
+                border: "1px solid #d1d5db",
+                borderRadius: 5,
+                background: !rightRailCollapsed && rightRailMode === "properties" ? "#dbeafe" : "white",
+                color: !rightRailCollapsed && rightRailMode === "properties" ? "#1d4ed8" : "#64748b",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              P
+            </button>
           </div>
+          {!rightRailCollapsed && (
+            <div data-testid="editor-right-rail-content" style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+              {rightRailMode === "page" ? (
+                <div data-testid="editor-right-rail-page" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                  <PagePanel
+                    doc={state.doc}
+                    sectionIndex={activeSectionIndex}
+                    editable={isTemplateMode}
+                    onUpdateMargin={(sectionIndex, margin) => {
+                      if (!isTemplateMode) return
+                      dispatch({ type: "UPDATE_MARGIN", sectionIndex, margin })
+                    }}
+                  />
+                </div>
+              ) : rightRailMode === "properties" ? (
+                <div data-testid="editor-right-rail-properties" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                  {isTemplateMode ? (
+                    <PropertyPanel
+                      doc={state.doc}
+                      registry={packageFieldRegistry}
+                      selectedNodeId={state.selectedNodeId}
+                      selectionAnchorNodeId={state.selectionAnchorNodeId}
+                      onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
+                      onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
+                      onUpdateFieldRef={(fieldRefId, changes) => dispatch({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
+                      onUpdateParagraphBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
+                      onSelectContextNode={(nodeId) => dispatch({
+                        type: "SELECT_NODE",
+                        nodeId,
+                        anchorNodeId: state.selectionAnchorNodeId ?? nodeId,
+                      })}
+                      onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
+                      tableOps={{
+                        addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
+                        removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
+                        addCol: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_COL", tableId, afterIndex }),
+                        removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
+                      }}
+                      flowRowOps={{
+                        addCol: (rowId, stackId, position = "after") => dispatch({ type: "FLOW_ROW_ADD_COL", rowId, stackId, position }),
+                        resizePair: (leftStackId, rightStackId, leftShare, rightShare) => dispatch({ type: "RESIZE_COLUMNS", leftStackId, rightStackId, leftShare, rightShare }),
+                      }}
+                    />
+                  ) : (
+                    <FillingPanel
+                      doc={state.doc}
+                      registry={packageFieldRegistry}
+                      snapshot={dataSnapshot}
+                      readinessIssues={dataReadiness.issues}
+                      onChange={(key, value) => setDataSnapshot((prev) => setDataSnapshotValue(prev, key, value))}
+                    />
+                  )}
+                </div>
+              ) : (
+                <div data-testid="editor-right-rail-outline" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                  <OutlinePanel
+                    doc={isTemplateMode ? state.doc : previewDoc}
+                    selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
+                    onSelect={(nodeId) => {
+                      if (!isTemplateMode) return
+                      dispatch({ type: "SELECT_NODE", nodeId })
+                      setRightRailMode("properties")
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

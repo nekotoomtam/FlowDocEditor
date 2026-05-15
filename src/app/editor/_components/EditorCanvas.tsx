@@ -2,7 +2,15 @@
 
 import { useRef, useEffect, useMemo } from "react"
 import type { TextMeasurer } from "@/layout"
-import type { PaginatedDocument, PageFragment, PaginatedLine, PaginatedPage, ParagraphRenderProps } from "@/pagination"
+import {
+  resolveParagraphBoxLayoutPrimitives,
+  type PaginatedDocument,
+  type PageFragment,
+  type PaginatedLine,
+  type PaginatedPage,
+  type ParagraphRenderProps,
+  type ResolvedBorderSide,
+} from "@/pagination"
 import { isPlainTextParagraph } from "@/document"
 import type { DocumentNode, ParagraphNode, TableCellNode, TableNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
@@ -27,12 +35,12 @@ import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const NODE_COLORS: Record<string, string> = {
-  paragraph: "#bfdbfe",
+  paragraph: "#c7ddf2",
   spacer:    "#d1d5db",
   row:       "#fed7aa",
   stack:     "#e9d5ff",
-  "flow-row":   "#bae6fd",
-  "flow-stack": "#ccfbf1",
+  "flow-row":   "#dbeafe",
+  "flow-stack": "#d7f4ef",
   body:      "#bbf7d0",
   table:     "#fde68a",
   "table-cell": "#fef3c7",
@@ -41,7 +49,11 @@ const NODE_COLORS: Record<string, string> = {
 
 const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "table", "toc"])
 const PARAGRAPH_CHROME_Y = 3
+const FLOW_STACK_PARAGRAPH_CHROME_Y = 0
 const PARAGRAPH_LIVE_PREVIEW_GAP_Y = 2
+const DROP_PREVIEW_FILL = "#99f6e4"
+const DROP_PREVIEW_STROKE = "#0f766e"
+const DROP_INSERTION_STROKE = "#0d9488"
 const READ_ONLY_ZONE_FILL: Record<"header" | "footer", string> = {
   header: "#fef9c3",
   footer: "#fce7f3",
@@ -61,6 +73,55 @@ function clamp(value: number, min: number, max: number): number {
 // line.x now contains the alignment offset (baked in by buildPaginatedLines).
 function lineVisualLeft(line: PaginatedLine): number {
   return line.x
+}
+
+function cssHex(hex: string): string {
+  return hex.startsWith("#") ? hex : `#${hex}`
+}
+
+function paragraphBoxStrokeDashArray(border: ResolvedBorderSide, scale: number): string | undefined {
+  const strokeWidth = Math.max(border.width * scale, 0.5)
+  if (border.style === "dashed") return `${Math.max(strokeWidth * 3, 3)} ${Math.max(strokeWidth * 2, 2)}`
+  if (border.style === "dotted") return `0 ${Math.max(strokeWidth * 2.2, 2)}`
+  return undefined
+}
+
+function renderParagraphBox(fragment: PageFragment, scale: number) {
+  const primitives = resolveParagraphBoxLayoutPrimitives(fragment)
+  if (!primitives) return null
+
+  return (
+    <g data-paragraph-box="true" style={{ pointerEvents: "none" }}>
+      {primitives.fill && (
+        <rect
+          data-paragraph-box-fill="true"
+          x={primitives.fill.x * scale}
+          y={primitives.fill.y * scale}
+          width={primitives.fill.width * scale}
+          height={primitives.fill.height * scale}
+          fill={cssHex(primitives.fill.color)}
+        />
+      )}
+      {primitives.borders.map((line) => {
+        if (line.border.style === "none" || line.border.width <= 0) return null
+        const strokeWidth = Math.max(line.border.width * scale, 0.5)
+        return (
+          <line
+            key={line.side}
+            data-paragraph-box-side={line.side}
+            x1={line.x1 * scale}
+            y1={line.y1 * scale}
+            x2={line.x2 * scale}
+            y2={line.y2 * scale}
+            stroke={cssHex(line.border.color)}
+            strokeWidth={strokeWidth}
+            strokeDasharray={paragraphBoxStrokeDashArray(line.border, scale)}
+            strokeLinecap={line.border.style === "dotted" ? "round" : "butt"}
+          />
+        )
+      })}
+    </g>
+  )
 }
 
 function caretIndexFromPointer(
@@ -270,34 +331,54 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
     const cw = contentBox.width * scale
     if (fragments.length === 0) {
       // empty body: line ที่ top ของ content
-      return <rect x={cx} y={contentBox.y * scale} width={cw} height={3} fill="#2563eb" rx={1} style={{ pointerEvents: "none" }} />
+      return <rect x={cx} y={contentBox.y * scale} width={cw} height={2} fill={DROP_INSERTION_STROKE} rx={1} style={{ pointerEvents: "none" }} />
     }
     // มี content: line ล่างสุดของ fragment สุดท้าย
     const bottomY = Math.max(...fragments.map((f) => f.y + f.height)) * scale
-    return <rect x={cx} y={bottomY + 2} width={cw} height={3} fill="#2563eb" rx={1} style={{ pointerEvents: "none" }} />
+    return <rect x={cx} y={bottomY + 2} width={cw} height={2} fill={DROP_INSERTION_STROKE} rx={1} style={{ pointerEvents: "none" }} />
   }
 
   const frag = fragments.find((f) => f.nodeId === hoverNodeId)
   if (!frag) return null
   const x = frag.x * scale, y = frag.y * scale, w = frag.width * scale, h = frag.height * scale
 
-  if (zone === "top" || zone === "row-outer-top")
-    return <rect x={x} y={y - 1} width={w} height={3} fill="#2563eb" rx={1} style={{ pointerEvents: "none" }} />
-  if (zone === "bottom" || zone === "row-outer-bottom")
-    return <rect x={x} y={y + h - 2} width={w} height={3} fill="#2563eb" rx={1} style={{ pointerEvents: "none" }} />
-  if (zone === "center")
-    return <rect x={x + 2} y={y + 2} width={w - 4} height={h - 4} fill="none" stroke="#2563eb" strokeWidth={1.5} strokeDasharray="5 3" rx={2} style={{ pointerEvents: "none" }} />
-  if (zone === "row-stack-inner" && target.kind === "row-stack-inner") {
+  if (target.kind === "row-stack-inner") {
     const rowFrag = fragments.find((f) => f.nodeId === target.rowId)
     if (rowFrag) {
       const geom = getRowGeometry(doc, target.rowId, rowFrag.width, rowFrag.height)
       const sr = geom?.stackRects.find((r) => r.stackId === target.stackId)
-      if (sr) return <rect x={(rowFrag.x + sr.left) * scale + 2} y={(rowFrag.y + sr.top) * scale + 2} width={sr.width * scale - 4} height={sr.height * scale - 4} fill="#dbeafe" fillOpacity={0.6} stroke="#2563eb" strokeWidth={1} strokeDasharray="4 2" rx={2} style={{ pointerEvents: "none" }} />
+      if (sr) {
+        const sx = (rowFrag.x + sr.left) * scale
+        const sy = (rowFrag.y + sr.top) * scale
+        const sw = sr.width * scale
+        const sh = sr.height * scale
+        if (zone === "left" || zone === "right") {
+          const halfW = sw / 2
+          return <rect x={zone === "left" ? sx : sx + halfW} y={sy} width={halfW} height={sh} fill={DROP_PREVIEW_FILL} fillOpacity={0.18} stroke={DROP_PREVIEW_STROKE} strokeWidth={1.2} strokeDasharray="4 3" rx={2} style={{ pointerEvents: "none" }} />
+        }
+        const childBottom = fragments
+          .filter((candidate) => candidate.parentNodeId === target.stackId)
+          .reduce<number | null>((bottom, candidate) => {
+            const candidateBottom = candidate.y + candidate.height
+            return bottom == null ? candidateBottom : Math.max(bottom, candidateBottom)
+          }, null)
+        const lineY = childBottom == null
+          ? sy + 8
+          : Math.min(sy + sh - 2, Math.max(sy + 3, childBottom * scale + 2))
+        return <rect x={sx + 4} y={lineY} width={Math.max(sw - 8, 2)} height={2} fill={DROP_INSERTION_STROKE} rx={1} style={{ pointerEvents: "none" }} />
+      }
     }
   }
+
+  if (zone === "top" || zone === "row-outer-top")
+    return <rect x={x} y={y - 1} width={w} height={2} fill={DROP_INSERTION_STROKE} rx={1} style={{ pointerEvents: "none" }} />
+  if (zone === "bottom" || zone === "row-outer-bottom")
+    return <rect x={x} y={y + h - 1} width={w} height={2} fill={DROP_INSERTION_STROKE} rx={1} style={{ pointerEvents: "none" }} />
+  if (zone === "center")
+    return <rect x={x + 3} y={y + 3} width={Math.max(w - 6, 2)} height={Math.max(h - 6, 2)} fill={DROP_PREVIEW_FILL} fillOpacity={0.16} stroke={DROP_PREVIEW_STROKE} strokeWidth={1.2} strokeDasharray="5 3" rx={2} style={{ pointerEvents: "none" }} />
   if (zone === "left" || zone === "right") {
     const halfW = w / 2
-    return <rect x={zone === "left" ? x : x + halfW} y={y} width={halfW} height={h} fill="#bfdbfe" fillOpacity={0.5} stroke="#2563eb" strokeWidth={1.5} strokeDasharray="4 2" rx={2} style={{ pointerEvents: "none" }} />
+    return <rect x={zone === "left" ? x : x + halfW} y={y} width={halfW} height={h} fill={DROP_PREVIEW_FILL} fillOpacity={0.18} stroke={DROP_PREVIEW_STROKE} strokeWidth={1.2} strokeDasharray="4 3" rx={2} style={{ pointerEvents: "none" }} />
   }
   return null
 }
@@ -391,7 +472,6 @@ function PageView({
       ? visualDraftFragmentForPage
       : fragment
   )
-
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
     <svg
@@ -515,6 +595,8 @@ function PageView({
         const displayFragment = isInlineEditing
           ? editFragmentRef.current?.fragment ?? visualDisplayFragment
           : visualDisplayFragment
+        const isFlowStackParagraph = f.nodeType === "paragraph" &&
+          isParagraphInsideFlowStack(doc, f.nodeId, f.parentNodeId)
         const docNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === f.nodeId)
         const isEmpty = (f.nodeType === "stack" || f.nodeType === "flow-stack") && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
         // visual override ระหว่าง resize
@@ -532,10 +614,12 @@ function PageView({
             fragHeight = Math.max(fragHeight, minHeightDrag.currentMinHeight)
           }
         }
-        const chromeTop = f.nodeType === "paragraph" ? PARAGRAPH_CHROME_Y : 0
-        const chromeBottom = f.nodeType === "paragraph" ? PARAGRAPH_CHROME_Y : 0
+        const paragraphChromeY = isFlowStackParagraph ? FLOW_STACK_PARAGRAPH_CHROME_Y : PARAGRAPH_CHROME_Y
+        const chromeTop = f.nodeType === "paragraph" ? paragraphChromeY : 0
+        const chromeBottom = f.nodeType === "paragraph" ? paragraphChromeY : 0
         const chromeY = displayFragment.y * scale - chromeTop
         const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
+        const selectionPad = isFlowStackParagraph ? 0 : 1
         const fragmentKey = isInlineEditing
           ? `inline-edit-${f.nodeId}`
           : `${f.nodeType}-${f.nodeId}-${f.pageIndex}-${f.lineStart ?? "x"}-${f.lineEnd ?? "x"}-${f.parentNodeId ?? "root"}-${i}`
@@ -592,10 +676,11 @@ function PageView({
               strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
               opacity={isInlineEditing ? 0.35 : 0.75}
             />
+            {f.nodeType === "paragraph" && renderParagraphBox(displayFragment, scale)}
             {isSelected && !isInlineEditing && (
               <rect
-                x={displayFragment.x * scale - 1} y={chromeY - 1}
-                width={displayFragment.width * scale + 2} height={chromeHeight + 2}
+                x={displayFragment.x * scale - selectionPad} y={chromeY - selectionPad}
+                width={displayFragment.width * scale + selectionPad * 2} height={chromeHeight + selectionPad * 2}
                 fill="none" stroke="#2563eb" strokeWidth={1.5}
                 style={{ pointerEvents: "none" }}
               />

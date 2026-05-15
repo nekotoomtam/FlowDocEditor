@@ -318,6 +318,58 @@ describe("spacing", () => {
   })
 })
 
+// ─── Paragraph Box ───────────────────────────────────────────────────────────
+
+describe("paragraph box", () => {
+  it("reduces content width and adds vertical box insets to totalHeight", () => {
+    const result = measureParagraph(
+      makeParagraph("Hello world", {
+        box: {
+          padding: {
+            top: { value: 5, unit: "pt" },
+            right: { value: 5, unit: "pt" },
+            bottom: { value: 5, unit: "pt" },
+            left: { value: 5, unit: "pt" },
+          },
+          border: {
+            top: { style: "solid", width: { value: 1, unit: "pt" }, color: "111111" },
+            right: { style: "solid", width: { value: 1, unit: "pt" }, color: "222222" },
+            bottom: { style: "solid", width: { value: 1, unit: "pt" }, color: "333333" },
+            left: { style: "solid", width: { value: 1, unit: "pt" }, color: "444444" },
+          },
+        },
+      }),
+      40,
+      defaultTextMeasurer,
+      spaceBreaker,
+    )
+
+    expect(result.contentWidth).toBe(28)
+    expect(result.lines.map((line) => line.text)).toEqual(["Hello", "world"])
+    expect(result.totalHeight).toBe(6 + LH * 2 + 6)
+    expect(result.box?.padding.left).toBe(5)
+    expect(result.box?.border.left?.width).toBe(1)
+  })
+
+  it("uses box content width for incremental paragraph reflow", () => {
+    const para = makeParagraph("Hello world", {
+      box: {
+        padding: {
+          top: { value: 0, unit: "pt" },
+          right: { value: 6, unit: "pt" },
+          bottom: { value: 0, unit: "pt" },
+          left: { value: 6, unit: "pt" },
+        },
+      },
+    })
+
+    const full = measureParagraph(para, 40, defaultTextMeasurer, spaceBreaker)
+    const { tailLines } = measureParagraphFrom(para, 0, 40, defaultTextMeasurer, spaceBreaker)
+
+    expect(tailLines.map((line) => line.text)).toEqual(full.lines.map((line) => line.text))
+  })
+})
+
 // ─── LineSegment metadata ─────────────────────────────────────────────────────
 
 describe("LineSegment metadata", () => {

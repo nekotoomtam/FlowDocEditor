@@ -260,6 +260,14 @@ describe("shouldScheduleResponsiveFlowStackDraftPagination", () => {
     })).toBe(true)
   })
 
+  it("does not make unsplit flow-stack edits responsive before a split marker exists", () => {
+    expect(shouldScheduleResponsiveFlowStackDraftPagination({
+      isFlowStackParagraph: true,
+      draftPaginationActive: false,
+      currentFragmentCount: 1,
+    })).toBe(false)
+  })
+
   it("does not promote non-flow-stack split paragraphs to the flow-stack responsive path", () => {
     expect(shouldScheduleResponsiveFlowStackDraftPagination({
       isFlowStackParagraph: false,

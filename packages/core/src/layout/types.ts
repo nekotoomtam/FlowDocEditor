@@ -33,6 +33,33 @@ export interface MeasuredLine {
   segments?: LineSegment[]
 }
 
+export interface MeasuredBoxEdges {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+export interface MeasuredParagraphBorderSide {
+  style: "solid" | "dashed" | "dotted"
+  width: number
+  color: string
+}
+
+export interface MeasuredParagraphBorder {
+  top?: MeasuredParagraphBorderSide
+  right?: MeasuredParagraphBorderSide
+  bottom?: MeasuredParagraphBorderSide
+  left?: MeasuredParagraphBorderSide
+}
+
+export interface MeasuredParagraphBox {
+  fill?: string
+  padding: MeasuredBoxEdges
+  border: MeasuredParagraphBorder
+  contentWidth: number
+}
+
 // ผลลัพธ์ measure paragraph ทั้งก้อน
 export interface MeasuredParagraph {
   nodeId: string
@@ -41,7 +68,9 @@ export interface MeasuredParagraph {
   spacingBefore: number
   spacingAfter: number
   width: number
-  totalHeight: number  // sum(lines) + spacingBefore + spacingAfter
+  contentWidth: number
+  box?: MeasuredParagraphBox
+  totalHeight: number  // spacing + optional box insets + sum(lines)
 }
 
 // ผลลัพธ์ measure spacer

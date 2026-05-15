@@ -32,6 +32,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Test levels and Definition of Done | `docs/TEST_STRATEGY.md` |
 | Browser/manual editor smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Editor interaction and UX behavior | `docs/EDITOR_UX_CONTRACT.md` |
+| Paragraph box style contract | `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md` |
 | WYSIWYG/inline edit roadmap | `docs/WYSIWYG_EDITOR_ROADMAP.md` |
 | FlowDoc-owned WYSIWYG text engine plan | `docs/WYSIWYG_TEXT_ENGINE_PLAN.md` |
 | End-to-end WYSIWYG edit/show parity plan | `docs/WYSIWYG_PARITY_PLAN.md` |
@@ -114,6 +115,8 @@ Any page-boundary behavior change should update the relevant contract and add or
 Start with:
 
 - `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md` when paragraph fill, padding, border,
+  or paragraph box metadata is in scope
 - `docs/LAYOUT_ENGINE_SPEC.md`
 - `docs/TEST_STRATEGY.md`
 

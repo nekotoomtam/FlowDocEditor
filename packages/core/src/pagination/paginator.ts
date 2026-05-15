@@ -1,6 +1,19 @@
 import type { DocumentNode, DocumentSection, ParagraphNode, TableNode, TableCellNode, CellBorder, BorderSide, TocNode } from "../schema"
-import { flowSection, flowZone, measureParagraph, toAbstractUnit, TOC_ENTRY_FS, TOC_ENTRY_LH, TOC_TITLE_FS, TOC_TITLE_LH, TOC_TITLE_AFTER } from "../layout"
-import type { FlowBox, LineSegment, MeasuredLine, TextMeasurer, WordBreaker } from "../layout"
+import {
+  flowSection,
+  flowZone,
+  measureParagraph,
+  paragraphBoxBottomInset,
+  paragraphBoxLeftInset,
+  paragraphBoxTopInset,
+  toAbstractUnit,
+  TOC_ENTRY_FS,
+  TOC_ENTRY_LH,
+  TOC_TITLE_FS,
+  TOC_TITLE_LH,
+  TOC_TITLE_AFTER,
+} from "../layout"
+import type { FlowBox, LineSegment, MeasuredLine, MeasuredParagraph, MeasuredParagraphBox, TextMeasurer, WordBreaker } from "../layout"
 import { defaultWordBreaker } from "../layout"
 import type {
   PageFlowCursor,
@@ -12,6 +25,7 @@ import type {
   ParagraphRenderProps,
   ParagraphSplitDecision,
   PageFragmentWarning,
+  ParagraphBoxRenderProps,
   ResolvedBorderSide,
   ResolvedCellBorder,
   TableCellRenderProps,
@@ -79,7 +93,21 @@ function toPageFragmentNodeType(nodeType: FlowBox["nodeType"]): PageFragment["no
 
 // ─── Paragraph Helpers ────────────────────────────────────────────────────────
 
-function buildRenderProps(node: ParagraphNode, lineHeight: number): ParagraphRenderProps {
+function buildParagraphBoxRenderProps(box: MeasuredParagraphBox | undefined): ParagraphBoxRenderProps | undefined {
+  if (!box) return undefined
+  return {
+    fill: box.fill,
+    padding: { ...box.padding },
+    border: {
+      top: box.border.top,
+      right: box.border.right,
+      bottom: box.border.bottom,
+      left: box.border.left,
+    },
+  }
+}
+
+function buildRenderProps(node: ParagraphNode, lineHeight: number, box?: MeasuredParagraphBox): ParagraphRenderProps {
   return {
     fontSize: toAbstractUnit(node.props.fontSize.value, node.props.fontSize.unit),
     fontFamilyKey: node.props.fontFamilyKey ?? "default",
@@ -90,7 +118,46 @@ function buildRenderProps(node: ParagraphNode, lineHeight: number): ParagraphRen
     textIndent: toAbstractUnit(node.props.textIndent.value, node.props.textIndent.unit),
     indentLeft: toAbstractUnit(node.props.indentLeft.value, node.props.indentLeft.unit),
     indentRight: toAbstractUnit(node.props.indentRight.value, node.props.indentRight.unit),
+    box: buildParagraphBoxRenderProps(box),
   }
+}
+
+function paragraphLineTopOffset(measured: MeasuredParagraph, lineStart: number): number {
+  if (lineStart > 0) return 0
+  return measured.spacingBefore + paragraphBoxTopInset(measured.box)
+}
+
+function paragraphEndInset(measured: MeasuredParagraph, lineEnd: number): number {
+  if (lineEnd < measured.lines.length) return 0
+  return paragraphBoxBottomInset(measured.box) + measured.spacingAfter
+}
+
+function paragraphLinesHeight(lines: MeasuredLine[]): number {
+  return lines.reduce((sum, line) => sum + line.height, 0)
+}
+
+function paragraphFragmentHeight(measured: MeasuredParagraph, lines: MeasuredLine[], lineStart: number, lineEnd: number): number {
+  return paragraphLineTopOffset(measured, lineStart) + paragraphLinesHeight(lines) + paragraphEndInset(measured, lineEnd)
+}
+
+function buildPositionedParagraphLines(
+  measured: MeasuredParagraph,
+  lines: MeasuredLine[],
+  outerX: number,
+  outerY: number,
+  lineStart: number,
+  align: ParagraphRenderProps["align"],
+  isLastFragment: boolean = true,
+): PaginatedLine[] {
+  return buildPaginatedLines(
+    lines,
+    outerX + paragraphBoxLeftInset(measured.box),
+    outerY,
+    paragraphLineTopOffset(measured, lineStart),
+    align,
+    measured.contentWidth,
+    isLastFragment,
+  )
 }
 
 function justifySegments(
@@ -148,8 +215,8 @@ function measureParagraphFragment(
   if (node?.type !== "paragraph") return null
   const measured = measureParagraph(node, box.width, measurer, wordBreaker)
   return {
-    lines: buildPaginatedLines(measured.lines, box.x, 0, measured.spacingBefore, node.props.align, box.width),
-    renderProps: buildRenderProps(node, measured.lineHeight),
+    lines: buildPositionedParagraphLines(measured, measured.lines, box.x, 0, 0, node.props.align),
+    renderProps: buildRenderProps(node, measured.lineHeight, measured.box),
   }
 }
 
@@ -200,13 +267,12 @@ function paginateParagraph(
   }
 
   const measured = measureParagraph(node, box.width, measurer, wordBreaker)
-  const renderProps = buildRenderProps(node, measured.lineHeight)
+  const renderProps = buildRenderProps(node, measured.lineHeight, measured.box)
   const spacingBefore = measured.spacingBefore
-  const spacingAfter = measured.spacingAfter
 
   // Fast path: whole paragraph fits on the current page without splitting
   if (current.cursorY + measured.totalHeight <= contentBottom) {
-    const rawLines = buildPaginatedLines(measured.lines, box.x, current.cursorY, spacingBefore, node.props.align, box.width, true)
+    const rawLines = buildPositionedParagraphLines(measured, measured.lines, box.x, current.cursorY, 0, node.props.align, true)
     const lines = resolvePageNumbers(rawLines, current.pageIndex + 1 + current.pageNumberOffset)
     pushFragment(pages, template, {
       nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
@@ -240,7 +306,8 @@ function paginateParagraph(
     }
 
     const currSpacingBefore = isFirstFragment ? spacingBefore : 0
-    const availableForLines = contentBottom - current.cursorY - currSpacingBefore
+    const currTopInset = isFirstFragment ? paragraphBoxTopInset(measured.box) : 0
+    const availableForLines = contentBottom - current.cursorY - currSpacingBefore - currTopInset
 
     let count = 0
     let used = 0
@@ -284,17 +351,17 @@ function paginateParagraph(
     }
 
     const isLastFragment = count >= remainingLines.length
-    const currSpacingAfter = isLastFragment ? spacingAfter : 0
     const fragLines = remainingLines.slice(0, count)
-    const fragHeight = currSpacingBefore + fragLines.reduce((s, l) => s + l.height, 0) + currSpacingAfter
+    const resolvedLineEnd = lineOffset + fragLines.length
+    const fragHeight = paragraphFragmentHeight(measured, fragLines, lineOffset, resolvedLineEnd)
 
-    const rawPositioned = buildPaginatedLines(fragLines, box.x, current.cursorY, currSpacingBefore, node.props.align, box.width, isLastFragment)
+    const rawPositioned = buildPositionedParagraphLines(measured, fragLines, box.x, current.cursorY, lineOffset, node.props.align, isLastFragment)
     const positionedLines = resolvePageNumbers(rawPositioned, current.pageIndex + 1 + current.pageNumberOffset)
     pushFragment(pages, template, {
       nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
       pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
       width: box.width, height: fragHeight, lines: positionedLines, renderProps,
-      fragmentIndex, lineStart: lineOffset, lineEnd: lineOffset + fragLines.length,
+      fragmentIndex, lineStart: lineOffset, lineEnd: resolvedLineEnd,
       continuesFrom: !isFirstFragment, isContinued: !isLastFragment,
     })
     onSplitDecision?.({
@@ -374,9 +441,9 @@ function pushStackContents(
       const node = section.nodes[child.nodeId]
       if (node?.type === "paragraph") {
         const measured = measureParagraph(node, child.width, measurer, wordBreaker)
-        const rawLines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore, node.props.align, child.width)
+        const rawLines = buildPositionedParagraphLines(measured, measured.lines, child.x, childPageY, 0, node.props.align)
         lines = resolvePageNumbers(rawLines, pageIndex + 1 + pageNumberOffset)
-        renderProps = buildRenderProps(node, measured.lineHeight)
+        renderProps = buildRenderProps(node, measured.lineHeight, measured.box)
       }
     }
 
@@ -575,11 +642,7 @@ function flowParagraphSliceHeight(
   const resolvedLineEnd = lineEnd ?? measured.lines.length
   const lines = measured.lines.slice(lineStart, resolvedLineEnd)
   if (lines.length === 0) return 0
-  const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
-  const spacingAfter = resolvedLineEnd >= measured.lines.length
-    ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
-    : 0
-  return spacingBefore + lines.reduce((sum, line) => sum + line.height, 0) + spacingAfter
+  return paragraphFragmentHeight(measured, lines, lineStart, resolvedLineEnd)
 }
 
 function flowStackSliceHeight(
@@ -641,8 +704,7 @@ function computeFlowStackSplitPointFrom(
       if (heightUsed + remainingHeight <= availH) {
         heightUsed += remainingHeight
       } else {
-        const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
-        const availForLines = availH - heightUsed - spacingBefore
+        const availForLines = availH - heightUsed - paragraphLineTopOffset(measured, lineStart)
         if (availForLines <= 0) return { childIdx: ci, lineIdx: lineStart }
         let lineAccum = 0
         for (let li = lineStart; li < measured.lines.length; li++) {
@@ -705,13 +767,9 @@ function buildFlowStackSliceFragments(
         : measured.lines.slice(lineStart)
 
       if (lines.length > 0) {
-        const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
         const resolvedLineEnd = lineStart + lines.length
         const isLastLines = lineEnd === undefined || lineEnd === measured.lines.length
-        const spacingAfter = isLastLines
-          ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
-          : 0
-        const paraH = spacingBefore + lines.reduce((sum, line) => sum + line.height, 0) + spacingAfter
+        const paraH = paragraphFragmentHeight(measured, lines, lineStart, resolvedLineEnd)
         const fragmentIndex = paragraphFragmentIndexes.get(child.nodeId) ?? 0
         paragraphFragmentIndexes.set(child.nodeId, fragmentIndex + 1)
         fragments.push({
@@ -724,10 +782,10 @@ function buildFlowStackSliceFragments(
           width: child.width,
           height: paraH,
           lines: resolvePageNumbers(
-            buildPaginatedLines(lines, child.x, curY, spacingBefore, node.props.align, child.width),
+            buildPositionedParagraphLines(measured, lines, child.x, curY, lineStart, node.props.align, isLastLines),
             pageIndex + 1 + pageNumberOffset,
           ),
-          renderProps: buildRenderProps(node, measured.lineHeight),
+          renderProps: buildRenderProps(node, measured.lineHeight, measured.box),
           fragmentIndex,
           lineStart,
           lineEnd: resolvedLineEnd,
@@ -906,11 +964,16 @@ function paginateFlowRow(
     })
 
     const childFragments: PageFragment[] = []
-    for (const stackBox of activeStacks) {
-      const from = fromSplits.get(stackBox.nodeId)!
-      const to = toSplits.get(stackBox.nodeId) ?? null
+    const activeStackIds = new Set(activeStacks.map((stackBox) => stackBox.nodeId))
+    for (const stackBox of box.children) {
       const stackFragmentIndex = stackFragmentIndexes.get(stackBox.nodeId) ?? 0
-      const stackContinuesAfter = flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, nextSplits.get(stackBox.nodeId)!)
+      const stackContinuesAfter = flowStackHasRemainingContent(
+        stackBox,
+        section,
+        measurer,
+        wordBreaker,
+        nextSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 },
+      )
       stackFragmentIndexes.set(stackBox.nodeId, stackFragmentIndex + 1)
 
       pushFragment(pages, template, {
@@ -928,6 +991,9 @@ function paginateFlowRow(
         warnings: sliceWarnings.get(stackBox.nodeId),
       })
 
+      if (!activeStackIds.has(stackBox.nodeId)) continue
+      const from = fromSplits.get(stackBox.nodeId)!
+      const to = toSplits.get(stackBox.nodeId) ?? null
       childFragments.push(...buildFlowStackSliceFragments(
         stackBox,
         section,
@@ -1029,9 +1095,9 @@ function pushTableCellContents(
       const node = tableNode.nodes[child.nodeId]
       if (node?.type === "paragraph") {
         const measured = measureParagraph(node, child.width, measurer, wordBreaker)
-        const rawLines = buildPaginatedLines(measured.lines, child.x, childPageY, measured.spacingBefore, node.props.align, child.width)
+        const rawLines = buildPositionedParagraphLines(measured, measured.lines, child.x, childPageY, 0, node.props.align)
         lines = resolvePageNumbers(rawLines, pageIndex + 1 + pageNumberOffset)
-        renderProps = buildRenderProps(node, measured.lineHeight)
+        renderProps = buildRenderProps(node, measured.lineHeight, measured.box)
         lineStart = 0
         lineEnd = measured.lines.length
         continuesFrom = false
@@ -1150,12 +1216,8 @@ function forcedSplitUnitHeight(
   const lineStart = from.lineIdx
   const lineEnd = to.childIdx === from.childIdx ? to.lineIdx : measured.lines.length
   const lines = measured.lines.slice(lineStart, lineEnd)
-  const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
-  const spacingAfter = lineEnd >= measured.lines.length
-    ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
-    : 0
 
-  return spacingBefore + lines.reduce((sum, line) => sum + line.height, 0) + spacingAfter
+  return paragraphFragmentHeight(measured, lines, lineStart, lineEnd)
 }
 
 // คำนวณ split point โดยเริ่มจาก `from` เพื่อหาว่า content สิ้นสุดที่ไหนเมื่อใส่ใน availH
@@ -1182,14 +1244,13 @@ function computeSplitPointFrom(
       if (node?.type !== "paragraph") continue
       const measured = measureParagraph(node, child.width, measurer, wordBreaker)
       const lineStart = ci === from.childIdx ? from.lineIdx : 0
-      const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
       const remainingLines = measured.lines.slice(lineStart)
-      const remainH = spacingBefore + remainingLines.reduce((s, l) => s + l.height, 0)
+      const remainH = paragraphLineTopOffset(measured, lineStart) + paragraphLinesHeight(remainingLines)
 
       if (heightUsed + remainH <= availH) {
         heightUsed += remainH
       } else {
-        const availForLines = availH - heightUsed - spacingBefore
+        const availForLines = availH - heightUsed - paragraphLineTopOffset(measured, lineStart)
         if (availForLines <= 0) return { childIdx: ci, lineIdx: lineStart }
         let lineAccum = 0
         for (let li = lineStart; li < measured.lines.length; li++) {
@@ -1250,17 +1311,14 @@ function pushCellSlice(
         : measured.lines.slice(lineStart)
 
       if (lines.length > 0) {
-        const spacingBefore = lineStart === 0 ? measured.spacingBefore : 0
         const resolvedLineEnd = lineStart + lines.length
         const isLastLines = lineEnd === undefined || lineEnd === measured.lines.length
-        const spacingAfter = isLastLines
-          ? toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit) : 0
-        const paraH = spacingBefore + lines.reduce((s, l) => s + l.height, 0) + spacingAfter
+        const paraH = paragraphFragmentHeight(measured, lines, lineStart, resolvedLineEnd)
         pushFragment(pages, template, {
           nodeId: child.nodeId, nodeType: "paragraph", parentNodeId: cellBox.nodeId,
           pageIndex, x: child.x, y: curY, width: child.width, height: paraH,
-          lines: resolvePageNumbers(buildPaginatedLines(lines, child.x, curY, spacingBefore, node.props.align, child.width), pageIndex + 1 + pageNumberOffset),
-          renderProps: buildRenderProps(node, measured.lineHeight),
+          lines: resolvePageNumbers(buildPositionedParagraphLines(measured, lines, child.x, curY, lineStart, node.props.align, isLastLines), pageIndex + 1 + pageNumberOffset),
+          renderProps: buildRenderProps(node, measured.lineHeight, measured.box),
           lineStart,
           lineEnd: resolvedLineEnd,
           continuesFrom: lineStart > 0,
@@ -1710,8 +1768,8 @@ function collectZoneFragments(
     const node = section.nodes[box.nodeId]
     if (node?.type === "paragraph") {
       const measured = measureParagraph(node, box.width, measurer, wordBreaker)
-      fragment.lines = buildPaginatedLines(measured.lines, box.x, box.y, measured.spacingBefore, node.props.align, box.width)
-      fragment.renderProps = buildRenderProps(node, measured.lineHeight)
+      fragment.lines = buildPositionedParagraphLines(measured, measured.lines, box.x, box.y, 0, node.props.align)
+      fragment.renderProps = buildRenderProps(node, measured.lineHeight, measured.box)
     }
   }
 

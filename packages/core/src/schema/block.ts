@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { UnitValueSchema } from "./units"
 import { InlineNodeSchema } from "./inline"
-import { TableNodeSchema } from "./table"
+import { BorderStyleSchema, TableNodeSchema } from "./table"
 
 // ─── Alignment ───────────────────────────────────────────────────────────────
 
@@ -42,6 +42,37 @@ export const FlowRowPropsSchema = z.object({
   minHeight: z.number().positive().optional(),
 })
 
+const HexColorSchema = z.string().regex(/^[0-9A-Fa-f]{6}$/)
+const NonNegativeUnitValueSchema = UnitValueSchema.refine((value) => value.value >= 0, {
+  message: "Unit value must be non-negative",
+})
+
+export const ParagraphBoxPaddingSchema = z.object({
+  top: NonNegativeUnitValueSchema,
+  right: NonNegativeUnitValueSchema,
+  bottom: NonNegativeUnitValueSchema,
+  left: NonNegativeUnitValueSchema,
+})
+
+export const ParagraphBoxBorderSideSchema = z.object({
+  style: BorderStyleSchema,
+  width: NonNegativeUnitValueSchema,
+  color: HexColorSchema.default("000000"),
+})
+
+export const ParagraphBoxBorderSchema = z.object({
+  top: ParagraphBoxBorderSideSchema.optional(),
+  right: ParagraphBoxBorderSideSchema.optional(),
+  bottom: ParagraphBoxBorderSideSchema.optional(),
+  left: ParagraphBoxBorderSideSchema.optional(),
+})
+
+export const ParagraphBoxStyleSchema = z.object({
+  fill: HexColorSchema.optional(),
+  padding: ParagraphBoxPaddingSchema.optional(),
+  border: ParagraphBoxBorderSchema.optional(),
+})
+
 export const ParagraphPropsSchema = z.object({
   align: TextAlignSchema,
   fontSize: UnitValueSchema,
@@ -54,6 +85,7 @@ export const ParagraphPropsSchema = z.object({
   indentRight: UnitValueSchema,
   headingLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   keepWithNext: z.boolean().optional(),  // keep this paragraph on the same page as the next sibling
+  box: ParagraphBoxStyleSchema.optional(),
 })
 
 export const SpacerPropsSchema = z.object({
@@ -143,6 +175,10 @@ export type RowProps = z.infer<typeof RowPropsSchema>
 export type FlowStackProps = z.infer<typeof FlowStackPropsSchema>
 export type FlowRowProps = z.infer<typeof FlowRowPropsSchema>
 export type ParagraphProps = z.infer<typeof ParagraphPropsSchema>
+export type ParagraphBoxPadding = z.infer<typeof ParagraphBoxPaddingSchema>
+export type ParagraphBoxBorderSide = z.infer<typeof ParagraphBoxBorderSideSchema>
+export type ParagraphBoxBorder = z.infer<typeof ParagraphBoxBorderSchema>
+export type ParagraphBoxStyle = z.infer<typeof ParagraphBoxStyleSchema>
 export type SpacerProps = z.infer<typeof SpacerPropsSchema>
 
 export type BodyNode = z.infer<typeof BodyNodeSchema>

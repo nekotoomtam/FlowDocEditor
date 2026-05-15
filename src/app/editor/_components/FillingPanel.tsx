@@ -71,11 +71,11 @@ export function FillingPanel({ doc, registry, snapshot, readinessIssues = [], on
   const allFields = [...fields, ...unknownFields]
 
   return (
-    <div style={{ background: "white", borderBottom: "1px solid #e5e7eb", flexShrink: 0 }}>
+    <div style={{ background: "white", borderBottom: "1px solid #e5e7eb", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "8px 14px", fontSize: 10, fontWeight: "bold", color: "#9ca3af", borderBottom: "1px solid #f3f4f6", background: "#fafafa", textTransform: "uppercase", letterSpacing: "0.08em" }}>
         Filling
       </div>
-      <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
         {readinessIssues.length > 0 && (
           <div
             data-testid="filling-readiness"

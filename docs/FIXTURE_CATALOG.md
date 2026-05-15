@@ -11,8 +11,8 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 28 core test files / 344 core tests
-- 25 app test files / 232 app tests
+- 33 core test files / 414 core tests
+- 35 app test files / 311 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 `docs/TEST_STRATEGY.md` as the current coverage snapshot until the suite changes.
@@ -102,6 +102,7 @@ fragments.
 ### Renderers
 
 - `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `packages/core/src/renderer/__tests__/pdfVisualRegression.test.ts`
 - `packages/core/src/renderer/__tests__/textFlow.test.ts`
 - `packages/core/src/renderer/__tests__/multiSection.test.ts`
 - `packages/core/src/renderer/__tests__/productExportGolden.test.ts`
@@ -110,7 +111,11 @@ fragments.
 Protects PDF/DOCX smoke behavior, renderer input contract, text flow, multiple
 sections, page-number restarts, TOC output, DOCX structural XML checks, product
 PDF page-count parity, user-level report PDF page-count parity, and product
-DOCX table row structure.
+DOCX table row structure. `pdfVisualRegression.test.ts` keeps a normal opt-in
+gate test and can verify paragraph box fill/border pixels when
+`FLOWDOC_PDF_VISUAL_REGRESSION=1` is run on a machine with `pdftoppm` or
+ImageMagick plus Ghostscript. `EditorCanvas.test.ts` covers paragraph box
+editor preview fill/border rendering from paginated metadata.
 
 ## App Test Files
 
@@ -188,7 +193,8 @@ editor scenario.
 
 Known gaps:
 
-- visual regression tests for PDF/editor parity
+- broad visual regression tests for PDF/editor parity beyond the focused
+  paragraph box PDF raster gate
 - broad automated browser workflow regression suite beyond the first editor
   smoke
 - DOCX semantic heading/style assertions
