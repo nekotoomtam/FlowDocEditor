@@ -24,6 +24,33 @@ Each entry should include:
 
 ## 2026-05-17
 
+### Add PDF Raster Coverage For Split Boxed Paragraphs
+
+Goal: Prove the PDF renderer draws a split paragraph box as one logical box
+sliced across pages.
+
+Completed:
+
+- Extended the PDF raster test helper so a test can rasterize a specific PDF
+  page from the same exported artifact.
+- Added an opt-in raster case for a boxed paragraph that splits across pages.
+- Checked that the first slice draws top/side borders but no bottom border, and
+  the final slice draws bottom/side borders but no top border.
+- Updated renderer/test docs to record focused split paragraph box raster
+  coverage.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:pdf-visual`
+- `git diff --check`
+
+Notes:
+
+- This keeps renderer behavior unchanged and only adds a focused PDF visual
+  guardrail for the existing paragraph box split contract.
+
 ### Add PDF Raster Coverage For Border Styles
 
 Goal: Strengthen the PDF-first export guardrail by checking authored dashed and

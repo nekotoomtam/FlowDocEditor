@@ -15,7 +15,7 @@ const PDF_RASTER_DPI = 96
 
 interface Rasterizer {
   name: string
-  render(pdfPath: string, pngPath: string): void
+  render(pdfPath: string, pngPath: string, pageNumber?: number): void
 }
 
 interface PngImage {
@@ -73,9 +73,13 @@ function findRasterizer(): Rasterizer | null {
   if (commandCanStart(pdftoppmCommand, ["-v"])) {
     return {
       name: "pdftoppm",
-      render(pdfPath, pngPath) {
+      render(pdfPath, pngPath, pageNumber = 1) {
         const prefix = pngPath.replace(/\.png$/i, "")
-        runRasterCommand(pdftoppmCommand, ["-png", "-singlefile", "-r", String(PDF_RASTER_DPI), pdfPath, prefix], "Install Poppler or set up another supported PDF rasterizer.")
+        runRasterCommand(
+          pdftoppmCommand,
+          ["-png", "-singlefile", "-r", String(PDF_RASTER_DPI), "-f", String(pageNumber), "-l", String(pageNumber), pdfPath, prefix],
+          "Install Poppler or set up another supported PDF rasterizer.",
+        )
         const generatedPath = `${prefix}.png`
         if (generatedPath !== pngPath && existsSync(generatedPath)) renameSync(generatedPath, pngPath)
         if (!existsSync(pngPath)) throw new Error(`pdftoppm did not write ${pngPath}`)
@@ -86,8 +90,8 @@ function findRasterizer(): Rasterizer | null {
   if (commandCanStart("magick", ["-version"]) && ghostscriptCanStart()) {
     return {
       name: "magick",
-      render(pdfPath, pngPath) {
-        runRasterCommand("magick", ["-density", String(PDF_RASTER_DPI), `${pdfPath}[0]`, `PNG32:${pngPath}`], "ImageMagick PDF input requires Ghostscript, for example gswin64c.exe on Windows.")
+      render(pdfPath, pngPath, pageNumber = 1) {
+        runRasterCommand("magick", ["-density", String(PDF_RASTER_DPI), `${pdfPath}[${pageNumber - 1}]`, `PNG32:${pngPath}`], "ImageMagick PDF input requires Ghostscript, for example gswin64c.exe on Windows.")
         if (!existsSync(pngPath)) throw new Error(`magick did not write ${pngPath}`)
       },
     }
@@ -449,6 +453,76 @@ describePdfVisual("PDF raster visual regression", () => {
     const dottedSamples = countBrokenStrokeSamples(image, page.height, dotted, hexToRgb("2563EB"))
     expect(dottedSamples.colored).toBeGreaterThan(6)
     expect(dottedSamples.uncolored).toBeGreaterThan(20)
+  })
+
+  it("draws split paragraph boxes as one logical box across PDF pages", async () => {
+    const rasterizer = findRasterizer()
+    expect(rasterizer, "Set up pdftoppm or ImageMagick with Ghostscript before running FLOWDOC_PDF_VISUAL_REGRESSION=1").not.toBeNull()
+
+    const paragraph = makePara("split-boxed", Array.from({ length: 95 }, (_, index) => `split-${index}`).join("\n"), {
+      box: {
+        fill: "FEF3C7",
+        padding: { top: pt(6), right: pt(6), bottom: pt(6), left: pt(6) },
+        border: {
+          top: { style: "solid", width: pt(2), color: "DC2626" },
+          right: { style: "solid", width: pt(2), color: "16A34A" },
+          bottom: { style: "solid", width: pt(2), color: "2563EB" },
+          left: { style: "solid", width: pt(2), color: "111827" },
+        },
+      },
+    })
+    const paginated = paginateDocument(makeDoc(["split-boxed"], { "split-boxed": paragraph }), defaultTextMeasurer, defaultWordBreaker)
+    const fragments = paginated.sections[0].pages
+      .flatMap((page) => page.fragments.map((fragment) => ({ page, fragment })))
+      .filter((entry) => entry.fragment.nodeId === "split-boxed")
+    expect(fragments.length).toBeGreaterThanOrEqual(2)
+
+    const first = fragments[0]
+    const last = fragments[fragments.length - 1]
+    const firstPrimitives = resolveParagraphBoxDrawingPrimitives(first.fragment, first.page.height)
+    const lastPrimitives = resolveParagraphBoxDrawingPrimitives(last.fragment, last.page.height)
+    if (!firstPrimitives?.fill) throw new Error("Expected first split paragraph box primitives")
+    if (!lastPrimitives?.fill) throw new Error("Expected last split paragraph box primitives")
+
+    expect(firstPrimitives.borders.map((line) => line.side).sort()).toEqual(["left", "right", "top"])
+    expect(lastPrimitives.borders.map((line) => line.side).sort()).toEqual(["bottom", "left", "right"])
+
+    const tempDir = mkdtempSync(join(tmpdir(), "flowdoc-pdf-split-box-"))
+    tempDirs.push(tempDir)
+    const pdfPath = join(tempDir, "actual.pdf")
+    const firstPngPath = join(tempDir, "first.png")
+    const lastPngPath = join(tempDir, "last.png")
+    const result = await new PdfRenderer().render(paginated)
+    writeFileSync(pdfPath, result.buffer)
+    rasterizer!.render(pdfPath, firstPngPath, first.page.index + 1)
+    rasterizer!.render(pdfPath, lastPngPath, last.page.index + 1)
+
+    const firstImage = parsePng(readFileSync(firstPngPath))
+    const lastImage = parsePng(readFileSync(lastPngPath))
+
+    for (const line of firstPrimitives.borders) {
+      const linePoint = pdfPointToImagePoint(first.page.height, (line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
+      expect(minColorDistanceNear(firstImage, linePoint.x, linePoint.y, hexToRgb(line.border.color), 4)).toBeLessThanOrEqual(80)
+    }
+
+    const firstBottomPoint = pdfPointToImagePoint(
+      first.page.height,
+      firstPrimitives.fill.x + firstPrimitives.fill.width / 2,
+      firstPrimitives.fill.y,
+    )
+    expect(minColorDistanceNear(firstImage, firstBottomPoint.x, firstBottomPoint.y, hexToRgb("2563EB"), 3)).toBeGreaterThan(90)
+
+    for (const line of lastPrimitives.borders) {
+      const linePoint = pdfPointToImagePoint(last.page.height, (line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
+      expect(minColorDistanceNear(lastImage, linePoint.x, linePoint.y, hexToRgb(line.border.color), 4)).toBeLessThanOrEqual(80)
+    }
+
+    const lastTopPoint = pdfPointToImagePoint(
+      last.page.height,
+      lastPrimitives.fill.x + lastPrimitives.fill.width / 2,
+      lastPrimitives.fill.y + lastPrimitives.fill.height,
+    )
+    expect(minColorDistanceNear(lastImage, lastTopPoint.x, lastTopPoint.y, hexToRgb("DC2626"), 3)).toBeGreaterThan(90)
   })
 
   it("draws flow-stack fills, borders, and gaps at paginated flow-row geometry", async () => {
