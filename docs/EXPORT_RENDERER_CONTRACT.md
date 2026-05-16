@@ -194,9 +194,10 @@ Choose the smallest verification that protects the changed layer.
 Current automated coverage includes API route contract smoke, PDF/DOCX smoke,
 product PDF page-count parity smoke, product DOCX table-row structure smoke,
 multi-section DOCX structure tests, focused paragraph box PDF drawing primitive
-tests, and an opt-in paragraph box PDF raster visual regression gate when a
-local PDF rasterizer is available. Missing coverage includes broad pixel-level
-PDF/editor parity and deeper DOCX semantic style checks.
+tests, and an opt-in PDF raster visual regression gate for paragraph box fill,
+solid/dashed/dotted border pixels, and flow-row/flow-stack fill, border, and
+gap pixels when a local PDF rasterizer is available. Missing coverage includes
+broad pixel-level PDF/editor parity and deeper DOCX semantic style checks.
 
 ## Deferred Work
 

@@ -328,6 +328,30 @@ function minColorDistanceNear(image: PngImage, x: number, y: number, expected: R
   return minDistance
 }
 
+function countBrokenStrokeSamples(
+  image: PngImage,
+  pageHeight: number,
+  line: NonNullable<ReturnType<typeof resolveParagraphBoxDrawingPrimitives>>["borders"][number],
+  expected: Rgb,
+): { colored: number, uncolored: number } {
+  let colored = 0
+  let uncolored = 0
+  const sampleCount = 80
+
+  for (let index = 0; index < sampleCount; index++) {
+    const t = (index + 1) / (sampleCount + 1)
+    const pdfX = line.x1 + (line.x2 - line.x1) * t
+    const pdfY = line.y1 + (line.y2 - line.y1) * t
+    const imagePoint = pdfPointToImagePoint(pageHeight, pdfX, pdfY)
+    const nearestDistance = minColorDistanceNear(image, imagePoint.x, imagePoint.y, expected, 1)
+    const centerDistance = colorDistance(pixelColor(image, imagePoint.x, imagePoint.y), expected)
+    if (nearestDistance <= 90) colored++
+    if (centerDistance >= 150) uncolored++
+  }
+
+  return { colored, uncolored }
+}
+
 function pdfPointToImagePoint(pageHeight: number, x: number, y: number): { x: number, y: number } {
   const scale = PDF_RASTER_DPI / 72
   return { x: x * scale, y: (pageHeight - y) * scale }
@@ -382,6 +406,49 @@ describePdfVisual("PDF raster visual regression", () => {
       const linePoint = pdfPointToImagePoint(page.height, (line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
       expect(minColorDistanceNear(image, linePoint.x, linePoint.y, hexToRgb(line.border.color), 4)).toBeLessThanOrEqual(80)
     }
+  })
+
+  it("draws dashed and dotted paragraph borders as broken PDF strokes", async () => {
+    const rasterizer = findRasterizer()
+    expect(rasterizer, "Set up pdftoppm or ImageMagick with Ghostscript before running FLOWDOC_PDF_VISUAL_REGRESSION=1").not.toBeNull()
+
+    const paragraph = makePara("styled-border", "", {
+      box: {
+        padding: { top: pt(12), right: pt(12), bottom: pt(12), left: pt(12) },
+        border: {
+          top: { style: "dashed", width: pt(3), color: "DC2626" },
+          bottom: { style: "dotted", width: pt(3), color: "2563EB" },
+        },
+      },
+    })
+    const paginated = paginateDocument(makeDoc(["styled-border"], { "styled-border": paragraph }), defaultTextMeasurer, defaultWordBreaker)
+    const page = paginated.sections[0].pages[0]
+    const fragment = page.fragments.find((item) => item.nodeId === "styled-border")
+    if (!fragment) throw new Error("Expected styled-border paragraph fragment")
+    const primitives = resolveParagraphBoxDrawingPrimitives(fragment, page.height)
+    if (!primitives) throw new Error("Expected paragraph box drawing primitives")
+
+    const tempDir = mkdtempSync(join(tmpdir(), "flowdoc-pdf-border-style-"))
+    tempDirs.push(tempDir)
+    const pdfPath = join(tempDir, "actual.pdf")
+    const pngPath = join(tempDir, "actual.png")
+    const result = await new PdfRenderer().render(paginated)
+    writeFileSync(pdfPath, result.buffer)
+    rasterizer!.render(pdfPath, pngPath)
+
+    const image = parsePng(readFileSync(pngPath))
+    const dashed = primitives.borders.find((border) => border.side === "top")
+    const dotted = primitives.borders.find((border) => border.side === "bottom")
+    if (!dashed) throw new Error("Missing dashed top border primitive")
+    if (!dotted) throw new Error("Missing dotted bottom border primitive")
+
+    const dashedSamples = countBrokenStrokeSamples(image, page.height, dashed, hexToRgb("DC2626"))
+    expect(dashedSamples.colored).toBeGreaterThan(12)
+    expect(dashedSamples.uncolored).toBeGreaterThan(12)
+
+    const dottedSamples = countBrokenStrokeSamples(image, page.height, dotted, hexToRgb("2563EB"))
+    expect(dottedSamples.colored).toBeGreaterThan(6)
+    expect(dottedSamples.uncolored).toBeGreaterThan(20)
   })
 
   it("draws flow-stack fills, borders, and gaps at paginated flow-row geometry", async () => {

@@ -22,6 +22,35 @@ Each entry should include:
 
 ---
 
+## 2026-05-17
+
+### Add PDF Raster Coverage For Border Styles
+
+Goal: Strengthen the PDF-first export guardrail by checking authored dashed and
+dotted paragraph borders in actual rasterized PDF output.
+
+Completed:
+
+- Added an opt-in PDF raster visual regression case for dashed and dotted
+  paragraph box borders.
+- Kept the change test-only for renderer behavior; the test samples actual PDF
+  pixels and verifies that styled strokes include both colored segments and
+  uncolored gaps.
+- Updated renderer/test docs to record the new focused PDF border-style raster
+  coverage.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:pdf-visual`
+- `git diff --check`
+
+Notes:
+
+- Broad PDF/editor visual parity remains deferred; this is a focused
+  border-style guardrail.
+
 ## 2026-05-16
 
 ### Bump Self-Use Baseline To 0.5.3

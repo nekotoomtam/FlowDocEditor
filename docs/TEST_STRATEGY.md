@@ -280,8 +280,9 @@ Current strengths:
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual
-  regression protects paragraph box fill/border pixels plus flow-row/flow-stack
-  fill, border, and gap pixels when `FLOWDOC_PDF_VISUAL_REGRESSION=1` is
+  regression protects paragraph box fill/border pixels, paragraph dashed/dotted
+  border stroke pixels, plus flow-row/flow-stack fill, border, and gap pixels
+  when `FLOWDOC_PDF_VISUAL_REGRESSION=1` is
   enabled on a machine with `pdftoppm` or ImageMagick plus Ghostscript; the
   normal suite keeps this raster assertion skipped because PDF rasterizers are
   environment-specific.
