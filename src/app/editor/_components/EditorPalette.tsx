@@ -3,8 +3,7 @@ import type { DragSource, PaletteBlockType } from "@/placement/types"
 const BLOCKS: { type: PaletteBlockType; label: string; icon: string; desc: string }[] = [
   { type: "paragraph", label: "Paragraph", icon: "¶", desc: "Text block" },
   { type: "row",       label: "Row",       icon: "▥", desc: "Single column" },
-  { type: "columns",   label: "Columns",   icon: "⊞", desc: "Two columns" },
-  { type: "flow-columns", label: "Flow cols", icon: "⇥", desc: "Multi-page columns" },
+  { type: "columns",   label: "Columns",   icon: "⊞", desc: "Multi-page columns" },
   { type: "table",     label: "Table",     icon: "⊡", desc: "3×3 table" },
 ]
 

@@ -18,9 +18,8 @@ import type { DragSource, PlacementOperation } from "../placement/types"
 import {
   createParagraphNode,
   createRowNode,
-  createRowSubtree,
-  createColumnsSubtree,
   createFlowColumnsSubtree,
+  createFlowRowNode,
   createFlowStackNode,
   createStackNode,
   getEqualWidthShares,
@@ -266,11 +265,11 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
       return { insertId: node.id, newNodes: { [node.id]: node } }
     }
     if (source.blockType === "row") {
-      const { row, nodes } = createRowSubtree()
+      const { row, nodes } = createFlowColumnsSubtree(1)
       return { insertId: row.id, newNodes: nodes }
     }
     if (source.blockType === "columns") {
-      const { row, nodes } = createColumnsSubtree(2)
+      const { row, nodes } = createFlowColumnsSubtree(2)
       return { insertId: row.id, newNodes: nodes }
     }
     if (source.blockType === "flow-columns") {
@@ -281,7 +280,7 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
       const table = createDefaultTable()
       return { insertId: table.id, newNodes: { [table.id]: table as unknown as LayoutNode } }
     }
-    const { row, nodes } = createRowSubtree()
+    const { row, nodes } = createFlowColumnsSubtree(1)
     return { insertId: row.id, newNodes: nodes }
   }
   if (source.source === "document") return { insertId: source.nodeId, newNodes: {} }
@@ -402,9 +401,17 @@ function doWrapInRow(
 
   const leftIds = isLeft ? [insertId] : [targetNodeId]
   const rightIds = isLeft ? [targetNodeId] : [insertId]
-  const stackLeft = createStackNode(leftIds, { widthShare: 50, minHeight: DEFAULT_STACK_MIN_HEIGHT })
-  const stackRight = createStackNode(rightIds, { widthShare: 50, minHeight: DEFAULT_STACK_MIN_HEIGHT })
-  const newRow = createRowNode([stackLeft.id, stackRight.id])
+  const parent = nodes[parentId]
+  const useLegacyRow = parent?.type === "stack"
+  const stackLeft = useLegacyRow
+    ? createStackNode(leftIds, { widthShare: 50, minHeight: DEFAULT_STACK_MIN_HEIGHT })
+    : createFlowStackNode(leftIds, { widthShare: 50, minHeight: DEFAULT_STACK_MIN_HEIGHT })
+  const stackRight = useLegacyRow
+    ? createStackNode(rightIds, { widthShare: 50, minHeight: DEFAULT_STACK_MIN_HEIGHT })
+    : createFlowStackNode(rightIds, { widthShare: 50, minHeight: DEFAULT_STACK_MIN_HEIGHT })
+  const newRow = useLegacyRow
+    ? createRowNode([stackLeft.id, stackRight.id])
+    : createFlowRowNode([stackLeft.id, stackRight.id])
 
   let result: Nodes = {
     ...nodes,

@@ -110,7 +110,7 @@ describe("buildSelectionContext", () => {
     const context = buildSelectionContext(flowDoc(), "p1")
 
     expect(context.map((item) => item.nodeId)).toEqual(["fr1", "fs1", "p1"])
-    expect(context.map((item) => item.label)).toEqual(["Flow row", "Flow stack", "Paragraph"])
+    expect(context.map((item) => item.label)).toEqual(["Row", "Stack", "Paragraph"])
   })
 
   it("hides body from simple body paragraph context", () => {

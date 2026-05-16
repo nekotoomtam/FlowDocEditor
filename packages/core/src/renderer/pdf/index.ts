@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
+import { LineCapStyle, PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import type { PDFFont, PDFPage } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
 import type { PaginatedDocument, PaginatedPage, PageFragment, ResolvedBorderSide } from "../../pagination"
@@ -54,6 +54,22 @@ export interface ParagraphBoxDrawingPrimitives {
   borders: PdfLinePrimitive[]
 }
 
+export function resolvePdfBorderLineOptions(side: ResolvedBorderSide): { dashArray?: number[]; lineCap?: LineCapStyle } {
+  if (side.style === "dashed") {
+    return {
+      dashArray: [Math.max(side.width * 3, 3), Math.max(side.width * 2, 2)],
+      lineCap: LineCapStyle.Butt,
+    }
+  }
+  if (side.style === "dotted") {
+    return {
+      dashArray: [0, Math.max(side.width * 2.2, 2)],
+      lineCap: LineCapStyle.Round,
+    }
+  }
+  return {}
+}
+
 function drawBorderSide(
   pdfPage: PDFPage,
   side: ResolvedBorderSide | undefined,
@@ -66,6 +82,7 @@ function drawBorderSide(
     end: { x: x2, y: y2 },
     thickness: side.width,
     color: hexToRgb(side.color),
+    ...resolvePdfBorderLineOptions(side),
   })
 }
 

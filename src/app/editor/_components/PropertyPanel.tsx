@@ -7,9 +7,11 @@ import type { FieldRegistryV1 } from "@/fieldRegistry"
 import { resolveFlowStackResizePairShares } from "./flowStackResize"
 import { InfoHint } from "./InfoHint"
 import { buildSelectionContext } from "./selectionContext"
+import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
 
 type DocNode = LayoutNode | TableRowNode | TableCellNode
 type ParagraphPanelTab = "text" | "box"
+type FlowContainerPanelTab = "layout" | "box"
 
 interface TableOps {
   addRow: (tableId: string, afterIndex?: number) => void
@@ -51,6 +53,12 @@ function findNode(doc: DocumentNode, nodeId: string): DocNode | null {
     }
   }
   return null
+}
+
+function displayNodeType(nodeType: DocNode["type"]): string {
+  if (nodeType === "flow-row") return "Row"
+  if (nodeType === "flow-stack") return "Stack"
+  return nodeType
 }
 
 function isTopLevel(doc: DocumentNode, nodeId: string): boolean {
@@ -506,11 +514,6 @@ function ParagraphBoxControls({
 
   return (
     <section data-testid="paragraph-box-controls" style={sectionBox}>
-      <div style={labelWithInfo}>
-        <label style={inlineLabel}>Box</label>
-        <InfoHint text="Paragraph box style is authored document content. PDF and editor preview use the paginated box geometry; DOCX is best-effort." />
-      </div>
-
       <CollapsibleCard title="Fill" summary={fill ? `#${fill}` : "none"} testId="paragraph-box-fill-card">
         <div
           data-testid="paragraph-box-fill-preview"
@@ -886,26 +889,26 @@ const btnDanger: React.CSSProperties = {
   ...btn, border: "1px solid #fca5a5", background: "#fff5f5", color: "#ef4444",
 }
 const sectionBox: React.CSSProperties = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 6,
-  padding: 8,
+  border: "none",
+  borderRadius: 0,
+  padding: 0,
   display: "flex",
   flexDirection: "column",
-  gap: 9,
-  background: "#fff",
+  gap: 8,
+  background: "transparent",
 }
 const collapsibleCard: React.CSSProperties = {
   border: "1px solid #e5e7eb",
-  borderRadius: 6,
+  borderRadius: 5,
   overflow: "hidden",
-  background: "#f9fafb",
+  background: "#fff",
 }
 const collapsibleCardHeader: React.CSSProperties = {
   width: "100%",
   border: "none",
   borderBottom: "1px solid #e5e7eb",
   background: "#f8fafc",
-  padding: "6px 7px",
+  padding: "5px 7px",
   display: "flex",
   alignItems: "center",
   gap: 6,
@@ -915,25 +918,23 @@ const collapsibleCardHeader: React.CSSProperties = {
   textAlign: "left",
 }
 const collapsibleCardBody: React.CSSProperties = {
-  padding: 7,
+  padding: 6,
   background: "white",
 }
 const panelTabList: React.CSSProperties = {
-  position: "sticky",
-  top: 0,
-  zIndex: 2,
+  flexShrink: 0,
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
-  gap: 4,
-  margin: "-14px -14px 0",
-  padding: "14px 14px 8px",
+  gap: 0,
+  padding: "0 12px",
   background: "white",
-  borderBottom: "1px solid #f3f4f6",
+  borderBottom: "1px solid #e5e7eb",
 }
 const panelTabButton: React.CSSProperties = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 5,
-  padding: "6px 0",
+  border: "none",
+  borderBottom: "2px solid transparent",
+  borderRadius: 0,
+  padding: "9px 0 7px",
   fontSize: 11,
   cursor: "pointer",
 }
@@ -943,8 +944,8 @@ const paragraphTabPanel: React.CSSProperties = {
 }
 const compassGrid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "1fr 58px 1fr",
-  gap: 5,
+  gridTemplateColumns: "1fr 54px 1fr",
+  gap: 4,
   alignItems: "end",
 }
 const compassField: React.CSSProperties = {
@@ -964,8 +965,8 @@ const compassButton: React.CSSProperties = {
   background: "#fafafa",
   color: "#374151",
   cursor: "pointer",
-  width: 30,
-  height: 30,
+  width: 28,
+  height: 28,
   padding: 0,
   display: "inline-flex",
   alignItems: "center",
@@ -1007,6 +1008,7 @@ const borderStyleIconLine: React.CSSProperties = {
 export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
   const [contextOpen, setContextOpen] = useState(false)
   const [paragraphPanelTab, setParagraphPanelTab] = useState<ParagraphPanelTab>("text")
+  const [flowContainerPanelTab, setFlowContainerPanelTab] = useState<FlowContainerPanelTab>("layout")
   const [flowResizeSide, setFlowResizeSide] = useState<"left" | "right" | null>(null)
   const [flowResizeDraft, setFlowResizeDraft] = useState<{ nodeId: string; side: "left" | "right"; selectedShare: number } | null>(null)
   const selectionContext = useMemo(
@@ -1017,6 +1019,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
   useEffect(() => {
     setContextOpen(false)
     setParagraphPanelTab("text")
+    setFlowContainerPanelTab("layout")
     setFlowResizeSide(null)
     setFlowResizeDraft(null)
   }, [selectedNodeId])
@@ -1034,153 +1037,188 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
 
   const canDelete = isTopLevel(doc, selectedNodeId)
   const hasSelectionContext = selectionContext.length > 1
+  const hasFlowContainerTabs = node.type === "flow-row" || node.type === "flow-stack"
+  const renderParagraphTabButton = (tab: ParagraphPanelTab, labelText: string) => {
+    const active = paragraphPanelTab === tab
+    return (
+      <button
+        key={tab}
+        type="button"
+        role="tab"
+        id={`paragraph-panel-tab-${tab}`}
+        data-testid={`paragraph-panel-tab-${tab}`}
+        aria-selected={active}
+        aria-controls={`paragraph-panel-${tab}`}
+        onClick={() => setParagraphPanelTab(tab)}
+        style={{
+          ...panelTabButton,
+          background: "transparent",
+          borderBottomColor: active ? "#2563eb" : "transparent",
+          color: active ? "#1d4ed8" : "#475569",
+          fontWeight: active ? 700 : 500,
+        }}
+      >
+        {labelText}
+      </button>
+    )
+  }
+  const renderFlowContainerTabButton = (tab: FlowContainerPanelTab, labelText: string) => {
+    const active = flowContainerPanelTab === tab
+    return (
+      <button
+        key={tab}
+        type="button"
+        role="tab"
+        id={`${node.type}-panel-tab-${tab}`}
+        data-testid={`${node.type}-panel-tab-${tab}`}
+        aria-selected={active}
+        aria-controls={`${node.type}-panel-${tab}`}
+        onClick={() => setFlowContainerPanelTab(tab)}
+        style={{
+          ...panelTabButton,
+          background: "transparent",
+          borderBottomColor: active ? "#2563eb" : "transparent",
+          color: active ? "#1d4ed8" : "#475569",
+          fontWeight: active ? 700 : 500,
+        }}
+      >
+        {labelText}
+      </button>
+    )
+  }
 
   return (
-    <div style={{ background: "white", display: "flex", flexDirection: "column", height: "100%", minHeight: 0, overflow: "hidden" }}>
-      {/* Header */}
-      <div data-testid="property-panel-title" style={{ position: "relative", padding: "8px 14px", fontSize: 10, fontWeight: "bold", color: "#9ca3af", borderBottom: "1px solid #f3f4f6", background: "#fafafa", textTransform: "uppercase", letterSpacing: "0.08em", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{node.type}</span>
-        {hasSelectionContext && (
-          <button
-            type="button"
-            data-testid="selection-context-button"
-            aria-expanded={contextOpen}
-            title="Show selection context"
-            onClick={() => setContextOpen((value) => !value)}
-            style={{
-              border: "1px solid #d1d5db",
-              borderRadius: 4,
-              background: contextOpen ? "#eef2ff" : "white",
-              color: "#4b5563",
-              cursor: "pointer",
-              fontSize: 9,
-              fontWeight: 700,
-              lineHeight: "16px",
-              padding: "0 6px",
-              textTransform: "none",
-              letterSpacing: 0,
-              flexShrink: 0,
-            }}
-          >
-            path
-          </button>
-        )}
-        {hasSelectionContext && contextOpen && (
-          <div
-            data-testid="selection-context-menu"
-            role="listbox"
-            style={{
-              position: "absolute",
-              top: 30,
-              right: 8,
-              zIndex: 20,
-              width: 178,
-              border: "1px solid #d1d5db",
-              borderRadius: 6,
-              background: "white",
-              boxShadow: "0 10px 24px rgba(15, 23, 42, 0.14)",
-              padding: 4,
-              textTransform: "none",
-              letterSpacing: 0,
-            }}
-          >
-            <div style={{ padding: "4px 6px", fontSize: 9, color: "#9ca3af", fontWeight: 700 }}>
-              Selected context
-            </div>
-            {selectionContext.map((item) => {
-              const active = item.nodeId === selectedNodeId
-              return (
+    <div style={{ ...rightRailPanelShell, overflow: "hidden" }}>
+      <RightRailPanelHeader
+        title={displayNodeType(node.type)}
+        testId="property-panel-title"
+        action={hasSelectionContext ? (
+          <>
+            <button
+              type="button"
+              data-testid="selection-context-button"
+              aria-expanded={contextOpen}
+              title="Show selection context"
+              onClick={() => setContextOpen((value) => !value)}
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: 4,
+                background: contextOpen ? "#eef2ff" : "white",
+                color: "#4b5563",
+                cursor: "pointer",
+                fontSize: 9,
+                fontWeight: 700,
+                lineHeight: "16px",
+                padding: "0 6px",
+                textTransform: "none",
+                letterSpacing: 0,
+                flexShrink: 0,
+              }}
+            >
+              path
+            </button>
+            {contextOpen && (
+              <div
+                data-testid="selection-context-menu"
+                role="listbox"
+                style={{
+                  position: "absolute",
+                  top: 30,
+                  right: 8,
+                  zIndex: 20,
+                  width: 178,
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  background: "white",
+                  boxShadow: "0 10px 24px rgba(15, 23, 42, 0.14)",
+                  padding: 4,
+                  textTransform: "none",
+                  letterSpacing: 0,
+                }}
+              >
+                <div style={{ padding: "4px 6px", fontSize: 9, color: "#9ca3af", fontWeight: 700 }}>
+                  Selected context
+                </div>
+                {selectionContext.map((item) => {
+                  const active = item.nodeId === selectedNodeId
+                  return (
+                    <button
+                      key={item.nodeId}
+                      type="button"
+                      data-testid="selection-context-item"
+                      data-node-id={item.nodeId}
+                      data-node-type={item.type}
+                      aria-selected={active}
+                      onClick={() => {
+                        setContextOpen(false)
+                        onSelectContextNode(item.nodeId)
+                      }}
+                      style={{
+                        width: "100%",
+                        border: "none",
+                        borderRadius: 4,
+                        background: active ? "#dbeafe" : "transparent",
+                        color: active ? "#1d4ed8" : "#374151",
+                        cursor: "pointer",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "5px 6px",
+                        fontSize: 11,
+                        textAlign: "left",
+                      }}
+                    >
+                      <span>{item.label}</span>
+                      {active && <span style={{ fontSize: 9, color: "#2563eb" }}>active</span>}
+                    </button>
+                  )
+                })}
                 <button
-                  key={item.nodeId}
                   type="button"
-                  data-testid="selection-context-item"
-                  data-node-id={item.nodeId}
-                  data-node-type={item.type}
-                  aria-selected={active}
-                  onClick={() => {
-                    setContextOpen(false)
-                    onSelectContextNode(item.nodeId)
-                  }}
+                  onClick={() => setContextOpen(false)}
                   style={{
                     width: "100%",
+                    marginTop: 2,
                     border: "none",
-                    borderRadius: 4,
-                    background: active ? "#dbeafe" : "transparent",
-                    color: active ? "#1d4ed8" : "#374151",
+                    borderTop: "1px solid #f3f4f6",
+                    background: "transparent",
+                    color: "#6b7280",
                     cursor: "pointer",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "5px 6px",
-                    fontSize: 11,
+                    padding: "5px 6px 3px",
+                    fontSize: 10,
                     textAlign: "left",
                   }}
                 >
-                  <span>{item.label}</span>
-                  {active && <span style={{ fontSize: 9, color: "#2563eb" }}>active</span>}
+                  Close
                 </button>
-              )
-            })}
-            <button
-              type="button"
-              onClick={() => setContextOpen(false)}
-              style={{
-                width: "100%",
-                marginTop: 2,
-                border: "none",
-                borderTop: "1px solid #f3f4f6",
-                background: "transparent",
-                color: "#6b7280",
-                cursor: "pointer",
-                padding: "5px 6px 3px",
-                fontSize: 10,
-                textAlign: "left",
-              }}
-            >
-              Close
-            </button>
-          </div>
-        )}
-      </div>
+              </div>
+            )}
+          </>
+        ) : undefined}
+      />
+      {node.type === "paragraph" && (
+        <div role="tablist" aria-label="Paragraph properties" data-testid="paragraph-panel-tabs" style={panelTabList}>
+          {renderParagraphTabButton("text", "Text")}
+          {renderParagraphTabButton("box", "Box")}
+        </div>
+      )}
+      {hasFlowContainerTabs && (
+        <div role="tablist" aria-label={`${node.type} properties`} data-testid={`${node.type}-panel-tabs`} style={panelTabList}>
+          {renderFlowContainerTabButton("layout", "Layout")}
+          {renderFlowContainerTabButton("box", "Box")}
+        </div>
+      )}
 
       {/* Fields */}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ ...rightRailPanelBody, display: "flex", flexDirection: "column", gap: 12 }}>
 
         {/* ── Paragraph ── */}
         {node.type === "paragraph" && (() => {
           const text = getParagraphText(node)
           const canEditText = isPlainTextParagraph(node)
           const fieldRefs = getParagraphFieldRefs(node)
-          const renderParagraphTabButton = (tab: ParagraphPanelTab, labelText: string) => {
-            const active = paragraphPanelTab === tab
-            return (
-              <button
-                key={tab}
-                type="button"
-                role="tab"
-                id={`paragraph-panel-tab-${tab}`}
-                data-testid={`paragraph-panel-tab-${tab}`}
-                aria-selected={active}
-                aria-controls={`paragraph-panel-${tab}`}
-                onClick={() => setParagraphPanelTab(tab)}
-                style={{
-                  ...panelTabButton,
-                  background: active ? "#dbeafe" : "#f8fafc",
-                  borderColor: active ? "#93c5fd" : "#e5e7eb",
-                  color: active ? "#1d4ed8" : "#475569",
-                  fontWeight: active ? 700 : 500,
-                }}
-              >
-                {labelText}
-              </button>
-            )
-          }
           return (
             <>
-              <div role="tablist" aria-label="Paragraph properties" data-testid="paragraph-panel-tabs" style={panelTabList}>
-                {renderParagraphTabButton("text", "Text")}
-                {renderParagraphTabButton("box", "Box")}
-              </div>
               <section
                 id="paragraph-panel-text"
                 role="tabpanel"
@@ -1324,34 +1362,52 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
         {/* ── Flow Row ── */}
         {node.type === "flow-row" && (
           <>
-            <div style={{ fontSize: 11, color: "#6b7280" }}>{node.childIds.length} cols</div>
-            <div>
-              <div style={labelWithInfo}>
-                <label style={inlineLabel}>Columns</label>
-                <InfoHint text="Adds one empty column and rebalances all column widths equally. Use a selected flow-stack edge button to insert before or after a specific column." />
+            <section
+              id="flow-row-panel-layout"
+              role="tabpanel"
+              aria-labelledby="flow-row-panel-tab-layout"
+              data-testid="flow-row-panel-layout"
+              hidden={flowContainerPanelTab !== "layout"}
+              style={{ ...paragraphTabPanel, display: flowContainerPanelTab === "layout" ? "flex" : "none" }}
+            >
+              <div style={{ fontSize: 11, color: "#6b7280" }}>{node.childIds.length} cols</div>
+              <div>
+                <div style={labelWithInfo}>
+                  <label style={inlineLabel}>Columns</label>
+                  <InfoHint text="Adds one empty column and rebalances all column widths equally. Use a selected flow-stack edge button to insert before or after a specific column." />
+                </div>
+                <button style={btn} onClick={() => flowRowOps.addCol(selectedNodeId)}>+ Balanced col</button>
               </div>
-              <button style={btn} onClick={() => flowRowOps.addCol(selectedNodeId)}>+ Balanced col</button>
-            </div>
-            <div>
-              <label style={label}>Gap (pt)</label>
-              <input type="number" min={0}
-                value={node.props.gap ?? 0}
-                onChange={(e) => onUpdateProps(selectedNodeId, { gap: Math.max(0, Number(e.target.value) || 0) })}
-                style={input} />
-            </div>
-            <div>
-              <div style={labelWithInfo}>
-                <label style={inlineLabel}>Min height (pt)</label>
-                <InfoHint text="0 keeps the flow-row auto-sized. In the current flow-row model, min height applies to the first slice only." />
+              <div>
+                <label style={label}>Gap (pt)</label>
+                <input type="number" min={0}
+                  value={node.props.gap ?? 0}
+                  onChange={(e) => onUpdateProps(selectedNodeId, { gap: Math.max(0, Number(e.target.value) || 0) })}
+                  style={input} />
               </div>
-              <input type="number" min={0} step={1}
-                value={node.props.minHeight ?? 0}
-                onChange={(e) => {
-                  const height = Math.max(0, Number(e.target.value) || 0)
-                  onUpdateProps(selectedNodeId, { minHeight: height > 0 ? height : undefined })
-                }}
-                style={input} />
-            </div>
+            </section>
+            <section
+              id="flow-row-panel-box"
+              role="tabpanel"
+              aria-labelledby="flow-row-panel-tab-box"
+              data-testid="flow-row-panel-box"
+              hidden={flowContainerPanelTab !== "box"}
+              style={{ ...paragraphTabPanel, display: flowContainerPanelTab === "box" ? "flex" : "none" }}
+            >
+              <div>
+                <div style={labelWithInfo}>
+                  <label style={inlineLabel}>Min height (pt)</label>
+                  <InfoHint text="0 keeps the flow-row auto-sized. In the current flow-row model, min height applies to the first slice only." />
+                </div>
+                <input type="number" min={0} step={1}
+                  value={node.props.minHeight ?? 0}
+                  onChange={(e) => {
+                    const height = Math.max(0, Number(e.target.value) || 0)
+                    onUpdateProps(selectedNodeId, { minHeight: height > 0 ? height : undefined })
+                  }}
+                  style={input} />
+              </div>
+            </section>
           </>
         )}
 
@@ -1371,254 +1427,272 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
         {/* ── Flow Stack ── */}
         {node.type === "flow-stack" && (
           <>
-            {(() => {
-              const parent = findFlowRowOfStack(doc, selectedNodeId)
-              if (!parent) return null
-              const leftStackId = parent.index > 0 ? parent.row.childIds[parent.index - 1] : null
-              const rightStackId = parent.index < parent.row.childIds.length - 1 ? parent.row.childIds[parent.index + 1] : null
-              const preferredSide = flowResizeSide === "left" && leftStackId
-                ? "left"
-                : flowResizeSide === "right" && rightStackId
-                  ? "right"
-                  : rightStackId
+            <section
+              id="flow-stack-panel-layout"
+              role="tabpanel"
+              aria-labelledby="flow-stack-panel-tab-layout"
+              data-testid="flow-stack-panel-layout"
+              hidden={flowContainerPanelTab !== "layout"}
+              style={{ ...paragraphTabPanel, display: flowContainerPanelTab === "layout" ? "flex" : "none" }}
+            >
+              {(() => {
+                const parent = findFlowRowOfStack(doc, selectedNodeId)
+                if (!parent) return null
+                const leftStackId = parent.index > 0 ? parent.row.childIds[parent.index - 1] : null
+                const rightStackId = parent.index < parent.row.childIds.length - 1 ? parent.row.childIds[parent.index + 1] : null
+                const preferredSide = flowResizeSide === "left" && leftStackId
+                  ? "left"
+                  : flowResizeSide === "right" && rightStackId
                     ? "right"
-                    : leftStackId
-                      ? "left"
-                      : null
-              const neighborStackId = preferredSide === "left" ? leftStackId : preferredSide === "right" ? rightStackId : null
-              const neighborStack = neighborStackId ? findNode(doc, neighborStackId) : null
-              const selectedShare = node.props.widthShare ?? 100
-              const neighborShare = neighborStack?.type === "flow-stack" ? neighborStack.props.widthShare ?? 0 : 0
-              const pairTotalShare = selectedShare + neighborShare
-              const selectedIsLeft = preferredSide === "right"
-              const draftShare = flowResizeDraft?.nodeId === selectedNodeId && flowResizeDraft.side === preferredSide
-                ? flowResizeDraft.selectedShare
-                : selectedShare
-              const pairShares = preferredSide
-                ? resolveFlowStackResizePairShares({
+                    : rightStackId
+                      ? "right"
+                      : leftStackId
+                        ? "left"
+                        : null
+                const neighborStackId = preferredSide === "left" ? leftStackId : preferredSide === "right" ? rightStackId : null
+                const neighborStack = neighborStackId ? findNode(doc, neighborStackId) : null
+                const selectedShare = node.props.widthShare ?? 100
+                const neighborShare = neighborStack?.type === "flow-stack" ? neighborStack.props.widthShare ?? 0 : 0
+                const pairTotalShare = selectedShare + neighborShare
+                const selectedIsLeft = preferredSide === "right"
+                const draftShare = flowResizeDraft?.nodeId === selectedNodeId && flowResizeDraft.side === preferredSide
+                  ? flowResizeDraft.selectedShare
+                  : selectedShare
+                const pairShares = preferredSide
+                  ? resolveFlowStackResizePairShares({
+                      pairTotalShare,
+                      selectedShare: draftShare,
+                      selectedIsLeft,
+                    })
+                  : null
+                const selectedDisplayShare = pairShares?.selectedShare ?? selectedShare
+                const leftDisplayShare = pairShares?.leftShare ?? (preferredSide === "left" ? neighborShare : selectedShare)
+                const rightDisplayShare = pairShares?.rightShare ?? (preferredSide === "left" ? selectedShare : neighborShare)
+                const commitResize = (nextSelectedShare = selectedDisplayShare) => {
+                  if (!preferredSide || !neighborStackId) return
+                  const nextShares = resolveFlowStackResizePairShares({
                     pairTotalShare,
-                    selectedShare: draftShare,
+                    selectedShare: nextSelectedShare,
                     selectedIsLeft,
                   })
-                : null
-              const selectedDisplayShare = pairShares?.selectedShare ?? selectedShare
-              const leftDisplayShare = pairShares?.leftShare ?? (preferredSide === "left" ? neighborShare : selectedShare)
-              const rightDisplayShare = pairShares?.rightShare ?? (preferredSide === "left" ? selectedShare : neighborShare)
-              const commitResize = (nextSelectedShare = selectedDisplayShare) => {
-                if (!preferredSide || !neighborStackId) return
-                const nextShares = resolveFlowStackResizePairShares({
-                  pairTotalShare,
-                  selectedShare: nextSelectedShare,
-                  selectedIsLeft,
-                })
-                const nextLeftStackId = preferredSide === "left" ? neighborStackId : selectedNodeId
-                const nextRightStackId = preferredSide === "left" ? selectedNodeId : neighborStackId
-                if (
-                  nextShares.leftShare === (preferredSide === "left" ? neighborShare : selectedShare) &&
-                  nextShares.rightShare === (preferredSide === "left" ? selectedShare : neighborShare)
-                ) {
+                  const nextLeftStackId = preferredSide === "left" ? neighborStackId : selectedNodeId
+                  const nextRightStackId = preferredSide === "left" ? selectedNodeId : neighborStackId
+                  if (
+                    nextShares.leftShare === (preferredSide === "left" ? neighborShare : selectedShare) &&
+                    nextShares.rightShare === (preferredSide === "left" ? selectedShare : neighborShare)
+                  ) {
+                    setFlowResizeDraft(null)
+                    return
+                  }
+                  flowRowOps.resizePair(nextLeftStackId, nextRightStackId, nextShares.leftShare, nextShares.rightShare)
                   setFlowResizeDraft(null)
-                  return
                 }
-                flowRowOps.resizePair(nextLeftStackId, nextRightStackId, nextShares.leftShare, nextShares.rightShare)
-                setFlowResizeDraft(null)
-              }
-              const updateDraftShare = (nextSelectedShare: number) => {
-                if (!preferredSide || !pairShares) return
-                const clamped = resolveFlowStackResizePairShares({
-                  pairTotalShare,
-                  selectedShare: nextSelectedShare,
-                  selectedIsLeft,
-                }).selectedShare
-                setFlowResizeDraft({ nodeId: selectedNodeId, side: preferredSide, selectedShare: clamped })
-              }
-              const stepResize = (delta: number) => {
-                if (!pairShares) return
-                commitResize(selectedDisplayShare + delta)
-              }
-              return (
-                <>
-                  <div>
-                    <label style={label}>Column</label>
-                    <div
-                      data-testid="flow-stack-column-control"
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "28px 1fr 28px",
-                        alignItems: "stretch",
-                        minHeight: 52,
-                        border: "1px solid #d1fae5",
-                        borderRadius: 6,
-                        overflow: "hidden",
-                        background: "#f0fdfa",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        data-testid="flow-stack-add-before"
-                        title="Add column before"
-                        onClick={() => flowRowOps.addCol(parent.rowId, selectedNodeId, "before")}
-                        style={{
-                          border: "none",
-                          borderRight: "1px solid #99f6e4",
-                          background: "#ecfdf5",
-                          color: "#0f766e",
-                          cursor: "pointer",
-                          fontSize: 16,
-                          fontWeight: 700,
-                        }}
-                      >
-                        +
-                      </button>
+                const updateDraftShare = (nextSelectedShare: number) => {
+                  if (!preferredSide || !pairShares) return
+                  const clamped = resolveFlowStackResizePairShares({
+                    pairTotalShare,
+                    selectedShare: nextSelectedShare,
+                    selectedIsLeft,
+                  }).selectedShare
+                  setFlowResizeDraft({ nodeId: selectedNodeId, side: preferredSide, selectedShare: clamped })
+                }
+                const stepResize = (delta: number) => {
+                  if (!pairShares) return
+                  commitResize(selectedDisplayShare + delta)
+                }
+                return (
+                  <>
+                    <div>
+                      <label style={label}>Column</label>
                       <div
+                        data-testid="flow-stack-column-control"
                         style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: 2,
-                          background: "#d7f4ef",
-                          color: "#0f766e",
-                          fontSize: 10,
-                          minWidth: 0,
-                        }}
-                      >
-                        <span style={{ fontWeight: 700 }}>Column {parent.index + 1}</span>
-                        <span style={{ color: "#6b7280" }}>{Math.round(node.props.widthShare ?? 100)}%</span>
-                      </div>
-                      <button
-                        type="button"
-                        data-testid="flow-stack-add-after"
-                        title="Add column after"
-                        onClick={() => flowRowOps.addCol(parent.rowId, selectedNodeId, "after")}
-                        style={{
-                          border: "none",
-                          borderLeft: "1px solid #99f6e4",
-                          background: "#ecfdf5",
-                          color: "#0f766e",
-                          cursor: "pointer",
-                          fontSize: 16,
-                          fontWeight: 700,
-                        }}
-                      >
-                        +
-                      </button>
-                    </div>
-                    <div style={{ marginTop: 4 }}>
-                      <InfoHint
-                        text={`The left and right edges add a sibling column before or after this flow-stack by splitting this column's width share. This is column ${parent.index + 1} of ${parent.row.childIds.length}.`}
-                        align="left"
-                      />
-                    </div>
-                  </div>
-                  {preferredSide && pairShares && neighborStack?.type === "flow-stack" && (
-                    <div data-testid="flow-stack-resize-control">
-                      <div style={labelWithInfo}>
-                        <label style={inlineLabel}>Resize with neighbor</label>
-                        <InfoHint
-                          text={`Choose a left or right neighbor, then resize only that pair. Minimum is ${pairShares.minShare}% each; pair total stays ${Math.round(pairTotalShare)}%.`}
-                        />
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 6 }}>
-                        <button
-                          type="button"
-                          disabled={!leftStackId}
-                          onClick={() => {
-                            setFlowResizeSide("left")
-                            setFlowResizeDraft(null)
-                          }}
-                          style={{
-                            ...btn,
-                            background: preferredSide === "left" ? "#dbeafe" : btn.background,
-                            color: !leftStackId ? "#9ca3af" : preferredSide === "left" ? "#1d4ed8" : btn.color,
-                            cursor: leftStackId ? "pointer" : "not-allowed",
-                          }}
-                        >
-                          Left
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!rightStackId}
-                          onClick={() => {
-                            setFlowResizeSide("right")
-                            setFlowResizeDraft(null)
-                          }}
-                          style={{
-                            ...btn,
-                            background: preferredSide === "right" ? "#dbeafe" : btn.background,
-                            color: !rightStackId ? "#9ca3af" : preferredSide === "right" ? "#1d4ed8" : btn.color,
-                            cursor: rightStackId ? "pointer" : "not-allowed",
-                          }}
-                        >
-                          Right
-                        </button>
-                      </div>
-                      <div
-                        style={{
-                          border: "1px solid #d1d5db",
+                          display: "grid",
+                          gridTemplateColumns: "28px 1fr 28px",
+                          alignItems: "stretch",
+                          minHeight: 52,
+                          border: "1px solid #d1fae5",
                           borderRadius: 6,
                           overflow: "hidden",
-                          background: "#f9fafb",
+                          background: "#f0fdfa",
                         }}
                       >
-                        <div style={{ display: "flex", height: 28, fontSize: 9, color: "#374151" }}>
-                          <div style={{ width: `${Math.max(4, (leftDisplayShare / pairTotalShare) * 100)}%`, background: preferredSide === "right" ? "#d7f4ef" : "#e5e7eb", display: "grid", placeItems: "center", minWidth: 24, overflow: "hidden", whiteSpace: "nowrap" }}>
-                            {preferredSide === "right" ? "This" : "Neighbor"} {Math.round(leftDisplayShare)}%
-                          </div>
-                          <div style={{ width: 2, background: "#0f766e" }} />
-                          <div style={{ width: `${Math.max(4, (rightDisplayShare / pairTotalShare) * 100)}%`, background: preferredSide === "left" ? "#d7f4ef" : "#e5e7eb", display: "grid", placeItems: "center", minWidth: 24, overflow: "hidden", whiteSpace: "nowrap" }}>
-                            {preferredSide === "left" ? "This" : "Neighbor"} {Math.round(rightDisplayShare)}%
-                          </div>
+                        <button
+                          type="button"
+                          data-testid="flow-stack-add-before"
+                          title="Add column before"
+                          onClick={() => flowRowOps.addCol(parent.rowId, selectedNodeId, "before")}
+                          style={{
+                            border: "none",
+                            borderRight: "1px solid #99f6e4",
+                            background: "#ecfdf5",
+                            color: "#0f766e",
+                            cursor: "pointer",
+                            fontSize: 16,
+                            fontWeight: 700,
+                          }}
+                        >
+                          +
+                        </button>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 2,
+                            background: "#d7f4ef",
+                            color: "#0f766e",
+                            fontSize: 10,
+                            minWidth: 0,
+                          }}
+                        >
+                          <span style={{ fontWeight: 700 }}>Column {parent.index + 1}</span>
+                          <span style={{ color: "#6b7280" }}>{Math.round(node.props.widthShare ?? 100)}%</span>
                         </div>
-                        <input
-                          type="range"
-                          min={pairShares.minShare}
-                          max={pairShares.maxShare}
-                          step={0.5}
-                          value={selectedDisplayShare}
-                          aria-label={`Resize selected column with ${preferredSide} neighbor`}
-                          onChange={(e) => updateDraftShare(Number(e.target.value))}
-                          onPointerUp={() => commitResize()}
-                          onKeyUp={(e) => {
-                            if (e.key === "Enter" || e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") commitResize()
+                        <button
+                          type="button"
+                          data-testid="flow-stack-add-after"
+                          title="Add column after"
+                          onClick={() => flowRowOps.addCol(parent.rowId, selectedNodeId, "after")}
+                          style={{
+                            border: "none",
+                            borderLeft: "1px solid #99f6e4",
+                            background: "#ecfdf5",
+                            color: "#0f766e",
+                            cursor: "pointer",
+                            fontSize: 16,
+                            fontWeight: 700,
                           }}
-                          onBlur={() => {
-                            if (flowResizeDraft?.nodeId === selectedNodeId && flowResizeDraft.side === preferredSide) commitResize()
-                          }}
-                          style={{ width: "100%", display: "block" }}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <div style={{ marginTop: 4 }}>
+                        <InfoHint
+                          text={`The left and right edges add a sibling column before or after this flow-stack by splitting this column's width share. This is column ${parent.index + 1} of ${parent.row.childIds.length}.`}
+                          align="left"
                         />
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginTop: 4 }}>
-                        <button type="button" style={btn} onClick={() => stepResize(-1)}>- 1%</button>
-                        <button type="button" style={btn} onClick={() => stepResize(1)}>+ 1%</button>
-                      </div>
                     </div>
-                  )}
-                </>
-              )
-            })()}
-            <div>
-              <div style={labelWithInfo}>
-                <label style={inlineLabel}>Width share (%)</label>
-                <InfoHint text="Width share is read-only here so edits stay sibling-safe. Use Resize with neighbor to change a selected pair." />
+                    {preferredSide && pairShares && neighborStack?.type === "flow-stack" && (
+                      <div data-testid="flow-stack-resize-control">
+                        <div style={labelWithInfo}>
+                          <label style={inlineLabel}>Resize with neighbor</label>
+                          <InfoHint
+                            text={`Choose a left or right neighbor, then resize only that pair. Minimum is ${pairShares.minShare}% each; pair total stays ${Math.round(pairTotalShare)}%.`}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 6 }}>
+                          <button
+                            type="button"
+                            disabled={!leftStackId}
+                            onClick={() => {
+                              setFlowResizeSide("left")
+                              setFlowResizeDraft(null)
+                            }}
+                            style={{
+                              ...btn,
+                              background: preferredSide === "left" ? "#dbeafe" : btn.background,
+                              color: !leftStackId ? "#9ca3af" : preferredSide === "left" ? "#1d4ed8" : btn.color,
+                              cursor: leftStackId ? "pointer" : "not-allowed",
+                            }}
+                          >
+                            Left
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!rightStackId}
+                            onClick={() => {
+                              setFlowResizeSide("right")
+                              setFlowResizeDraft(null)
+                            }}
+                            style={{
+                              ...btn,
+                              background: preferredSide === "right" ? "#dbeafe" : btn.background,
+                              color: !rightStackId ? "#9ca3af" : preferredSide === "right" ? "#1d4ed8" : btn.color,
+                              cursor: rightStackId ? "pointer" : "not-allowed",
+                            }}
+                          >
+                            Right
+                          </button>
+                        </div>
+                        <div
+                          style={{
+                            border: "1px solid #d1d5db",
+                            borderRadius: 6,
+                            overflow: "hidden",
+                            background: "#f9fafb",
+                          }}
+                        >
+                          <div style={{ display: "flex", height: 28, fontSize: 9, color: "#374151" }}>
+                            <div style={{ width: `${Math.max(4, (leftDisplayShare / pairTotalShare) * 100)}%`, background: preferredSide === "right" ? "#d7f4ef" : "#e5e7eb", display: "grid", placeItems: "center", minWidth: 24, overflow: "hidden", whiteSpace: "nowrap" }}>
+                              {preferredSide === "right" ? "This" : "Neighbor"} {Math.round(leftDisplayShare)}%
+                            </div>
+                            <div style={{ width: 2, background: "#0f766e" }} />
+                            <div style={{ width: `${Math.max(4, (rightDisplayShare / pairTotalShare) * 100)}%`, background: preferredSide === "left" ? "#d7f4ef" : "#e5e7eb", display: "grid", placeItems: "center", minWidth: 24, overflow: "hidden", whiteSpace: "nowrap" }}>
+                              {preferredSide === "left" ? "This" : "Neighbor"} {Math.round(rightDisplayShare)}%
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min={pairShares.minShare}
+                            max={pairShares.maxShare}
+                            step={0.5}
+                            value={selectedDisplayShare}
+                            aria-label={`Resize selected column with ${preferredSide} neighbor`}
+                            onChange={(e) => updateDraftShare(Number(e.target.value))}
+                            onPointerUp={() => commitResize()}
+                            onKeyUp={(e) => {
+                              if (e.key === "Enter" || e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") commitResize()
+                            }}
+                            onBlur={() => {
+                              if (flowResizeDraft?.nodeId === selectedNodeId && flowResizeDraft.side === preferredSide) commitResize()
+                            }}
+                            style={{ width: "100%", display: "block" }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginTop: 4 }}>
+                          <button type="button" style={btn} onClick={() => stepResize(-1)}>- 1%</button>
+                          <button type="button" style={btn} onClick={() => stepResize(1)}>+ 1%</button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
+              <div>
+                <div style={labelWithInfo}>
+                  <label style={inlineLabel}>Width share (%)</label>
+                  <InfoHint text="Width share is read-only here so edits stay sibling-safe. Use Resize with neighbor to change a selected pair." />
+                </div>
+                <input type="number" readOnly
+                  value={Math.round(node.props.widthShare ?? 100)}
+                  style={{ ...input, background: "#f9fafb", color: "#9ca3af" }} />
               </div>
-              <input type="number" readOnly
-                value={Math.round(node.props.widthShare ?? 100)}
-                style={{ ...input, background: "#f9fafb", color: "#9ca3af" }} />
-            </div>
-            <div>
-              <div style={labelWithInfo}>
-                <label style={inlineLabel}>Min height (pt)</label>
-                <InfoHint text="0 keeps the flow-stack auto-sized. This is a visual floor for the first visible stack area, not a content-aware column minimum." />
+            </section>
+            <section
+              id="flow-stack-panel-box"
+              role="tabpanel"
+              aria-labelledby="flow-stack-panel-tab-box"
+              data-testid="flow-stack-panel-box"
+              hidden={flowContainerPanelTab !== "box"}
+              style={{ ...paragraphTabPanel, display: flowContainerPanelTab === "box" ? "flex" : "none" }}
+            >
+              <div>
+                <div style={labelWithInfo}>
+                  <label style={inlineLabel}>Min height (pt)</label>
+                  <InfoHint text="0 keeps the flow-stack auto-sized. This is a visual floor for the first visible stack area, not a content-aware column minimum." />
+                </div>
+                <input type="number" min={0} step={1}
+                  value={node.props.minHeight ?? 0}
+                  onChange={(e) => {
+                    const height = Math.max(0, Number(e.target.value) || 0)
+                    onUpdateProps(selectedNodeId, { minHeight: height > 0 ? height : undefined })
+                  }}
+                  style={input} />
               </div>
-              <input type="number" min={0} step={1}
-                value={node.props.minHeight ?? 0}
-                onChange={(e) => {
-                  const height = Math.max(0, Number(e.target.value) || 0)
-                  onUpdateProps(selectedNodeId, { minHeight: height > 0 ? height : undefined })
-                }}
-                style={input} />
-            </div>
+            </section>
           </>
         )}
 

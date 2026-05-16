@@ -47,7 +47,13 @@ const NODE_COLORS: Record<string, string> = {
   toc:       "#d1fae5",
 }
 
-const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "table", "toc"])
+function displayFragmentNodeType(nodeType: PageFragment["nodeType"]): string {
+  if (nodeType === "flow-row") return "row"
+  if (nodeType === "flow-stack") return "stack"
+  return nodeType
+}
+
+const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "table", "toc"])
 const PARAGRAPH_CHROME_Y = 3
 const FLOW_STACK_PARAGRAPH_CHROME_Y = 0
 const PARAGRAPH_LIVE_PREVIEW_GAP_Y = 2
@@ -619,6 +625,12 @@ function PageView({
         const chromeBottom = f.nodeType === "paragraph" ? paragraphChromeY : 0
         const chromeY = displayFragment.y * scale - chromeTop
         const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
+        const hasAuthoredParagraphBox = f.nodeType === "paragraph" && Boolean(displayFragment.renderProps?.box)
+        const chromeFill = hasAuthoredParagraphBox && !isInlineEditing ? "transparent" : isInlineEditing ? "#dbeafe" : color
+        const chromeStroke = hasAuthoredParagraphBox && !isInlineEditing && !isHovered
+          ? "transparent"
+          : isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"
+        const chromeOpacity = hasAuthoredParagraphBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
         const selectionPad = isFlowStackParagraph ? 0 : 1
         const fragmentKey = isInlineEditing
           ? `inline-edit-${f.nodeId}`
@@ -671,10 +683,10 @@ function PageView({
             <rect
               x={fragX * scale} y={chromeY}
               width={Math.max(fragWidth * scale, 2)} height={chromeHeight}
-              fill={isInlineEditing ? "#dbeafe" : color}
-              stroke={isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"}
+              fill={chromeFill}
+              stroke={chromeStroke}
               strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
-              opacity={isInlineEditing ? 0.35 : 0.75}
+              opacity={chromeOpacity}
             />
             {f.nodeType === "paragraph" && renderParagraphBox(displayFragment, scale)}
             {isSelected && !isInlineEditing && (
@@ -719,7 +731,7 @@ function PageView({
             })()}
             <text x={displayFragment.x * scale + 3} y={displayFragment.y * scale + 8} fontSize={6} fill="#374151"
               style={{ pointerEvents: "none", userSelect: "none" }}>
-              {f.nodeType}
+              {displayFragmentNodeType(f.nodeType)}
             </text>
             {isEmpty && (
               <text
@@ -1070,7 +1082,19 @@ export function EditorCanvas({
   }, [autoFitScale, onScaleChange, pageWidth])
 
   return (
-    <div ref={containerRef} data-testid="editor-canvas" style={{ flex: 1, overflow: "auto", padding: 24, background: "#f3f4f6" }}>
+    <div
+      ref={containerRef}
+      data-testid="editor-canvas"
+      style={{
+        flex: 1,
+        overflow: "auto",
+        padding: "24px 30px 24px 24px",
+        background: "#f3f4f6",
+        scrollbarWidth: "thin",
+        scrollbarColor: "#cbd5e1 transparent",
+        overscrollBehavior: "contain",
+      }}
+    >
       <div style={{ minWidth: scaledPageWidth + 96 }}>
         {sections.map((section, si) => (
           <div key={section.sectionId ?? si} style={{ margin: "0 auto 32px", width: scaledPageWidth }}>

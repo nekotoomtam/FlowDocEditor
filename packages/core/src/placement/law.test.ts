@@ -126,6 +126,28 @@ describe("placement law flow-row / flow-stack sources", () => {
     expect(result.error.code).toBe("invalid-zone")
   })
 
+  it("treats the Columns palette block as flow-backed instead of expanding old rows", () => {
+    const doc = makeDoc({
+      row1: { id: "row1", type: "row", props: {}, childIds: ["stack1"] },
+      stack1: { id: "stack1", type: "stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1: makeParagraph("p1", "inside"),
+    }, ["row1"])
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "left",
+        intent: "insertLeft",
+        target: { kind: "node", nodeId: "p1", nodeType: "paragraph" },
+      },
+      { source: "palette", blockType: "columns" },
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe("invalid-zone")
+  })
+
   it("treats flow-stack nodes as structural drag sources", () => {
     const doc = makeDoc({
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },

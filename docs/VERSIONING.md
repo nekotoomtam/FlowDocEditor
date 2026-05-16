@@ -3,9 +3,9 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.5.1`: suitable for self-use with accepted static
-`flow-row` / `flow-stack` pagination coverage plus follow-up editor/UX
-hardening, but not yet a general-user `v1`.
+The current baseline is `0.5.2`: suitable for self-use with accepted static
+`flow-row` / `flow-stack` pagination coverage, right-rail/editor UX hardening,
+and flow-backed Row/Columns authoring, but not yet a general-user `v1`.
 
 ## Version Meaning
 
@@ -14,6 +14,7 @@ hardening, but not yet a general-user `v1`.
 | `0.4.x` | Previous self-use baseline. Bug fixes, probes, docs, and small config safety improvements. |
 | `0.5.0` | Accepted `flow-row` / `flow-stack` milestone for static cross-page row/column fragmentation. |
 | `0.5.1` | Patch baseline for flow-row/flow-stack hardening, paragraph box controls, and right-rail Page/Properties UX. |
+| `0.5.2` | Patch baseline for flow-backed Row/Columns authoring, right-rail layout polish, and PDF/DOCX border-style hardening. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |
 | `1.0.0` | First version acceptable for real user workflows without expected workarounds in the main path. |

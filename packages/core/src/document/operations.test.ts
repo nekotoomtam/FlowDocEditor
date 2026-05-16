@@ -463,6 +463,106 @@ describe("field reference operations", () => {
 })
 
 describe("flow-row / flow-stack operations", () => {
+  it("maps the Row palette block to a single-stack flow-row", () => {
+    const updated = applyPlacementOperation(
+      makeDoc({}, []),
+      "section",
+      { kind: "insert-into-container", containerId: "body", containerType: "body", index: 0 },
+      { source: "palette", blockType: "row" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+
+    const row = section.nodes[body.childIds[0]]
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(1)
+
+    const stack = section.nodes[row.childIds[0]]
+    expect(stack.type).toBe("flow-stack")
+    if (stack.type !== "flow-stack") return
+    expect(stack.props.widthShare).toBe(100)
+  })
+
+  it("maps the Columns palette block to a two-stack flow-row", () => {
+    const updated = applyPlacementOperation(
+      makeDoc({}, []),
+      "section",
+      { kind: "insert-into-container", containerId: "body", containerType: "body", index: 0 },
+      { source: "palette", blockType: "columns" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+
+    const row = section.nodes[body.childIds[0]]
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds.map((id) => section.nodes[id]?.type)).toEqual(["flow-stack", "flow-stack"])
+  })
+
+  it("wraps a body paragraph in flow-stack columns on horizontal placement", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Right" }])
+    const updated = applyPlacementOperation(
+      makeDoc({ p1 }, ["p1"]),
+      "section",
+      { kind: "wrap-in-row-left", parentId: "body", parentType: "body", index: 0, targetNodeId: "p1" },
+      { source: "palette", blockType: "paragraph" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+
+    const row = section.nodes[body.childIds[0]]
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds.map((id) => section.nodes[id]?.type)).toEqual(["flow-stack", "flow-stack"])
+
+    const [leftStackId, rightStackId] = row.childIds
+    const leftStack = section.nodes[leftStackId]
+    const rightStack = section.nodes[rightStackId]
+    expect(leftStack.type).toBe("flow-stack")
+    expect(rightStack.type).toBe("flow-stack")
+    if (leftStack.type !== "flow-stack" || rightStack.type !== "flow-stack") return
+    expect(section.nodes[leftStack.childIds[0]]?.type).toBe("paragraph")
+    expect(rightStack.childIds).toEqual(["p1"])
+  })
+
+  it("keeps direct legacy stack wrap operations on the old row model", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Nested" }])
+    const updated = applyPlacementOperation(
+      makeDoc({
+        rowParent: { id: "rowParent", type: "row", props: {}, childIds: ["stackParent"] },
+        stackParent: { id: "stackParent", type: "stack", props: { widthShare: 100 }, childIds: ["p1"] },
+        p1,
+      }, ["rowParent"]),
+      "section",
+      { kind: "wrap-in-row-left", parentId: "stackParent", parentType: "stack", index: 0, targetNodeId: "p1" },
+      { source: "palette", blockType: "paragraph" },
+    )
+    const section = updated.document.sections[0]
+    const stackParent = section.nodes.stackParent
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(stackParent.type).toBe("stack")
+    if (stackParent.type !== "stack") return
+
+    const row = section.nodes[stackParent.childIds[0]]
+    expect(row.type).toBe("row")
+    if (row.type !== "row") return
+    expect(row.childIds.map((id) => section.nodes[id]?.type)).toEqual(["stack", "stack"])
+  })
+
   it("inserts a default two-stack flow-row from the palette", () => {
     const updated = applyPlacementOperation(
       makeDoc({}, []),

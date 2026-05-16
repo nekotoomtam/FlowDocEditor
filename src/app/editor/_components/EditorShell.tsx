@@ -1,6 +1,6 @@
 "use client"
 
-import { useReducer, useCallback, useRef, useState, useEffect, useMemo } from "react"
+import { useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent } from "react"
 import { collectPaginatedLayoutWarnings, getPageDimensions, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
@@ -27,6 +27,17 @@ import { EditorCanvas } from "./EditorCanvas"
 import { PropertyPanel } from "./PropertyPanel"
 import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
+import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
+import {
+  RIGHT_RAIL_COLLAPSED_WIDTH,
+  RIGHT_RAIL_COLLAPSE_THRESHOLD,
+  RIGHT_RAIL_CONTENT_HIDE_THRESHOLD,
+  RIGHT_RAIL_MAX_WIDTH,
+  RIGHT_RAIL_MIN_WIDTH,
+  resolveRightRailPreviewWidth,
+  resolveRightRailResize,
+  resolveRightRailResizeStartWidth,
+} from "./rightRailResize"
 import { SAMPLE_FIELD_REGISTRY_V1 } from "@/app/_lib/fieldRegistry"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import {
@@ -183,6 +194,12 @@ type RightRailMode = "page" | "outline" | "properties"
 type PageMarginSide = "top" | "right" | "bottom" | "left"
 type PageMarginDraft = Record<PageMarginSide, number>
 type DocumentSection = DocumentNode["document"]["sections"][number]
+type RightRailResizeDrag = {
+  pointerId: number
+  startX: number
+  startWidth: number
+  previewWidth: number
+}
 
 const MIN_SCALE = 0.3
 const MAX_SCALE = 4
@@ -675,22 +692,9 @@ function PagePanel({
   )
 
   return (
-    <div data-testid="page-panel" style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", background: "#fff" }}>
-      <div
-        data-testid="page-panel-title"
-        style={{
-          flexShrink: 0,
-          padding: "12px 14px",
-          borderBottom: "1px solid #e5e7eb",
-          color: "#94a3b8",
-          fontSize: 12,
-          fontWeight: 700,
-          letterSpacing: 0,
-        }}
-      >
-        PAGE
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 14, display: "grid", alignContent: "start", gap: 10 }}>
+    <div data-testid="page-panel" style={rightRailPanelShell}>
+      <RightRailPanelHeader title="Page" testId="page-panel-title" />
+      <div style={{ ...rightRailPanelBody, display: "grid", alignContent: "start", gap: 10 }}>
         {section ? (
           <>
             <PagePanelSection title="Page setup" summary={`${section.page.size} / ${section.page.orientation}`} testId="page-setup-card">
@@ -832,6 +836,50 @@ const pageCompassControlLabel: React.CSSProperties = {
   textAlign: "center",
 }
 
+const rightRailSidebarStyle = (collapsed: boolean): React.CSSProperties => ({
+  width: 36,
+  flexShrink: 0,
+  borderRight: collapsed ? "none" : "1px solid #e5e7eb",
+  background: "#f8fafc",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "stretch",
+  gap: 5,
+  padding: "8px 0 8px 3px",
+  position: "relative",
+  zIndex: 2,
+})
+
+const rightRailBookmarkGroup: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 5,
+}
+
+const rightRailBookmarkButton = (active: boolean, height = 28, fontSize = 11): React.CSSProperties => ({
+  width: active ? "calc(100% + 7px)" : "100%",
+  height,
+  border: "none",
+  borderRadius: "0 6px 6px 0",
+  background: active
+    ? "linear-gradient(90deg, rgba(37, 99, 235, 0.28) 0%, rgba(37, 99, 235, 0.15) 58%, rgba(255, 255, 255, 0.92) 100%)"
+    : "transparent",
+  boxShadow: active
+    ? "inset 3px 0 0 #2563eb, 4px 0 8px rgba(15, 23, 42, 0.06), 1px 0 0 rgba(37, 99, 235, 0.08)"
+    : "none",
+  color: active ? "#1d4ed8" : "#64748b",
+  cursor: "pointer",
+  fontSize,
+  fontWeight: 700,
+  lineHeight: 1,
+  marginRight: active ? -7 : 0,
+  padding: 0,
+  position: "relative",
+  zIndex: active ? 3 : 1,
+  textAlign: "center",
+  transition: "width 120ms ease, background 120ms ease, box-shadow 120ms ease, color 120ms ease",
+})
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function EditorShell() {
@@ -840,6 +888,9 @@ export default function EditorShell() {
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit")
   const [rightRailMode, setRightRailMode] = useState<RightRailMode>("page")
   const [rightRailCollapsed, setRightRailCollapsed] = useState(false)
+  const [rightRailWidth, setRightRailWidth] = useState(RIGHT_RAIL_MIN_WIDTH)
+  const [rightRailResizeDrag, setRightRailResizeDrag] = useState<RightRailResizeDrag | null>(null)
+  const [rightRailResizeHandleHover, setRightRailResizeHandleHover] = useState(false)
   const [state, dispatch] = useReducer(reducer, initialTestScenario?.document ?? null, createInitialEditorState)
   const [editorTextMeasurer, setEditorTextMeasurer] = useState<TextMeasurer>(() => createBrowserTextMeasurer())
   const [editorTextMeasurerStatus, setEditorTextMeasurerStatus] = useState<EditorTextMeasurerStatus>("loading")
@@ -901,6 +952,43 @@ export default function EditorShell() {
   const [driftReport, setDriftReport] = useState<DriftReport | null>(null)
   const showDriftRef = useRef(showDrift)
   useEffect(() => { showDriftRef.current = showDrift }, [showDrift])
+  const rightRailDisplayWidth = rightRailCollapsed
+    ? RIGHT_RAIL_COLLAPSED_WIDTH
+    : rightRailResizeDrag?.previewWidth ?? rightRailWidth
+  const rightRailContentVisible = !rightRailCollapsed && rightRailDisplayWidth >= RIGHT_RAIL_CONTENT_HIDE_THRESHOLD
+  const rightRailResizeHandleActive = rightRailResizeHandleHover || Boolean(rightRailResizeDrag)
+  const openRightRailMode = useCallback((mode: RightRailMode) => {
+    setRightRailResizeDrag(null)
+    setRightRailCollapsed(false)
+    setRightRailMode(mode)
+  }, [])
+  const startRightRailResize = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const startWidth = resolveRightRailResizeStartWidth({ collapsed: rightRailCollapsed, width: rightRailWidth })
+    setRightRailResizeDrag({
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth,
+      previewWidth: startWidth,
+    })
+  }, [rightRailCollapsed, rightRailWidth])
+  const moveRightRailResize = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    setRightRailResizeDrag((drag) => {
+      if (!drag || drag.pointerId !== event.pointerId) return drag
+      const rawWidth = drag.startWidth + (drag.startX - event.clientX)
+      return { ...drag, previewWidth: resolveRightRailPreviewWidth(rawWidth) }
+    })
+  }, [])
+  const finishRightRailResize = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    setRightRailResizeDrag((drag) => {
+      if (!drag || drag.pointerId !== event.pointerId) return drag
+      const next = resolveRightRailResize(drag.previewWidth)
+      setRightRailCollapsed(next.collapsed)
+      if (!next.collapsed) setRightRailWidth(next.width)
+      return null
+    })
+  }, [])
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const docRef = useRef(state.doc)
   const packageFieldRegistryRef = useRef(packageFieldRegistry)
@@ -2524,100 +2612,106 @@ export default function EditorShell() {
         )}
         <div
           data-testid="editor-right-rail"
+          data-width={rightRailDisplayWidth}
           style={{
-            width: rightRailCollapsed ? 36 : 260,
+            width: rightRailDisplayWidth,
             flexShrink: 0,
             display: "flex",
             borderLeft: "1px solid #e5e7eb",
             overflow: "hidden",
             background: "#fff",
+            position: "relative",
+            transition: rightRailResizeDrag ? "none" : "width 120ms ease",
+            cursor: rightRailResizeDrag ? "col-resize" : undefined,
           }}
         >
-          <div data-testid="editor-right-rail-sidebar" style={{ width: 36, flexShrink: 0, borderRight: rightRailCollapsed ? "none" : "1px solid #e5e7eb", background: "#f8fafc", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "8px 5px" }}>
-            <button
-              type="button"
-              data-testid="editor-right-rail-collapse"
-              aria-label={rightRailCollapsed ? "Expand right panel" : "Collapse right panel"}
-              title={rightRailCollapsed ? "Expand right panel" : "Collapse right panel"}
-              onClick={() => setRightRailCollapsed((value) => !value)}
-              style={{ width: 24, height: 24, border: "1px solid #d1d5db", borderRadius: 5, background: "white", color: "#475569", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
-            >
-              {rightRailCollapsed ? ">" : "<"}
-            </button>
-            <button
-              type="button"
-              data-testid="editor-right-rail-mode-page"
-              aria-label="Show page"
-              aria-pressed={!rightRailCollapsed && rightRailMode === "page"}
-              title="Page"
-              onClick={() => {
-                setRightRailCollapsed(false)
-                setRightRailMode("page")
-              }}
-              style={{
-                width: 24,
-                height: 28,
-                border: "1px solid #d1d5db",
-                borderRadius: 5,
-                background: !rightRailCollapsed && rightRailMode === "page" ? "#dbeafe" : "white",
-                color: !rightRailCollapsed && rightRailMode === "page" ? "#1d4ed8" : "#64748b",
-                cursor: "pointer",
-                fontSize: 10,
-                fontWeight: 700,
-              }}
-            >
-              Pg
-            </button>
-            <button
-              type="button"
-              data-testid="editor-right-rail-mode-outline"
-              aria-label="Show outline"
-              aria-pressed={!rightRailCollapsed && rightRailMode === "outline"}
-              title="Outline"
-              onClick={() => {
-                setRightRailCollapsed(false)
-                setRightRailMode("outline")
-              }}
-              style={{
-                width: 24,
-                height: 28,
-                border: "1px solid #d1d5db",
-                borderRadius: 5,
-                background: !rightRailCollapsed && rightRailMode === "outline" ? "#dbeafe" : "white",
-                color: !rightRailCollapsed && rightRailMode === "outline" ? "#1d4ed8" : "#64748b",
-                cursor: "pointer",
-                fontSize: 11,
-                fontWeight: 700,
-              }}
-            >
-              O
-            </button>
-            <button
-              type="button"
-              data-testid="editor-right-rail-mode-properties"
-              aria-label="Show properties"
-              aria-pressed={!rightRailCollapsed && rightRailMode === "properties"}
-              title="Properties"
-              onClick={() => {
-                setRightRailCollapsed(false)
-                setRightRailMode("properties")
-              }}
-              style={{
-                width: 24,
-                height: 28,
-                border: "1px solid #d1d5db",
-                borderRadius: 5,
-                background: !rightRailCollapsed && rightRailMode === "properties" ? "#dbeafe" : "white",
-                color: !rightRailCollapsed && rightRailMode === "properties" ? "#1d4ed8" : "#64748b",
-                cursor: "pointer",
-                fontSize: 11,
-                fontWeight: 700,
-              }}
-            >
-              P
-            </button>
+          <div
+            data-testid="editor-right-rail-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-valuemin={RIGHT_RAIL_MIN_WIDTH}
+            aria-valuemax={RIGHT_RAIL_MAX_WIDTH}
+            aria-valuenow={rightRailCollapsed ? RIGHT_RAIL_COLLAPSED_WIDTH : rightRailWidth}
+            title={rightRailCollapsed ? "Drag left to open the right panel." : "Drag to resize. Drag near the icon rail to collapse."}
+            onPointerEnter={() => setRightRailResizeHandleHover(true)}
+            onPointerLeave={() => setRightRailResizeHandleHover(false)}
+            onMouseEnter={() => setRightRailResizeHandleHover(true)}
+            onMouseLeave={() => setRightRailResizeHandleHover(false)}
+            onPointerDown={startRightRailResize}
+            onPointerMove={moveRightRailResize}
+            onPointerUp={finishRightRailResize}
+            onPointerCancel={finishRightRailResize}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 8,
+              zIndex: 10,
+              cursor: "col-resize",
+              background: rightRailResizeDrag
+                ? "rgba(37, 99, 235, 0.16)"
+                : rightRailResizeHandleHover
+                  ? "rgba(148, 163, 184, 0.18)"
+                  : "transparent",
+              boxShadow: rightRailResizeHandleActive ? "inset 2px 0 0 rgba(37, 99, 235, 0.45)" : "none",
+              transition: "background 120ms ease, box-shadow 120ms ease",
+            }}
+          />
+          <div data-testid="editor-right-rail-sidebar" style={rightRailSidebarStyle(rightRailCollapsed)}>
+            <div data-testid="editor-right-rail-collapse-bookmark" style={rightRailBookmarkGroup}>
+              <button
+                type="button"
+                data-testid="editor-right-rail-collapse"
+                aria-label={rightRailCollapsed ? "Expand right panel" : "Collapse right panel"}
+                aria-pressed={rightRailCollapsed}
+                title={rightRailCollapsed ? "Expand right panel" : "Collapse right panel"}
+                onClick={() => {
+                  setRightRailResizeDrag(null)
+                  setRightRailCollapsed((value) => !value)
+                }}
+                style={rightRailBookmarkButton(rightRailCollapsed, 24, 12)}
+              >
+                {rightRailCollapsed ? ">" : "<"}
+              </button>
+            </div>
+            <div data-testid="editor-right-rail-mode-bookmarks" style={rightRailBookmarkGroup}>
+              <button
+                type="button"
+                data-testid="editor-right-rail-mode-page"
+                aria-label="Show page"
+                aria-pressed={!rightRailCollapsed && rightRailMode === "page"}
+                title="Page"
+                onClick={() => openRightRailMode("page")}
+                style={rightRailBookmarkButton(!rightRailCollapsed && rightRailMode === "page", 28, 10)}
+              >
+                Pg
+              </button>
+              <button
+                type="button"
+                data-testid="editor-right-rail-mode-outline"
+                aria-label="Show outline"
+                aria-pressed={!rightRailCollapsed && rightRailMode === "outline"}
+                title="Outline"
+                onClick={() => openRightRailMode("outline")}
+                style={rightRailBookmarkButton(!rightRailCollapsed && rightRailMode === "outline")}
+              >
+                O
+              </button>
+              <button
+                type="button"
+                data-testid="editor-right-rail-mode-properties"
+                aria-label="Show properties"
+                aria-pressed={!rightRailCollapsed && rightRailMode === "properties"}
+                title="Properties"
+                onClick={() => openRightRailMode("properties")}
+                style={rightRailBookmarkButton(!rightRailCollapsed && rightRailMode === "properties")}
+              >
+                P
+              </button>
+            </div>
           </div>
-          {!rightRailCollapsed && (
+          {rightRailContentVisible && (
             <div data-testid="editor-right-rail-content" style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
               {rightRailMode === "page" ? (
                 <div data-testid="editor-right-rail-page" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>

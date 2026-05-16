@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import type { DocumentNode, LayoutNode } from "@/schema"
+import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -33,19 +34,35 @@ function NodeRow({ label, icon, depth, nodeId, selectedNodeId, onClick, children
   return (
     <div>
       <div
+        data-testid="outline-node-row"
         onClick={() => onClick(nodeId)}
         style={{
-          display: "flex", alignItems: "center", gap: 4,
-          padding: "3px 8px 3px",
+          minHeight: 26,
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "4px 7px",
           paddingLeft: 8 + depth * 14,
           cursor: "pointer", fontSize: 11,
           background: isSelected ? "#dbeafe" : "transparent",
           color: isSelected ? "#1d4ed8" : "#374151",
-          borderRadius: 3,
+          border: "1px solid transparent",
+          borderRadius: 5,
           userSelect: "none",
+          boxSizing: "border-box",
         }}
-        onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = "#f3f4f6" }}
-        onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = "transparent" }}
+        onMouseEnter={(e) => {
+          if (!isSelected) {
+            const target = e.currentTarget as HTMLDivElement
+            target.style.background = "#f8fafc"
+            target.style.borderColor = "#e5e7eb"
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isSelected) {
+            const target = e.currentTarget as HTMLDivElement
+            target.style.background = "transparent"
+            target.style.borderColor = "transparent"
+          }
+        }}
       >
         {hasChildren && (
           <span
@@ -56,8 +73,8 @@ function NodeRow({ label, icon, depth, nodeId, selectedNodeId, onClick, children
           </span>
         )}
         {!hasChildren && <span style={{ width: 10, flexShrink: 0 }} />}
-        <span style={{ flexShrink: 0 }}>{icon}</span>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isSelected ? "#1d4ed8" : "#6b7280" }}>
+        <span style={{ flexShrink: 0, width: 12, textAlign: "center", color: isSelected ? "#1d4ed8" : "#64748b" }}>{icon}</span>
+        <span title={label} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isSelected ? "#1d4ed8" : "#475569" }}>
           {label}
         </span>
       </div>
@@ -105,15 +122,16 @@ function OutlineNode({ nodes, nodeId, depth, selectedNodeId, onSelect, labelOver
     )
   }
 
-  if (node.type === "row") {
+  if (node.type === "row" || node.type === "flow-row") {
     const childIds = node.childIds ?? []
     const stackCount = childIds.length
+    const expectedStackType = node.type === "flow-row" ? "flow-stack" : "stack"
     return (
       <NodeRow icon="⫿" label={`${stackCount} คอลัมน์`} depth={depth} nodeId={nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}>
         {childIds.map((stackId, i) => {
           const stack = nodes[stackId]
-          if (stack?.type !== "stack") return null
+          if (stack?.type !== expectedStackType) return null
           return (
             <OutlineNode key={stackId} nodes={nodes} nodeId={stackId}
               depth={depth + 1} selectedNodeId={selectedNodeId} onSelect={onSelect}
@@ -124,7 +142,7 @@ function OutlineNode({ nodes, nodeId, depth, selectedNodeId, onSelect, labelOver
     )
   }
 
-  if (node.type === "stack") {
+  if (node.type === "stack" || node.type === "flow-stack") {
     const childIds = node.childIds ?? []
     return (
       <NodeRow icon="▯" label={labelOverride ?? "คอลัมน์"} depth={depth} nodeId={nodeId}
@@ -162,15 +180,13 @@ interface Props {
 
 export function OutlinePanel({ doc, selectedNodeId, onSelect }: Props) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", borderTop: "1px solid #e5e7eb" }}>
-      <div style={{ padding: "8px 12px 4px", fontSize: 10, fontWeight: 600, color: "#6b7280", letterSpacing: "0.05em", flexShrink: 0 }}>
-        OUTLINE
-      </div>
-      <div style={{ flex: 1, overflow: "auto", padding: "0 4px 8px" }}>
+    <div style={rightRailPanelShell}>
+      <RightRailPanelHeader title="Outline" testId="outline-panel-title" />
+      <div style={{ ...rightRailPanelBody, padding: "8px 8px 12px" }}>
         {doc.document.sections.map((section, si) => (
           <div key={section.id}>
             {doc.document.sections.length > 1 && (
-              <div style={{ padding: "4px 8px", fontSize: 10, color: "#9ca3af", fontWeight: 600 }}>
+              <div style={{ padding: "6px 8px 4px", fontSize: 10, color: "#9ca3af", fontWeight: 700 }}>
                 Section {si + 1}
               </div>
             )}

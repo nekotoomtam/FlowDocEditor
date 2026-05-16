@@ -20,6 +20,208 @@ Each entry should include:
 
 ## 2026-05-16
 
+### Unify Right Rail Panel Layout
+
+Goal: Make the Page, Outline, and Properties right-rail rooms use the same
+header language and reduce the cramped nested spacing in paragraph box controls.
+
+Completed:
+
+- Added a shared right-rail panel header/shell helper.
+- Routed Page, Outline, and Properties headers through the same height, padding,
+  border, and uppercase visual treatment.
+- Added right-rail drag resizing with a `260px` to `320px` visible range and a
+  near-icon-rail drag collapse path that keeps the explicit collapse button.
+- Kept the last visible right-rail width when collapsing so reopening returns to
+  the user's chosen width.
+- Kept the rail resize handle available while the rail is collapsed, allowing a
+  direct drag-left gesture to reopen and resize the rail without pressing the
+  explicit expand button.
+- Added a hover affordance on the right-rail resize handle and moved drag-close
+  to a half-width threshold so a small resize below `260px` stays visually
+  pinned at `260px` instead of shrinking or closing the rail.
+- Restyled the right-rail icon sidebar from bordered button chrome into
+  bookmark-like markers with a left-to-right active gradient; when collapsed,
+  the active marker moves to the expand control.
+- Gave the active bookmark marker a small overhang into the content panel so it
+  reads as a tab protruding from the right rail instead of a flat in-rail label.
+- Restyled the document canvas scrollbar to the same thin, quieter scrollbar
+  language used by the right rail and gave the canvas a little extra right
+  gutter.
+- Removed the outer paragraph Box wrapper border and padding so `Fill`,
+  `Padding`, and `Border` use the available rail width directly.
+- Changed the paragraph `Text` / `Box` switch from button-like controls to a
+  non-sticky underline tab bar mounted directly under the Paragraph header.
+- Removed the duplicate inner `Box` heading from the Box tab so Text and Box
+  read as sibling paragraph inspector sections.
+- Added matching `Layout` / `Box` tabs for `flow-row` and `flow-stack`
+  properties: layout controls keep column/gap/resize behavior, while the
+  current Box tab holds the existing minimum-height control only.
+- Lightened right-rail scrollbars through the shared panel body style.
+- Tightened paragraph box section/card spacing and compass controls without
+  changing the authored paragraph box model or document operations.
+- Stopped the editor-only paragraph chrome from painting behind authored
+  paragraph boxes, so box fills and borders no longer look shorter than the
+  surrounding paragraph block in the canvas.
+- Mapped authored paragraph/table border styles into PDF line drawing options so
+  dashed and dotted borders survive PDF export; DOCX style mapping was already
+  present and is now covered by explicit assertions.
+- Restyled Outline rows with compact row height, hover/selected chrome, and
+  ellipsized labels.
+- Added focused tests for the shared header, right-rail resize rules, and
+  Outline panel structure.
+
+Files changed:
+
+- `src/app/editor/_components/RightRailPanel.tsx`
+- `src/app/editor/_components/rightRailResize.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/editor/_components/OutlinePanel.tsx`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/__tests__/RightRailPanel.test.ts`
+- `src/app/editor/_components/__tests__/rightRailResize.test.ts`
+- `src/app/editor/_components/__tests__/OutlinePanel.test.ts`
+- `src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `packages/core/src/renderer/pdf/index.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/rightRailResize.test.ts src/app/editor/_components/__tests__/RightRailPanel.test.ts src/app/editor/_components/__tests__/OutlinePanel.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- Browser inspection on `http://localhost:4000/editor`:
+  - Page, Outline, and Paragraph headers all reported `min-height: 42px`,
+    `padding: 0px 14px`, and a `1px` bottom border.
+  - Paragraph Box controls reported no outer border and `padding: 0px`.
+  - Boxed paragraph canvas markup reported transparent editor chrome behind the
+    authored box and preserved the authored box fill/border geometry.
+  - Renderer tests confirmed PDF border style options for solid, dashed, and
+    dotted lines and DOCX `w:val` output for dashed and dotted paragraph
+    borders.
+  - Dragging the right rail expanded it from about `260px` to about `320px`.
+  - Hovering the resize handle showed a visible drag affordance.
+  - Dragging slightly below the visible minimum kept the rail visually pinned at
+    `260px`, while dragging past the half-width close threshold reduced the rail
+    to the icon strip and reopening restored the chosen expanded width.
+  - A Playwright probe measured the hover handle style, shallow drag snapback to
+    `260px`, half-width drag collapse to `36px`, and collapsed drag-open to
+    `320px`.
+  - A Playwright probe confirmed the active Page marker uses the gradient while
+    open, and the active gradient moves to the expand control after collapse.
+  - A Playwright probe confirmed the active bookmark overhang renders wider than
+    the rail slot and keeps the same overhang on the expand control when
+    collapsed.
+  - With the rail collapsed, dragging the edge handle left reopened the rail to
+    about `320px`.
+  - The paragraph `Text` / `Box` switch stayed as an underline active tab with
+    thin right-rail scrollbar styling.
+  - The Paragraph `Text` / `Box` tab bar reported no `position: sticky` and no
+    negative margin after being moved outside the scroll body.
+  - The Paragraph Box tab no longer rendered a second inner `Box` heading before
+    the Fill, Padding, and Border controls.
+  - Flow-row and flow-stack Properties panels rendered matching `Layout` /
+    `Box` tabs; browser inspection confirmed `Layout` contains column/gap or
+    resize controls and `Box` contains only `Min height (pt)`.
+  - The document canvas reported thin scrollbar styling and the added right
+    gutter.
+  - Page, Outline, and Paragraph Box right-rail screenshots were inspected.
+- `git diff --check`
+
+Notes:
+
+- This is right-rail layout/chrome only. It does not change document schema,
+  pagination, undo/redo, export behavior, WYSIWYG editing, or paragraph box
+  authored semantics.
+- Broader visual tuning of individual Box controls can continue as a separate
+  UX slice if the rail still feels too dense after use.
+
+### Make Row/Columns Flow-Backed Authoring
+
+Goal: Let the product-facing Row/Columns tools use the newer
+`flow-row`/`flow-stack` engine while preserving legacy `row`/`stack` documents.
+
+Completed:
+
+- Removed the separate `Flow cols` palette item.
+- Kept `Row` and `Columns` as the visible authoring language.
+- Mapped new `Row` palette insertion to a one-stack `flow-row`.
+- Mapped new `Columns` palette insertion to a two-stack `flow-row`.
+- Kept the legacy `flow-columns` palette source as an internal compatibility
+  alias.
+- Updated placement-law source classification so new Row/Columns palette drags
+  are treated as flow-backed row sources, not legacy row expansion requests.
+- Changed body-level horizontal paragraph wrapping to create
+  `flow-row`/`flow-stack` columns.
+- Preserved direct legacy-stack wrap behavior so explicit old operations inside
+  legacy stacks still create old `row`/`stack` nodes.
+- Updated visible editor labels so flow-backed rows/stacks display as
+  `Row`/`Stack` in the property header, selection path, outline, and canvas
+  chrome.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `packages/core/src/placement/law.ts`
+- `packages/core/src/placement/law.test.ts`
+- `src/app/editor/_components/EditorPalette.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/OutlinePanel.tsx`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/selectionContext.ts`
+- `src/app/editor/_components/__tests__/EditorPalette.test.ts`
+- `src/app/editor/_components/__tests__/OutlinePanel.test.ts`
+- `src/app/editor/_components/__tests__/selectionContext.test.ts`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/document/operations.test.ts src/placement/law.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorPalette.test.ts src/app/editor/_components/__tests__/OutlinePanel.test.ts src/app/editor/_components/__tests__/selectionContext.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd run test:core`
+- Browser inspection on `http://localhost:4000/editor` confirmed the palette
+  shows `Row` and `Columns`, no longer shows `Flow cols`, and selecting a
+  flow-backed stack displays the property header as `Stack`.
+- `git diff --check`
+
+Notes:
+
+- This is an authoring and visible-label migration only. It intentionally does
+  not remove legacy `row`/`stack` from schema, assertions, pagination, or
+  existing documents.
+- Header/footer roots still rely on legacy `stack` semantics.
+- Automatic migration of existing legacy rows remains a separate explicit
+  command/workflow.
+
+### Bump Self-Use Baseline To 0.5.2
+
+Goal: Mark the accepted right-rail, paragraph box border export, and
+flow-backed Row/Columns authoring work as the next conservative `0.5.x` patch
+baseline.
+
+Completed:
+
+- Bumped the project version marker from `0.5.1` to `0.5.2`.
+- Updated the lockfile root package version to match.
+- Updated versioning docs so the current baseline points at `0.5.2`.
+
+Verification:
+
+- `npm.cmd version 0.5.2 --no-git-tag-version`
+- `npm.cmd pkg get version`
+
+Notes:
+
+- This remains a `0.5.x` self-use patch baseline, not a `0.6.0` milestone and
+  not a `v1` readiness claim.
+
 ### Add Paragraph Box Editor Preview Rendering
 
 Goal: Make the editor canvas display authored paragraph box fill and borders

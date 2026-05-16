@@ -79,7 +79,7 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"selection-context-button\"")
     expect(markup).toContain("path")
     expect(markup).toContain("data-testid=\"paragraph-panel-tabs\"")
-    expect(markup).toContain("position:sticky")
+    expect(markup).not.toContain("position:sticky")
     expect(markup).toContain("data-testid=\"paragraph-panel-tab-text\"")
     expect(markup).toContain("data-testid=\"paragraph-panel-tab-box\"")
     expect(markup).toContain("data-testid=\"paragraph-panel-text\"")
@@ -131,6 +131,7 @@ describe("PropertyPanel selection context", () => {
     }))
 
     expect(markup).toContain("data-testid=\"paragraph-box-controls\"")
+    expect(markup).not.toContain("Paragraph box style is authored document content")
     expect(markup).toContain("data-testid=\"paragraph-box-fill-card\"")
     expect(markup).toContain("data-testid=\"paragraph-box-padding-card\"")
     expect(markup).toContain("data-testid=\"paragraph-box-border-card\"")
@@ -185,6 +186,12 @@ describe("PropertyPanel selection context", () => {
       },
     }))
 
+    expect(markup).toContain("data-testid=\"flow-stack-panel-tabs\"")
+    expect(markup).toContain("data-testid=\"flow-stack-panel-tab-layout\"")
+    expect(markup).toContain("data-testid=\"flow-stack-panel-tab-box\"")
+    expect(markup).toContain("data-testid=\"flow-stack-panel-layout\"")
+    expect(markup).toContain("data-testid=\"flow-stack-panel-box\"")
+    expect(markup).toContain("aria-controls=\"flow-stack-panel-layout\"")
     expect(markup).toContain("data-testid=\"flow-stack-column-control\"")
     expect(markup).toContain("data-testid=\"flow-stack-add-before\"")
     expect(markup).toContain("data-testid=\"flow-stack-add-after\"")
@@ -247,6 +254,12 @@ describe("PropertyPanel selection context", () => {
       },
     }))
 
+    expect(markup).toContain("data-testid=\"flow-row-panel-tabs\"")
+    expect(markup).toContain("data-testid=\"flow-row-panel-tab-layout\"")
+    expect(markup).toContain("data-testid=\"flow-row-panel-tab-box\"")
+    expect(markup).toContain("data-testid=\"flow-row-panel-layout\"")
+    expect(markup).toContain("data-testid=\"flow-row-panel-box\"")
+    expect(markup).toContain("aria-controls=\"flow-row-panel-layout\"")
     expect(markup).toContain("+ Balanced col")
     expect(markup).toContain("data-testid=\"info-hint\"")
     expect(markup).toContain("Columns")

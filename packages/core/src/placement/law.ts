@@ -175,8 +175,7 @@ function getSourceBlockType(document: DocumentNode, source?: DragSource | null):
   if (source == null) return null
   if (source.source === "field") return null
   if (source.source === "palette") {
-    if (source.blockType === "columns") return "row"
-    if (source.blockType === "flow-columns") return "flow-row"
+    if (source.blockType === "row" || source.blockType === "columns" || source.blockType === "flow-columns") return "flow-row"
     return source.blockType
   }
   const location = findLocation(document, source.nodeId)
@@ -203,8 +202,8 @@ function isInlineFieldSource(source?: DragSource | null): boolean {
 
 function getPaletteStackInsertCount(source?: DragSource | null): number | null {
   if (source?.source !== "palette") return null
-  if (source.blockType === "row") return 1
-  if (source.blockType === "columns") return 1
+  // Row/Columns palette entries are flow-backed now. Legacy row stack insertion
+  // remains available only through explicit legacy operations, not palette law.
   return null
 }
 

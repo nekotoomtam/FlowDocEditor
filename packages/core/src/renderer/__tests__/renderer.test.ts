@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import JSZip from "jszip"
-import { PdfRenderer, resolveParagraphBoxDrawingPrimitives } from "../pdf"
+import { LineCapStyle } from "pdf-lib"
+import { PdfRenderer, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions } from "../pdf"
 import { DocxRenderer } from "../docx"
 import { paginateDocument } from "../../pagination"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
@@ -161,6 +162,18 @@ describe("PdfRenderer smoke tests", () => {
     const result = await pdf.render(paginate(makeDoc(["p1"], { p1: p })))
     expect(result.buffer.length).toBeGreaterThan(0)
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("maps paragraph box border styles to PDF line drawing options", () => {
+    expect(resolvePdfBorderLineOptions({ style: "solid", width: 2, color: "111111" })).toEqual({})
+    expect(resolvePdfBorderLineOptions({ style: "dashed", width: 2, color: "222222" })).toEqual({
+      dashArray: [6, 4],
+      lineCap: LineCapStyle.Butt,
+    })
+    expect(resolvePdfBorderLineOptions({ style: "dotted", width: 2, color: "333333" })).toEqual({
+      dashArray: [0, 4.4],
+      lineCap: LineCapStyle.Round,
+    })
   })
 
   it("resolves paragraph box drawing primitives without including outside spacing", () => {
@@ -410,6 +423,8 @@ describe("DocxRenderer smoke tests", () => {
     expect(xml).toContain('w:color="222222"')
     expect(xml).toContain('w:color="333333"')
     expect(xml).toContain('w:color="444444"')
+    expect(xml).toContain('w:val="dashed"')
+    expect(xml).toContain('w:val="dotted"')
     expect(xml).toContain('w:space="6"')
   })
 })

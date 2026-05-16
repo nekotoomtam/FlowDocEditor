@@ -301,6 +301,21 @@ describe("EditorCanvas paragraph box preview", () => {
     expect(markup).toContain("stroke=\"#111827\"")
   })
 
+  it("does not paint editor paragraph chrome beyond authored paragraph boxes", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      textFragment("body-p", "Body text", 72, {
+        height: 40,
+        renderProps: boxedRenderProps,
+      }),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc())
+
+    expect(markup).toContain("x=\"36\" y=\"69\" width=\"228\" height=\"46\" fill=\"transparent\" stroke=\"transparent\"")
+    expect(markup).toContain("x=\"36\" y=\"75\" width=\"228\" height=\"32\" fill=\"#E0F2FE\"")
+  })
+
   it("keeps middle split paragraph box fragments open at the top and bottom", () => {
     const paginated = makePaginated()
     paginated.sections[0].pages[0].fragments = [
