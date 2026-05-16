@@ -22,19 +22,21 @@ export interface ParagraphBoxLayoutPrimitives {
   borders: ParagraphBoxLinePrimitive[]
 }
 
-export function resolveParagraphBoxLayoutPrimitives(fragment: PageFragment): ParagraphBoxLayoutPrimitives | null {
+export function resolveFragmentBoxLayoutPrimitives(fragment: PageFragment): ParagraphBoxLayoutPrimitives | null {
   const props = fragment.renderProps
-  const box = props?.box
-  if (!props || !box) return null
+  const box = fragment.nodeType === "paragraph" ? props?.box : fragment.boxRenderProps
+  if (!box) return null
 
   const isFirstFragment = fragment.continuesFrom !== true
   const isLastFragment = fragment.isContinued !== true
-  const boxY = fragment.y + (isFirstFragment ? props.spacingBefore : 0)
+  const spacingBefore = fragment.nodeType === "paragraph" && props ? props.spacingBefore : 0
+  const spacingAfter = fragment.nodeType === "paragraph" && props ? props.spacingAfter : 0
+  const boxY = fragment.y + (isFirstFragment ? spacingBefore : 0)
   const boxHeight = Math.max(
     0,
     fragment.height -
-      (isFirstFragment ? props.spacingBefore : 0) -
-      (isLastFragment ? props.spacingAfter : 0),
+      (isFirstFragment ? spacingBefore : 0) -
+      (isLastFragment ? spacingAfter : 0),
   )
   if (boxHeight <= 0 || fragment.width <= 0) return null
 
@@ -60,4 +62,9 @@ export function resolveParagraphBoxLayoutPrimitives(fragment: PageFragment): Par
     fill: box.fill ? { x, y: yTop, width: fragment.width, height: boxHeight, color: box.fill } : undefined,
     borders,
   }
+}
+
+export function resolveParagraphBoxLayoutPrimitives(fragment: PageFragment): ParagraphBoxLayoutPrimitives | null {
+  if (fragment.nodeType !== "paragraph") return null
+  return resolveFragmentBoxLayoutPrimitives(fragment)
 }

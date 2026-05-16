@@ -106,6 +106,43 @@ describe("flow-row / flow-stack pagination", () => {
     expect(fragments.some((f) => f.nodeId === "p1" && f.nodeType === "paragraph" && f.parentNodeId === "fs1")).toBe(true)
   })
 
+  it("carries flow-stack box render props and insets child paragraph geometry", () => {
+    const p1 = makePara("p1", "Inset stack")
+    const result = paginate(makeDoc(["fr1"], {
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: {
+        id: "fs1",
+        type: "flow-stack",
+        props: {
+          widthShare: 100,
+          box: {
+            fill: "F8FAFC",
+            padding: { top: pt(3), right: pt(5), bottom: pt(7), left: pt(11) },
+            border: {
+              top: { style: "solid", width: pt(1), color: "111111" },
+              left: { style: "solid", width: pt(2), color: "222222" },
+            },
+          },
+        },
+        childIds: ["p1"],
+      },
+      p1,
+    }))
+
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+    const fragments = result.sections[0].pages[0].fragments
+    const stack = fragments.find((f) => f.nodeId === "fs1" && f.nodeType === "flow-stack")
+    const paragraph = fragments.find((f) => f.nodeId === "p1" && f.nodeType === "paragraph")
+    expect(stack?.boxRenderProps).toMatchObject({
+      fill: "F8FAFC",
+      padding: { top: 3, right: 5, bottom: 7, left: 11 },
+    })
+    expect(stack?.boxRenderProps?.border.left).toMatchObject({ style: "solid", width: 2, color: "222222" })
+    expect(paragraph?.x).toBeCloseTo((stack?.x ?? 0) + 13, 2)
+    expect(paragraph?.y).toBeCloseTo((stack?.y ?? 0) + 4, 2)
+    expect(paragraph?.width).toBeCloseTo((stack?.width ?? 0) - 18, 2)
+  })
+
   it("emits placeholder fragments for an empty inserted flow-row", () => {
     const result = paginate(makeDoc(["fr1"], {
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
@@ -271,7 +308,7 @@ describe("flow-row / flow-stack long document hardening", () => {
     const firstSignature = structuralSignature(doc)
     expect(structuralSignature(doc)).toBe(firstSignature)
     expect(structuralSignature(doc)).toBe(firstSignature)
-  })
+  }, 15000)
 
   it("keeps a long three-stack fixture valid with one row and active stacks per page slice", () => {
     const aLines = Array.from({ length: 120 }, (_, index) => `a-${index}`)

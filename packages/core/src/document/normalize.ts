@@ -256,6 +256,7 @@ function normalizeFlowStackNode(input: LayoutNode & { type: "flow-stack" }): Flo
         ? normalizePositiveNumber(props["minHeight"], DEFAULT_STACK_MIN_HEIGHT)
         : undefined,
       widthShare: normalizeWidthShare(props["widthShare"]),
+      box: normalizeParagraphBoxStyle(props["box"]),
     },
     childIds: Array.isArray(input.childIds) ? input.childIds.filter((id) => typeof id === "string" && id.length > 0) : [],
   }

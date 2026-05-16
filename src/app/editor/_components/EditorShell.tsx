@@ -4,7 +4,7 @@ import { useReducer, useCallback, useRef, useState, useEffect, useMemo, type Poi
 import { collectPaginatedLayoutWarnings, getPageDimensions, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
-import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, updateParagraphBoxStyle, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious, addFlowStackColumn } from "@/document"
+import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, updateParagraphBoxStyle, updateFlowStackBoxStyle, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious, addFlowStackColumn } from "@/document"
 import type { FieldRefInlineChanges, ParagraphBoxStyleChanges } from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
@@ -236,6 +236,7 @@ type EditorAction =
   | { type: "UPDATE_TEXT"; nodeId: string; text: string }
   | { type: "UPDATE_FIELD_REF"; fieldRefId: string; changes: FieldRefInlineChanges }
   | { type: "UPDATE_PARAGRAPH_BOX_STYLE"; nodeId: string; changes: ParagraphBoxStyleChanges }
+  | { type: "UPDATE_FLOW_STACK_BOX_STYLE"; nodeId: string; changes: ParagraphBoxStyleChanges }
   | { type: "UPDATE_INLINE_TEXT_DRAFT"; nodeId: string; text: string }
   | { type: "COMMIT_INLINE_TEXT_EDIT"; nodeId: string; beforeDoc: DocumentNode; beforePaginated: PaginatedDocument; beforeText: string; afterPaginated: PaginatedDocument }
   | { type: "COMMIT_WYSIWYG_TEXT_EDIT"; nodeId: string; text: string; beforeText: string; history?: HistoryEntry; afterPaginated: PaginatedDocument }
@@ -365,6 +366,8 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, updateFieldRefInline(state.doc, action.fieldRefId, action.changes))
     case "UPDATE_PARAGRAPH_BOX_STYLE":
       return pushDoc(state, updateParagraphBoxStyle(state.doc, action.nodeId, action.changes))
+    case "UPDATE_FLOW_STACK_BOX_STYLE":
+      return pushDoc(state, updateFlowStackBoxStyle(state.doc, action.nodeId, action.changes))
     case "UPDATE_INLINE_TEXT_DRAFT":
       return setDocWithoutHistory(state, updateParagraphText(state.doc, action.nodeId, action.text))
     case "COMMIT_INLINE_TEXT_EDIT": {
@@ -2737,6 +2740,7 @@ export default function EditorShell() {
                       onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
                       onUpdateFieldRef={(fieldRefId, changes) => dispatch({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
                       onUpdateParagraphBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
+                      onUpdateFlowStackBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId, changes })}
                       onSelectContextNode={(nodeId) => dispatch({
                         type: "SELECT_NODE",
                         nodeId,

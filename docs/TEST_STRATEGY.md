@@ -146,8 +146,11 @@ Protects:
 - DOCX generation does not throw and emits a ZIP header
 - multi-section structure remains serializable
 - product DOCX table structure is present in generated XML
-- opt-in PDF raster checks can verify selected pixels when a local rasterizer
-  such as `pdftoppm` or ImageMagick plus Ghostscript is available
+- flow-row DOCX fixed-layout table projection preserves paginated stack widths,
+  gaps, styled boxes, and marker text once
+- opt-in PDF raster checks can verify selected paragraph-box and flow-row pixels
+  when a local rasterizer such as `pdftoppm` or ImageMagick plus Ghostscript is
+  available
 
 Renderer smoke tests do not prove pixel-perfect output. Focused PDF raster
 visual regression is available behind `FLOWDOC_PDF_VISUAL_REGRESSION=1` for
@@ -277,12 +280,14 @@ Current strengths:
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual
-  regression protects paragraph box fill and border pixels when
-  `FLOWDOC_PDF_VISUAL_REGRESSION=1` is enabled on a machine with `pdftoppm` or
-  ImageMagick plus Ghostscript; the normal suite keeps this raster assertion
-  skipped because PDF rasterizers are environment-specific.
+  regression protects paragraph box fill/border pixels plus flow-row/flow-stack
+  fill, border, and gap pixels when `FLOWDOC_PDF_VISUAL_REGRESSION=1` is
+  enabled on a machine with `pdftoppm` or ImageMagick plus Ghostscript; the
+  normal suite keeps this raster assertion skipped because PDF rasterizers are
+  environment-specific.
 - Product export golden smoke protects PDF page-count parity for customs/report
-  fixtures and DOCX table row structure for the customs fixture.
+  fixtures, DOCX table row structure for the customs fixture, and flow-row
+  DOCX fixed-layout table projection for multi-column styled stacks.
 - User-level report fixture coverage protects saved FlowDoc package v2 fixtures
   for company, government, and university reports, including pagination
   assertions, PDF page-count export assertions, runtime-font failure behavior,
@@ -389,6 +394,6 @@ Avoid:
   - Windows PowerShell: `npm.cmd run test -w packages/core -- <test-file-or-filter>`
   - Non-Windows: `npm run test -w packages/core -- <test-file-or-filter>`
 - Opt-in PDF raster visual regression:
-  - Windows PowerShell: `$env:FLOWDOC_PDF_VISUAL_REGRESSION='1'; npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
-  - Non-Windows: `FLOWDOC_PDF_VISUAL_REGRESSION=1 npm run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+  - Windows PowerShell: `npm.cmd run test:pdf-visual`
+  - Non-Windows: `npm run test:pdf-visual`
 - Diff hygiene: `git diff --check`

@@ -95,6 +95,7 @@ export interface PageFragment {
   height: number
   lines?: PaginatedLine[]
   renderProps?: ParagraphRenderProps
+  boxRenderProps?: ParagraphBoxRenderProps
   cellRenderProps?: TableCellRenderProps
   // Paragraph split metadata — populated by pagination paths that split or
   // explicitly track paragraph continuation.

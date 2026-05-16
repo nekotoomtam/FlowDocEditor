@@ -20,6 +20,240 @@ Each entry should include:
 
 ## 2026-05-16
 
+### Bump Self-Use Baseline To 0.5.3
+
+Goal: Mark the accepted flow-stack box/export/visual-script work as the next
+self-use patch baseline.
+
+Completed:
+
+- Bumped the root package and lockfile version marker to `0.5.3`.
+- Updated versioning docs so the current baseline points at `0.5.3`.
+- Updated the project version marker test to assert the accepted `0.5.3`
+  baseline.
+- Gave the long flow-row pagination stability regression an explicit timeout
+  after the full suite showed the fixture can exceed Vitest's default 5 second
+  limit on this machine.
+- Recorded `0.5.3` as the patch baseline for flow-stack Box styling,
+  flow-row DOCX projection, focused PDF raster visual smoke, and local
+  visual/WYSIWYG convenience scripts.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `docs/VERSIONING.md`
+- `src/app/__tests__/projectVersion.test.ts`
+- `packages/core/src/pagination/__tests__/flowRowStack.test.ts`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- No git tag was created; project versions remain release-readiness markers.
+
+### Add Convenience Scripts For Visual And WYSIWYG Runs
+
+Goal: Reduce repeated local PowerShell environment setup for PDF raster visual
+checks and WYSIWYG development sessions.
+
+Completed:
+
+- Added `npm run test:pdf-visual`, which sets
+  `FLOWDOC_PDF_VISUAL_REGRESSION=1` and runs the focused PDF raster test.
+- Added `npm run dev:wysiwyg`, which starts the existing dev server with
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1` and
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1`.
+- Added small Node wrappers so the commands do not depend on PowerShell-only
+  `$env:` syntax.
+- Made the PDF visual wrapper pass an explicit `FLOWDOC_PDFTOPPM_PATH` when it
+  falls back to WinGet-installed Poppler on Windows.
+- Reused npm's active `npm_execpath` inside both wrappers so nested commands do
+  not depend on `npm.cmd` being discoverable in PATH.
+- Prepended the active Node executable directory to wrapper child environments
+  so npm-run subcommands can resolve `node` in restricted shells.
+- Updated test/WYSIWYG docs to point at the new convenience commands.
+
+Files changed:
+
+- `package.json`
+- `scripts/run-pdf-visual-regression.mjs`
+- `scripts/dev-wysiwyg.mjs`
+- `packages/core/src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `docs/TEST_STRATEGY.md`
+- `docs/WYSIWYG_PRODUCTION_GATE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `node --check scripts/run-pdf-visual-regression.mjs`
+- `node --check scripts/dev-wysiwyg.mjs`
+- `npm.cmd pkg get scripts.test:pdf-visual scripts.dev:wysiwyg`
+- `npm.cmd run test:pdf-visual`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- `npm.cmd run test:pdf-visual` passed after the wrapper resolved the
+  WinGet-installed Poppler path.
+- `npm.cmd run dev:wysiwyg` was not launched during verification because it
+  intentionally starts a long-running Next dev server.
+
+### Add Flow-Row PDF Raster Visual Smoke
+
+Goal: Add focused PDF visual protection for flow-row/flow-stack output while
+keeping rasterization optional and environment-specific.
+
+Completed:
+
+- Added an opt-in PDF raster visual regression case for a three-stack
+  `flow-row` with fixed gaps, distinct stack fills, and solid borders.
+- The raster case checks fill pixels, border pixels, and gap pixels against the
+  paginated geometry consumed by `PdfRenderer`.
+- Kept the default suite independent of rasterizer availability; the new case
+  runs only with `FLOWDOC_PDF_VISUAL_REGRESSION=1`.
+- Updated fixture/test docs to record focused flow-row PDF raster coverage while
+  keeping broad PDF/editor parity as a future visual regression area.
+
+Files changed:
+
+- `packages/core/src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- The local machine has ImageMagick but no detected `pdftoppm` or Ghostscript,
+  so the opt-in raster path itself was not run in this session. The default gate
+  passed with the raster assertions skipped as designed.
+
+### Tighten Flow-Row DOCX Layout Projection
+
+Goal: Make DOCX export preserve the overall flow-row/flow-stack layout more
+closely without treating DOCX as a pixel-perfect target.
+
+Completed:
+
+- Kept the authored model as `flow-row` / `flow-stack` and tightened only the
+  DOCX renderer projection.
+- Projected each `flow-row` slice to a fixed-layout Word table using paginated
+  row width, stack column widths, and exact row slice height.
+- Added empty fixed-width gap cells between flow-stack cells so DOCX preserves
+  paginated inter-stack gaps instead of collapsing columns together.
+- Set zero cell margins for unboxed flow-stacks so Word's default table padding
+  does not shift stack content away from the editor/PDF geometry.
+- Preserved existing flow-stack box shading, borders, and padding through table
+  cell formatting.
+- Added `flow-row-export-golden`, a product export fixture with multi-column
+  flow-row content, gaps, styled flow-stack boxes, PDF page-count parity, DOCX
+  fixed-layout projection, and marker de-duplication checks.
+- Added renderer coverage that inspects DOCX XML for fixed table layout,
+  exact row height, paginated column widths, and gap columns.
+- Updated the export and flow-row/flow-stack docs to record the renderer-only
+  table projection and the remaining DOCX exchange-format limitation.
+
+Files changed:
+
+- `packages/core/src/renderer/docx/index.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `packages/core/src/renderer/__tests__/productExportGolden.test.ts`
+- `docs/FLOW_ROW_STACK_SPEC.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/PRODUCT_SCENARIOS.md`
+- `docs/FIXTURE_CATALOG.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/productExportGolden.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- DOCX still lets Word/LibreOffice own final text reflow. This slice improves
+  overall table/column/box geometry only; hard line-break serialization remains
+  intentionally deferred.
+
+### Add Flow-Stack Box Styling
+
+Goal: Give selected flow-stacks a real authored Box surface while keeping
+flow-row styling deferred.
+
+Completed:
+
+- Added `flow-stack.props.box` using the existing paragraph box fill, padding,
+  and border shape.
+- Added a history-safe `updateFlowStackBoxStyle(...)` operation and routed the
+  flow-stack Box property panel through it.
+- Made flow-stack box padding and border participate in core measurement and
+  pagination: horizontal insets reduce child paragraph width, and vertical
+  insets contribute to stack slice height.
+- Added fragment-level `boxRenderProps` so editor preview, PDF, and DOCX consume
+  the same paginated metadata instead of recomputing document styling.
+- Rendered flow-stack fill/borders in the editor canvas and PDF renderer.
+- Mapped flow-stack boxes to DOCX layout-table cell shading, borders, and
+  margins as best-effort exchange-format output.
+- Moved flow-row and flow-stack `Min height` controls into their `Layout` tabs.
+- Updated the flow-row/flow-stack roadmap/spec to record the focused
+  flow-stack box decision while keeping flow-row box styling deferred.
+
+Files changed:
+
+- `packages/core/src/schema/block.ts`
+- `packages/core/src/document/normalize.ts`
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/layout/flow.ts`
+- `packages/core/src/pagination/types.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/paragraphBoxPrimitives.ts`
+- `packages/core/src/renderer/pdf/index.ts`
+- `packages/core/src/renderer/docx/index.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- focused tests in core/app touched areas
+- `docs/FLOW_ROW_STACK_SPEC.md`
+- `docs/FLOW_ROW_STACK_ROADMAP.md`
+- `docs/WORK_LOG.md`
+
+Verification:
+
+- `npm.cmd test -- packages/core/src/document/normalize.test.ts packages/core/src/document/operations.test.ts packages/core/src/layout/__tests__/flowRowStack.test.ts packages/core/src/pagination/__tests__/flowRowStack.test.ts packages/core/src/renderer/__tests__/renderer.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- Flow-row Box styling is intentionally not implemented in this slice.
+- DOCX remains best-effort and uses table-cell formatting for flow-stack box
+  output; PDF/editor continue to be the visual authority.
+
 ### Unify Right Rail Panel Layout
 
 Goal: Make the Page, Outline, and Properties right-rail rooms use the same

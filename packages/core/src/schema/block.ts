@@ -30,13 +30,6 @@ export const RowPropsSchema = z.object({
   minHeight: z.number().positive().optional(),
 })
 
-export const FlowStackPropsSchema = z.object({
-  // widthShare คือ % ของ parent flow-row เช่น 50 = 50%
-  // ต้องมีเมื่ออยู่ใน flow-row — validate ตอน assertDocument
-  widthShare: z.number().positive().max(100).optional(),
-  minHeight: z.number().positive().optional(),
-})
-
 export const FlowRowPropsSchema = z.object({
   gap: z.number().nonnegative().optional(),
   minHeight: z.number().positive().optional(),
@@ -71,6 +64,14 @@ export const ParagraphBoxStyleSchema = z.object({
   fill: HexColorSchema.optional(),
   padding: ParagraphBoxPaddingSchema.optional(),
   border: ParagraphBoxBorderSchema.optional(),
+})
+
+export const FlowStackPropsSchema = z.object({
+  // widthShare คือ % ของ parent flow-row เช่น 50 = 50%
+  // ต้องมีเมื่ออยู่ใน flow-row — validate ตอน assertDocument
+  widthShare: z.number().positive().max(100).optional(),
+  minHeight: z.number().positive().optional(),
+  box: ParagraphBoxStyleSchema.optional(),
 })
 
 export const ParagraphPropsSchema = z.object({

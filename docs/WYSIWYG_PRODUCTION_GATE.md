@@ -44,6 +44,12 @@ $env:NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE="1"
 $env:NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT="1"
 ```
 
+For local development, the same flags can be started through:
+
+```powershell
+npm.cmd run dev:wysiwyg
+```
+
 In production, the text engine also requires a separate release
 acknowledgement:
 

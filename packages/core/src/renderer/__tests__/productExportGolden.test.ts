@@ -214,6 +214,110 @@ function countXmlTag(xml: string, tag: string): number {
   return xml.match(new RegExp(`<${tag}(\\s|>|/)`, "g"))?.length ?? 0
 }
 
+function countText(xml: string, text: string): number {
+  const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return xml.match(new RegExp(escaped, "g"))?.length ?? 0
+}
+
+function makeFlowRowDoc(): DocumentNode {
+  const intro = makePara("flow-row-intro", "Flow row export layout smoke", {
+    fontSize: pt(14),
+    spacingAfter: pt(8),
+  })
+  const outro = makePara("flow-row-outro", "Flow row export after marker", {
+    spacingBefore: pt(8),
+  })
+  const left = makePara(
+    "flow-left-text",
+    Array.from({ length: 120 }, (_, index) => `FLOW_ROW_LEFT_${index + 1} รายการด้านซ้าย`).join("\n"),
+    { fontSize: pt(9), lineHeight: 1.15, spacingAfter: pt(2) },
+  )
+  const middle = makePara(
+    "flow-middle-text",
+    Array.from({ length: 92 }, (_, index) => `FLOW_ROW_MIDDLE_${index + 1} รายการตรงกลาง`).join("\n"),
+    { fontSize: pt(9), lineHeight: 1.15, spacingAfter: pt(2) },
+  )
+  const right = makePara(
+    "flow-right-text",
+    Array.from({ length: 70 }, (_, index) => `FLOW_ROW_RIGHT_${index + 1} รายการด้านขวา`).join("\n"),
+    { fontSize: pt(9), lineHeight: 1.15, spacingAfter: pt(2) },
+  )
+  const leftStack: LayoutNode = {
+    id: "flow-left-stack",
+    type: "flow-stack",
+    props: {
+      widthShare: 28,
+      box: {
+        fill: "E0F2FE",
+        padding: { top: pt(4), right: pt(5), bottom: pt(4), left: pt(5) },
+        border: {
+          left: { style: "solid", width: pt(1), color: "2563EB" },
+          top: { style: "solid", width: pt(1), color: "2563EB" },
+        },
+      },
+    },
+    childIds: ["flow-left-text"],
+  }
+  const middleStack: LayoutNode = {
+    id: "flow-middle-stack",
+    type: "flow-stack",
+    props: {
+      widthShare: 34,
+      box: {
+        fill: "FEF3C7",
+        padding: { top: pt(4), right: pt(5), bottom: pt(4), left: pt(5) },
+        border: {
+          top: { style: "dashed", width: pt(1), color: "16A34A" },
+          bottom: { style: "dashed", width: pt(1), color: "16A34A" },
+        },
+      },
+    },
+    childIds: ["flow-middle-text"],
+  }
+  const rightStack: LayoutNode = {
+    id: "flow-right-stack",
+    type: "flow-stack",
+    props: {
+      widthShare: 38,
+      box: {
+        fill: "DCFCE7",
+        padding: { top: pt(4), right: pt(5), bottom: pt(4), left: pt(5) },
+        border: {
+          right: { style: "solid", width: pt(1), color: "15803D" },
+          bottom: { style: "solid", width: pt(1), color: "15803D" },
+        },
+      },
+    },
+    childIds: ["flow-right-text"],
+  }
+  const row: LayoutNode = {
+    id: "flow-export-row",
+    type: "flow-row",
+    props: { gap: 8, minHeight: 160 },
+    childIds: ["flow-left-stack", "flow-middle-stack", "flow-right-stack"],
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "flow-row-export-golden",
+      sections: [
+        makeSection("flow-row-export", ["flow-row-intro", "flow-export-row", "flow-row-outro"], {
+          "flow-row-intro": intro,
+          "flow-export-row": row,
+          "flow-left-stack": leftStack,
+          "flow-middle-stack": middleStack,
+          "flow-right-stack": rightStack,
+          "flow-left-text": left,
+          "flow-middle-text": middle,
+          "flow-right-text": right,
+          "flow-row-outro": outro,
+        }),
+      ],
+    },
+  }
+}
+
 describe("product export golden smoke", () => {
   it("requires the default runtime font asset", () => {
     const fontBuffer = readRuntimeFont()
@@ -282,5 +386,56 @@ describe("product export golden smoke", () => {
     expect(result.buffer[0]).toBe(0x50)
     expect(result.buffer[1]).toBe(0x4b)
     expect(countXmlTag(xml, "w:tr")).toBe(expectedRows)
+  })
+
+  it("product fixture - flow-row export preserves PDF page count and DOCX layout projection", async () => {
+    const fontBuffer = readRuntimeFont()
+    const paginated = paginateForExport(makeFlowRowDoc(), fontBuffer)
+    const pages = paginated.sections[0].pages
+    const flowRows = pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === "flow-export-row" && fragment.nodeType === "flow-row"),
+    )
+    const stackSlices = pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.parentNodeId === "flow-export-row" && fragment.nodeType === "flow-stack"),
+    )
+
+    expect(flowRows.length).toBeGreaterThanOrEqual(2)
+    for (const row of flowRows) {
+      const stacks = pages[row.pageIndex].fragments
+        .filter((fragment) => fragment.parentNodeId === row.nodeId && fragment.nodeType === "flow-stack")
+        .sort((a, b) => a.x - b.x)
+      expect(stacks).toHaveLength(3)
+      expect(stacks.every((stack) => stack.height === row.height)).toBe(true)
+      expect(stacks[1].x - (stacks[0].x + stacks[0].width)).toBeGreaterThan(0)
+      expect(stacks[2].x - (stacks[1].x + stacks[1].width)).toBeGreaterThan(0)
+    }
+
+    const pdfResult = await new PdfRenderer(makeFontProvider(fontBuffer)).render(paginated)
+    expect(String.fromCharCode(...pdfResult.buffer.slice(0, 4))).toBe("%PDF")
+    expect(await pdfPageCount(pdfResult.buffer)).toBe(totalPageCount(paginated))
+
+    const docxResult = await new DocxRenderer().render(paginated)
+    const xml = await readDocxXml(docxResult.buffer, "word/document.xml")
+
+    expect(docxResult.buffer[0]).toBe(0x50)
+    expect(docxResult.buffer[1]).toBe(0x4b)
+    expect(countText(xml, 'w:tblLayout w:type="fixed"')).toBe(flowRows.length)
+    expect(countXmlTag(xml, "w:gridCol")).toBe(flowRows.length * 5)
+    expect(countText(xml, 'w:fill="E0F2FE"')).toBeGreaterThanOrEqual(flowRows.length)
+    expect(countText(xml, 'w:fill="FEF3C7"')).toBeGreaterThanOrEqual(flowRows.length)
+    expect(countText(xml, 'w:fill="DCFCE7"')).toBeGreaterThanOrEqual(flowRows.length)
+    for (const marker of [
+      "FLOW_ROW_LEFT_1 รายการด้านซ้าย",
+      "FLOW_ROW_LEFT_70 รายการด้านซ้าย",
+      "FLOW_ROW_LEFT_120 รายการด้านซ้าย",
+      "FLOW_ROW_MIDDLE_1 รายการตรงกลาง",
+      "FLOW_ROW_MIDDLE_92 รายการตรงกลาง",
+      "FLOW_ROW_RIGHT_1 รายการด้านขวา",
+      "FLOW_ROW_RIGHT_70 รายการด้านขวา",
+      "Flow row export after marker",
+    ]) {
+      expect(countText(xml, marker)).toBe(1)
+    }
+    expect(stackSlices.length).toBe(flowRows.length * 3)
   })
 })

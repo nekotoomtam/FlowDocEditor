@@ -10,10 +10,13 @@ import {
   TableCell,
   AlignmentType,
   BorderStyle,
+  HeightRule,
+  TableLayoutType,
   WidthType,
   PageOrientation,
   SectionType,
   ShadingType,
+  VerticalAlignTable,
 } from "docx"
 import type { PaginatedDocument, PageFragment, ResolvedBorderSide, ResolvedCellBorder } from "../../pagination"
 import type { ParagraphRenderProps } from "../../pagination"
@@ -68,7 +71,7 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
       const group: TableGroup = { tableFragment: fragment, rows: [] }
       tableMap.set(fragment.nodeId, group)
       items.push({ kind: "table", group })
-    } else if (fragment.nodeType === "row") {
+    } else if (fragment.nodeType === "row" || fragment.nodeType === "flow-row") {
       if (fragment.parentNodeId && tableRowIds.has(fragment.nodeId)) {
         if (!tableMap.has(fragment.parentNodeId)) {
           const group: TableGroup = {
@@ -92,7 +95,7 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
         tableCellMap.set(fragment.nodeId, cellGroup)
         tableRowMap.get(fragment.parentNodeId)!.cells.push(cellGroup)
       }
-    } else if (fragment.nodeType === "stack") {
+    } else if (fragment.nodeType === "stack" || fragment.nodeType === "flow-stack") {
       if (fragment.parentNodeId && rowMap.has(fragment.parentNodeId)) {
         const stackGroup: StackGroup = { stackFragment: fragment, children: [] }
         stackMap.set(fragment.nodeId, stackGroup)
@@ -186,6 +189,49 @@ function buildParagraphShading(fragment: PageFragment) {
   return fill ? { type: ShadingType.CLEAR, fill, color: "auto" } : undefined
 }
 
+function buildFragmentBoxCellBorders(fragment: PageFragment) {
+  const box = fragment.boxRenderProps
+  if (!box) return INVISIBLE_BORDERS
+
+  const isFirstFragment = fragment.continuesFrom !== true
+  const isLastFragment = fragment.isContinued !== true
+  return {
+    top: isFirstFragment ? toBorderOpts(box.border.top) : NO_BORDER,
+    right: toBorderOpts(box.border.right),
+    bottom: isLastFragment ? toBorderOpts(box.border.bottom) : NO_BORDER,
+    left: toBorderOpts(box.border.left),
+    insideHorizontal: NO_BORDER,
+    insideVertical: NO_BORDER,
+  }
+}
+
+function buildFragmentBoxCellShading(fragment: PageFragment) {
+  const fill = fragment.boxRenderProps?.fill
+  return fill ? { type: ShadingType.CLEAR, fill, color: "auto" } : undefined
+}
+
+function buildFragmentBoxCellMargins(fragment: PageFragment) {
+  const box = fragment.boxRenderProps
+  if (!box) return undefined
+  const isFirstFragment = fragment.continuesFrom !== true
+  const isLastFragment = fragment.isContinued !== true
+  return {
+    top: ptToTwips(isFirstFragment ? box.padding.top : 0),
+    right: ptToTwips(box.padding.right),
+    bottom: ptToTwips(isLastFragment ? box.padding.bottom : 0),
+    left: ptToTwips(box.padding.left),
+  }
+}
+
+function buildFlowStackCellMargins(fragment: PageFragment) {
+  return buildFragmentBoxCellMargins(fragment) ?? {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  }
+}
+
 // ─── Builders ─────────────────────────────────────────────────────────────────
 
 function buildParagraph(fragment: PageFragment): Paragraph | null {
@@ -230,18 +276,69 @@ function buildCellChildren(children: PageFragment[]): Paragraph[] {
   })
 }
 
+function buildLayoutStackCell(stack: StackGroup, rowWidth: number, isFlowRow: boolean): TableCell {
+  return new TableCell({
+    width: isFlowRow
+      ? { size: ptToTwips(stack.stackFragment.width), type: WidthType.DXA }
+      : { size: Math.round((stack.stackFragment.width / rowWidth) * 100), type: WidthType.PERCENTAGE },
+    borders: buildFragmentBoxCellBorders(stack.stackFragment),
+    shading: buildFragmentBoxCellShading(stack.stackFragment),
+    margins: isFlowRow ? buildFlowStackCellMargins(stack.stackFragment) : buildFragmentBoxCellMargins(stack.stackFragment),
+    verticalAlign: isFlowRow ? VerticalAlignTable.TOP : undefined,
+    children: buildCellChildren(stack.children),
+  })
+}
+
+function buildFlowGapCell(width: number): TableCell {
+  return new TableCell({
+    width: { size: ptToTwips(width), type: WidthType.DXA },
+    borders: INVISIBLE_BORDERS,
+    margins: { top: 0, right: 0, bottom: 0, left: 0 },
+    children: [new Paragraph({ children: [] })],
+  })
+}
+
+function buildLayoutTableCells(group: RowGroup, rowWidth: number, isFlowRow: boolean): { cells: TableCell[]; columnWidths?: number[] } {
+  if (!isFlowRow) {
+    return {
+      cells: group.stacks.map((stack) => buildLayoutStackCell(stack, rowWidth, false)),
+    }
+  }
+
+  const cells: TableCell[] = []
+  const columnWidths: number[] = []
+  group.stacks.forEach((stack, index) => {
+    cells.push(buildLayoutStackCell(stack, rowWidth, true))
+    columnWidths.push(ptToTwips(stack.stackFragment.width))
+
+    const nextStack = group.stacks[index + 1]
+    if (!nextStack) return
+    const gap = Math.max(0, nextStack.stackFragment.x - (stack.stackFragment.x + stack.stackFragment.width))
+    if (gap <= 0) return
+    cells.push(buildFlowGapCell(gap))
+    columnWidths.push(ptToTwips(gap))
+  })
+
+  return { cells, columnWidths }
+}
+
 function buildLayoutTable(group: RowGroup): Table {
   const rowWidth = group.rowFragment.width
-  const cells = group.stacks.map((stack) =>
-    new TableCell({
-      width: { size: Math.round((stack.stackFragment.width / rowWidth) * 100), type: WidthType.PERCENTAGE },
-      borders: INVISIBLE_BORDERS,
-      children: buildCellChildren(stack.children),
-    }),
-  )
+  const isFlowRow = group.rowFragment.nodeType === "flow-row"
+  const { cells, columnWidths } = buildLayoutTableCells(group, rowWidth, isFlowRow)
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [new TableRow({ children: cells })],
+    width: isFlowRow
+      ? { size: ptToTwips(rowWidth), type: WidthType.DXA }
+      : { size: 100, type: WidthType.PERCENTAGE },
+    columnWidths,
+    layout: isFlowRow ? TableLayoutType.FIXED : undefined,
+    rows: [new TableRow({
+      children: cells,
+      cantSplit: isFlowRow ? true : undefined,
+      height: isFlowRow
+        ? { value: ptToTwips(group.rowFragment.height), rule: HeightRule.EXACT }
+        : undefined,
+    })],
   })
 }
 

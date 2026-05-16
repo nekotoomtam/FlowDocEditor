@@ -196,6 +196,11 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"flow-stack-add-before\"")
     expect(markup).toContain("data-testid=\"flow-stack-add-after\"")
     expect(markup).toContain("Column 1")
+    expect(markup).toContain("data-testid=\"flow-stack-box-controls\"")
+    expect(markup).toContain("data-testid=\"flow-stack-box-fill-card\"")
+    expect(markup).toContain("data-testid=\"flow-stack-box-padding-card\"")
+    expect(markup).toContain("data-testid=\"flow-stack-box-border-card\"")
+    expect(markup).toContain("Min height (pt)")
   })
 
   it("renders sibling-safe flow-stack resize controls with the min share guard", () => {

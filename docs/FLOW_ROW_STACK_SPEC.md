@@ -152,6 +152,21 @@ type FlowStackNode = {
   props: {
     widthShare?: number
     minHeight?: number
+    box?: {
+      fill?: string
+      padding?: {
+        top: UnitValue
+        right: UnitValue
+        bottom: UnitValue
+        left: UnitValue
+      }
+      border?: {
+        top?: BorderSide
+        right?: BorderSide
+        bottom?: BorderSide
+        left?: BorderSide
+      }
+    }
   }
   childIds: string[] // paragraphs and spacers in v1
 }
@@ -232,6 +247,12 @@ Within a page slice:
 - if any stack has remaining content and uses all available vertical capacity,
   the current slice may fill to the page content bottom;
 - the final slice may shrink to the tallest remaining stack content.
+- authored `flow-stack` box padding and border participate in stack content
+  measurement; horizontal insets reduce child content width and vertical insets
+  contribute to the visible stack slice height.
+- authored `flow-stack` fill draws on every emitted stack slice; side borders
+  draw on every slice, while top and bottom borders follow first/final slice
+  continuation metadata.
 
 Open design question:
 
@@ -291,6 +312,11 @@ Renderers must not recompute:
 DOCX remains an exchange format. If DOCX cannot preserve the exact visual
 fragmentation, it should preserve useful structure and document the limitation
 instead of inventing a second layout policy.
+For flow-row/flow-stack output, the DOCX renderer may project each paginated
+flow-row slice into a fixed-layout Word table using the paginated stack widths,
+gap geometry, row slice height, and stack box metadata. This is a renderer-only
+projection; the authored FlowDoc model remains `flow-row` / `flow-stack`, not a
+table.
 
 ## Test Plan
 
@@ -342,7 +368,8 @@ Mitigation:
 ## Open Questions
 
 - Should flow-stack backgrounds/borders render on continuation pages after that
-  stack's content has ended but a sibling stack continues?
+  stack's content has ended but a sibling stack continues? The current behavior
+  keeps emitted sibling stack slices visually styled for alignment.
 - Should `gap` be a row prop only, or should stacks support padding before v1?
 - Should `keepWithNext` work inside a flow-stack in the first milestone?
 - Should flow-row have an `allowBreak` prop, or is breakability implied by the

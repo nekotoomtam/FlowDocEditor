@@ -8,7 +8,7 @@ import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { paginateDocument } from "../../pagination"
 import { pt } from "../../schema"
 import type { DocumentNode, LayoutNode, ParagraphNode } from "../../schema"
-import { PdfRenderer, resolveParagraphBoxDrawingPrimitives } from "../pdf"
+import { PdfRenderer, resolveFragmentBoxDrawingPrimitives, resolveParagraphBoxDrawingPrimitives } from "../pdf"
 
 const ENABLE_PDF_VISUAL_REGRESSION = process.env.FLOWDOC_PDF_VISUAL_REGRESSION === "1"
 const PDF_RASTER_DPI = 96
@@ -69,12 +69,13 @@ function runRasterCommand(command: string, args: string[], failureHint: string):
 }
 
 function findRasterizer(): Rasterizer | null {
-  if (commandCanStart("pdftoppm", ["-v"])) {
+  const pdftoppmCommand = process.env.FLOWDOC_PDFTOPPM_PATH?.trim() || "pdftoppm"
+  if (commandCanStart(pdftoppmCommand, ["-v"])) {
     return {
       name: "pdftoppm",
       render(pdfPath, pngPath) {
         const prefix = pngPath.replace(/\.png$/i, "")
-        runRasterCommand("pdftoppm", ["-png", "-singlefile", "-r", String(PDF_RASTER_DPI), pdfPath, prefix], "Install Poppler or set up another supported PDF rasterizer.")
+        runRasterCommand(pdftoppmCommand, ["-png", "-singlefile", "-r", String(PDF_RASTER_DPI), pdfPath, prefix], "Install Poppler or set up another supported PDF rasterizer.")
         const generatedPath = `${prefix}.png`
         if (generatedPath !== pngPath && existsSync(generatedPath)) renameSync(generatedPath, pngPath)
         if (!existsSync(pngPath)) throw new Error(`pdftoppm did not write ${pngPath}`)
@@ -132,6 +133,70 @@ function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): Doc
       }],
     },
   }
+}
+
+function makeFlowRowVisualDoc(): DocumentNode {
+  const leftStack: LayoutNode = {
+    id: "flow-left-stack",
+    type: "flow-stack",
+    props: {
+      widthShare: 30,
+      box: {
+        fill: "E0F2FE",
+        padding: { top: pt(4), right: pt(4), bottom: pt(4), left: pt(4) },
+        border: {
+          left: { style: "solid", width: pt(2), color: "2563EB" },
+          top: { style: "solid", width: pt(2), color: "2563EB" },
+        },
+      },
+    },
+    childIds: [],
+  }
+  const middleStack: LayoutNode = {
+    id: "flow-middle-stack",
+    type: "flow-stack",
+    props: {
+      widthShare: 30,
+      box: {
+        fill: "FEF3C7",
+        padding: { top: pt(4), right: pt(4), bottom: pt(4), left: pt(4) },
+        border: {
+          top: { style: "solid", width: pt(2), color: "EF4444" },
+          bottom: { style: "solid", width: pt(2), color: "EF4444" },
+        },
+      },
+    },
+    childIds: [],
+  }
+  const rightStack: LayoutNode = {
+    id: "flow-right-stack",
+    type: "flow-stack",
+    props: {
+      widthShare: 40,
+      box: {
+        fill: "DCFCE7",
+        padding: { top: pt(4), right: pt(4), bottom: pt(4), left: pt(4) },
+        border: {
+          right: { style: "solid", width: pt(2), color: "15803D" },
+          bottom: { style: "solid", width: pt(2), color: "15803D" },
+        },
+      },
+    },
+    childIds: [],
+  }
+  const row: LayoutNode = {
+    id: "flow-row",
+    type: "flow-row",
+    props: { gap: 16, minHeight: 120 },
+    childIds: ["flow-left-stack", "flow-middle-stack", "flow-right-stack"],
+  }
+
+  return makeDoc(["flow-row"], {
+    "flow-row": row,
+    "flow-left-stack": leftStack,
+    "flow-middle-stack": middleStack,
+    "flow-right-stack": rightStack,
+  })
 }
 
 function readUInt32(buffer: Buffer, offset: number): number {
@@ -316,6 +381,61 @@ describePdfVisual("PDF raster visual regression", () => {
       if (!line) throw new Error(`Missing ${side} border primitive`)
       const linePoint = pdfPointToImagePoint(page.height, (line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
       expect(minColorDistanceNear(image, linePoint.x, linePoint.y, hexToRgb(line.border.color), 4)).toBeLessThanOrEqual(80)
+    }
+  })
+
+  it("draws flow-stack fills, borders, and gaps at paginated flow-row geometry", async () => {
+    const rasterizer = findRasterizer()
+    expect(rasterizer, "Set up pdftoppm or ImageMagick with Ghostscript before running FLOWDOC_PDF_VISUAL_REGRESSION=1").not.toBeNull()
+
+    const paginated = paginateDocument(makeFlowRowVisualDoc(), defaultTextMeasurer, defaultWordBreaker)
+    const page = paginated.sections[0].pages[0]
+    const row = page.fragments.find((item) => item.nodeId === "flow-row" && item.nodeType === "flow-row")
+    if (!row) throw new Error("Expected flow-row fragment")
+
+    const stacks = page.fragments
+      .filter((item) => item.parentNodeId === "flow-row" && item.nodeType === "flow-stack")
+      .sort((a, b) => a.x - b.x)
+    expect(stacks).toHaveLength(3)
+    expect(stacks.every((stack) => stack.height === row.height)).toBe(true)
+
+    const tempDir = mkdtempSync(join(tmpdir(), "flowdoc-pdf-flow-row-"))
+    tempDirs.push(tempDir)
+    const pdfPath = join(tempDir, "actual.pdf")
+    const pngPath = join(tempDir, "actual.png")
+    const result = await new PdfRenderer().render(paginated)
+    writeFileSync(pdfPath, result.buffer)
+    rasterizer!.render(pdfPath, pngPath)
+
+    const image = parsePng(readFileSync(pngPath))
+    const expectedFills = ["E0F2FE", "FEF3C7", "DCFCE7"]
+    for (const [index, stack] of stacks.entries()) {
+      const primitives = resolveFragmentBoxDrawingPrimitives(stack, page.height)
+      if (!primitives?.fill) throw new Error(`Expected flow-stack fill primitives for ${stack.nodeId}`)
+      const fillPoint = pdfPointToImagePoint(
+        page.height,
+        primitives.fill.x + primitives.fill.width / 2,
+        primitives.fill.y + primitives.fill.height / 2,
+      )
+      expect(minColorDistanceNear(image, fillPoint.x, fillPoint.y, hexToRgb(expectedFills[index]), 1)).toBeLessThanOrEqual(28)
+
+      for (const line of primitives.borders) {
+        const linePoint = pdfPointToImagePoint(page.height, (line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
+        expect(minColorDistanceNear(image, linePoint.x, linePoint.y, hexToRgb(line.border.color), 4)).toBeLessThanOrEqual(80)
+      }
+    }
+
+    for (let index = 0; index < stacks.length - 1; index++) {
+      const left = stacks[index]
+      const right = stacks[index + 1]
+      const gap = right.x - (left.x + left.width)
+      expect(gap).toBeGreaterThan(0)
+      const gapPoint = pdfPointToImagePoint(
+        page.height,
+        left.x + left.width + gap / 2,
+        page.height - (row.y + row.height / 2),
+      )
+      expect(minColorDistanceNear(image, gapPoint.x, gapPoint.y, hexToRgb("FFFFFF"), 1)).toBeLessThanOrEqual(18)
     }
   })
 })

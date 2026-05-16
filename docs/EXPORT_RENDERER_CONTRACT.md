@@ -117,6 +117,9 @@ DOCX should:
   TOC text where possible
 - preserve paragraph box fill and border where possible, and approximate
   paragraph padding only through documented Word-compatible formatting
+- preserve the overall layout of `flow-row` / `flow-stack` slices where
+  possible by projecting them to fixed-layout Word tables from paginated
+  geometry, including stack widths and inter-stack gaps
 - emit valid DOCX ZIP output
 - keep page/section structure useful for review workflows
 - document where Word/LibreOffice may reflow content after opening

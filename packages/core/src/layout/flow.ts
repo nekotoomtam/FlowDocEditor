@@ -1,7 +1,15 @@
 import type { BodyNode, DocumentSection, FlowRowNode, FlowStackNode, LayoutNode, RowNode, StackNode, TocNode } from "../schema"
 import type { TableNode, TableCellNode } from "../schema"
 import { DEFAULT_STACK_MIN_HEIGHT } from "../document/defaults"
-import { measureParagraph, measureSpacer, toAbstractUnit } from "./measure"
+import {
+  measureParagraph,
+  measureSpacer,
+  paragraphBoxBottomInset,
+  paragraphBoxLeftInset,
+  paragraphBoxTopInset,
+  resolveParagraphBoxStyle,
+  toAbstractUnit,
+} from "./measure"
 import type { FlowBox, TextMeasurer, WordBreaker } from "./types"
 import { defaultWordBreaker } from "./types"
 
@@ -274,7 +282,11 @@ function flowFlowStack(
   wordBreaker: WordBreaker = defaultWordBreaker,
   tocHeightOverrides?: Map<string, number>,
 ): FlowBox {
-  let cursorY = y
+  const measuredBox = resolveParagraphBoxStyle(node.props.box, width)
+  const contentX = x + paragraphBoxLeftInset(measuredBox)
+  const contentY = y + paragraphBoxTopInset(measuredBox)
+  const contentWidth = measuredBox?.contentWidth ?? width
+  let cursorY = contentY
   const children: FlowBox[] = []
 
   const childNodes = node.childIds
@@ -282,13 +294,14 @@ function flowFlowStack(
     .filter((n): n is LayoutNode => n != null)
 
   childNodes.forEach((child) => {
-    const childBox = flowNode(section, child, x, cursorY, width, measurer, undefined, wordBreaker, tocHeightOverrides)
+    const childBox = flowNode(section, child, contentX, cursorY, contentWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
     children.push(childBox)
     cursorY = childBox.y + childBox.height
   })
 
-  const contentHeight = cursorY - y
-  const resolvedHeight = Math.max(contentHeight, Math.max(0, node.props.minHeight ?? 0), stackRenderHeight ?? 0)
+  const contentHeight = cursorY - contentY
+  const boxHeight = contentHeight + paragraphBoxTopInset(measuredBox) + paragraphBoxBottomInset(measuredBox)
+  const resolvedHeight = Math.max(boxHeight, Math.max(0, node.props.minHeight ?? 0), stackRenderHeight ?? 0)
 
   return {
     nodeId: node.id,

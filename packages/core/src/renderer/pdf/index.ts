@@ -2,7 +2,7 @@ import { LineCapStyle, PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import type { PDFFont, PDFPage } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
 import type { PaginatedDocument, PaginatedPage, PageFragment, ResolvedBorderSide } from "../../pagination"
-import { resolveParagraphBoxLayoutPrimitives } from "../../pagination"
+import { resolveFragmentBoxLayoutPrimitives, resolveParagraphBoxLayoutPrimitives } from "../../pagination"
 import type { RenderResult, Renderer, FontProvider } from "../shared"
 
 /**
@@ -91,6 +91,13 @@ export function resolveParagraphBoxDrawingPrimitives(
   pageHeight: number,
 ): ParagraphBoxDrawingPrimitives | null {
   const layout = resolveParagraphBoxLayoutPrimitives(fragment)
+  return resolveBoxDrawingPrimitivesFromLayout(layout, pageHeight)
+}
+
+function resolveBoxDrawingPrimitivesFromLayout(
+  layout: ReturnType<typeof resolveFragmentBoxLayoutPrimitives>,
+  pageHeight: number,
+): ParagraphBoxDrawingPrimitives | null {
   if (!layout) return null
 
   return {
@@ -111,8 +118,16 @@ export function resolveParagraphBoxDrawingPrimitives(
   }
 }
 
-function drawParagraphBox(pdfPage: PDFPage, fragment: PageFragment, pageHeight: number): void {
-  const primitives = resolveParagraphBoxDrawingPrimitives(fragment, pageHeight)
+export function resolveFragmentBoxDrawingPrimitives(
+  fragment: PageFragment,
+  pageHeight: number,
+): ParagraphBoxDrawingPrimitives | null {
+  const layout = resolveFragmentBoxLayoutPrimitives(fragment)
+  return resolveBoxDrawingPrimitivesFromLayout(layout, pageHeight)
+}
+
+function drawFragmentBox(pdfPage: PDFPage, fragment: PageFragment, pageHeight: number): void {
+  const primitives = resolveFragmentBoxDrawingPrimitives(fragment, pageHeight)
   if (!primitives) return
   if (primitives.fill) {
     pdfPage.drawRectangle({
@@ -181,9 +196,14 @@ export class PdfRenderer implements Renderer {
         continue
       }
 
+      if (fragment.nodeType === "flow-stack") {
+        drawFragmentBox(pdfPage, fragment, page.height)
+        continue
+      }
+
       if (fragment.nodeType !== "paragraph" && fragment.nodeType !== "toc") continue
       if (!fragment.lines?.length || !fragment.renderProps) continue
-      if (fragment.nodeType === "paragraph") drawParagraphBox(pdfPage, fragment, page.height)
+      if (fragment.nodeType === "paragraph") drawFragmentBox(pdfPage, fragment, page.height)
 
       const font = await this.resolveFont(pdfDoc, fontCache, fragment.renderProps.fontFamilyKey)
       const defaultFontSize = fragment.renderProps.fontSize

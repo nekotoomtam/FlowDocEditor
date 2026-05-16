@@ -7,7 +7,7 @@ the spec disagree, update the spec first or record the deliberate decision here.
 
 ## Implementation Progress
 
-Last checked: 2026-05-15.
+Last checked: 2026-05-16.
 
 - Phase 0: complete.
 - Phase 1: complete for authored schema/defaults/normalize/assert.
@@ -64,15 +64,17 @@ Use these defaults unless a later decision updates the spec:
 
 - `flow-row` breakability is implied by the node type. Do not add an
   `allowBreak` prop in `0.5.0`.
-- `flow-row.props.gap` owns column gap in `0.5.0`. Do not add
-  `flow-stack` padding unless a focused design accepts it.
+- `flow-row.props.gap` owns column gap in `0.5.0`. A later focused design
+  accepted `flow-stack.props.box` for fill, padding, and border; padding must
+  participate in core measurement/pagination before it is exposed in the
+  property panel.
 - `flow-row.props.minHeight` applies to the first slice only in `0.5.0`.
 - `flow-stack.props.minHeight` participates in first-slice visual height only.
 - `keepWithNext` inside `flow-stack` is deferred unless a later pagination patch
   explicitly designs and tests it.
-- `flow-row` / `flow-stack` styling props such as borders and backgrounds are
-  deferred. Editor selection chrome may visualize fragments, but authored visual
-  styling is not part of this milestone.
+- `flow-row` styling props such as borders and backgrounds remain deferred.
+  `flow-stack.props.box` may style the stack slice itself, while editor
+  selection chrome must stay separate from authored visual styling.
 - DOCX should not invent a separate layout policy. If exact DOCX fidelity is not
   practical in `0.5.0`, preserve useful structure and document the limitation.
 

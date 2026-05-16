@@ -355,6 +355,11 @@ gaps.
   body section, long Thai body continuation, and footer page numbers.
   - Covered by `USER_REPORT_FIXTURES`, `userReportFixtures.test.ts`, and
     `userReportExport.test.ts`.
+- [x] `flow-row-export-golden`: multi-column `flow-row` with gap, styled
+  `flow-stack` boxes, and content continuing across pages.
+  - Covered by `product fixture — flow-row export preserves PDF page count and
+    DOCX layout projection` in
+    `packages/core/src/renderer/__tests__/productExportGolden.test.ts`.
 
 ## Coverage Matrix
 
@@ -375,6 +380,8 @@ gaps.
 | User-level company report package with data binding, pagination, PDF export, and app import/export path | `company-report` / `USER_REPORT_FIXTURES` + `userReportImportExport.test.ts` | Product package fixture |
 | User-level government report package with Thai body, TOC, bordered table, and footer restarts | `government-report` / `USER_REPORT_FIXTURES` | Product package fixture |
 | User-level university report package with cover/TOC/body restart and long Thai continuation | `university-report` / `USER_REPORT_FIXTURES` | Product package fixture |
+| Flow-row/flow-stack multi-column export with gaps and styled stack boxes | `flow-row-export-golden` / `productExportGolden.test.ts` | Product export smoke |
+| Flow-row/flow-stack PDF fill, border, and gap pixels | `pdfVisualRegression.test.ts` with `FLOWDOC_PDF_VISUAL_REGRESSION=1` | Opt-in PDF raster |
 | PDF export does not throw for representative multi-section documents | renderer smoke tests | Smoke |
 | PDF/editor pixel or page-count parity for product fixtures | future visual regression tests | Missing |
 | DOCX semantic Word heading styles | future DOCX structure tests | Missing |

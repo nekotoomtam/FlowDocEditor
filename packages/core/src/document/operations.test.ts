@@ -13,6 +13,7 @@ import {
   removeTableRow,
   splitParagraphAtIndex,
   updateFieldRefInline,
+  updateFlowStackBoxStyle,
   updateParagraphBoxStyle,
   updateParagraphText,
 } from "./operations"
@@ -336,6 +337,38 @@ describe("paragraph box style operations", () => {
     expect(updated.props.box).toEqual({
       fill: "E0F2FE",
       padding: { top: pt(0), right: pt(0), bottom: pt(0), left: pt(9) },
+    })
+  })
+})
+
+describe("flow-stack box style operations", () => {
+  it("updates flow-stack box style without changing row structure", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Column text" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1: p,
+    }, ["fr1"])
+
+    const result = updateFlowStackBoxStyle(doc, "fs1", {
+      fill: "E0F2FE",
+      padding: { top: pt(4), left: pt(6) },
+      border: { left: { style: "solid", width: pt(1), color: "111111" } },
+    })
+    const section = result.document.sections[0]
+    const row = section.nodes.fr1
+    const stack = section.nodes.fs1
+
+    expect(() => assertDocument(result)).not.toThrow()
+    expect(row.type).toBe("flow-row")
+    expect(stack.type).toBe("flow-stack")
+    if (row.type !== "flow-row" || stack.type !== "flow-stack") return
+    expect(row.childIds).toEqual(["fs1"])
+    expect(stack.childIds).toEqual(["p1"])
+    expect(stack.props.box).toEqual({
+      fill: "E0F2FE",
+      padding: { top: pt(4), right: pt(0), bottom: pt(0), left: pt(6) },
+      border: { left: { style: "solid", width: pt(1), color: "111111" } },
     })
   })
 })

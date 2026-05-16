@@ -1,6 +1,7 @@
 import type {
   DocumentNode,
   FieldRefInline,
+  FlowStackNode,
   LayoutNode,
   ParagraphBoxBorder,
   ParagraphBoxBorderSide,
@@ -596,7 +597,9 @@ function pruneParagraphBox(box: ParagraphBoxStyle): ParagraphBoxStyle | undefine
   return isEmptyParagraphBox(next) ? undefined : next
 }
 
-function applyParagraphBoxStyleChanges(node: ParagraphNode, changes: ParagraphBoxStyleChanges): ParagraphNode {
+type BoxStyleNode = ParagraphNode | FlowStackNode
+
+function applyBoxStyleChanges<T extends BoxStyleNode>(node: T, changes: ParagraphBoxStyleChanges): T {
   const current = node.props.box ?? {}
   const next: ParagraphBoxStyle = {
     ...current,
@@ -655,7 +658,7 @@ export function updateParagraphBoxStyle(
     const section = doc.document.sections[si]
     const node = section.nodes[paragraphId]
     if (node?.type === "paragraph") {
-      const updated: LayoutNode = applyParagraphBoxStyleChanges(node, changes)
+      const updated: LayoutNode = applyBoxStyleChanges(node, changes)
       const newSections = doc.document.sections.map((s, i) =>
         i === si ? { ...s, nodes: { ...s.nodes, [paragraphId]: updated } } : s,
       )
@@ -667,7 +670,7 @@ export function updateParagraphBoxStyle(
       const table = n as unknown as TableNode
       const inner = table.nodes[paragraphId]
       if (inner?.type !== "paragraph") continue
-      const updated = applyParagraphBoxStyleChanges(inner, changes)
+      const updated = applyBoxStyleChanges(inner, changes)
       const newTable = { ...table, nodes: { ...table.nodes, [paragraphId]: updated } }
       const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
       const newSections = doc.document.sections.map((s, i) =>
@@ -675,6 +678,24 @@ export function updateParagraphBoxStyle(
       )
       return { ...doc, document: { ...doc.document, sections: newSections } }
     }
+  }
+  return doc
+}
+
+export function updateFlowStackBoxStyle(
+  doc: DocumentNode,
+  stackId: string,
+  changes: ParagraphBoxStyleChanges,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[stackId]
+    if (node?.type !== "flow-stack") continue
+    const updated: LayoutNode = applyBoxStyleChanges(node, changes)
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes: { ...s.nodes, [stackId]: updated } } : s,
+    )
+    return { ...doc, document: { ...doc.document, sections: newSections } }
   }
   return doc
 }

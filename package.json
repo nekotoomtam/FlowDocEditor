@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -14,6 +14,8 @@
     "test": "npm run test:core && npm run test:app",
     "test:core": "npm run test -w packages/core --",
     "test:app": "vitest run",
+    "test:pdf-visual": "node scripts/run-pdf-visual-regression.mjs",
+    "dev:wysiwyg": "node scripts/dev-wysiwyg.mjs",
     "review:build": "node scripts/review-build.mjs",
     "review:gate": "npm run type-check && npm run test && npm run review:build",
     "review:gate:full": "npm run review:archive -- --check && npm run review:gate",

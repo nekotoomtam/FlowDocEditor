@@ -6,6 +6,7 @@ import {
   paragraphBoxBottomInset,
   paragraphBoxLeftInset,
   paragraphBoxTopInset,
+  resolveParagraphBoxStyle,
   toAbstractUnit,
   TOC_ENTRY_FS,
   TOC_ENTRY_LH,
@@ -584,6 +585,44 @@ function flowProgressKey(rowBox: FlowBox, splits: Map<string, FlowSplitPoint>): 
     .join("|")
 }
 
+function flowStackMeasuredBox(section: DocumentSection, stackBox: FlowBox): MeasuredParagraphBox | undefined {
+  const node = section.nodes[stackBox.nodeId]
+  if (node?.type !== "flow-stack") return undefined
+  return resolveParagraphBoxStyle(node.props.box, stackBox.width)
+}
+
+function isFlowStackSliceStart(from: FlowSplitPoint): boolean {
+  return from.childIdx === 0 && from.lineIdx === 0
+}
+
+function isFlowStackSliceEnd(stackBox: FlowBox, to: FlowSplitPoint | null): boolean {
+  const end = endFlowSplitPoint(stackBox, to)
+  return end.childIdx >= stackBox.children.length
+}
+
+function flowStackSliceTopInset(section: DocumentSection, stackBox: FlowBox, from: FlowSplitPoint): number {
+  return isFlowStackSliceStart(from) ? paragraphBoxTopInset(flowStackMeasuredBox(section, stackBox)) : 0
+}
+
+function flowStackSliceBottomInset(section: DocumentSection, stackBox: FlowBox, to: FlowSplitPoint | null): number {
+  return isFlowStackSliceEnd(stackBox, to) ? paragraphBoxBottomInset(flowStackMeasuredBox(section, stackBox)) : 0
+}
+
+function buildFlowStackBoxRenderProps(section: DocumentSection, stackBox: FlowBox): ParagraphBoxRenderProps | undefined {
+  return buildParagraphBoxRenderProps(flowStackMeasuredBox(section, stackBox))
+}
+
+function flowStackFirstSliceVisualFloor(section: DocumentSection, stackBox: FlowBox, from: FlowSplitPoint): number {
+  if (!isFlowStackSliceStart(from)) return 0
+  const node = section.nodes[stackBox.nodeId]
+  if (node?.type !== "flow-stack") return 0
+  const measuredBox = flowStackMeasuredBox(section, stackBox)
+  return Math.max(
+    Math.max(0, node.props.minHeight ?? 0),
+    paragraphBoxTopInset(measuredBox) + paragraphBoxBottomInset(measuredBox),
+  )
+}
+
 function flowStackHasRemainingContent(
   stackBox: FlowBox,
   section: DocumentSection,
@@ -653,7 +692,7 @@ function flowStackSliceHeight(
   from: FlowSplitPoint,
   to: FlowSplitPoint | null,
 ): number {
-  let height = 0
+  let height = flowStackSliceTopInset(section, stackBox, from)
   for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
     const child = stackBox.children[ci]
     if (!child) continue
@@ -674,7 +713,7 @@ function flowStackSliceHeight(
     if (isAtTo) break
   }
 
-  return height
+  return height + flowStackSliceBottomInset(section, stackBox, to)
 }
 
 function computeFlowStackSplitPointFrom(
@@ -685,14 +724,17 @@ function computeFlowStackSplitPointFrom(
   wordBreaker: WordBreaker,
   from: FlowSplitPoint,
 ): FlowSplitPoint | null {
-  let heightUsed = 0
+  let heightUsed = flowStackSliceTopInset(section, stackBox, from)
+  const bottomInset = paragraphBoxBottomInset(flowStackMeasuredBox(section, stackBox))
 
   for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
     const child = stackBox.children[ci]
     if (heightUsed >= availH) return { childIdx: ci, lineIdx: 0 }
+    const isLastStackChild = ci === stackBox.children.length - 1
 
     if (child.nodeType === "spacer") {
-      if (heightUsed + child.height <= availH) heightUsed += child.height
+      const trailingInset = isLastStackChild ? bottomInset : 0
+      if (heightUsed + child.height + trailingInset <= availH) heightUsed += child.height + trailingInset
       else return { childIdx: ci, lineIdx: 0 }
     } else if (child.nodeType === "paragraph") {
       const node = section.nodes[child.nodeId]
@@ -700,18 +742,24 @@ function computeFlowStackSplitPointFrom(
       const measured = measureParagraph(node, child.width, measurer, wordBreaker)
       const lineStart = ci === from.childIdx ? from.lineIdx : 0
       const remainingHeight = flowParagraphSliceHeight(node, child, measurer, wordBreaker, lineStart)
+      const trailingInset = isLastStackChild ? bottomInset : 0
 
-      if (heightUsed + remainingHeight <= availH) {
-        heightUsed += remainingHeight
+      if (heightUsed + remainingHeight + trailingInset <= availH) {
+        heightUsed += remainingHeight + trailingInset
       } else {
         const availForLines = availH - heightUsed - paragraphLineTopOffset(measured, lineStart)
         if (availForLines <= 0) return { childIdx: ci, lineIdx: lineStart }
         let lineAccum = 0
         for (let li = lineStart; li < measured.lines.length; li++) {
-          if (lineAccum + measured.lines[li].height > availForLines) return { childIdx: ci, lineIdx: li }
+          const lineEnd = li + 1
+          const completesParagraph = lineEnd >= measured.lines.length
+          const lineTrailingInset = completesParagraph
+            ? paragraphEndInset(measured, lineEnd) + trailingInset
+            : 0
+          if (lineAccum + measured.lines[li].height + lineTrailingInset > availForLines) return { childIdx: ci, lineIdx: li }
           lineAccum += measured.lines[li].height
         }
-        heightUsed += remainingHeight
+        heightUsed += remainingHeight + trailingInset
       }
     }
   }
@@ -732,7 +780,7 @@ function buildFlowStackSliceFragments(
   paragraphFragmentIndexes: Map<string, number>,
 ): PageFragment[] {
   const fragments: PageFragment[] = []
-  let curY = stackPageY
+  let curY = stackPageY + flowStackSliceTopInset(section, stackBox, from)
 
   for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
     const child = stackBox.children[ci]
@@ -865,6 +913,7 @@ function paginateFlowRow(
         y: current.cursorY,
         width: stackBox.width,
         height: rowSliceHeight,
+        boxRenderProps: buildFlowStackBoxRenderProps(section, stackBox),
         fragmentIndex: 0,
         continuesFrom: false,
         isContinued: false,
@@ -893,6 +942,13 @@ function paginateFlowRow(
     let hasContentProgress = false
     let rowSliceHeight = sliceMinHeight
     const sliceWarnings = new Map<string, PageFragmentWarning[]>()
+
+    for (const stackBox of box.children) {
+      rowSliceHeight = Math.max(
+        rowSliceHeight,
+        flowStackFirstSliceVisualFloor(section, stackBox, fromSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }),
+      )
+    }
 
     for (const stackBox of activeStacks) {
       const from = fromSplits.get(stackBox.nodeId)!
@@ -985,6 +1041,7 @@ function paginateFlowRow(
         y: current.cursorY,
         width: stackBox.width,
         height: rowSliceHeight,
+        boxRenderProps: buildFlowStackBoxRenderProps(section, stackBox),
         fragmentIndex: stackFragmentIndex,
         continuesFrom: stackFragmentIndex > 0,
         isContinued: stackContinuesAfter,

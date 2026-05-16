@@ -3,7 +3,7 @@
 import { useRef, useEffect, useMemo } from "react"
 import type { TextMeasurer } from "@/layout"
 import {
-  resolveParagraphBoxLayoutPrimitives,
+  resolveFragmentBoxLayoutPrimitives,
   type PaginatedDocument,
   type PageFragment,
   type PaginatedLine,
@@ -92,12 +92,17 @@ function paragraphBoxStrokeDashArray(border: ResolvedBorderSide, scale: number):
   return undefined
 }
 
-function renderParagraphBox(fragment: PageFragment, scale: number) {
-  const primitives = resolveParagraphBoxLayoutPrimitives(fragment)
+function renderFragmentBox(fragment: PageFragment, scale: number) {
+  const primitives = resolveFragmentBoxLayoutPrimitives(fragment)
   if (!primitives) return null
 
   return (
-    <g data-paragraph-box="true" style={{ pointerEvents: "none" }}>
+    <g
+      data-fragment-box="true"
+      data-paragraph-box={fragment.nodeType === "paragraph" ? "true" : undefined}
+      data-flow-stack-box={fragment.nodeType === "flow-stack" ? "true" : undefined}
+      style={{ pointerEvents: "none" }}
+    >
       {primitives.fill && (
         <rect
           data-paragraph-box-fill="true"
@@ -625,12 +630,13 @@ function PageView({
         const chromeBottom = f.nodeType === "paragraph" ? paragraphChromeY : 0
         const chromeY = displayFragment.y * scale - chromeTop
         const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
-        const hasAuthoredParagraphBox = f.nodeType === "paragraph" && Boolean(displayFragment.renderProps?.box)
-        const chromeFill = hasAuthoredParagraphBox && !isInlineEditing ? "transparent" : isInlineEditing ? "#dbeafe" : color
-        const chromeStroke = hasAuthoredParagraphBox && !isInlineEditing && !isHovered
+        const hasAuthoredFragmentBox = (f.nodeType === "paragraph" && Boolean(displayFragment.renderProps?.box)) ||
+          (f.nodeType === "flow-stack" && Boolean(displayFragment.boxRenderProps))
+        const chromeFill = hasAuthoredFragmentBox && !isInlineEditing ? "transparent" : isInlineEditing ? "#dbeafe" : color
+        const chromeStroke = hasAuthoredFragmentBox && !isInlineEditing && !isHovered
           ? "transparent"
           : isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"
-        const chromeOpacity = hasAuthoredParagraphBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
+        const chromeOpacity = hasAuthoredFragmentBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
         const selectionPad = isFlowStackParagraph ? 0 : 1
         const fragmentKey = isInlineEditing
           ? `inline-edit-${f.nodeId}`
@@ -688,7 +694,7 @@ function PageView({
               strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
               opacity={chromeOpacity}
             />
-            {f.nodeType === "paragraph" && renderParagraphBox(displayFragment, scale)}
+            {(f.nodeType === "paragraph" || f.nodeType === "flow-stack") && renderFragmentBox(displayFragment, scale)}
             {isSelected && !isInlineEditing && (
               <rect
                 x={displayFragment.x * scale - selectionPad} y={chromeY - selectionPad}

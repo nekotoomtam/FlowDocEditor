@@ -128,4 +128,36 @@ describe("flow-row / flow-stack measurement", () => {
     expect(row.children[0].height).toBe(row.height)
     expect(row.children[1].height).toBe(row.height)
   })
+
+  it("insets flow-stack children by authored box padding and borders", () => {
+    const p1 = makePara("p1", "Inset")
+    const row = measureFlowRow(makeDoc(["fr1"], {
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: {
+        id: "fs1",
+        type: "flow-stack",
+        props: {
+          widthShare: 100,
+          box: {
+            padding: { top: pt(4), right: pt(6), bottom: pt(8), left: pt(10) },
+            border: {
+              top: { style: "solid", width: pt(1), color: "111111" },
+              right: { style: "solid", width: pt(2), color: "222222" },
+              bottom: { style: "solid", width: pt(3), color: "333333" },
+              left: { style: "solid", width: pt(4), color: "444444" },
+            },
+          },
+        },
+        childIds: ["p1"],
+      },
+      p1,
+    }))
+
+    const stack = row.children[0]
+    const child = stack.children[0]
+    expect(child.x).toBeCloseTo(stack.x + 14, 2)
+    expect(child.y).toBeCloseTo(stack.y + 5, 2)
+    expect(child.width).toBeCloseTo(stack.width - 22, 2)
+    expect(stack.height).toBeCloseTo(child.height + 16, 2)
+  })
 })

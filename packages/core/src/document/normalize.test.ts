@@ -149,7 +149,20 @@ describe("normalizeDocument", () => {
   it("preserves flow-row and flow-stack props", () => {
     const doc = makeDoc({
       fr1: { id: "fr1", type: "flow-row", props: { gap: 6, minHeight: 96 }, childIds: ["fs1"] },
-      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100, minHeight: 24 }, childIds: [] },
+      fs1: {
+        id: "fs1",
+        type: "flow-stack",
+        props: {
+          widthShare: 100,
+          minHeight: 24,
+          box: {
+            fill: "F8FAFC",
+            padding: { top: pt(2), right: pt(4), bottom: pt(6), left: pt(8) },
+            border: { left: { style: "solid", width: pt(1), color: "0F172A" } },
+          },
+        },
+        childIds: [],
+      },
     }, ["fr1"])
 
     const nodes = normalizeDocument(doc).document.sections[0].nodes
@@ -162,6 +175,11 @@ describe("normalizeDocument", () => {
     expect(row.props.minHeight).toBe(96)
     expect(stack.props.widthShare).toBe(100)
     expect(stack.props.minHeight).toBe(24)
+    expect(stack.props.box).toEqual({
+      fill: "F8FAFC",
+      padding: { top: pt(2), right: pt(4), bottom: pt(6), left: pt(8) },
+      border: { left: { style: "solid", width: pt(1), color: "0F172A" } },
+    })
   })
 
   it("normalizes flow-row width shares without assuming two stacks", () => {

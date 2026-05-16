@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import type { DocumentNode, FieldRefInline, LayoutNode, TableNode, TableRowNode, TableCellNode, ParagraphNode, TocNode, ParagraphBoxBorderSide } from "@/schema"
+import type { DocumentNode, FieldRefInline, LayoutNode, TableNode, TableRowNode, TableCellNode, ParagraphNode, TocNode, ParagraphBoxBorderSide, ParagraphBoxStyle } from "@/schema"
 import { pt } from "@/schema"
 import { isPlainTextParagraph } from "@/document"
 import type { FieldRefInlineChanges, ParagraphBoxStyleChanges } from "@/document"
@@ -34,6 +34,7 @@ interface Props {
   onUpdateText: (nodeId: string, text: string) => void
   onUpdateFieldRef: (fieldRefId: string, changes: FieldRefInlineChanges) => void
   onUpdateParagraphBoxStyle: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
+  onUpdateFlowStackBoxStyle?: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
   onSelectContextNode: (nodeId: string) => void
   onDelete: (nodeId: string) => void
   tableOps: TableOps
@@ -314,16 +315,19 @@ function BorderStyleIcon({ style }: { style: ParagraphBoxBorderStyle }) {
   )
 }
 
-function ParagraphBoxControls({
+function BoxControls({
   nodeId,
-  node,
-  onUpdateParagraphBoxStyle,
+  box,
+  onUpdateBoxStyle,
+  testIdPrefix = "paragraph-box",
+  labelPrefix = "Paragraph box",
 }: {
   nodeId: string
-  node: ParagraphNode
-  onUpdateParagraphBoxStyle: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
+  box: ParagraphBoxStyle | undefined
+  onUpdateBoxStyle: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
+  testIdPrefix?: string
+  labelPrefix?: string
 }) {
-  const box = node.props.box
   const fill = box?.fill?.toUpperCase() ?? ""
   const activeEdges = PARAGRAPH_BOX_EDGES.filter((edge) => box?.border?.[edge])
   const activeSides = activeEdges
@@ -366,7 +370,7 @@ function ParagraphBoxControls({
       acc[edge] = side
       return acc
     }, {})
-    onUpdateParagraphBoxStyle(nodeId, { border })
+    onUpdateBoxStyle(nodeId, { border })
   }
 
   const makeBorderSide = (overrides: Partial<{
@@ -381,7 +385,7 @@ function ParagraphBoxControls({
 
   const commitFill = (nextFill: string) => {
     const hex = sanitizeHexColorInput(nextFill)
-    onUpdateParagraphBoxStyle(nodeId, { fill: hex.length === 6 ? hex : null })
+    onUpdateBoxStyle(nodeId, { fill: hex.length === 6 ? hex : null })
     setFillDraft(hex.length === 6 ? hex : "")
     setFillDraftDirty(false)
   }
@@ -389,7 +393,7 @@ function ParagraphBoxControls({
   const commitFillDraft = () => {
     const hex = sanitizeHexColorInput(fillDraft)
     if (hex.length === 0) {
-      if (fill !== "") onUpdateParagraphBoxStyle(nodeId, { fill: null })
+      if (fill !== "") onUpdateBoxStyle(nodeId, { fill: null })
       setFillDraft("")
       setFillDraftDirty(false)
       return
@@ -399,7 +403,7 @@ function ParagraphBoxControls({
       setFillDraftDirty(false)
       return
     }
-    if (hex !== fill) onUpdateParagraphBoxStyle(nodeId, { fill: hex })
+    if (hex !== fill) onUpdateBoxStyle(nodeId, { fill: hex })
     setFillDraft(hex)
     setFillDraftDirty(false)
   }
@@ -430,12 +434,12 @@ function ParagraphBoxControls({
   }
 
   const setPadding = (edge: ParagraphBoxEdge, value: string) => {
-    onUpdateParagraphBoxStyle(nodeId, { padding: { [edge]: pt(numericPtInput(value)) } })
+    onUpdateBoxStyle(nodeId, { padding: { [edge]: pt(numericPtInput(value)) } })
   }
 
   const setAllPadding = (value: string) => {
     const amount = numericPtInput(value)
-    onUpdateParagraphBoxStyle(nodeId, {
+    onUpdateBoxStyle(nodeId, {
       padding: {
         top: pt(amount),
         right: pt(amount),
@@ -449,7 +453,7 @@ function ParagraphBoxControls({
     <label key={edge} style={{ ...compassField, gridArea }}>
       <span style={compassControlLabel}>{edgeLabel(edge)}</span>
       <input
-        data-testid={`paragraph-box-padding-${edge}`}
+        data-testid={`${testIdPrefix}-padding-${edge}`}
         type="number"
         min={0}
         step={1}
@@ -466,7 +470,7 @@ function ParagraphBoxControls({
       <button
         key={edge}
         type="button"
-        data-testid={`paragraph-box-border-${edge}`}
+        data-testid={`${testIdPrefix}-border-${edge}`}
         aria-label={`Toggle ${edge} border`}
         aria-pressed={active}
         title={`Toggle ${edge} border`}
@@ -489,7 +493,7 @@ function ParagraphBoxControls({
       <button
         key={style}
         type="button"
-        data-testid={`paragraph-box-border-style-${style}`}
+        data-testid={`${testIdPrefix}-border-style-${style}`}
         aria-label={label}
         aria-pressed={active}
         title={label}
@@ -513,10 +517,10 @@ function ParagraphBoxControls({
   const borderPreviewWidth = Math.max(1, borderWidthDraft)
 
   return (
-    <section data-testid="paragraph-box-controls" style={sectionBox}>
-      <CollapsibleCard title="Fill" summary={fill ? `#${fill}` : "none"} testId="paragraph-box-fill-card">
+    <section data-testid={`${testIdPrefix}-controls`} style={sectionBox}>
+      <CollapsibleCard title="Fill" summary={fill ? `#${fill}` : "none"} testId={`${testIdPrefix}-fill-card`}>
         <div
-          data-testid="paragraph-box-fill-preview"
+          data-testid={`${testIdPrefix}-fill-preview`}
           style={{
             height: 22,
             border: "1px solid #e5e7eb",
@@ -528,7 +532,7 @@ function ParagraphBoxControls({
         <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 44px", gap: 6, alignItems: "center" }}>
           <input
             type="color"
-            aria-label="Paragraph box fill color"
+            aria-label={`${labelPrefix} fill color`}
             value={`#${fillPreviewColor}`}
             onChange={(e) => {
               setFillDraft(sanitizeHexColorInput(e.target.value))
@@ -538,7 +542,7 @@ function ParagraphBoxControls({
             style={{ width: 28, height: 24, padding: 0, border: "1px solid #e5e7eb", borderRadius: 4, background: "white" }}
           />
           <input
-            data-testid="paragraph-box-fill-input"
+            data-testid={`${testIdPrefix}-fill-input`}
             value={fillDraft}
             placeholder="none"
             maxLength={6}
@@ -571,8 +575,8 @@ function ParagraphBoxControls({
             <button
               key={swatch}
               type="button"
-              data-testid="paragraph-box-fill-swatch"
-              aria-label={`Set paragraph box fill ${swatch}`}
+              data-testid={`${testIdPrefix}-fill-swatch`}
+              aria-label={`Set ${labelPrefix.toLowerCase()} fill ${swatch}`}
               onClick={() => commitFill(swatch)}
               style={{
                 width: 20,
@@ -590,9 +594,9 @@ function ParagraphBoxControls({
         </div>
       </CollapsibleCard>
 
-      <CollapsibleCard title="Padding" summary={`${paddingSummary} pt`} testId="paragraph-box-padding-card">
+      <CollapsibleCard title="Padding" summary={`${paddingSummary} pt`} testId={`${testIdPrefix}-padding-card`}>
         <div
-          data-testid="paragraph-box-padding-compass"
+          data-testid={`${testIdPrefix}-padding-compass`}
           style={{
             ...compassGrid,
             gridTemplateAreas: `
@@ -607,7 +611,7 @@ function ParagraphBoxControls({
           <label style={{ ...compassField, gridArea: "all" }}>
             <span style={compassControlLabel}>All</span>
             <input
-              data-testid="paragraph-box-padding-all"
+              data-testid={`${testIdPrefix}-padding-all`}
               type="number"
               min={0}
               step={1}
@@ -620,14 +624,14 @@ function ParagraphBoxControls({
           {renderPaddingInput("right", "right")}
           {renderPaddingInput("bottom", "bottom")}
         </div>
-        <button type="button" onClick={() => onUpdateParagraphBoxStyle(nodeId, { padding: null })} style={{ ...btn, width: "100%", marginTop: 5 }}>
+        <button type="button" onClick={() => onUpdateBoxStyle(nodeId, { padding: null })} style={{ ...btn, width: "100%", marginTop: 5 }}>
           Clear padding
         </button>
       </CollapsibleCard>
 
-      <CollapsibleCard title="Border" summary={borderSummary} testId="paragraph-box-border-card">
+      <CollapsibleCard title="Border" summary={borderSummary} testId={`${testIdPrefix}-border-card`}>
         <div
-          data-testid="paragraph-box-border-compass"
+          data-testid={`${testIdPrefix}-border-compass`}
           style={{
             ...compassGrid,
             marginBottom: 6,
@@ -642,7 +646,7 @@ function ParagraphBoxControls({
           {renderBorderButton("left", "left")}
           <button
             type="button"
-            data-testid="paragraph-box-border-all"
+            data-testid={`${testIdPrefix}-border-all`}
             aria-label={allBorderActionLabel}
             aria-pressed={allBordersActive}
             title={allBorderActionLabel}
@@ -662,7 +666,7 @@ function ParagraphBoxControls({
         <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
             <span style={{ fontSize: 9, color: "#9ca3af" }}>Style</span>
-            <div data-testid="paragraph-box-border-style-group" style={borderStyleGroup}>
+            <div data-testid={`${testIdPrefix}-border-style-group`} style={borderStyleGroup}>
               {BOX_BORDER_STYLE_OPTIONS.map(renderBorderStyleButton)}
             </div>
             {borderStyle === "mixed" && <span style={{ fontSize: 9, color: "#9ca3af" }}>mixed sides</span>}
@@ -671,7 +675,7 @@ function ParagraphBoxControls({
             <span style={{ fontSize: 9, color: "#9ca3af" }}>Width</span>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 52px", gap: 6, alignItems: "center" }}>
               <input
-                data-testid="paragraph-box-border-width-slider"
+                data-testid={`${testIdPrefix}-border-width-slider`}
                 aria-label="Border width"
                 type="range"
                 min={0}
@@ -691,7 +695,7 @@ function ParagraphBoxControls({
                 style={{ width: "100%" }}
               />
               <input
-                data-testid="paragraph-box-border-width"
+                data-testid={`${testIdPrefix}-border-width`}
                 type="number"
                 min={0}
                 max={BOX_BORDER_WIDTH_MAX}
@@ -713,7 +717,7 @@ function ParagraphBoxControls({
           </label>
         </div>
         <div
-          data-testid="paragraph-box-border-preview"
+          data-testid={`${testIdPrefix}-border-preview`}
           style={{
             height: 20,
             display: "flex",
@@ -732,7 +736,7 @@ function ParagraphBoxControls({
         <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 44px", gap: 6, alignItems: "center", marginTop: 6 }}>
           <input
             type="color"
-            aria-label="Paragraph box border color"
+            aria-label={`${labelPrefix} border color`}
             value={`#${borderPreviewColor}`}
             onChange={(e) => {
               const hex = sanitizeHexColorInput(e.target.value)
@@ -743,7 +747,7 @@ function ParagraphBoxControls({
             style={{ width: 28, height: 24, padding: 0, border: "1px solid #e5e7eb", borderRadius: 4, background: "white" }}
           />
           <input
-            data-testid="paragraph-box-border-color"
+            data-testid={`${testIdPrefix}-border-color`}
             value={borderColorDraft}
             placeholder="mixed"
             maxLength={6}
@@ -771,15 +775,15 @@ function ParagraphBoxControls({
             Apply
           </button>
         </div>
-        <button type="button" onClick={() => onUpdateParagraphBoxStyle(nodeId, { border: null })} style={{ ...btn, width: "100%", marginTop: 5 }}>
+        <button type="button" onClick={() => onUpdateBoxStyle(nodeId, { border: null })} style={{ ...btn, width: "100%", marginTop: 5 }}>
           Clear border
         </button>
       </CollapsibleCard>
 
       <button
         type="button"
-        data-testid="paragraph-box-reset"
-        onClick={() => onUpdateParagraphBoxStyle(nodeId, { fill: null, padding: null, border: null })}
+        data-testid={`${testIdPrefix}-reset`}
+        onClick={() => onUpdateBoxStyle(nodeId, { fill: null, padding: null, border: null })}
         style={{ ...btnDanger, width: "100%" }}
       >
         Reset box style
@@ -1005,7 +1009,7 @@ const borderStyleIconLine: React.CSSProperties = {
 
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
-export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
+export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
   const [contextOpen, setContextOpen] = useState(false)
   const [paragraphPanelTab, setParagraphPanelTab] = useState<ParagraphPanelTab>("text")
   const [flowContainerPanelTab, setFlowContainerPanelTab] = useState<FlowContainerPanelTab>("layout")
@@ -1312,10 +1316,10 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                 hidden={paragraphPanelTab !== "box"}
                 style={{ ...paragraphTabPanel, display: paragraphPanelTab === "box" ? "flex" : "none" }}
               >
-                <ParagraphBoxControls
+                <BoxControls
                   nodeId={selectedNodeId}
-                  node={node}
-                  onUpdateParagraphBoxStyle={onUpdateParagraphBoxStyle}
+                  box={node.props.box}
+                  onUpdateBoxStyle={onUpdateParagraphBoxStyle}
                 />
               </section>
             </>
@@ -1385,15 +1389,6 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   onChange={(e) => onUpdateProps(selectedNodeId, { gap: Math.max(0, Number(e.target.value) || 0) })}
                   style={input} />
               </div>
-            </section>
-            <section
-              id="flow-row-panel-box"
-              role="tabpanel"
-              aria-labelledby="flow-row-panel-tab-box"
-              data-testid="flow-row-panel-box"
-              hidden={flowContainerPanelTab !== "box"}
-              style={{ ...paragraphTabPanel, display: flowContainerPanelTab === "box" ? "flex" : "none" }}
-            >
               <div>
                 <div style={labelWithInfo}>
                   <label style={inlineLabel}>Min height (pt)</label>
@@ -1407,6 +1402,15 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   }}
                   style={input} />
               </div>
+            </section>
+            <section
+              id="flow-row-panel-box"
+              role="tabpanel"
+              aria-labelledby="flow-row-panel-tab-box"
+              data-testid="flow-row-panel-box"
+              hidden={flowContainerPanelTab !== "box"}
+              style={{ ...paragraphTabPanel, display: flowContainerPanelTab === "box" ? "flex" : "none" }}
+            >
             </section>
           </>
         )}
@@ -1670,15 +1674,6 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   value={Math.round(node.props.widthShare ?? 100)}
                   style={{ ...input, background: "#f9fafb", color: "#9ca3af" }} />
               </div>
-            </section>
-            <section
-              id="flow-stack-panel-box"
-              role="tabpanel"
-              aria-labelledby="flow-stack-panel-tab-box"
-              data-testid="flow-stack-panel-box"
-              hidden={flowContainerPanelTab !== "box"}
-              style={{ ...paragraphTabPanel, display: flowContainerPanelTab === "box" ? "flex" : "none" }}
-            >
               <div>
                 <div style={labelWithInfo}>
                   <label style={inlineLabel}>Min height (pt)</label>
@@ -1692,6 +1687,22 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   }}
                   style={input} />
               </div>
+            </section>
+            <section
+              id="flow-stack-panel-box"
+              role="tabpanel"
+              aria-labelledby="flow-stack-panel-tab-box"
+              data-testid="flow-stack-panel-box"
+              hidden={flowContainerPanelTab !== "box"}
+              style={{ ...paragraphTabPanel, display: flowContainerPanelTab === "box" ? "flex" : "none" }}
+            >
+              <BoxControls
+                nodeId={selectedNodeId}
+                box={node.props.box}
+                onUpdateBoxStyle={onUpdateFlowStackBoxStyle ?? onUpdateParagraphBoxStyle}
+                testIdPrefix="flow-stack-box"
+                labelPrefix="Stack box"
+              />
             </section>
           </>
         )}

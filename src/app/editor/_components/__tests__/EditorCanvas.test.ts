@@ -158,7 +158,22 @@ function makeFlowPaginated(): PaginatedDocument {
         contentBox: { x: 36, y: 72, width: 228, height: 256 },
         fragments: [
           { nodeId: "fr1", nodeType: "flow-row", pageIndex: 0, x: 36, y: 72, width: 228, height: 40, fragmentIndex: 0 },
-          { nodeId: "fs1", nodeType: "flow-stack", parentNodeId: "fr1", pageIndex: 0, x: 36, y: 72, width: 228, height: 40, fragmentIndex: 0 },
+          {
+            nodeId: "fs1",
+            nodeType: "flow-stack",
+            parentNodeId: "fr1",
+            pageIndex: 0,
+            x: 36,
+            y: 72,
+            width: 228,
+            height: 40,
+            fragmentIndex: 0,
+            boxRenderProps: {
+              fill: "E0F2FE",
+              padding: { top: 0, right: 0, bottom: 0, left: 0 },
+              border: { left: { style: "solid", width: 1, color: "111111" } },
+            },
+          },
           textFragment("body-p", "Body text", 72),
         ],
         headerFragments: [],
@@ -240,6 +255,7 @@ describe("EditorCanvas flow-row / flow-stack static preview", () => {
 
     expect(markup).toContain("data-node-type=\"flow-row\"")
     expect(markup).toContain("data-node-type=\"flow-stack\"")
+    expect(markup).toContain("data-flow-stack-box=\"true\"")
     expect(markup).toContain("flow-row")
     expect(markup).toContain("flow-stack")
   })

@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest"
 import JSZip from "jszip"
 import { LineCapStyle } from "pdf-lib"
-import { PdfRenderer, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions } from "../pdf"
+import { PdfRenderer, resolveFragmentBoxDrawingPrimitives, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions } from "../pdf"
 import { DocxRenderer } from "../docx"
 import { paginateDocument } from "../../pagination"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
+import { ptToTwips } from "../shared"
 import { pt } from "../../schema"
 import type { DocumentNode, LayoutNode, ParagraphNode, SpacerNode } from "../../schema"
 
@@ -162,6 +163,35 @@ describe("PdfRenderer smoke tests", () => {
     const result = await pdf.render(paginate(makeDoc(["p1"], { p1: p })))
     expect(result.buffer.length).toBeGreaterThan(0)
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("resolves flow-stack box drawing primitives from fragment metadata", () => {
+    const p = makePara("p1", "Stack boxed")
+    const fs1: LayoutNode = {
+      id: "fs1",
+      type: "flow-stack",
+      props: {
+        widthShare: 100,
+        box: {
+          fill: "E0F2FE",
+          padding: { top: pt(2), right: pt(2), bottom: pt(2), left: pt(2) },
+          border: { left: { style: "dashed", width: pt(1), color: "111111" } },
+        },
+      },
+      childIds: ["p1"],
+    }
+    const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] }
+    const page = paginate(makeDoc(["fr1"], { fr1: row, fs1, p1: p })).sections[0].pages[0]
+    const stack = page.fragments.find((fragment) => fragment.nodeId === "fs1" && fragment.nodeType === "flow-stack")!
+    const primitives = resolveFragmentBoxDrawingPrimitives(stack, page.height)
+
+    expect(primitives?.fill).toMatchObject({
+      x: stack.x,
+      width: stack.width,
+      height: stack.height,
+      color: "E0F2FE",
+    })
+    expect(primitives?.borders.map((line) => line.side)).toEqual(["left"])
   })
 
   it("maps paragraph box border styles to PDF line drawing options", () => {
@@ -366,6 +396,34 @@ describe("DocxRenderer smoke tests", () => {
     expect(result.buffer[1]).toBe(0x4b)
   })
 
+  it("emits flow-row as a fixed DOCX layout table using paginated geometry", async () => {
+    const p1 = makePara("p1", "Left")
+    const p2 = makePara("p2", "Right")
+    const fs1: LayoutNode = { id: "fs1", type: "flow-stack", props: { widthShare: 25 }, childIds: ["p1"] }
+    const fs2: LayoutNode = { id: "fs2", type: "flow-stack", props: { widthShare: 75 }, childIds: ["p2"] }
+    const row: LayoutNode = { id: "fr1", type: "flow-row", props: { gap: 12, minHeight: 96 }, childIds: ["fs1", "fs2"] }
+    const paginated = paginate(makeDoc(["fr1"], { fr1: row, fs1, fs2, p1, p2 }))
+    const page = paginated.sections[0].pages[0]
+    const rowFragment = page.fragments.find((fragment) => fragment.nodeId === "fr1" && fragment.nodeType === "flow-row")!
+    const stackFragments = page.fragments.filter((fragment) => fragment.parentNodeId === "fr1" && fragment.nodeType === "flow-stack")
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(xml).toContain('w:tblLayout w:type="fixed"')
+    expect(xml).toContain(`w:tblW w:type="dxa" w:w="${ptToTwips(rowFragment.width)}"`)
+    expect(xml).toContain(`w:trHeight w:val="${ptToTwips(rowFragment.height)}" w:hRule="exact"`)
+    expect(xml).toContain("w:cantSplit")
+    for (const stack of stackFragments) {
+      const width = ptToTwips(stack.width)
+      expect(xml).toContain(`w:gridCol w:w="${width}"`)
+      expect(xml).toContain(`w:tcW w:type="dxa" w:w="${width}"`)
+    }
+    const gapWidth = ptToTwips(stackFragments[1].x - (stackFragments[0].x + stackFragments[0].width))
+    expect(xml).toContain(`w:gridCol w:w="${gapWidth}"`)
+    expect(xml).toContain(`w:tcW w:type="dxa" w:w="${gapWidth}"`)
+  })
+
   it("renders long flow-row marker lines once in DOCX output", async () => {
     const leftLines = Array.from({ length: 90 }, (_, i) => `FLOWDOC_LEFT_MARKER_${i}`)
     const rightLines = Array.from({ length: 90 }, (_, i) => `FLOWDOC_RIGHT_MARKER_${i}`)
@@ -426,5 +484,35 @@ describe("DocxRenderer smoke tests", () => {
     expect(xml).toContain('w:val="dashed"')
     expect(xml).toContain('w:val="dotted"')
     expect(xml).toContain('w:space="6"')
+  })
+
+  it("emits flow-stack box as DOCX table cell shading, borders, and margins", async () => {
+    const p = makePara("p1", "Stack boxed")
+    const fs1: LayoutNode = {
+      id: "fs1",
+      type: "flow-stack",
+      props: {
+        widthShare: 100,
+        box: {
+          fill: "E0F2FE",
+          padding: { top: pt(3), right: pt(4), bottom: pt(5), left: pt(6) },
+          border: {
+            top: { style: "solid", width: pt(1), color: "111111" },
+            left: { style: "dashed", width: pt(1), color: "222222" },
+          },
+        },
+      },
+      childIds: ["p1"],
+    }
+    const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] }
+    const result = await docx.render(paginate(makeDoc(["fr1"], { fr1: row, fs1, p1: p })))
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(xml).toContain('w:fill="E0F2FE"')
+    expect(xml).toContain("<w:tcMar>")
+    expect(xml).toContain('w:w="120"')
+    expect(xml).toContain('w:color="111111"')
+    expect(xml).toContain('w:color="222222"')
+    expect(xml).toContain('w:val="dashed"')
   })
 })

@@ -1,4 +1,4 @@
-import type { ParagraphBoxBorderSide, ParagraphNode, SpacerNode } from "../schema"
+import type { ParagraphBoxBorderSide, ParagraphBoxStyle, ParagraphNode, SpacerNode } from "../schema"
 import type {
   LineSegment,
   MeasuredBoxEdges,
@@ -52,8 +52,7 @@ function resolveParagraphBorderSide(side: ParagraphBoxBorderSide | undefined): M
   return { style: side.style, width, color: side.color }
 }
 
-function resolveParagraphBox(node: ParagraphNode, availableWidth: number): MeasuredParagraphBox | undefined {
-  const box = node.props.box
+export function resolveParagraphBoxStyle(box: ParagraphBoxStyle | undefined, availableWidth: number): MeasuredParagraphBox | undefined {
   if (!box) return undefined
 
   const padding: MeasuredBoxEdges = box.padding
@@ -82,6 +81,10 @@ function resolveParagraphBox(node: ParagraphNode, availableWidth: number): Measu
     border,
     contentWidth: Math.max(0, availableWidth - horizontalInset),
   }
+}
+
+function resolveParagraphBox(node: ParagraphNode, availableWidth: number): MeasuredParagraphBox | undefined {
+  return resolveParagraphBoxStyle(node.props.box, availableWidth)
 }
 
 export function paragraphBoxHorizontalInset(box: MeasuredParagraphBox | undefined): number {

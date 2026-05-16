@@ -35,6 +35,7 @@ Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 | `company-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts`, `src/app/api/__tests__/userReportImportExport.test.ts` | saved FlowDoc package v2, field/data binding, header/footer, page numbers, multi-page KPI table, default and production-stack pagination assertions, PDF page count, app import/export path |
 | `government-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts` | saved FlowDoc package v2, cover, TOC, Thai formal body, keep-with-next heading, bordered table, restarted footer page numbers, default and production-stack pagination assertions, PDF page count |
 | `university-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts` | saved FlowDoc package v2, cover, TOC, body page restart, long Thai continuation, footer page numbers, default and production-stack pagination assertions, PDF page count |
+| `flow-row-export-golden` | `packages/core/src/renderer/__tests__/productExportGolden.test.ts` | multi-column flow-row export with gaps, styled flow-stack boxes, PDF page-count parity, DOCX fixed-layout table projection, DOCX marker de-duplication |
 
 Product fixture names should stay visible in test descriptions, such as
 `product fixture - customs-basic-table`.
@@ -110,9 +111,10 @@ fragments.
 
 Protects PDF/DOCX smoke behavior, renderer input contract, text flow, multiple
 sections, page-number restarts, TOC output, DOCX structural XML checks, product
-PDF page-count parity, user-level report PDF page-count parity, and product
-DOCX table row structure. `pdfVisualRegression.test.ts` keeps a normal opt-in
-gate test and can verify paragraph box fill/border pixels when
+PDF page-count parity, user-level report PDF page-count parity, product DOCX
+table row structure, and flow-row DOCX fixed-layout projection.
+`pdfVisualRegression.test.ts` keeps a normal opt-in gate test and can verify
+paragraph box pixels plus flow-row/flow-stack fill, border, and gap pixels when
 `FLOWDOC_PDF_VISUAL_REGRESSION=1` is run on a machine with `pdftoppm` or
 ImageMagick plus Ghostscript. `EditorCanvas.test.ts` covers paragraph box
 editor preview fill/border rendering from paginated metadata.
@@ -194,7 +196,7 @@ editor scenario.
 Known gaps:
 
 - broad visual regression tests for PDF/editor parity beyond the focused
-  paragraph box PDF raster gate
+  paragraph box and flow-row PDF raster gates
 - broad automated browser workflow regression suite beyond the first editor
   smoke
 - DOCX semantic heading/style assertions
