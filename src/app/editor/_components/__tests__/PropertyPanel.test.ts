@@ -460,6 +460,10 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"flow-table-cell-rowspan-input\"")
     expect(markup).toContain("data-testid=\"flow-table-cell-colspan-input\"")
     expect(markup).toContain("data-testid=\"info-hint\"")
+    expect(markup).toContain("Merge right")
+    expect(markup).toContain("Merge right needs an empty cell fully inside the next span")
+    expect(markup).toContain("Merge down")
+    expect(markup).toContain("Unmerge")
     expect(markup).toContain("↑ Above")
     expect(markup).toContain("Right →")
     expect(markup).toContain("Delete column")
@@ -493,6 +497,8 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"flow-table-cell-rowspan-input\"")
     expect(markup).toContain("data-testid=\"flow-table-cell-colspan-input\"")
     expect(markup).toContain("value=\"2\"")
+    expect(markup).toContain("Unmerge")
+    expect(markup).toContain("Split selected span into empty cells")
   })
 
   it("enables C2.2 safe flow-table delete controls for spanned tables", () => {

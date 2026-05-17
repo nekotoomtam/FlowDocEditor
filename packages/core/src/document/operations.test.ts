@@ -1468,6 +1468,48 @@ describe("flow-table structural operations", () => {
     expect(updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2 })).toBe(doc)
   })
 
+  it("merges a flow-table cell right into an empty neighbor by increasing colspan", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["", ""],
+        ["", ""],
+      ],
+      columnWidths: [100, 100],
+    })
+    const updated = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2 })
+    assertDocument(updated)
+    const table = getFlowTable(updated)
+    const grid = resolveFlowTableGrid(table)
+    const topRow = table.nodes["flow-row-0"]
+
+    expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 2, rowspan: 1 })
+    expect(table.nodes["flow-cell-0-1"]).toBeUndefined()
+    expect(topRow?.type).toBe("flow-table-row")
+    if (topRow?.type !== "flow-table-row") return
+    expect(topRow.cellIds).toEqual(["flow-cell-0-0"])
+  })
+
+  it("merges a flow-table cell down into an empty neighbor by increasing rowspan", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["", ""],
+        ["", ""],
+      ],
+      columnWidths: [100, 100],
+    })
+    const updated = updateFlowTableCellSpan(doc, "flow-cell-0-0", { rowspan: 2 })
+    assertDocument(updated)
+    const table = getFlowTable(updated)
+    const grid = resolveFlowTableGrid(table)
+    const bottomRow = table.nodes["flow-row-1"]
+
+    expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 1, rowspan: 2 })
+    expect(table.nodes["flow-cell-1-0"]).toBeUndefined()
+    expect(bottomRow?.type).toBe("flow-table-row")
+    if (bottomRow?.type !== "flow-table-row") return
+    expect(bottomRow.cellIds).toEqual(["flow-cell-1-1"])
+  })
+
   it("shrinks a flow-table cell span by creating empty replacement cells", () => {
     const doc = makeGridFlowTableDoc({
       rows: [

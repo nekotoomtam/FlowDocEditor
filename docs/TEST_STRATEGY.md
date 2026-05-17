@@ -303,6 +303,9 @@ Current strengths:
   edits: empty-cell expansion, non-empty-cell blocking, shrink replacement
   cells, grid validity, and PropertyPanel span controls wired through a core
   operation.
+- Flow Table C2.3B/C2.4 coverage protects directional empty-cell merge and
+  unmerge controls by asserting one-step right/down span expansion, replacement
+  cells on split, and PropertyPanel affordance text/disabled states.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual

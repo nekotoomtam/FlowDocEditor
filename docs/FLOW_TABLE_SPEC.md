@@ -38,7 +38,12 @@ Implementation status:
   expand its `rowspan`/`colspan` only through empty cells that are wholly inside
   the new span rectangle. Shrinking a span creates empty replacement cells for
   vacated slots.
-- Merge/unmerge and span-origin movement remain deferred.
+- C2.3B/C2.4 convenience controls are available for safe empty-cell merge and
+  unmerge. `Merge right` and `Merge down` increase the selected cell span only
+  when the next cells are empty and wholly consumed by the requested rectangle.
+  `Unmerge` collapses the selected span to `1x1` and creates empty replacement
+  cells.
+- Non-empty content merge and span-origin movement remain deferred.
 - Broader property editing and row/column/span operations remain intentionally
   incremental.
 
@@ -388,8 +393,9 @@ v1 editor support should be static and explicit:
   row break allowance, and basic cell text/vertical alignment
 - text editing can stay conservative and reuse current safe cell-edit paths
 - live cross-page WYSIWYG editing inside Flow Table is deferred
-- safe span editing UI may expose `rowspan`/`colspan` only through core
-  operations that preserve grid law; content merge/unmerge remains deferred
+- safe span editing UI may expose `rowspan`/`colspan`, directional empty-cell
+  merge, and unmerge only through core operations that preserve grid law;
+  non-empty content merge remains deferred
 
 ## Migration And Compatibility
 
@@ -436,7 +442,9 @@ Suggested order:
     implemented only for targets that do not move span origins.
 17. Add C2.3A safe cell span controls. Current status: implemented for
     empty-cell expansion and empty-cell replacement on shrink.
-18. Add C2 span-origin movement, content merge/unmerge, and broader span authoring
+18. Add C2.3B/C2.4 safe empty-cell merge and unmerge controls. Current status:
+    implemented using the C2.3A span operation.
+19. Add C2 span-origin movement, non-empty content merge, and broader span authoring
     operations.
 
 ## Test Plan

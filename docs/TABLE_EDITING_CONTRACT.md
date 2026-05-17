@@ -125,8 +125,12 @@ Flow Table C2 foundation:
   core operation that keeps the grid valid. Expansion may consume only empty
   cells that are wholly inside the requested span rectangle. Shrinking creates
   empty replacement cells in vacated slots.
-- C2.3A must not merge non-empty content, move a span origin, or make the
-  property panel patch span props directly.
+- C2.3B/C2.4 allows directional empty-cell merge and unmerge controls that
+  call the same core span operation. `Merge right`/`Merge down` are convenience
+  actions for increasing `colspan`/`rowspan`; `Unmerge` collapses the selected
+  span to `1x1`.
+- These controls must not merge non-empty content, move a span origin, or make
+  the property panel patch span props directly.
 
 ## Pagination-Related Authoring Rules
 
@@ -162,6 +166,6 @@ behavior:
 
 - Selection and editing for multiple paragraphs inside one table cell.
 - Explicit table or column resize UI.
-- Content-merge authoring UI for `rowspan` and `colspan`.
+- Non-empty content-merge authoring UI for `rowspan` and `colspan`.
 - Split-at-row-boundary within rowspan-linked groups.
 - Visual regression tests for editor/PDF parity on multi-page tables.

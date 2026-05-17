@@ -15,7 +15,7 @@ import type {
   TocNode,
 } from "@/schema"
 import { pt } from "@/schema"
-import { canRemoveFlowTableColumn, canRemoveFlowTableRow, isPlainTextParagraph } from "@/document"
+import { canRemoveFlowTableColumn, canRemoveFlowTableRow, canUpdateFlowTableCellSpan, isPlainTextParagraph } from "@/document"
 import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges } from "@/document"
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
@@ -1937,6 +1937,9 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           const canAddGrid = table ? canAddFlowTableGrid(table) : false
           const canRemoveCol = table && pos ? canRemoveFlowTableColumn(table, pos.colIndex) : false
           const canRemoveRow = table && pos ? canRemoveFlowTableRow(table, pos.rowIndex) : false
+          const canMergeRight = table && pos ? canUpdateFlowTableCellSpan(table, selectedNodeId, { colspan: pos.colspan + 1 }) : false
+          const canMergeDown = table && pos ? canUpdateFlowTableCellSpan(table, selectedNodeId, { rowspan: pos.rowspan + 1 }) : false
+          const canUnmerge = table && pos ? canUpdateFlowTableCellSpan(table, selectedNodeId, { colspan: 1, rowspan: 1 }) : false
           return (
             <>
               {pos && table && (
@@ -2019,6 +2022,32 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                         style={input}
                       />
                     </label>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4, marginTop: 6 }}>
+                    <button
+                      style={{ ...btn, opacity: canMergeRight ? 1 : 0.4 }}
+                      disabled={!canMergeRight}
+                      title={canMergeRight ? "Merge right into empty cells" : "Merge right needs an empty cell fully inside the next span"}
+                      onClick={() => onUpdateFlowTableCellSpan?.(selectedNodeId, { colspan: pos.colspan + 1 })}
+                    >
+                      Merge right
+                    </button>
+                    <button
+                      style={{ ...btn, opacity: canMergeDown ? 1 : 0.4 }}
+                      disabled={!canMergeDown}
+                      title={canMergeDown ? "Merge down into empty cells" : "Merge down needs an empty cell fully inside the next span"}
+                      onClick={() => onUpdateFlowTableCellSpan?.(selectedNodeId, { rowspan: pos.rowspan + 1 })}
+                    >
+                      Merge down
+                    </button>
+                    <button
+                      style={{ ...btn, opacity: canUnmerge ? 1 : 0.4 }}
+                      disabled={!canUnmerge}
+                      title={canUnmerge ? "Split selected span into empty cells" : "Selected cell is already 1 by 1"}
+                      onClick={() => onUpdateFlowTableCellSpan?.(selectedNodeId, { colspan: 1, rowspan: 1 })}
+                    >
+                      Unmerge
+                    </button>
                   </div>
                 </div>
               )}

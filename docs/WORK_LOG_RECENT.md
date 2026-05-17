@@ -24,6 +24,40 @@ Each entry should include:
 
 ## 2026-05-17
 
+### Add Flow Table C2.3B/C2.4 Empty Merge And Unmerge Controls
+
+Goal: Make the safe span operation easier to use from the PropertyPanel without
+adding non-empty content merge or span-origin movement.
+
+Completed:
+
+- Added Flow Table cell `Merge right`, `Merge down`, and `Unmerge` controls.
+- Wired the buttons through `canUpdateFlowTableCellSpan(...)` and
+  `updateFlowTableCellSpan(...)` so the editor never patches span props
+  directly.
+- Kept merge limited to empty cells wholly consumed by the requested span
+  rectangle.
+- Kept unmerge limited to collapsing the selected span to `1x1` and creating
+  empty replacement cells.
+- Added focused operation coverage for one-step right/down empty-cell merge.
+- Extended PropertyPanel coverage for merge/unmerge affordances and blocked
+  merge titles.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/flowTableGrid.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- `npm.cmd run smoke:editor`
+
+Notes:
+
+- Non-empty content merge remains a design gate.
+- Span-origin movement remains deferred.
+
 ### Add Flow Table C2.3A Safe Cell Span Controls
 
 Goal: Let the PropertyPanel author Flow Table cell `rowspan`/`colspan` through
