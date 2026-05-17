@@ -1981,7 +1981,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                 <div>
                   <div style={labelWithInfo}>
                     <label style={inlineLabel}>Span</label>
-                    <InfoHint text="Expanding can only consume empty Flow Table cells. Shrinking creates empty replacement cells; content merge and span-origin movement are deferred." />
+                    <InfoHint text="Merging appends consumed cell content to the selected cell in row-major order. Unmerge creates empty replacement cells and does not restore original content mapping." />
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                     <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, color: "#6b7280" }}>
@@ -2027,7 +2027,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                     <button
                       style={{ ...btn, opacity: canMergeRight ? 1 : 0.4 }}
                       disabled={!canMergeRight}
-                      title={canMergeRight ? "Merge right into empty cells" : "Merge right needs an empty cell fully inside the next span"}
+                      title={canMergeRight ? "Merge right and append content" : "Merge right needs a fully covered cell inside the next span"}
                       onClick={() => onUpdateFlowTableCellSpan?.(selectedNodeId, { colspan: pos.colspan + 1 })}
                     >
                       Merge right
@@ -2035,7 +2035,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                     <button
                       style={{ ...btn, opacity: canMergeDown ? 1 : 0.4 }}
                       disabled={!canMergeDown}
-                      title={canMergeDown ? "Merge down into empty cells" : "Merge down needs an empty cell fully inside the next span"}
+                      title={canMergeDown ? "Merge down and append content" : "Merge down needs a fully covered cell inside the next span"}
                       onClick={() => onUpdateFlowTableCellSpan?.(selectedNodeId, { rowspan: pos.rowspan + 1 })}
                     >
                       Merge down

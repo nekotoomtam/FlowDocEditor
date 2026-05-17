@@ -24,6 +24,40 @@ Each entry should include:
 
 ## 2026-05-17
 
+### Add Flow Table C2.5A Non-Empty Merge Append
+
+Goal: Allow practical Flow Table merge through non-empty cells without adding
+source-cell content metadata or span-origin movement.
+
+Completed:
+
+- Updated the shared Flow Table span operation so selected-cell expansion may
+  consume non-empty cells that are wholly inside the requested span rectangle.
+- Appended consumed cell child blocks to the selected cell in row-major order.
+- Discarded empty placeholder paragraphs from consumed cells so empty merge
+  does not create extra blank content.
+- Kept unmerge behavior intentionally one-way for content: combined content
+  stays in the selected cell and vacated slots receive empty replacement cells.
+- Updated PropertyPanel copy for `Merge right`, `Merge down`, and `Unmerge` to
+  reflect content append behavior.
+- Added focused operation coverage for row-major content append and unmerge
+  after content merge.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/flowTableGrid.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- `npm.cmd run smoke:editor`
+
+Notes:
+
+- Source-cell content mapping restoration remains deferred.
+- Span-origin movement remains deferred.
+
 ### Add Flow Table C2.3B/C2.4 Empty Merge And Unmerge Controls
 
 Goal: Make the safe span operation easier to use from the PropertyPanel without

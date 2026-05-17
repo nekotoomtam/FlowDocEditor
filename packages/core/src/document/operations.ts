@@ -566,14 +566,9 @@ function resolveRequestedFlowTableSpan(value: number | undefined, current: numbe
   return value
 }
 
-function isEmptyFlowTableCell(table: FlowTableNode, cellId: string): boolean {
-  const cell = table.nodes[cellId]
-  if (cell?.type !== "flow-table-cell") return false
-  return cell.childIds.every((childId) => {
-    const child = table.nodes[childId]
-    if (child?.type !== "paragraph") return false
-    return isPlainTextParagraph(child) && getPlainText(child).trim().length === 0
-  })
+function isEmptyFlowTableCellChild(table: FlowTableNode, childId: string): boolean {
+  const child = table.nodes[childId]
+  return child?.type === "paragraph" && isPlainTextParagraph(child) && getPlainText(child).trim().length === 0
 }
 
 function deleteFlowTableCellSubtree(nodes: FlowTableNode["nodes"], cellId: string): void {
@@ -603,6 +598,7 @@ function getFlowTableCellSpanUpdatePlan(
   const newSlotKeys = new Set<string>()
   const createSlots: Array<{ rowIndex: number; columnIndex: number }> = []
   const consumeCellIds = new Set<string>()
+  const consumePlacements: Array<{ cellId: string; rowIndex: number; columnIndex: number }> = []
 
   for (let rowIndex = placement.rowIndex; rowIndex < placement.rowIndex + rowspan; rowIndex++) {
     for (let columnIndex = placement.columnIndex; columnIndex < placement.columnIndex + colspan; columnIndex++) {
@@ -619,8 +615,15 @@ function getFlowTableCellSpanUpdatePlan(
       const whollyCovered = coveredPlacement.coveredSlots.every((coveredSlot) =>
         newSlotKeys.has(slotKey(coveredSlot.rowIndex, coveredSlot.columnIndex)),
       )
-      if (!whollyCovered || !isEmptyFlowTableCell(table, slot.cellId)) return null
-      consumeCellIds.add(slot.cellId)
+      if (!whollyCovered) return null
+      if (!consumeCellIds.has(slot.cellId)) {
+        consumeCellIds.add(slot.cellId)
+        consumePlacements.push({
+          cellId: slot.cellId,
+          rowIndex: coveredPlacement.rowIndex,
+          columnIndex: coveredPlacement.columnIndex,
+        })
+      }
     }
   }
 
@@ -635,7 +638,9 @@ function getFlowTableCellSpanUpdatePlan(
     columnIndex: placement.columnIndex,
     colspan,
     rowspan,
-    consumeCellIds: Array.from(consumeCellIds),
+    consumeCellIds: consumePlacements
+      .sort((a, b) => a.rowIndex - b.rowIndex || a.columnIndex - b.columnIndex)
+      .map((item) => item.cellId),
     createSlots,
   }
 }
@@ -1530,16 +1535,30 @@ export function updateFlowTableCellSpan(
       const internalNodes: FlowTableNode["nodes"] = { ...table.nodes }
       const consumed = new Set(plan.consumeCellIds)
       const originColumns = new Map<string, number>()
+      const appendChildIds = plan.consumeCellIds.flatMap((consumeCellId) => {
+        const consumeCell = table.nodes[consumeCellId]
+        if (consumeCell?.type !== "flow-table-cell") return []
+        return consumeCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
+      })
 
       plan.consumeCellIds.forEach((consumeCellId) => {
-        deleteFlowTableCellSubtree(internalNodes, consumeCellId)
+        const consumeCell = internalNodes[consumeCellId]
+        if (consumeCell?.type !== "flow-table-cell") return
+        consumeCell.childIds.forEach((childId) => {
+          if (!appendChildIds.includes(childId)) delete internalNodes[childId]
+        })
+        delete internalNodes[consumeCellId]
       })
 
       const currentCell = internalNodes[cellId] as FlowTableCellNode | undefined
       if (currentCell?.type !== "flow-table-cell") return doc
+      const currentChildIds = appendChildIds.length > 0
+        ? currentCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
+        : currentCell.childIds
       internalNodes[cellId] = {
         ...currentCell,
         props: flowTableCellPropsWithSpan(currentCell.props, plan.colspan, plan.rowspan),
+        childIds: [...currentChildIds, ...appendChildIds],
       }
 
       const resolved = tryResolveFlowTableGrid(table)

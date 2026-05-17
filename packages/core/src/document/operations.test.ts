@@ -257,6 +257,15 @@ function paragraphText(node: ParagraphNode): string {
   return node.children.filter((child) => child.type === "text").map((child) => child.text).join("")
 }
 
+function flowTableCellParagraphTexts(table: FlowTableNode, cellId: string): string[] {
+  const cell = table.nodes[cellId]
+  if (cell?.type !== "flow-table-cell") return []
+  return cell.childIds.map((childId) => {
+    const child = table.nodes[childId]
+    return child?.type === "paragraph" ? paragraphText(child) : childId
+  })
+}
+
 describe("paragraph text operations", () => {
   it("updates plain text paragraph and collapses multiple text runs to one run", () => {
     const p = makeParagraph("p1", [
@@ -1430,7 +1439,7 @@ describe("flow-table structural operations", () => {
     expect(removeFlowTableColumn(doc, "flow-table", 0)).toBe(doc)
   })
 
-  it("expands a flow-table cell span only through empty cells", () => {
+  it("expands a flow-table cell span through empty cells without appending placeholders", () => {
     const doc = makeGridFlowTableDoc({
       rows: [
         ["", ""],
@@ -1452,9 +1461,10 @@ describe("flow-table structural operations", () => {
     expect(table.nodes["flow-cell-0-1"]).toBeUndefined()
     expect(table.nodes["flow-cell-1-0"]).toBeUndefined()
     expect(table.nodes["flow-cell-1-1"]).toBeUndefined()
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual([""])
   })
 
-  it("does not expand a flow-table cell span through non-empty cells", () => {
+  it("expands a flow-table cell span through non-empty cells by appending content row-major", () => {
     const doc = makeGridFlowTableDoc({
       rows: [
         ["A", "B"],
@@ -1464,8 +1474,17 @@ describe("flow-table structural operations", () => {
     })
     const table = getFlowTable(doc)
 
-    expect(canUpdateFlowTableCellSpan(table, "flow-cell-0-0", { colspan: 2 })).toBe(false)
-    expect(updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2 })).toBe(doc)
+    expect(canUpdateFlowTableCellSpan(table, "flow-cell-0-0", { colspan: 2, rowspan: 2 })).toBe(true)
+    const updated = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    assertDocument(updated)
+    const updatedTable = getFlowTable(updated)
+    const grid = resolveFlowTableGrid(updatedTable)
+
+    expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 2, rowspan: 2 })
+    expect(flowTableCellParagraphTexts(updatedTable, "flow-cell-0-0")).toEqual(["A", "B", "C", "D"])
+    expect(updatedTable.nodes["flow-cell-0-1"]).toBeUndefined()
+    expect(updatedTable.nodes["flow-cell-1-0"]).toBeUndefined()
+    expect(updatedTable.nodes["flow-cell-1-1"]).toBeUndefined()
   })
 
   it("merges a flow-table cell right into an empty neighbor by increasing colspan", () => {
@@ -1535,6 +1554,31 @@ describe("flow-table structural operations", () => {
       const row = table.nodes[rowId]
       expect(row?.type).toBe("flow-table-row")
       if (row?.type === "flow-table-row") expect(row.cellIds).toHaveLength(2)
+    })
+  })
+
+  it("unmerges a content-merged flow-table cell without restoring source-cell mapping", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+      columnWidths: [100, 100],
+    })
+    const merged = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    const unmerged = updateFlowTableCellSpan(merged, "flow-cell-0-0", { colspan: 1, rowspan: 1 })
+    assertDocument(unmerged)
+    const table = getFlowTable(unmerged)
+    const grid = resolveFlowTableGrid(table)
+
+    expect(grid.placements).toHaveLength(4)
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A", "B", "C", "D"])
+    const replacementCellIds = grid.placements
+      .filter((placement) => placement.cellId !== "flow-cell-0-0")
+      .map((placement) => placement.cellId)
+    expect(replacementCellIds).toHaveLength(3)
+    replacementCellIds.forEach((cellId) => {
+      expect(flowTableCellParagraphTexts(table, cellId)).toEqual([""])
     })
   })
 

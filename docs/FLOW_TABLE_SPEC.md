@@ -43,7 +43,11 @@ Implementation status:
   when the next cells are empty and wholly consumed by the requested rectangle.
   `Unmerge` collapses the selected span to `1x1` and creates empty replacement
   cells.
-- Non-empty content merge and span-origin movement remain deferred.
+- C2.5A non-empty merge is available for selected-cell expansion. Consumed
+  cells are removed and their non-empty child blocks are appended to the
+  selected cell in row-major order.
+- Restoring original content-to-cell mapping after unmerge and span-origin
+  movement remain deferred.
 - Broader property editing and row/column/span operations remain intentionally
   incremental.
 
@@ -393,9 +397,10 @@ v1 editor support should be static and explicit:
   row break allowance, and basic cell text/vertical alignment
 - text editing can stay conservative and reuse current safe cell-edit paths
 - live cross-page WYSIWYG editing inside Flow Table is deferred
-- safe span editing UI may expose `rowspan`/`colspan`, directional empty-cell
-  merge, and unmerge only through core operations that preserve grid law;
-  non-empty content merge remains deferred
+- safe span editing UI may expose `rowspan`/`colspan`, directional merge with
+  row-major content append, and unmerge only through core operations that
+  preserve grid law; original source-cell content mapping is not restored on
+  unmerge
 
 ## Migration And Compatibility
 
@@ -444,7 +449,9 @@ Suggested order:
     empty-cell expansion and empty-cell replacement on shrink.
 18. Add C2.3B/C2.4 safe empty-cell merge and unmerge controls. Current status:
     implemented using the C2.3A span operation.
-19. Add C2 span-origin movement, non-empty content merge, and broader span authoring
+19. Add C2.5A non-empty merge with row-major content append. Current status:
+    implemented for selected-cell expansion only.
+20. Add C2 span-origin movement, content-mapping restoration, and broader span authoring
     operations.
 
 ## Test Plan

@@ -306,6 +306,10 @@ Current strengths:
 - Flow Table C2.3B/C2.4 coverage protects directional empty-cell merge and
   unmerge controls by asserting one-step right/down span expansion, replacement
   cells on split, and PropertyPanel affordance text/disabled states.
+- Flow Table C2.5A coverage protects non-empty merge by asserting row-major
+  child-block append, consumed-cell removal, placeholder discard, grid validity,
+  and unmerge behavior that keeps combined content in the selected cell while
+  creating empty replacement cells.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual

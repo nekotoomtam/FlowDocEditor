@@ -129,8 +129,15 @@ Flow Table C2 foundation:
   call the same core span operation. `Merge right`/`Merge down` are convenience
   actions for increasing `colspan`/`rowspan`; `Unmerge` collapses the selected
   span to `1x1`.
-- These controls must not merge non-empty content, move a span origin, or make
-  the property panel patch span props directly.
+- C2.5A allows directional merge through non-empty consumed cells when those
+  cells are wholly inside the requested span rectangle. Consumed cell child
+  blocks are appended to the selected cell in row-major order; empty placeholder
+  paragraphs are discarded.
+- Unmerge after content merge must not attempt to restore original source-cell
+  mapping. It keeps the combined content in the selected cell and creates empty
+  replacement cells.
+- These controls must not move a span origin or make the property panel patch
+  span props directly.
 
 ## Pagination-Related Authoring Rules
 
@@ -166,6 +173,6 @@ behavior:
 
 - Selection and editing for multiple paragraphs inside one table cell.
 - Explicit table or column resize UI.
-- Non-empty content-merge authoring UI for `rowspan` and `colspan`.
+- Content-mapping restoration after merged non-empty cells are unmerged.
 - Split-at-row-boundary within rowspan-linked groups.
 - Visual regression tests for editor/PDF parity on multi-page tables.
