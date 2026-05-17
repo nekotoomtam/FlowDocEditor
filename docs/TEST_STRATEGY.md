@@ -318,6 +318,19 @@ Current strengths:
 - Flow Table C2.7A coverage protects merged-cell PropertyPanel text visibility
   by rendering every paragraph child in a selected Flow Table cell as its own
   text area while continuing to use the existing paragraph text operation.
+- Flow Table C2.8A coverage protects merge-map schema safety by asserting valid
+  `flow-table-cell.props.mergeMap` metadata, rejecting offsets outside the
+  current span, rejecting mapped child ids outside the owning cell, and
+  normalizing stale map entries before assertion.
+- Flow Table C2.8B coverage protects merge-map operation writing by asserting
+  row/column offsets for non-empty merge, neighbor-origin left/up merge,
+  chained merge offset shifting, no metadata for empty-only merge, and stale
+  map clearing on shrink/unmerge when no restoration metadata is available.
+- Flow Table C2.8C coverage protects merge-map restoration by asserting
+  content-merged unmerge restores mapped child blocks to their released source
+  slots, partial shrink keeps in-span mapped content with the surviving origin,
+  released slots receive their mapped child blocks, and restored cells clear
+  stale merge-map metadata.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual

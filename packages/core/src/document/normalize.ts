@@ -5,6 +5,9 @@ import type {
   FieldRefInline,
   FlowRowNode,
   FlowStackNode,
+  FlowTableCellMergeMap,
+  FlowTableCellNode,
+  FlowTableNode,
   InlineNode,
   LayoutNode,
   ParagraphBoxBorder,
@@ -369,6 +372,68 @@ function normalizeFlowRowNode(input: LayoutNode & { type: "flow-row" }): FlowRow
   }
 }
 
+// ─── Flow Table ───────────────────────────────────────────────────────────────
+
+function normalizeFlowTableCellMergeMap(
+  input: unknown,
+  cellChildIds: string[],
+  rowspan: number,
+  colspan: number,
+): FlowTableCellMergeMap | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  if (raw["version"] !== 1 || !Array.isArray(raw["entries"])) return undefined
+
+  const validCellChildIds = new Set(cellChildIds)
+  const mappedChildIds = new Set<string>()
+  const entries: FlowTableCellMergeMap["entries"] = []
+
+  raw["entries"].forEach((item) => {
+    if (typeof item !== "object" || item == null) return
+    const entry = item as Record<string, unknown>
+    const rowOffset = entry["rowOffset"]
+    const colOffset = entry["colOffset"]
+    if (!Number.isInteger(rowOffset) || typeof rowOffset !== "number" || rowOffset < 0 || rowOffset >= rowspan) return
+    if (!Number.isInteger(colOffset) || typeof colOffset !== "number" || colOffset < 0 || colOffset >= colspan) return
+    if (!Array.isArray(entry["childIds"])) return
+
+    const childIds = entry["childIds"].filter((childId): childId is string => {
+      if (typeof childId !== "string" || childId.length === 0) return false
+      if (!validCellChildIds.has(childId)) return false
+      if (mappedChildIds.has(childId)) return false
+      mappedChildIds.add(childId)
+      return true
+    })
+    if (childIds.length === 0) return
+    entries.push({ rowOffset, colOffset, childIds })
+  })
+
+  return entries.length > 0 ? { version: 1, entries } : undefined
+}
+
+function normalizeFlowTableCellNode(input: FlowTableCellNode): FlowTableCellNode {
+  const rawProps = (input.props ?? {}) as Record<string, unknown>
+  const props: FlowTableCellNode["props"] = { ...input.props }
+  const rowspan = typeof rawProps["rowspan"] === "number" && Number.isInteger(rawProps["rowspan"]) && rawProps["rowspan"] >= 1
+    ? rawProps["rowspan"]
+    : 1
+  const colspan = typeof rawProps["colspan"] === "number" && Number.isInteger(rawProps["colspan"]) && rawProps["colspan"] >= 1
+    ? rawProps["colspan"]
+    : 1
+  const mergeMap = normalizeFlowTableCellMergeMap(rawProps["mergeMap"], input.childIds, rowspan, colspan)
+  if (mergeMap) props.mergeMap = mergeMap
+  else delete props.mergeMap
+  return { ...input, props }
+}
+
+function normalizeFlowTableNode(input: FlowTableNode): FlowTableNode {
+  const nodes: FlowTableNode["nodes"] = {}
+  Object.entries(input.nodes).forEach(([id, node]) => {
+    nodes[id] = node.type === "flow-table-cell" ? normalizeFlowTableCellNode(node) : node
+  })
+  return { ...input, nodes }
+}
+
 // ─── Section ──────────────────────────────────────────────────────────────────
 
 function normalizeNode(node: LayoutNode): LayoutNode {
@@ -381,7 +446,7 @@ function normalizeNode(node: LayoutNode): LayoutNode {
     case "paragraph": return normalizeParagraphNode(node)
     case "spacer": return normalizeSpacerNode(node)
     case "table": return node
-    case "flow-table": return node
+    case "flow-table": return normalizeFlowTableNode(node as unknown as FlowTableNode) as unknown as LayoutNode
     case "toc": return node
   }
 }

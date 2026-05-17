@@ -302,6 +302,37 @@ function assertFlowTableCellContents(
   })
 }
 
+function assertFlowTableCellMergeMap(cell: FlowTableCellNode, path: string): void {
+  const mergeMap = cell.props.mergeMap
+  if (mergeMap == null) return
+
+  const rowspan = cell.props.rowspan ?? 1
+  const colspan = cell.props.colspan ?? 1
+  const cellChildIds = new Set(cell.childIds)
+  const mappedChildIds = new Set<string>()
+
+  mergeMap.entries.forEach((entry, entryIndex) => {
+    const entryPath = `${path}.props.mergeMap.entries[${entryIndex}]`
+    if (entry.rowOffset >= rowspan) {
+      fail(`${entryPath}.rowOffset`, `mergeMap rowOffset must be within cell rowspan ${rowspan}`)
+    }
+    if (entry.colOffset >= colspan) {
+      fail(`${entryPath}.colOffset`, `mergeMap colOffset must be within cell colspan ${colspan}`)
+    }
+
+    entry.childIds.forEach((childId, childIndex) => {
+      const childPath = `${entryPath}.childIds[${childIndex}]`
+      if (!cellChildIds.has(childId)) {
+        fail(childPath, `mergeMap child "${childId}" must be in the cell childIds`)
+      }
+      if (mappedChildIds.has(childId)) {
+        fail(childPath, `mergeMap child "${childId}" must not be mapped more than once`)
+      }
+      mappedChildIds.add(childId)
+    })
+  })
+}
+
 function assertFlowTable(table: FlowTableNode, path: string): void {
   assertUniqueIds(table.rowIds, `${path}.rowIds`, "flow-table row")
 
@@ -349,6 +380,7 @@ function assertFlowTable(table: FlowTableNode, path: string): void {
 
       reachable.add(cellId)
       assertFlowTableCellContents(table, cell, path, `${path}.nodes.${cellId}`, reachable, seenContentParents)
+      assertFlowTableCellMergeMap(cell, `${path}.nodes.${cellId}`)
     })
   })
 

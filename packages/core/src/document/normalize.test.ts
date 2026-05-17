@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { DocumentNode, LayoutNode } from "../schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode } from "../schema"
 import { pt } from "../schema"
 import { normalizeDocument } from "./normalize"
 
@@ -24,6 +24,25 @@ function makeDoc(nodes: Record<string, LayoutNode>, childIds: string[]): Documen
         },
       }],
     },
+  }
+}
+
+function paragraph(id: string, text: string): ParagraphNode {
+  return {
+    id,
+    type: "paragraph",
+    props: {
+      align: "left",
+      fontSize: pt(12),
+      fontFamilyKey: "default",
+      lineHeight: 1.5,
+      spacingBefore: pt(0),
+      spacingAfter: pt(0),
+      textIndent: pt(0),
+      indentLeft: pt(0),
+      indentRight: pt(0),
+    },
+    children: [{ id: `${id}-text`, type: "text", text }],
   }
 }
 
@@ -198,5 +217,85 @@ describe("normalizeDocument", () => {
     })
     expect(shares.reduce((sum, share) => sum + share, 0)).toBe(100)
     expect(shares).toEqual([33.33, 33.33, 33.34])
+  })
+
+  it("preserves valid flow-table cell mergeMap entries", () => {
+    const p1 = paragraph("p1", "A")
+    const p2 = paragraph("p2", "B")
+    const cell: FlowTableCellNode = {
+      id: "c1",
+      type: "flow-table-cell",
+      props: {
+        colspan: 2,
+        mergeMap: {
+          version: 1,
+          entries: [
+            { rowOffset: 0, colOffset: 0, childIds: [p1.id] },
+            { rowOffset: 0, colOffset: 1, childIds: [p2.id] },
+          ],
+        },
+      },
+      childIds: [p1.id, p2.id],
+    }
+    const row: FlowTableRowNode = { id: "r1", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [row.id],
+      nodes: { [row.id]: row, [cell.id]: cell, [p1.id]: p1, [p2.id]: p2 },
+    }
+
+    const normalized = normalizeDocument(makeDoc({ [table.id]: table as unknown as LayoutNode }, [table.id]))
+    const normalizedTable = normalized.document.sections[0].nodes.ft1 as unknown as FlowTableNode
+    const normalizedCell = normalizedTable.nodes.c1
+    expect(normalizedCell.type).toBe("flow-table-cell")
+    if (normalizedCell.type !== "flow-table-cell") return
+    expect(normalizedCell.props.mergeMap).toEqual(cell.props.mergeMap)
+  })
+
+  it("normalizes stale flow-table cell mergeMap entries", () => {
+    const p1 = paragraph("p1", "A")
+    const p2 = paragraph("p2", "B")
+    const cell = {
+      id: "c1",
+      type: "flow-table-cell",
+      props: {
+        colspan: 2,
+        mergeMap: {
+          version: 1,
+          entries: [
+            { rowOffset: 0, colOffset: 0, childIds: [p1.id, p1.id] },
+            { rowOffset: 0, colOffset: 1, childIds: [p2.id, "missing"] },
+            { rowOffset: 1, colOffset: 0, childIds: [p2.id] },
+            { rowOffset: 0, colOffset: 2, childIds: [p2.id] },
+          ],
+        },
+      },
+      childIds: [p1.id, p2.id],
+    } as unknown as FlowTableCellNode
+    const row: FlowTableRowNode = { id: "r1", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [row.id],
+      nodes: { [row.id]: row, [cell.id]: cell, [p1.id]: p1, [p2.id]: p2 },
+    }
+
+    const normalized = normalizeDocument(makeDoc({ [table.id]: table as unknown as LayoutNode }, [table.id]))
+    const normalizedTable = normalized.document.sections[0].nodes.ft1 as unknown as FlowTableNode
+    const normalizedCell = normalizedTable.nodes.c1
+    expect(normalizedCell.type).toBe("flow-table-cell")
+    if (normalizedCell.type !== "flow-table-cell") return
+    expect(normalizedCell.props.mergeMap).toEqual({
+      version: 1,
+      entries: [
+        { rowOffset: 0, colOffset: 0, childIds: [p1.id] },
+        { rowOffset: 0, colOffset: 1, childIds: [p2.id] },
+      ],
+    })
   })
 })

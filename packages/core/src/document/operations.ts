@@ -543,12 +543,16 @@ interface FlowTableColumnRemovalPlan {
 
 interface FlowTableCellSpanUpdatePlan {
   cellId: string
+  rowIndex: number
   columnIndex: number
   colspan: number
   rowspan: number
   consumeCellIds: string[]
   createSlots: Array<{ rowIndex: number; columnIndex: number }>
 }
+
+type FlowTableCellMergeMap = NonNullable<FlowTableCellNode["props"]["mergeMap"]>
+type FlowTableCellMergeMapEntry = FlowTableCellMergeMap["entries"][number]
 
 function slotKey(rowIndex: number, columnIndex: number): string {
   return `${rowIndex}:${columnIndex}`
@@ -567,6 +571,135 @@ function flowTableCellPropsWithSpan(
   return next
 }
 
+function mergeFlowTableMergeMapEntries(entries: FlowTableCellMergeMapEntry[]): FlowTableCellMergeMap | undefined {
+  const entriesBySlot = new Map<string, FlowTableCellMergeMapEntry>()
+  entries.forEach((entry) => {
+    if (entry.childIds.length === 0) return
+    const key = slotKey(entry.rowOffset, entry.colOffset)
+    const existing = entriesBySlot.get(key)
+    if (existing) {
+      existing.childIds.push(...entry.childIds)
+    } else {
+      entriesBySlot.set(key, { rowOffset: entry.rowOffset, colOffset: entry.colOffset, childIds: [...entry.childIds] })
+    }
+  })
+  const merged = [...entriesBySlot.values()]
+    .sort((a, b) => a.rowOffset - b.rowOffset || a.colOffset - b.colOffset)
+  return merged.length > 0 ? { version: 1, entries: merged } : undefined
+}
+
+function buildFlowTableCellMergeMapForSpanUpdate(
+  table: FlowTableNode,
+  plan: FlowTableCellSpanUpdatePlan,
+  keptOriginChildIds: string[],
+  consumedChildIdsByCellId: Map<string, string[]>,
+): FlowTableCellMergeMap | undefined {
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return undefined
+  const entries: FlowTableCellMergeMapEntry[] = []
+  const mappedChildIds = new Set<string>()
+
+  const addCellEntries = (sourceCellId: string, keptChildIds: string[]) => {
+    if (keptChildIds.length === 0) return
+    const sourceCell = table.nodes[sourceCellId]
+    if (sourceCell?.type !== "flow-table-cell") return
+    const placement = resolved.grid.placementsByCellId.get(sourceCellId)
+    if (placement == null) return
+
+    const kept = new Set(keptChildIds)
+    const baseRowOffset = placement.rowIndex - plan.rowIndex
+    const baseColOffset = placement.columnIndex - plan.columnIndex
+
+    sourceCell.props.mergeMap?.entries.forEach((entry) => {
+      const childIds = entry.childIds.filter((childId) => kept.has(childId) && !mappedChildIds.has(childId))
+      if (childIds.length === 0) return
+      childIds.forEach((childId) => { mappedChildIds.add(childId) })
+      entries.push({
+        rowOffset: baseRowOffset + entry.rowOffset,
+        colOffset: baseColOffset + entry.colOffset,
+        childIds,
+      })
+    })
+
+    const unmappedChildIds = keptChildIds.filter((childId) => !mappedChildIds.has(childId))
+    if (unmappedChildIds.length > 0) {
+      unmappedChildIds.forEach((childId) => { mappedChildIds.add(childId) })
+      entries.push({
+        rowOffset: baseRowOffset,
+        colOffset: baseColOffset,
+        childIds: unmappedChildIds,
+      })
+    }
+  }
+
+  addCellEntries(plan.cellId, keptOriginChildIds)
+  plan.consumeCellIds.forEach((consumeCellId) => {
+    addCellEntries(consumeCellId, consumedChildIdsByCellId.get(consumeCellId) ?? [])
+  })
+
+  const keptChildIds = new Set([
+    ...keptOriginChildIds,
+    ...[...consumedChildIdsByCellId.values()].flat(),
+  ])
+  const boundedEntries = entries
+    .filter((entry) => entry.rowOffset >= 0 && entry.rowOffset < plan.rowspan && entry.colOffset >= 0 && entry.colOffset < plan.colspan)
+    .map((entry) => ({ ...entry, childIds: entry.childIds.filter((childId) => keptChildIds.has(childId)) }))
+    .filter((entry) => entry.childIds.length > 0)
+
+  return mergeFlowTableMergeMapEntries(boundedEntries)
+}
+
+interface FlowTableCellSpanShrinkContentPlan {
+  originChildIds: string[]
+  childIdsBySlot: Map<string, string[]>
+}
+
+function splitFlowTableCellChildrenForSpanShrink(
+  cell: FlowTableCellNode,
+  plan: FlowTableCellSpanUpdatePlan,
+): FlowTableCellSpanShrinkContentPlan | null {
+  const mergeMap = cell.props.mergeMap
+  if (mergeMap == null || plan.createSlots.length === 0) return null
+
+  const cellChildIds = new Set(cell.childIds)
+  const mappedChildIds = new Set<string>()
+  const originSlotKeys = new Set<string>()
+  const createSlotKeys = new Set(
+    plan.createSlots.map((slot) => slotKey(slot.rowIndex - plan.rowIndex, slot.columnIndex - plan.columnIndex)),
+  )
+  const originChildIds: string[] = []
+  const childIdsBySlot = new Map<string, string[]>()
+
+  for (let rowOffset = 0; rowOffset < plan.rowspan; rowOffset++) {
+    for (let colOffset = 0; colOffset < plan.colspan; colOffset++) {
+      originSlotKeys.add(slotKey(rowOffset, colOffset))
+    }
+  }
+
+  mergeMap.entries.forEach((entry) => {
+    const childIds = entry.childIds.filter((childId) => cellChildIds.has(childId) && !mappedChildIds.has(childId))
+    if (childIds.length === 0) return
+    childIds.forEach((childId) => { mappedChildIds.add(childId) })
+
+    const key = slotKey(entry.rowOffset, entry.colOffset)
+    if (originSlotKeys.has(key)) {
+      originChildIds.push(...childIds)
+      return
+    }
+
+    if (createSlotKeys.has(key)) {
+      childIdsBySlot.set(key, [...(childIdsBySlot.get(key) ?? []), ...childIds])
+      return
+    }
+
+    originChildIds.push(...childIds)
+  })
+
+  originChildIds.push(...cell.childIds.filter((childId) => !mappedChildIds.has(childId)))
+
+  return { originChildIds, childIdsBySlot }
+}
+
 function resolveRequestedFlowTableSpan(value: number | undefined, current: number): number | null {
   if (value == null) return current
   if (!Number.isInteger(value) || value < 1) return null
@@ -583,6 +716,12 @@ function deleteFlowTableCellSubtree(nodes: FlowTableNode["nodes"], cellId: strin
   if (cell?.type !== "flow-table-cell") return
   cell.childIds.forEach((childId) => { delete nodes[childId] })
   delete nodes[cellId]
+}
+
+function createFlowTableCellWithChildren(internalNodes: FlowTableNode["nodes"], childIds: string[]): string {
+  const cell = createFlowTableCellNode(childIds)
+  internalNodes[cell.id] = cell
+  return cell.id
 }
 
 function getFlowTableCellSpanUpdatePlan(
@@ -642,6 +781,7 @@ function getFlowTableCellSpanUpdatePlan(
 
   return {
     cellId,
+    rowIndex: placement.rowIndex,
     columnIndex: placement.columnIndex,
     colspan,
     rowspan,
@@ -1609,10 +1749,13 @@ export function updateFlowTableCellSpan(
       const internalNodes: FlowTableNode["nodes"] = { ...table.nodes }
       const consumed = new Set(plan.consumeCellIds)
       const originColumns = new Map<string, number>()
+      const consumedChildIdsByCellId = new Map<string, string[]>()
       const appendChildIds = plan.consumeCellIds.flatMap((consumeCellId) => {
         const consumeCell = table.nodes[consumeCellId]
         if (consumeCell?.type !== "flow-table-cell") return []
-        return consumeCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
+        const childIds = consumeCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
+        consumedChildIdsByCellId.set(consumeCellId, childIds)
+        return childIds
       })
 
       plan.consumeCellIds.forEach((consumeCellId) => {
@@ -1626,12 +1769,30 @@ export function updateFlowTableCellSpan(
 
       const currentCell = internalNodes[cellId] as FlowTableCellNode | undefined
       if (currentCell?.type !== "flow-table-cell") return doc
-      const currentChildIds = appendChildIds.length > 0
+      const shrinkContentPlan = splitFlowTableCellChildrenForSpanShrink(currentCell, plan)
+      const currentChildIds = shrinkContentPlan?.originChildIds ?? (appendChildIds.length > 0
         ? currentCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
-        : currentCell.childIds
+        : currentCell.childIds)
+      const nextProps = flowTableCellPropsWithSpan(currentCell.props, plan.colspan, plan.rowspan)
+      const shouldWriteMergeMap =
+        plan.createSlots.length === 0 &&
+        plan.consumeCellIds.length > 0 &&
+        (
+          appendChildIds.length > 0 ||
+          currentCell.props.mergeMap != null ||
+          plan.consumeCellIds.some((consumeCellId) => {
+            const consumeCell = table.nodes[consumeCellId]
+            return consumeCell?.type === "flow-table-cell" && consumeCell.props.mergeMap != null
+          })
+        )
+      const mergeMap = shouldWriteMergeMap
+        ? buildFlowTableCellMergeMapForSpanUpdate(table, plan, currentChildIds, consumedChildIdsByCellId)
+        : undefined
+      if (mergeMap) nextProps.mergeMap = mergeMap
+      else delete nextProps.mergeMap
       internalNodes[cellId] = {
         ...currentCell,
-        props: flowTableCellPropsWithSpan(currentCell.props, plan.colspan, plan.rowspan),
+        props: nextProps,
         childIds: [...currentChildIds, ...appendChildIds],
       }
 
@@ -1646,7 +1807,13 @@ export function updateFlowTableCellSpan(
       plan.createSlots
         .sort((a, b) => a.rowIndex - b.rowIndex || a.columnIndex - b.columnIndex)
         .forEach((slot) => {
-          const newCellId = createEmptyFlowTableCell(internalNodes)
+          const restoredChildIds = shrinkContentPlan?.childIdsBySlot.get(slotKey(
+            slot.rowIndex - plan.rowIndex,
+            slot.columnIndex - plan.columnIndex,
+          ))
+          const newCellId = restoredChildIds != null && restoredChildIds.length > 0
+            ? createFlowTableCellWithChildren(internalNodes, restoredChildIds)
+            : createEmptyFlowTableCell(internalNodes)
           originColumns.set(newCellId, slot.columnIndex)
           const rowCells = createdByRow.get(slot.rowIndex) ?? []
           rowCells.push(newCellId)

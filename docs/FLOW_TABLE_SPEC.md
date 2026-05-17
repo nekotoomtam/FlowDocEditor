@@ -52,8 +52,17 @@ Implementation status:
   row-major order, and move editor selection to the surviving neighbor.
 - C2.7A PropertyPanel text editing surfaces every paragraph child in a selected
   Flow Table cell, including paragraphs appended by non-empty merge.
-- Restoring original content-to-cell mapping after unmerge and true span-origin
-  movement remain deferred.
+- C2.8A merge-map schema, assert, and normalize foundation exists for future
+  content restoration.
+- C2.8B merge-map writing is available during Flow Table cell span expansion.
+  Merge records relative source slots for appended content and carries existing
+  merge maps through chained merges.
+- C2.8C merge-map restoration is available during Flow Table cell shrink and
+  unmerge. Mapped children whose source slots remain inside the surviving span
+  stay with the origin cell; mapped children from released slots move to the
+  replacement cells created for those slots. Restored cells do not carry a new
+  merge map in this slice.
+- True span-origin movement remains deferred.
 - Broader property editing and row/column/span operations remain intentionally
   incremental.
 
@@ -229,6 +238,14 @@ type FlowTableCellNode = {
       border?: CellBorder
     }
     verticalAlign?: "top" | "middle" | "bottom"
+    mergeMap?: {
+      version: 1
+      entries: Array<{
+        rowOffset: number
+        colOffset: number
+        childIds: string[]
+      }>
+    }
   }
   childIds: string[]
 }
@@ -241,6 +258,9 @@ Draft choices:
   draft direction, not an open model question.
 - Keep `rowspan` / `colspan` in the authored model from the beginning.
 - Keep columns authored as document units, not computed widths.
+- `mergeMap` is optional authored metadata used only to restore merged child
+  content back to relative cell slots during span shrink/unmerge. It must not
+  drive layout, pagination, or renderer geometry.
 - Keep computed row heights, cell slice geometry, page indices, and line split
   ranges out of authored data.
 
@@ -407,8 +427,8 @@ v1 editor support should be static and explicit:
 - live cross-page WYSIWYG editing inside Flow Table is deferred
 - safe span editing UI may expose `rowspan`/`colspan`, directional merge with
   row-major content append, and unmerge only through core operations that
-  preserve grid law; original source-cell content mapping is not restored on
-  unmerge
+  preserve grid law; merge-map-backed unmerge restores mapped children to
+  replacement cells where source-slot metadata exists
 
 ## Migration And Compatibility
 
@@ -463,8 +483,13 @@ Suggested order:
     aligned neighboring origins without true span-origin movement.
 21. Add C2.7A merged-cell multi-paragraph text editing in the PropertyPanel.
     Current status: implemented for existing paragraph children.
-22. Add C2 span-origin movement, content-mapping restoration, and broader span authoring
-    operations.
+22. Add C2.8A merge-map schema/assert/normalize foundation. Current status:
+    implemented without changing merge/unmerge behavior.
+23. Add C2.8B merge-map writing during Flow Table cell merge. Current status:
+    implemented for span expansion.
+24. Add C2.8C merge-map restoration during Flow Table cell shrink/unmerge.
+    Current status: implemented for existing relative slot metadata.
+25. Add C2 span-origin movement and broader span authoring operations.
 
 ## Test Plan
 

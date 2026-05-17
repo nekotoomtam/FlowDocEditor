@@ -219,6 +219,92 @@ describe("assertDocument flow-table invariants", () => {
     expect(() => assertDocument(flowTableDoc(table))).not.toThrow()
   })
 
+  it("allows a flow-table cell mergeMap that maps current children inside the span", () => {
+    const p1 = paragraph("p1")
+    const p2 = paragraph("p2")
+    const p3 = paragraph("p3")
+    const c1: FlowTableCellNode = {
+      id: "c1",
+      type: "flow-table-cell",
+      props: {
+        colspan: 2,
+        rowspan: 2,
+        mergeMap: {
+          version: 1,
+          entries: [
+            { rowOffset: 0, colOffset: 0, childIds: [p1.id] },
+            { rowOffset: 0, colOffset: 1, childIds: [p2.id] },
+            { rowOffset: 1, colOffset: 0, childIds: [p3.id] },
+          ],
+        },
+      },
+      childIds: [p1.id, p2.id, p3.id],
+    }
+    const r1 = flowRow("r1", [c1.id])
+    const r2 = flowRow("r2", [])
+    const table: FlowTableNode = {
+      id: "flow-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [r1.id, r2.id],
+      nodes: { [r1.id]: r1, [r2.id]: r2, [c1.id]: c1, [p1.id]: p1, [p2.id]: p2, [p3.id]: p3 },
+    }
+
+    expect(() => assertDocument(flowTableDoc(table))).not.toThrow()
+  })
+
+  it("rejects a flow-table cell mergeMap that references children outside the cell", () => {
+    const p1 = paragraph("p1")
+    const p2 = paragraph("p2")
+    const c1: FlowTableCellNode = {
+      id: "c1",
+      type: "flow-table-cell",
+      props: {
+        colspan: 2,
+        mergeMap: { version: 1, entries: [{ rowOffset: 0, colOffset: 1, childIds: [p2.id] }] },
+      },
+      childIds: [p1.id],
+    }
+    const c2 = flowCell("c2", p2.id)
+    const r1 = flowRow("r1", [c1.id])
+    const table: FlowTableNode = {
+      id: "flow-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [r1.id],
+      nodes: { [r1.id]: r1, [c1.id]: c1, [c2.id]: c2, [p1.id]: p1, [p2.id]: p2 },
+    }
+
+    expect(() => assertDocument(flowTableDoc(table))).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(flowTableDoc(table))).toThrow('mergeMap child "p2" must be in the cell childIds')
+  })
+
+  it("rejects a flow-table cell mergeMap with offsets outside the current span", () => {
+    const p1 = paragraph("p1")
+    const c1: FlowTableCellNode = {
+      id: "c1",
+      type: "flow-table-cell",
+      props: {
+        mergeMap: { version: 1, entries: [{ rowOffset: 1, colOffset: 0, childIds: [p1.id] }] },
+      },
+      childIds: [p1.id],
+    }
+    const r1 = flowRow("r1", [c1.id])
+    const table: FlowTableNode = {
+      id: "flow-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }],
+      rowIds: [r1.id],
+      nodes: { [r1.id]: r1, [c1.id]: c1, [p1.id]: p1 },
+    }
+
+    expect(() => assertDocument(flowTableDoc(table))).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(flowTableDoc(table))).toThrow("mergeMap rowOffset must be within cell rowspan 1")
+  })
+
   it("rejects flow-table rows that do not fill every column", () => {
     const p1 = paragraph("p1")
     const c1 = flowCell("c1", p1.id)

@@ -24,6 +24,129 @@ Each entry should include:
 
 ## 2026-05-18
 
+### Add Flow Table C2.8C Merge Map Restoration
+
+Goal: Use Flow Table merge-map metadata to restore merged content during
+span shrink and unmerge without adding new UI controls.
+
+Completed:
+
+- Added shrink/unmerge content splitting for `flow-table-cell.props.mergeMap`.
+- Kept mapped child blocks whose source slots remain inside the new span on the
+  surviving origin cell.
+- Reused mapped child blocks from released slots when creating replacement
+  cells.
+- Kept unmapped child blocks on the origin cell to avoid data loss.
+- Cleared `mergeMap` metadata from restored cells in this slice.
+- Added focused operation coverage for full unmerge restoration and partial
+  shrink restoration.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/assert.test.ts src/document/normalize.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+
+Notes:
+
+- This does not add true arbitrary span-origin movement.
+- Restored replacement cells do not receive nested merge maps yet.
+
+### Add Flow Table C2.8B Merge Map Writing
+
+Goal: Start recording source-slot metadata during Flow Table cell merge without
+turning on unmerge restoration yet.
+
+Completed:
+
+- Updated `updateFlowTableCellSpan(...)` to write `mergeMap` during span
+  expansion when merge appends non-empty content or carries existing mapped
+  content.
+- Composed merge maps across chained merges by shifting consumed cell offsets
+  relative to the surviving origin cell.
+- Kept empty-only merge free of unnecessary metadata.
+- Cleared stale `mergeMap` metadata on shrink/unmerge because restoration is
+  still deferred in this slice.
+- Added focused operation coverage for 2x2 non-empty merge mapping,
+  neighbor-origin left/up mapping, chained merge offset preservation, empty-only
+  merge, and current no-restore unmerge behavior.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/assert.test.ts src/document/normalize.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+
+Notes:
+
+- Unmerge content restoration from `mergeMap` remains deferred to C2.8C.
+- True arbitrary span-origin movement remains deferred.
+
+### Add Flow Table C2.8A Merge Map Schema Foundation
+
+Goal: Add a document-owned metadata foundation for future Flow Table content
+restoration without changing current merge/unmerge behavior.
+
+Completed:
+
+- Added optional `flow-table-cell.props.mergeMap` schema with versioned entries
+  that map child ids to relative row/column offsets inside the current span.
+- Added assert-layer validation that merge-map offsets stay inside the current
+  `rowspan`/`colspan`, mapped child ids belong to the owning cell, and a child
+  id is not mapped more than once.
+- Added normalization for stale merge-map entries, pruning invalid offsets,
+  missing child ids, and duplicate child mappings.
+- Added focused assert and normalize coverage for valid metadata, invalid
+  child references, out-of-span offsets, and stale-entry pruning.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Files changed:
+
+- `packages/core/src/schema/table.ts`
+- `packages/core/src/document/assert.ts`
+- `packages/core/src/document/assert.test.ts`
+- `packages/core/src/document/normalize.ts`
+- `packages/core/src/document/normalize.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/assert.test.ts src/document/normalize.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+
+Notes:
+
+- Merge/unmerge operations do not yet write or consume `mergeMap`.
+- Content restoration remains deferred to the next C2.8 slice.
+
 ### Add Flow Table C2.7A Merged Cell Multi-Paragraph Text Editing
 
 Goal: Keep content appended by non-empty Flow Table merge visible and editable

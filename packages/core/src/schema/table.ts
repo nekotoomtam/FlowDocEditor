@@ -52,6 +52,17 @@ export const FlowTableCellBoxStyleSchema = z.object({
   border: FlowTableCellBoxBorderSchema.optional(),
 })
 
+export const FlowTableCellMergeMapEntrySchema = z.object({
+  rowOffset: z.number().int().nonnegative(),
+  colOffset: z.number().int().nonnegative(),
+  childIds: z.array(z.string().min(1)).min(1),
+})
+
+export const FlowTableCellMergeMapSchema = z.object({
+  version: z.literal(1),
+  entries: z.array(FlowTableCellMergeMapEntrySchema).min(1),
+})
+
 // ─── Column ───────────────────────────────────────────────────────────────────
 
 export const TableColumnDefSchema = z.object({
@@ -128,6 +139,7 @@ export const FlowTableCellPropsSchema = z.object({
   rowspan: z.number().int().min(1).optional(),
   box: FlowTableCellBoxStyleSchema.optional(),
   verticalAlign: z.enum(["top", "middle", "bottom"]).optional(),
+  mergeMap: FlowTableCellMergeMapSchema.optional(),
 })
 
 export const FlowTableCellNodeSchema = z.object({
@@ -169,6 +181,8 @@ export type FlowTableCellBoxPadding = z.infer<typeof FlowTableCellBoxPaddingSche
 export type FlowTableCellBoxBorderSide = z.infer<typeof FlowTableCellBoxBorderSideSchema>
 export type FlowTableCellBoxBorder = z.infer<typeof FlowTableCellBoxBorderSchema>
 export type FlowTableCellBoxStyle = z.infer<typeof FlowTableCellBoxStyleSchema>
+export type FlowTableCellMergeMapEntry = z.infer<typeof FlowTableCellMergeMapEntrySchema>
+export type FlowTableCellMergeMap = z.infer<typeof FlowTableCellMergeMapSchema>
 export type TableColumnDef = z.infer<typeof TableColumnDefSchema>
 export type TableProps = z.infer<typeof TablePropsSchema>
 export type TableRowProps = z.infer<typeof TableRowPropsSchema>

@@ -140,9 +140,18 @@ Flow Table C2 foundation:
 - C2.7A allows the Flow Table cell PropertyPanel to surface every paragraph
   child in the selected cell. This keeps content appended by non-empty merge
   visible and editable without adding source-cell mapping metadata.
-- Unmerge after content merge must not attempt to restore original source-cell
-  mapping. It keeps the combined content in the selected cell and creates empty
-  replacement cells.
+- C2.8A adds optional Flow Table cell `mergeMap` metadata to the schema,
+  assertion, and normalization layers. This is a document-owned foundation for
+  later content restoration.
+- C2.8B writes `mergeMap` during Flow Table cell span expansion when merge
+  appends non-empty content or carries existing mapped content. Chained merges
+  must shift relative offsets instead of flattening source slots.
+- C2.8C consumes `mergeMap` during Flow Table cell shrink/unmerge. Mapped
+  child blocks whose source slots remain inside the surviving span stay in the
+  origin cell; mapped child blocks from released slots move into the replacement
+  cells created for those slots. Unmapped child blocks stay with the origin cell
+  to avoid data loss. Restored cells do not receive a new `mergeMap` in this
+  slice.
 - These controls must not move an authored span origin or make the property
   panel patch span props directly. Left/up merge is a neighbor-origin action,
   not selected-cell origin movement.
@@ -182,7 +191,7 @@ behavior:
 - Canvas selection/editing ergonomics for multiple paragraphs inside one table
   cell.
 - Explicit table or column resize UI.
-- Content-mapping restoration after merged non-empty cells are unmerged.
+- Broader content-mapping controls beyond merge-map-backed shrink/unmerge.
 - True span-origin movement for arbitrary left/up span authoring.
 - Split-at-row-boundary within rowspan-linked groups.
 - Visual regression tests for editor/PDF parity on multi-page tables.

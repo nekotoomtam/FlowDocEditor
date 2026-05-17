@@ -1480,8 +1480,20 @@ describe("flow-table structural operations", () => {
     assertDocument(updated)
     const updatedTable = getFlowTable(updated)
     const grid = resolveFlowTableGrid(updatedTable)
+    const originCell = updatedTable.nodes["flow-cell-0-0"]
 
     expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 2, rowspan: 2 })
+    expect(originCell.type).toBe("flow-table-cell")
+    if (originCell.type !== "flow-table-cell") return
+    expect(originCell.props.mergeMap).toEqual({
+      version: 1,
+      entries: [
+        { rowOffset: 0, colOffset: 0, childIds: ["fp-0-0"] },
+        { rowOffset: 0, colOffset: 1, childIds: ["fp-0-1"] },
+        { rowOffset: 1, colOffset: 0, childIds: ["fp-1-0"] },
+        { rowOffset: 1, colOffset: 1, childIds: ["fp-1-1"] },
+      ],
+    })
     expect(flowTableCellParagraphTexts(updatedTable, "flow-cell-0-0")).toEqual(["A", "B", "C", "D"])
     expect(updatedTable.nodes["flow-cell-0-1"]).toBeUndefined()
     expect(updatedTable.nodes["flow-cell-1-0"]).toBeUndefined()
@@ -1504,6 +1516,10 @@ describe("flow-table structural operations", () => {
 
     expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 2, rowspan: 1 })
     expect(table.nodes["flow-cell-0-1"]).toBeUndefined()
+    expect(table.nodes["flow-cell-0-0"]?.type).toBe("flow-table-cell")
+    if (table.nodes["flow-cell-0-0"]?.type === "flow-table-cell") {
+      expect(table.nodes["flow-cell-0-0"].props.mergeMap).toBeUndefined()
+    }
     expect(topRow?.type).toBe("flow-table-row")
     if (topRow?.type !== "flow-table-row") return
     expect(topRow.cellIds).toEqual(["flow-cell-0-0"])
@@ -1549,6 +1565,16 @@ describe("flow-table structural operations", () => {
     expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 2, rowspan: 1 })
     expect(flowTableCellParagraphTexts(updatedTable, "flow-cell-0-0")).toEqual(["A", "B"])
     expect(updatedTable.nodes["flow-cell-0-1"]).toBeUndefined()
+    expect(updatedTable.nodes["flow-cell-0-0"]?.type).toBe("flow-table-cell")
+    if (updatedTable.nodes["flow-cell-0-0"]?.type === "flow-table-cell") {
+      expect(updatedTable.nodes["flow-cell-0-0"].props.mergeMap).toEqual({
+        version: 1,
+        entries: [
+          { rowOffset: 0, colOffset: 0, childIds: ["fp-0-0"] },
+          { rowOffset: 0, colOffset: 1, childIds: ["fp-0-1"] },
+        ],
+      })
+    }
     expect(topRow?.type).toBe("flow-table-row")
     if (topRow?.type !== "flow-table-row") return
     expect(topRow.cellIds).toEqual(["flow-cell-0-0"])
@@ -1573,6 +1599,16 @@ describe("flow-table structural operations", () => {
     expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 1, rowspan: 2 })
     expect(flowTableCellParagraphTexts(updatedTable, "flow-cell-0-0")).toEqual(["A", "B"])
     expect(updatedTable.nodes["flow-cell-1-0"]).toBeUndefined()
+    expect(updatedTable.nodes["flow-cell-0-0"]?.type).toBe("flow-table-cell")
+    if (updatedTable.nodes["flow-cell-0-0"]?.type === "flow-table-cell") {
+      expect(updatedTable.nodes["flow-cell-0-0"].props.mergeMap).toEqual({
+        version: 1,
+        entries: [
+          { rowOffset: 0, colOffset: 0, childIds: ["fp-0-0"] },
+          { rowOffset: 1, colOffset: 0, childIds: ["fp-1-0"] },
+        ],
+      })
+    }
     expect(bottomRow?.type).toBe("flow-table-row")
     if (bottomRow?.type !== "flow-table-row") return
     expect(bottomRow.cellIds).toEqual([])
@@ -1583,6 +1619,30 @@ describe("flow-table structural operations", () => {
     const table = getFlowTable(doc)
 
     expect(resolveFlowTableCellMergeTarget(table, "flow-cell-bottom-right", "left")).toBeNull()
+  })
+
+  it("preserves mergeMap offsets through chained flow-table cell merges", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [["A", "B", "C"]],
+      columnWidths: [100, 100, 100],
+    })
+    const firstMerge = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2 })
+    const secondMerge = updateFlowTableCellSpan(firstMerge, "flow-cell-0-0", { colspan: 3 })
+    assertDocument(secondMerge)
+    const table = getFlowTable(secondMerge)
+    const cell = table.nodes["flow-cell-0-0"]
+
+    expect(cell.type).toBe("flow-table-cell")
+    if (cell.type !== "flow-table-cell") return
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A", "B", "C"])
+    expect(cell.props.mergeMap).toEqual({
+      version: 1,
+      entries: [
+        { rowOffset: 0, colOffset: 0, childIds: ["fp-0-0"] },
+        { rowOffset: 0, colOffset: 1, childIds: ["fp-0-1"] },
+        { rowOffset: 0, colOffset: 2, childIds: ["fp-0-2"] },
+      ],
+    })
   })
 
   it("shrinks a flow-table cell span by creating empty replacement cells", () => {
@@ -1604,6 +1664,7 @@ describe("flow-table structural operations", () => {
     if (selected?.type !== "flow-table-cell") return
     expect(selected.props.colspan).toBeUndefined()
     expect(selected.props.rowspan).toBeUndefined()
+    expect(selected.props.mergeMap).toBeUndefined()
     expect(grid.placements).toHaveLength(4)
     expect(grid.slotMatrix[0][0].cellId).toBe("flow-cell-0-0")
     table.rowIds.forEach((rowId) => {
@@ -1613,7 +1674,7 @@ describe("flow-table structural operations", () => {
     })
   })
 
-  it("unmerges a content-merged flow-table cell without restoring source-cell mapping", () => {
+  it("unmerges a content-merged flow-table cell by restoring source-cell mapping", () => {
     const doc = makeGridFlowTableDoc({
       rows: [
         ["A", "B"],
@@ -1628,14 +1689,40 @@ describe("flow-table structural operations", () => {
     const grid = resolveFlowTableGrid(table)
 
     expect(grid.placements).toHaveLength(4)
-    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A", "B", "C", "D"])
-    const replacementCellIds = grid.placements
-      .filter((placement) => placement.cellId !== "flow-cell-0-0")
-      .map((placement) => placement.cellId)
-    expect(replacementCellIds).toHaveLength(3)
-    replacementCellIds.forEach((cellId) => {
-      expect(flowTableCellParagraphTexts(table, cellId)).toEqual([""])
+    const origin = table.nodes["flow-cell-0-0"]
+    expect(origin.type).toBe("flow-table-cell")
+    if (origin.type !== "flow-table-cell") return
+    expect(origin.props.mergeMap).toBeUndefined()
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[0][1].cellId)).toEqual(["B"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][0].cellId)).toEqual(["C"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][1].cellId)).toEqual(["D"])
+  })
+
+  it("shrinks a content-merged flow-table cell by keeping in-span content and restoring released slots", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+      columnWidths: [100, 100],
     })
+    const merged = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    const shrunk = updateFlowTableCellSpan(merged, "flow-cell-0-0", { colspan: 2, rowspan: 1 })
+    assertDocument(shrunk)
+    const table = getFlowTable(shrunk)
+    const grid = resolveFlowTableGrid(table)
+    const origin = table.nodes["flow-cell-0-0"]
+
+    expect(grid.placements).toHaveLength(3)
+    expect(origin.type).toBe("flow-table-cell")
+    if (origin.type !== "flow-table-cell") return
+    expect(origin.props.colspan).toBe(2)
+    expect(origin.props.rowspan).toBeUndefined()
+    expect(origin.props.mergeMap).toBeUndefined()
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A", "B"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][0].cellId)).toEqual(["C"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][1].cellId)).toEqual(["D"])
   })
 
   it("does not delete the last flow-table column", () => {
