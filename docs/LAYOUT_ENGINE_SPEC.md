@@ -276,6 +276,8 @@ resolver before pushing the fragment. This applies to:
 - body-level paragraph fragments (`paginateParagraph`)
 - stack / column paragraph fragments (`pushStackContents`)
 - table cell paragraph fragments (`pushTableCellContents`, `pushCellSlice`)
+- Flow Table cell paragraph fragments (`collectFlowTableCellContents`,
+  `collectFlowTableCellSlice`)
 
 Omitting this call in any path is a bug: the page-number placeholder string will
 appear in the rendered output instead of the resolved number.
@@ -336,6 +338,11 @@ Current policy direction:
   split-at-row-boundary rules are explicit
 - table cell content: splits by the same measured line boundaries as body
   paragraphs, but only within a row that permits splitting; see 4.3
+- flow-table row: non-rowspan single-row groups split by default;
+  `allowBreak=false` keeps a row together when possible; rowspan-linked Flow
+  Table groups are atomic in v1; repeated headers remain deferred
+- flow-table cell content: splits by the same measured line boundaries as body
+  paragraphs, but only within a non-rowspan row that permits splitting
 - TOC placeholder: estimated-height placeholder in pass 1; if generated TOC
   content is taller than the placeholder, pass 2 repaginates with the corrected
   height before rendering TOC lines
@@ -432,6 +439,10 @@ Rules:
 - breakable table rows that must force one content unit forward should expose a
   `forced-table-split-overflow` fragment warning and keep the row/cell slice
   height large enough to enclose the forced content when possible
+- breakable Flow Table rows that must force one content unit forward should
+  expose a `forced-flow-table-split-overflow` fragment warning and keep the
+  row/cell slice height large enough to enclose the forced content when
+  possible
 - fragment warnings are renderer/editor-facing diagnostics; final export should
   not hide them from the user
 

@@ -1,0 +1,464 @@
+# Flow Table Spec
+
+Status: Design draft with partial runtime implementation. Flow Table remains
+experimental and is not the default inserted table.
+
+Implementation status:
+
+- Schema, assert-layer validation, and a standalone grid resolver exist for the
+  draft `flow-table` node family.
+- Static flow layout exists for authored columns, `colspan`, `rowspan`, row
+  height, and cell box padding.
+- Pagination supports breakable non-rowspan row/cell continuation across pages.
+  Short sibling cell content is not duplicated on continuation slices.
+- Rowspan-linked row groups remain atomic in v1.
+- PDF and editor preview draw Flow Table cell `box` fill/border from paginated
+  `flow-table-cell` fragments.
+- Repeated headers, DOCX output, broader Flow Table renderer behavior, editor
+  insertion, and property editing are intentionally not implemented yet.
+
+This document drafts a new table primitive that can be developed beside the
+current `table` node. The working title is **Flow Table** and the provisional
+node type name is `flow-table`.
+
+Use this document together with:
+
+- `docs/TABLE_EDITING_CONTRACT.md` for the current table model
+- `docs/CROSS_PAGE_BEHAVIOR.md` for page-boundary policy
+- `docs/FLOW_ROW_STACK_SPEC.md` for the separate-primitive rollout pattern
+- `docs/EXPORT_RENDERER_CONTRACT.md` for renderer ownership
+- `docs/TEST_STRATEGY.md` for verification levels
+
+## Decision
+
+Flow Table is a new explicit primitive, not a hidden replacement for the
+existing `table` node.
+
+Rules:
+
+- Existing `table` nodes remain current/legacy authored nodes during Flow Table
+  development.
+- New Flow Table content uses an explicit `flow-table` node type.
+- The draft node family name is `flow-table`, `flow-table-row`, and
+  `flow-table-cell`; final TypeScript naming may still adjust during schema
+  review.
+- Flow Table cell visual styling uses a `box` object in v1, matching the
+  paragraph/flow-stack box concept.
+- There is no automatic migration from `table` to `flow-table`.
+- There is no render-time projection that secretly lays out old `table` nodes
+  with the Flow Table engine.
+- There is no hidden compatibility conversion.
+- If Flow Table reaches acceptance, new insertions may default to Flow Table
+  while existing `table` documents remain readable.
+- Hiding or removing legacy `table` is an open decision after Flow Table
+  acceptance, not part of v1.
+
+This mirrors the successful `row` / `stack` and `flow-row` / `flow-stack`
+separation pattern: protect existing behavior while a stronger primitive proves
+itself.
+
+## Why Not Patch Current Table First
+
+The current table path is already doing several hard things:
+
+- authored grid structure, columns, rows, cells, rowspans, and colspans
+- row splitting through a table-specific pagination loop
+- repeated header rows
+- cell border, padding, background, and vertical-align props
+- PDF/DOCX/editor output from paginated fragments
+
+Changing the current `table` semantics directly would risk surprising existing
+documents and make debugging harder. A separate primitive lets Flow Table define
+new page-slicing rules without silently changing the meaning of old documents.
+
+## Relationship To Flow Row / Flow Stack
+
+Flow Table is not `flow-row` / `flow-stack`.
+
+Shared principles:
+
+- use a new explicit primitive instead of mutating old semantics
+- core pagination owns page slices and continuation boundaries
+- editor/PDF/DOCX consume `PaginatedDocument`
+- renderers must not remeasure or choose page breaks
+- no empty continuation slices without progress
+- forced progress must be explicit and test-covered when content cannot fit
+  cleanly on a page
+
+Different responsibilities:
+
+- `flow-row` / `flow-stack` handles side-by-side long-form content with no grid
+  law.
+- Flow Table handles document tables with column identity, row identity,
+  headers, `rowspan`, `colspan`, cell chrome, and table-specific split policy.
+
+Flow Table should reuse the page-slice baseline proven by `flow-row` /
+`flow-stack`: paginate before render, emit continuation slices, keep visual
+geometry derived from paginated fragments, shrink final slices where the table
+policy allows it, and warn on forced progress. It must still keep table
+grid/span semantics native to the table engine.
+
+## Current Evidence
+
+The current code/docs show why Flow Table should be designed as a separate
+primitive:
+
+- `packages/core/src/schema/table.ts` defines current authored table props:
+  table border/header rows, row `allowBreak`, and cell `rowspan`, `colspan`,
+  `padding`, `background`, and `verticalAlign`.
+- `packages/core/src/layout/flow.ts` measures current tables in `flowTable(...)`
+  and treats table cells as stack-like internal flow boxes before pagination
+  emits table-cell fragments.
+- `packages/core/src/pagination/paginator.ts` owns current table pagination in
+  `paginateTable(...)`, `paginateTableRowFull(...)`,
+  `paginateTableRowSplit(...)`, `pushTableCellContents(...)`, and
+  `pushCellSlice(...)`.
+- `packages/core/src/renderer/pdf/index.ts` renders table cells from
+  `cellRenderProps` in `drawCellBorders(...)`; it does not own table layout.
+- `docs/TABLE_EDITING_CONTRACT.md` states that renderers consume paginated
+  fragments and must not invent a separate table layout policy.
+- `docs/CROSS_PAGE_BEHAVIOR.md` documents the current table split and header
+  repeat behavior as current `table` behavior, not as the final Flow Table
+  architecture.
+
+## Goals
+
+- Create a table-native primitive that can fragment across pages without
+  relying on hidden migration or renderer-side relayout.
+- Preserve grid/span semantics as first-class authored structure.
+- Make PDF/editor visual output consume the same cell slice primitives.
+- Keep current `table` behavior stable while Flow Table is experimental.
+- Let Flow Table become the future insertion default only after acceptance.
+- Keep the model extensible for complex document tables without overcommitting
+  v1 to every advanced split case.
+
+## Non-Goals
+
+- Do not auto-convert existing `table` nodes.
+- Do not secretly render existing `table` nodes with Flow Table.
+- Do not remove legacy `table` in v1.
+- Do not promise pixel-perfect DOCX output.
+- Do not implement live cross-page WYSIWYG editing in v1.
+- Do not implement advanced split-inside-rowspan behavior in v1 unless a later
+  design accepts the added complexity.
+- Do not use Flow Table as a generic layout grid or as a replacement for
+  `flow-row` / `flow-stack`.
+
+## Authored Model Draft
+
+The `flow-table` node family is the accepted working name for the draft. Exact
+exported TypeScript aliases may still change during implementation review.
+
+```ts
+type FlowTableNode = {
+  id: string
+  type: "flow-table"
+  props: {
+    headerRowCount?: number
+    border?: CellBorder
+  }
+  columns: Array<{ width: UnitValue }>
+  rowIds: string[]
+  nodes: Record<string, FlowTableRowNode | FlowTableCellNode | ParagraphNode | SpacerNode>
+}
+
+type FlowTableRowNode = {
+  id: string
+  type: "flow-table-row"
+  props: {
+    allowBreak?: boolean
+    height?: UnitValue
+  }
+  cellIds: string[]
+}
+
+type FlowTableCellNode = {
+  id: string
+  type: "flow-table-cell"
+  props: {
+    colspan?: number
+    rowspan?: number
+    box?: {
+      fill?: string
+      padding?: {
+        top: UnitValue
+        right: UnitValue
+        bottom: UnitValue
+        left: UnitValue
+      }
+      border?: CellBorder
+    }
+    verticalAlign?: "top" | "middle" | "bottom"
+  }
+  childIds: string[]
+}
+```
+
+Draft choices:
+
+- Use a `box` object for cell visual styling so fill, padding, and border use
+  the same conceptual shape as paragraph and flow-stack boxes. This is the v1
+  draft direction, not an open model question.
+- Keep `rowspan` / `colspan` in the authored model from the beginning.
+- Keep columns authored as document units, not computed widths.
+- Keep computed row heights, cell slice geometry, page indices, and line split
+  ranges out of authored data.
+
+## Grid Law
+
+Flow Table must define a strict grid law before implementation:
+
+- `columns.length` is the table grid width.
+- Each row resolves into occupied column slots.
+- A cell's `colspan` reserves adjacent columns in the same row.
+- A cell's `rowspan` reserves the same columns in later rows.
+- Invalid overlaps, orphan cells, missing row ids, and impossible spans are
+  document validity failures, not renderer concerns.
+- Operations that add or remove rows/columns must preserve the grid law or fail
+  clearly.
+
+The assert layer should reject invalid Flow Table structure before pagination.
+
+## Pagination Model Draft
+
+Pagination emits page slices from one authored Flow Table.
+
+Conceptual output:
+
+```txt
+page 0:
+  flow-table T slice 0
+    flow-table-row R1 slice 0
+      flow-table-cell C1 slice 0
+        paragraph fragments
+      flow-table-cell C2 slice 0
+    flow-table-row R2 slice 0
+
+page 1:
+  flow-table T slice 1
+    repeated header rows when applicable
+    flow-table-row R2 slice 1
+      flow-table-cell C1 slice 1
+        continued paragraph fragments
+```
+
+Each emitted fragment should preserve:
+
+- authored source node id
+- parent/child traceability
+- page index
+- fragment index where useful
+- continuation flags
+- line ranges for paragraph children
+- explicit warnings for forced-progress overflow
+
+Renderers and editor selection should use fragment metadata, not object order or
+DOM heuristics.
+
+## Split Policy Draft
+
+v1 should be conservative.
+
+Normal cells and rows:
+
+- Rows with `allowBreak=false` move as a whole when possible.
+- Rows with `allowBreak=true` or omitted may split by cell content progress.
+- Cell paragraph content may split by measured line boundaries.
+- Short cells in a split row should not duplicate content on continuation
+  slices.
+- Empty continuation slices are not allowed while remaining content is still at
+  the same split point.
+- If no clean page can fit one content unit, pagination may force one content
+  unit and attach an explicit warning.
+
+Headers:
+
+- `headerRowCount` repeats header rows on continuation pages where body rows
+  continue.
+- Header rows should be authored rows, not renderer-only decorations.
+- Repeated headers belong to paginated output.
+
+Rowspan:
+
+- Any row connected by the same rowspan forms a rowspan-linked row group.
+- Rowspan-linked row groups are atomic in v1. Pagination should move the whole
+  group to a clean page when possible.
+- If a rowspan-linked group is taller than one clean page, v1 may use forced
+  overflow with an explicit Flow Table warning, but it must not silently split
+  inside the rowspan group.
+- Split-at-row-boundary or split-inside-cell behavior inside rowspan groups
+  remains deferred for v1.
+- A future split-inside-rowspan design must define active rowspan cell slices
+  across pages, border and padding continuation rules, row height distribution
+  per page slice, repeated-header interaction, and line accounting inside
+  spanning cells.
+
+Colspan:
+
+- Colspan affects width and grid occupancy from the first implementation.
+- Colspan does not create cross-page state by itself; it is mostly horizontal
+  geometry plus normal vertical cell fragmentation.
+- Colspan cells may split vertically like normal cells only when the owning row
+  is breakable and no rowspan-linked policy blocks the split.
+
+## Cell Visual Semantics
+
+Flow Table cell style is document styling, not editor-only chrome.
+
+Cell box rules should mirror the paragraph/flow-stack split-box idea:
+
+- fill draws on every emitted cell slice
+- left/right borders draw on every emitted slice
+- top border draws only on the first logical cell slice
+- bottom border draws only on the final logical cell slice
+- top padding applies only to the first logical cell slice
+- bottom padding applies only to the final logical cell slice
+- horizontal padding applies on every slice
+
+This should be implemented as shared table-cell drawing primitives consumed by
+editor preview and PDF. DOCX can map the same metadata to Word table cell
+features as a best-effort exchange format.
+
+## Renderer Behavior
+
+PDF/editor:
+
+- consume Flow Table fragments from `PaginatedDocument`
+- draw cell fills, borders, and text from paginated geometry
+- do not compute row splits, header repeats, or span layout
+- share helper primitives for table-cell visual output
+
+DOCX:
+
+- remains best-effort
+- should serialize Flow Table to editable Word tables when possible
+- may differ after Word/LibreOffice reflows text
+- must not become a second Flow Table layout engine
+
+## Editor Behavior Draft
+
+v1 editor support should be static and explicit:
+
+- palette inserts a new Flow Table primitive, not legacy `table`
+- selection can target table, row, and cell fragments
+- property panel can edit the first accepted v1 props
+- text editing can stay conservative and reuse current safe cell-edit paths
+- live cross-page WYSIWYG editing inside Flow Table is deferred
+- span editing UI is deferred unless the model and operations are already
+  protected by tests
+
+## Migration And Compatibility
+
+No automatic migration is planned.
+
+Explicit decisions:
+
+- Existing documents with `table` keep `table`.
+- New Flow Table documents use `flow-table`.
+- Import does not rewrite `table` to `flow-table`.
+- Renderers do not secretly project `table` into Flow Table.
+- Persistence should round-trip both node families independently while both are
+  supported.
+- A future manual conversion command may be discussed later, but it is not part
+  of v1.
+- Removing or hiding legacy `table` is an open decision after Flow Table
+  acceptance.
+
+## Implementation Path
+
+Suggested order:
+
+1. Finalize this spec enough to accept v1 scope.
+2. Add schema and assert/normalize support for `flow-table`,
+   `flow-table-row`, and `flow-table-cell`.
+3. Add small document operation helpers for insertion only.
+4. Add core layout measurement for one-page static Flow Tables.
+5. Add pagination for non-spanning rows.
+6. Add `colspan` width/grid support.
+7. Add conservative `rowspan` atomic-group support.
+8. Add repeated header rows.
+9. Add split row/cell continuation for non-rowspan groups.
+10. Add PDF/editor cell visual primitives and focused raster tests.
+11. Add DOCX best-effort projection.
+12. Add insertion UI after schema, pagination, PDF, and editor preview have
+    enough coverage.
+
+## Test Plan
+
+Schema/assert tests:
+
+- valid one-row Flow Table passes
+- invalid missing row/cell ids fail
+- overlapping spans fail
+- out-of-range spans fail
+- legacy `table` remains valid and unchanged
+
+Pagination tests:
+
+- one-page Flow Table emits table/row/cell/paragraph fragments
+- column widths and colspan widths match authored columns
+- rowspan-linked rows stay together in v1
+- breakable non-rowspan rows split by line ranges
+- repeated headers appear on continuation pages
+- no empty continuation slice without progress
+- forced-progress warnings appear for impossible cases
+
+Renderer/editor tests:
+
+- PDF renders Flow Table without throwing
+- PDF raster checks cell fill/border geometry
+- editor preview draws from the same cell primitives
+- DOCX emits valid ZIP output with useful table structure
+
+Product fixture tests:
+
+- dense customs-style table
+- repeated header multi-page table
+- breakable uneven row table
+- span boundary table
+
+## Acceptance Gate
+
+Flow Table should not become the default inserted table until:
+
+- schema/assert/normalize support is covered
+- static pagination supports the accepted v1 cases
+- PDF/editor preview use the same paginated cell primitives
+- focused PDF raster visual tests pass for cell fill/border/split behavior
+- DOCX best-effort output is documented and smoke-tested
+- legacy `table` documents remain unaffected
+- no automatic migration exists
+
+## Risk Map
+
+High risks:
+
+- grid law bugs causing hidden overlap or orphan cells
+- row/column operation bugs corrupting spans
+- empty continuation slices duplicating or skipping content
+- rowspan policy becoming ambiguous across pages
+- repeated headers consuming all available height
+- renderer code accidentally becoming a second layout engine
+- user confusion if legacy `table` and Flow Table are not visibly distinct
+
+Mitigation:
+
+- keep Flow Table explicit and separate
+- implement schema/assert before editor UI
+- add pagination tests before renderer output
+- keep v1 split policy conservative
+- use PDF raster tests for visual primitives, not for broad layout invention
+- defer legacy table hiding/removal until Flow Table acceptance
+
+## Open Decisions
+
+- Whether `box` should share exact TypeScript types with paragraph/flow-stack
+  boxes or use table-specific aliases with the same conceptual shape.
+- Whether v1 needs manual row/column insertion operations or insertion-only
+  static fixtures are enough at first.
+- Whether `height` should be accepted in Flow Table rows in v1.
+- How much vertical-align behavior belongs in v1.
+- Whether split-inside-rowspan should ever be supported or remain permanently
+  out of scope.
+- When, if ever, legacy `table` should be hidden or removed from the insertion
+  UI.

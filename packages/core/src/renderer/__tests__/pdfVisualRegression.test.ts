@@ -203,6 +203,42 @@ function makeFlowRowVisualDoc(): DocumentNode {
   })
 }
 
+function makeFlowTableVisualDoc(): DocumentNode {
+  const cell = {
+    id: "flow-table-cell",
+    type: "flow-table-cell",
+    props: {
+      box: {
+        fill: "E0F2FE",
+        padding: { top: pt(4), right: pt(4), bottom: pt(4), left: pt(4) },
+        border: {
+          top: { style: "solid", width: pt(2), color: "DC2626" },
+          right: { style: "solid", width: pt(2), color: "16A34A" },
+          bottom: { style: "solid", width: pt(2), color: "2563EB" },
+          left: { style: "solid", width: pt(2), color: "111827" },
+        },
+      },
+    },
+    childIds: [],
+  }
+  const row = {
+    id: "flow-table-row",
+    type: "flow-table-row",
+    props: { height: pt(120) },
+    cellIds: [cell.id],
+  }
+  const table = {
+    id: "flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(180) }],
+    rowIds: [row.id],
+    nodes: { [row.id]: row, [cell.id]: cell },
+  } as unknown as LayoutNode
+
+  return makeDoc(["flow-table"], { "flow-table": table })
+}
+
 function readUInt32(buffer: Buffer, offset: number): number {
   return buffer.readUInt32BE(offset)
 }
@@ -577,6 +613,39 @@ describePdfVisual("PDF raster visual regression", () => {
         page.height - (row.y + row.height / 2),
       )
       expect(minColorDistanceNear(image, gapPoint.x, gapPoint.y, hexToRgb("FFFFFF"), 1)).toBeLessThanOrEqual(18)
+    }
+  })
+
+  it("draws flow-table cell fills and borders at paginated cell geometry", async () => {
+    const rasterizer = findRasterizer()
+    expect(rasterizer, "Set up pdftoppm or ImageMagick with Ghostscript before running FLOWDOC_PDF_VISUAL_REGRESSION=1").not.toBeNull()
+
+    const paginated = paginateDocument(makeFlowTableVisualDoc(), defaultTextMeasurer, defaultWordBreaker)
+    const page = paginated.sections[0].pages[0]
+    const cell = page.fragments.find((item) => item.nodeId === "flow-table-cell" && item.nodeType === "flow-table-cell")
+    if (!cell) throw new Error("Expected flow-table-cell fragment")
+    const primitives = resolveFragmentBoxDrawingPrimitives(cell, page.height)
+    if (!primitives?.fill) throw new Error("Expected flow-table cell fill primitives")
+
+    const tempDir = mkdtempSync(join(tmpdir(), "flowdoc-pdf-flow-table-cell-"))
+    tempDirs.push(tempDir)
+    const pdfPath = join(tempDir, "actual.pdf")
+    const pngPath = join(tempDir, "actual.png")
+    const result = await new PdfRenderer().render(paginated)
+    writeFileSync(pdfPath, result.buffer)
+    rasterizer!.render(pdfPath, pngPath)
+
+    const image = parsePng(readFileSync(pngPath))
+    const fillPoint = pdfPointToImagePoint(
+      page.height,
+      primitives.fill.x + primitives.fill.width / 2,
+      primitives.fill.y + primitives.fill.height / 2,
+    )
+    expect(minColorDistanceNear(image, fillPoint.x, fillPoint.y, hexToRgb("E0F2FE"), 1)).toBeLessThanOrEqual(28)
+
+    for (const line of primitives.borders) {
+      const linePoint = pdfPointToImagePoint(page.height, (line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
+      expect(minColorDistanceNear(image, linePoint.x, linePoint.y, hexToRgb(line.border.color), 4)).toBeLessThanOrEqual(80)
     }
   })
 })

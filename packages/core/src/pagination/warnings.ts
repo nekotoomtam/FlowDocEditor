@@ -12,6 +12,8 @@ function warningMessageForCode(code: string): string {
   switch (code) {
     case "forced-table-split-overflow":
       return "table split used forced overflow"
+    case "forced-flow-table-split-overflow":
+      return "flow-table split used forced overflow"
     default:
       return code
   }

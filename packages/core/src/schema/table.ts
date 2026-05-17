@@ -21,6 +21,37 @@ export const CellBorderSchema = z.object({
   left: BorderSideSchema.optional(),
 })
 
+const HexColorSchema = z.string().regex(/^[0-9A-Fa-f]{6}$/)
+const NonNegativeUnitValueSchema = UnitValueSchema.refine((value) => value.value >= 0, {
+  message: "Unit value must be non-negative",
+})
+
+export const FlowTableCellBoxPaddingSchema = z.object({
+  top: NonNegativeUnitValueSchema,
+  right: NonNegativeUnitValueSchema,
+  bottom: NonNegativeUnitValueSchema,
+  left: NonNegativeUnitValueSchema,
+})
+
+export const FlowTableCellBoxBorderSideSchema = z.object({
+  style: BorderStyleSchema,
+  width: NonNegativeUnitValueSchema,
+  color: HexColorSchema.default("000000"),
+})
+
+export const FlowTableCellBoxBorderSchema = z.object({
+  top: FlowTableCellBoxBorderSideSchema.optional(),
+  right: FlowTableCellBoxBorderSideSchema.optional(),
+  bottom: FlowTableCellBoxBorderSideSchema.optional(),
+  left: FlowTableCellBoxBorderSideSchema.optional(),
+})
+
+export const FlowTableCellBoxStyleSchema = z.object({
+  fill: HexColorSchema.optional(),
+  padding: FlowTableCellBoxPaddingSchema.optional(),
+  border: FlowTableCellBoxBorderSchema.optional(),
+})
+
 // ─── Column ───────────────────────────────────────────────────────────────────
 
 export const TableColumnDefSchema = z.object({
@@ -80,17 +111,75 @@ export const TableNodeSchema = z.object({
   nodes: z.record(z.string().min(1), TableInternalNodeSchema),
 })
 
+// ─── Flow Table Nodes ────────────────────────────────────────────────────────
+
+export const FlowTablePropsSchema = z.object({
+  border: CellBorderSchema.optional(),
+  headerRowCount: z.number().int().nonnegative().optional(),
+})
+
+export const FlowTableRowPropsSchema = z.object({
+  height: UnitValueSchema.optional(),
+  allowBreak: z.boolean().optional(),
+})
+
+export const FlowTableCellPropsSchema = z.object({
+  colspan: z.number().int().min(1).optional(),
+  rowspan: z.number().int().min(1).optional(),
+  box: FlowTableCellBoxStyleSchema.optional(),
+  verticalAlign: z.enum(["top", "middle", "bottom"]).optional(),
+})
+
+export const FlowTableCellNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("flow-table-cell"),
+  props: FlowTableCellPropsSchema,
+  childIds: z.array(z.string().min(1)),
+})
+
+export const FlowTableRowNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("flow-table-row"),
+  props: FlowTableRowPropsSchema,
+  cellIds: z.array(z.string().min(1)),
+})
+
+// nodes ใน flow-table เก็บแบบ passthrough เหมือน table เดิมเพื่อหลีกเลี่ยง
+// circular dep กับ block.ts; assert layer ตรวจโครงสร้างจริงเอง
+const FlowTableInternalNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.string().min(1),
+}).passthrough()
+
+export const FlowTableNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("flow-table"),
+  props: FlowTablePropsSchema,
+  columns: z.array(TableColumnDefSchema).min(1),
+  rowIds: z.array(z.string().min(1)).min(1),
+  nodes: z.record(z.string().min(1), FlowTableInternalNodeSchema),
+})
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type BorderStyle = z.infer<typeof BorderStyleSchema>
 export type BorderSide = z.infer<typeof BorderSideSchema>
 export type CellBorder = z.infer<typeof CellBorderSchema>
+export type FlowTableCellBoxPadding = z.infer<typeof FlowTableCellBoxPaddingSchema>
+export type FlowTableCellBoxBorderSide = z.infer<typeof FlowTableCellBoxBorderSideSchema>
+export type FlowTableCellBoxBorder = z.infer<typeof FlowTableCellBoxBorderSchema>
+export type FlowTableCellBoxStyle = z.infer<typeof FlowTableCellBoxStyleSchema>
 export type TableColumnDef = z.infer<typeof TableColumnDefSchema>
 export type TableProps = z.infer<typeof TablePropsSchema>
 export type TableRowProps = z.infer<typeof TableRowPropsSchema>
 export type TableCellProps = z.infer<typeof TableCellPropsSchema>
 export type TableCellNode = z.infer<typeof TableCellNodeSchema>
 export type TableRowNode = z.infer<typeof TableRowNodeSchema>
+export type FlowTableProps = z.infer<typeof FlowTablePropsSchema>
+export type FlowTableRowProps = z.infer<typeof FlowTableRowPropsSchema>
+export type FlowTableCellProps = z.infer<typeof FlowTableCellPropsSchema>
+export type FlowTableCellNode = z.infer<typeof FlowTableCellNodeSchema>
+export type FlowTableRowNode = z.infer<typeof FlowTableRowNodeSchema>
 
 // TableNode ใช้ TypeScript type แยกต่างหากเพื่อให้ nodes มี type ที่ precise
 // (Zod infer จะได้ nodes: Record<string, { id, type }> ซึ่ง loose เกินไป)
@@ -101,4 +190,13 @@ export interface TableNode {
   columns: TableColumnDef[]
   rowIds: string[]
   nodes: Record<string, TableRowNode | TableCellNode | ParagraphNode | SpacerNode>
+}
+
+export interface FlowTableNode {
+  id: string
+  type: "flow-table"
+  props: FlowTableProps
+  columns: TableColumnDef[]
+  rowIds: string[]
+  nodes: Record<string, FlowTableRowNode | FlowTableCellNode | ParagraphNode | SpacerNode>
 }

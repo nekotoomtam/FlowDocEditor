@@ -101,6 +101,7 @@ function renderFragmentBox(fragment: PageFragment, scale: number) {
       data-fragment-box="true"
       data-paragraph-box={fragment.nodeType === "paragraph" ? "true" : undefined}
       data-flow-stack-box={fragment.nodeType === "flow-stack" ? "true" : undefined}
+      data-flow-table-cell-box={fragment.nodeType === "flow-table-cell" ? "true" : undefined}
       style={{ pointerEvents: "none" }}
     >
       {primitives.fill && (
@@ -631,7 +632,7 @@ function PageView({
         const chromeY = displayFragment.y * scale - chromeTop
         const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
         const hasAuthoredFragmentBox = (f.nodeType === "paragraph" && Boolean(displayFragment.renderProps?.box)) ||
-          (f.nodeType === "flow-stack" && Boolean(displayFragment.boxRenderProps))
+          ((f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && Boolean(displayFragment.boxRenderProps))
         const chromeFill = hasAuthoredFragmentBox && !isInlineEditing ? "transparent" : isInlineEditing ? "#dbeafe" : color
         const chromeStroke = hasAuthoredFragmentBox && !isInlineEditing && !isHovered
           ? "transparent"
@@ -694,7 +695,7 @@ function PageView({
               strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
               opacity={chromeOpacity}
             />
-            {(f.nodeType === "paragraph" || f.nodeType === "flow-stack") && renderFragmentBox(displayFragment, scale)}
+            {(f.nodeType === "paragraph" || f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && renderFragmentBox(displayFragment, scale)}
             {isSelected && !isInlineEditing && (
               <rect
                 x={displayFragment.x * scale - selectionPad} y={chromeY - selectionPad}

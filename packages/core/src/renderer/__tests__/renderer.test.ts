@@ -3,7 +3,7 @@ import JSZip from "jszip"
 import { LineCapStyle } from "pdf-lib"
 import { PdfRenderer, resolveFragmentBoxDrawingPrimitives, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions } from "../pdf"
 import { DocxRenderer } from "../docx"
-import { paginateDocument } from "../../pagination"
+import { paginateDocument, type PageFragment } from "../../pagination"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { ptToTwips } from "../shared"
 import { pt } from "../../schema"
@@ -124,6 +124,38 @@ describe("PdfRenderer smoke tests", () => {
     const fs2: LayoutNode = { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] }
     const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] }
     const result = await pdf.render(paginate(makeDoc(["fr1"], { fr1: row, fs1, fs2, p1, p2 })))
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("renders a flow-table cell box without throwing", async () => {
+    const cell = {
+      id: "ftc1",
+      type: "flow-table-cell",
+      props: {
+        box: {
+          fill: "E0F2FE",
+          border: { top: { style: "solid", width: pt(1), color: "111111" } },
+        },
+      },
+      childIds: [],
+    }
+    const row = {
+      id: "ftr1",
+      type: "flow-table-row",
+      props: { height: pt(36) },
+      cellIds: [cell.id],
+    }
+    const table = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(120) }],
+      rowIds: [row.id],
+      nodes: { [row.id]: row, [cell.id]: cell },
+    } as unknown as LayoutNode
+    const result = await pdf.render(paginate(makeDoc(["ft1"], { ft1: table })))
+
     expect(result.buffer.length).toBeGreaterThan(0)
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
   })
@@ -258,6 +290,68 @@ describe("PdfRenderer smoke tests", () => {
 
     expect(firstSides).toEqual(["left", "right", "top"])
     expect(lastSides).toEqual(["bottom", "left", "right"])
+  })
+
+  it("resolves flow-table cell box drawing primitives from fragment metadata", () => {
+    const fragment: PageFragment = {
+      nodeId: "flow-cell",
+      nodeType: "flow-table-cell",
+      pageIndex: 0,
+      x: 72,
+      y: 90,
+      width: 120,
+      height: 48,
+      boxRenderProps: {
+        fill: "E0F2FE",
+        padding: { top: 4, right: 6, bottom: 8, left: 10 },
+        border: {
+          top: { style: "solid", width: 2, color: "DC2626" },
+          right: { style: "solid", width: 2, color: "16A34A" },
+          bottom: { style: "solid", width: 2, color: "2563EB" },
+          left: { style: "solid", width: 2, color: "111827" },
+        },
+      },
+    }
+
+    const primitives = resolveFragmentBoxDrawingPrimitives(fragment, 400)
+
+    expect(primitives?.fill).toMatchObject({
+      x: 72,
+      y: 262,
+      width: 120,
+      height: 48,
+      color: "E0F2FE",
+    })
+    expect(primitives?.borders.map((line) => line.side).sort()).toEqual(["bottom", "left", "right", "top"])
+  })
+
+  it("resolves split flow-table cell borders as sliced logical box edges", () => {
+    const baseFragment: PageFragment = {
+      nodeId: "flow-cell",
+      nodeType: "flow-table-cell",
+      pageIndex: 0,
+      x: 72,
+      y: 90,
+      width: 120,
+      height: 48,
+      boxRenderProps: {
+        fill: "E0F2FE",
+        padding: { top: 0, right: 0, bottom: 0, left: 0 },
+        border: {
+          top: { style: "solid", width: 2, color: "DC2626" },
+          right: { style: "solid", width: 2, color: "16A34A" },
+          bottom: { style: "solid", width: 2, color: "2563EB" },
+          left: { style: "solid", width: 2, color: "111827" },
+        },
+      },
+    }
+    const first = resolveFragmentBoxDrawingPrimitives({ ...baseFragment, isContinued: true }, 400)
+    const middle = resolveFragmentBoxDrawingPrimitives({ ...baseFragment, continuesFrom: true, isContinued: true }, 400)
+    const last = resolveFragmentBoxDrawingPrimitives({ ...baseFragment, continuesFrom: true }, 400)
+
+    expect(first?.borders.map((line) => line.side).sort()).toEqual(["left", "right", "top"])
+    expect(middle?.borders.map((line) => line.side).sort()).toEqual(["left", "right"])
+    expect(last?.borders.map((line) => line.side).sort()).toEqual(["bottom", "left", "right"])
   })
 })
 

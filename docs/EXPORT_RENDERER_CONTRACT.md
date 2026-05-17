@@ -100,6 +100,8 @@ PDF should:
   paginated geometry
 - draw authored paragraph box fill, padding, and border from paginated paragraph
   metadata when paragraph box style is enabled
+- draw authored Flow Table cell box fill and border from paginated
+  `flow-table-cell` metadata
 - preserve repeated headers and table split slices produced by pagination
 - treat renderer smoke failures as product-blocking for export work
 

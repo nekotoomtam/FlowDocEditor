@@ -201,6 +201,11 @@ export class PdfRenderer implements Renderer {
         continue
       }
 
+      if (fragment.nodeType === "flow-table-cell") {
+        drawFragmentBox(pdfPage, fragment, page.height)
+        continue
+      }
+
       if (fragment.nodeType !== "paragraph" && fragment.nodeType !== "toc") continue
       if (!fragment.lines?.length || !fragment.renderProps) continue
       if (fragment.nodeType === "paragraph") drawFragmentBox(pdfPage, fragment, page.height)

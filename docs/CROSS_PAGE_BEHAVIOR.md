@@ -51,6 +51,8 @@ remain true:
 | Table row with `allowBreak=true` or omitted (default breakable) | A single-row group may split across pages. Cell paragraphs split by measured line boundaries through the table row split loop. Shorter cells render only once and are not duplicated on continuation pages. A split slice must advance at least one remaining cell content unit before consuming row height; if padding/repeated headers leave no line capacity even on a clean continuation page, the row may force one-line overflow progress. | `tablePagination.test.ts` |
 | Rowspan-linked table rows | Rowspan-linked rows stay together as an atomic group. If the group does not fit, it moves to the next page as a unit. Split-at-row-boundary inside a rowspan group is deferred. | `tablePagination.test.ts` |
 | Repeating table headers | The first `headerRowCount` rows repeat at the top of continuation pages where table body rows continue. | `tablePagination.test.ts` |
+| Flow Table row with `allowBreak=true` or omitted (default breakable) and no rowspan-linked group | A single Flow Table row may split across pages. Flow Table cell paragraphs split by measured line boundaries through the Flow Table row split loop. Shorter sibling cells render their content only once and are not duplicated on continuation pages. A split slice must advance at least one remaining cell content unit before consuming row height; if no clean page can fit one unit, the row may force one-unit overflow progress with a Flow Table warning. | `flowTablePagination.test.ts` |
+| Rowspan-linked Flow Table rows | Rowspan-linked Flow Table rows stay together as an atomic group in v1. If the group does not fit the remaining page space, it moves to the next page as a unit. Split-at-row-boundary and split-inside-rowspan remain deferred. | `flowTablePagination.test.ts` |
 | Header/footer page numbers | Header and footer fragments are cloned per page and inline page-number fields resolve using physical or section-local display page numbers. | `sectionPageNumbers.test.ts`, `tablePagination.test.ts`, `multiSection.test.ts` |
 | TOC placeholder | Pass 1 estimates height and collects entries. If generated TOC content exceeds the placeholder, pass 2 repaginates with corrected height before rendering TOC lines. | `tocOverflow.test.ts`, `multiSection.test.ts` |
 
@@ -92,6 +94,9 @@ Overflow is allowed only as an explicit fallback.
 - A breakable table-row continuation must not emit an empty body-row slice while
   remaining cell content stays at the same split point. Forced one-line/spacer
   overflow is accepted only as the explicit low-capacity fallback.
+- A breakable Flow Table row continuation follows the same no-empty-slice rule
+  for non-rowspan rows. Forced one-line/spacer overflow is accepted only as the
+  explicit low-capacity fallback and should expose a Flow Table warning.
 - Tests should cover every accepted overflow case so future changes do not turn
   accidental clipping into silent behavior.
 

@@ -381,6 +381,7 @@ function normalizeNode(node: LayoutNode): LayoutNode {
     case "paragraph": return normalizeParagraphNode(node)
     case "spacer": return normalizeSpacerNode(node)
     case "table": return node
+    case "flow-table": return node
     case "toc": return node
   }
 }

@@ -350,4 +350,64 @@ describe("EditorCanvas paragraph box preview", () => {
     expect(markup).not.toContain("data-paragraph-box-side=\"top\"")
     expect(markup).not.toContain("data-paragraph-box-side=\"bottom\"")
   })
+
+  it("renders authored flow-table cell box fill and borders from paginated metadata", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      {
+        nodeId: "ft1",
+        nodeType: "flow-table",
+        pageIndex: 0,
+        x: 36,
+        y: 72,
+        width: 120,
+        height: 44,
+      },
+      {
+        nodeId: "ftr1",
+        nodeType: "flow-table-row",
+        parentNodeId: "ft1",
+        pageIndex: 0,
+        x: 36,
+        y: 72,
+        width: 120,
+        height: 44,
+      },
+      {
+        nodeId: "ftc1",
+        nodeType: "flow-table-cell",
+        parentNodeId: "ftr1",
+        pageIndex: 0,
+        x: 36,
+        y: 72,
+        width: 120,
+        height: 44,
+        boxRenderProps: {
+          fill: "FEF3C7",
+          padding: { top: 4, right: 6, bottom: 8, left: 10 },
+          border: {
+            top: { style: "solid", width: 2, color: "DC2626" },
+            right: { style: "dashed", width: 2, color: "16A34A" },
+            bottom: { style: "solid", width: 2, color: "2563EB" },
+            left: { style: "solid", width: 2, color: "111827" },
+          },
+        },
+      },
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc())
+
+    expect(markup).toContain("data-flow-table-cell-box=\"true\"")
+    expect(markup).toContain("x=\"36\" y=\"72\" width=\"120\" height=\"44\" fill=\"#FEF3C7\"")
+    expect(markup).toContain("data-paragraph-box-side=\"top\"")
+    expect(markup).toContain("stroke=\"#DC2626\"")
+    expect(markup).toContain("data-paragraph-box-side=\"right\"")
+    expect(markup).toContain("stroke=\"#16A34A\"")
+    expect(markup).toContain("stroke-dasharray=\"6 4\"")
+    expect(markup).toContain("data-paragraph-box-side=\"bottom\"")
+    expect(markup).toContain("stroke=\"#2563EB\"")
+    expect(markup).toContain("data-paragraph-box-side=\"left\"")
+    expect(markup).toContain("stroke=\"#111827\"")
+    expect(markup).toContain("x=\"36\" y=\"72\" width=\"120\" height=\"44\" fill=\"transparent\" stroke=\"transparent\"")
+  })
 })

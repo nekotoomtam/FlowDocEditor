@@ -85,7 +85,19 @@ export interface MeasuredSpacer {
 // position ของ node หลัง flow — relative to parent
 export interface FlowBox {
   nodeId: string
-  nodeType: "body" | "row" | "stack" | "flow-row" | "flow-stack" | "paragraph" | "spacer" | "table" | "toc"
+  nodeType:
+    | "body"
+    | "row"
+    | "stack"
+    | "flow-row"
+    | "flow-stack"
+    | "paragraph"
+    | "spacer"
+    | "table"
+    | "flow-table"
+    | "flow-table-row"
+    | "flow-table-cell"
+    | "toc"
   x: number
   y: number
   width: number

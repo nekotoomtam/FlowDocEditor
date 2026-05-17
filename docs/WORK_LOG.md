@@ -20,6 +20,218 @@ Each entry should include:
 
 ## 2026-05-17
 
+### Draw Flow Table Cell Boxes In PDF And Editor
+
+Goal: Make the first Flow Table visual output consume paginated
+`flow-table-cell` box metadata without adding DOCX, repeated headers, or editor
+authoring UI yet.
+
+Completed:
+
+- Wired PDF rendering to draw `flow-table-cell.boxRenderProps` through the
+  shared fragment box primitive.
+- Wired editor SVG preview to draw Flow Table cell fill/border and hide generic
+  editor chrome over authored cell boxes.
+- Added primitive tests for Flow Table cell static and split border semantics.
+- Added a PDF smoke test plus opt-in raster coverage for Flow Table cell
+  fill/border pixels.
+- Added an EditorCanvas markup test for Flow Table cell box rendering.
+- Updated Flow Table and export renderer docs to record the supported visual
+  slice.
+
+Files changed:
+
+- `packages/core/src/renderer/pdf/index.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `packages/core/src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- DOCX Flow Table projection, repeated headers, editor insertion/property UI,
+  and split-inside-rowspan remain intentionally deferred.
+
+### Add Flow Table Non-Rowspan Split Pagination
+
+Goal: Add the first cross-page Flow Table slice without taking on repeated
+headers, renderer output, editor UI, or split-inside-rowspan behavior.
+
+Completed:
+
+- Added breakable non-rowspan Flow Table row/cell split pagination.
+- Preserved `allowBreak=false` row movement and kept rowspan-linked Flow Table
+  rows atomic in v1.
+- Added Flow Table forced-progress warning plumbing for impossible low-capacity
+  row splits.
+- Ensured shorter sibling cells do not duplicate their paragraph content on
+  continuation slices.
+- Kept Flow Table parent fragments aligned with the first row when a split must
+  start on a clean page.
+- Updated cross-page and layout specs to record the new Flow Table split policy.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/types.ts`
+- `packages/core/src/pagination/warnings.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts src/document/flowTableGrid.test.ts src/document/assert.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- Repeated headers, PDF/DOCX/editor rendering, editor insertion/property UI, and
+  split-inside-rowspan remain intentionally deferred.
+
+### Add Flow Table Static Layout And Pagination
+
+Goal: Let the new Flow Table primitive produce core geometry for one-page,
+unsplit cases before adding cross-page row/cell split behavior or editor UI.
+
+Completed:
+
+- Added `flow-table`, `flow-table-row`, and `flow-table-cell` flow fragment
+  kinds.
+- Implemented static Flow Table measurement using authored columns,
+  `colspan`, `rowspan`, row height, and cell box padding.
+- Added unsplit block pagination for Flow Table. A Flow Table moves to the next
+  page when it does not fit the remaining space, but row/cell splitting remains
+  deferred.
+- Emitted Flow Table page fragments with paragraph child fragments and
+  cell-level `boxRenderProps` metadata for later renderer work.
+- Extended drift/placement type surfaces enough to accept the new fragment
+  kinds without enabling editor insertion or drag behavior.
+- Added focused pagination tests for one-page fragments, span geometry, and
+  whole-table page movement.
+
+Files changed:
+
+- `packages/core/src/layout/types.ts`
+- `packages/core/src/layout/flow.ts`
+- `packages/core/src/pagination/types.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `packages/core/src/placement/types.ts`
+- `packages/core/src/placement/geometry.ts`
+- `src/app/editor/_components/comparePagination.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts src/document/flowTableGrid.test.ts src/document/assert.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- Runtime row/cell split pagination, repeated headers, PDF/DOCX rendering,
+  editor insertion, and property editing are intentionally deferred.
+
+### Add Flow Table Schema And Grid Resolver
+
+Goal: Start Flow Table implementation with a small reversible model/assertion
+slice before touching layout, pagination, renderer, or editor insertion.
+
+Completed:
+
+- Added draft `flow-table`, `flow-table-row`, and `flow-table-cell` schema
+  support with cell `box` styling.
+- Added a standalone `resolveFlowTableGrid(...)` helper that resolves
+  row/column occupancy for `colspan` and `rowspan`.
+- Wired `assertDocument(...)` to validate Flow Table internals, row/cell
+  reachability, child ownership, header row count, and grid fill/span rules.
+- Kept runtime layout disabled with an explicit `flow-table layout is not
+  implemented yet` error if a hand-authored Flow Table reaches the flow layer.
+- Added focused tests for Flow Table grid resolution and document assertion.
+
+Files changed:
+
+- `packages/core/src/schema/table.ts`
+- `packages/core/src/schema/block.ts`
+- `packages/core/src/document/flowTableGrid.ts`
+- `packages/core/src/document/flowTableGrid.test.ts`
+- `packages/core/src/document/assert.ts`
+- `packages/core/src/document/assert.test.ts`
+- `packages/core/src/document/normalize.ts`
+- `packages/core/src/layout/flow.ts`
+- `src/app/editor/_components/selectionContext.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/assert.test.ts src/document/flowTableGrid.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- Runtime layout, pagination, renderer output, editor insertion, and property
+  editing are intentionally deferred.
+
+### Draft Flow Table Spec
+
+Goal: Capture the agreed direction for a new explicit table primitive before
+changing schema, pagination, editor, or renderer code.
+
+Completed:
+
+- Added `docs/FLOW_TABLE_SPEC.md` as the Flow Table design draft.
+- Recorded the core decision that Flow Table is a separate explicit primitive,
+  not an automatic migration or hidden projection of legacy `table`.
+- Defined provisional authored model, grid law, pagination slices, conservative
+  v1 split policy, renderer/editor behavior, migration stance, implementation
+  path, test plan, acceptance gate, risk map, and open decisions.
+- Locked the draft direction for the `flow-table` node family name, cell `box`
+  styling, `colspan` grid support from the start, and conservative atomic
+  `rowspan` groups in v1.
+- Updated `docs/DOCS_INDEX.md` so future table design work can find the new
+  spec.
+
+Files changed:
+
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/DOCS_INDEX.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `git diff --check`
+
+Notes:
+
+- This is docs-only. No runtime `table` or proposed `flow-table` behavior was
+  changed.
+
 ### Add PDF Raster Coverage For Split Boxed Paragraphs
 
 Goal: Prove the PDF renderer draws a split paragraph box as one logical box

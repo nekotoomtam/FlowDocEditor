@@ -49,6 +49,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Flow-row/flow-stack 0.5.0 implementation roadmap | `docs/FLOW_ROW_STACK_ROADMAP.md` |
 | Flow-row/flow-stack 0.5.0 acceptance review | `docs/FLOW_ROW_STACK_ACCEPTANCE_REVIEW.md` |
 | Table authoring and table operations | `docs/TABLE_EDITING_CONTRACT.md` |
+| Planned Flow Table primitive | `docs/FLOW_TABLE_SPEC.md` |
 | Export/API/PDF/DOCX renderer contract | `docs/EXPORT_RENDERER_CONTRACT.md` |
 | Persisted/editor JSON package contract | `docs/FLOWDOC_PACKAGE_CONTRACT.md` |
 | Field registry and key rules | `docs/FIELD_REGISTRY_CONTRACT.md` |
@@ -94,6 +95,7 @@ Start with:
 Start with:
 
 - `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/FLOW_TABLE_SPEC.md` when designing the new explicit Flow Table primitive
 - `docs/CROSS_PAGE_BEHAVIOR.md`
 - `docs/LAYOUT_ENGINE_SPEC.md`
 - `docs/TEST_STRATEGY.md`

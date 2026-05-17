@@ -1,11 +1,14 @@
 import {
   DocumentNodeSchema,
+  FlowTableCellNodeSchema,
+  FlowTableRowNodeSchema,
   ParagraphNodeSchema,
   SpacerNodeSchema,
   TableCellNodeSchema,
   TableRowNodeSchema,
 } from "../schema"
-import type { DocumentNode, DocumentSection, FlowRowNode, LayoutNode, RowNode, TableCellNode, TableNode } from "../schema"
+import type { DocumentNode, DocumentSection, FlowRowNode, FlowTableCellNode, FlowTableNode, LayoutNode, RowNode, TableCellNode, TableNode } from "../schema"
+import { FlowTableGridError, resolveFlowTableGrid } from "./flowTableGrid"
 
 // ─── Error Types ──────────────────────────────────────────────────────────────
 
@@ -248,6 +251,123 @@ function assertTable(table: TableNode, path: string): void {
   })
 }
 
+// ─── Flow Table Internals ────────────────────────────────────────────────────
+
+function assertFlowTableInternalSchema(node: { type: string }, path: string): void {
+  const schema =
+    node.type === "flow-table-row" ? FlowTableRowNodeSchema :
+    node.type === "flow-table-cell" ? FlowTableCellNodeSchema :
+    node.type === "paragraph" ? ParagraphNodeSchema :
+    node.type === "spacer" ? SpacerNodeSchema :
+    null
+
+  if (schema == null) {
+    fail(path, `unsupported flow-table internal node type "${node.type}"`)
+  }
+
+  const result = schema.safeParse(node)
+  if (!result.success) {
+    const issue = result.error.issues[0]
+    fail(`${path}.${issue?.path.join(".") ?? ""}`, issue?.message ?? "invalid flow-table internal node")
+  }
+}
+
+function assertFlowTableCellContents(
+  table: FlowTableNode,
+  cell: FlowTableCellNode,
+  tablePath: string,
+  path: string,
+  reachable: Set<string>,
+  seenContentParents: Map<string, string>,
+): void {
+  assertUniqueIds(cell.childIds, `${path}.childIds`, "flow-table cell child")
+
+  cell.childIds.forEach((childId, index) => {
+    const childPath = `${path}.childIds[${index}]`
+    const child = table.nodes[childId]
+
+    if (child == null) fail(childPath, `missing child "${childId}"`)
+    if (child.type !== "paragraph" && child.type !== "spacer") {
+      fail(childPath, `flow-table cell child must be paragraph or spacer — got "${child.type}"`)
+    }
+
+    const existingParent = seenContentParents.get(childId)
+    if (existingParent != null && existingParent !== cell.id) {
+      fail(childPath, `node "${childId}" has multiple flow-table cell parents`)
+    }
+    seenContentParents.set(childId, cell.id)
+
+    reachable.add(childId)
+    assertNoLayoutKeys(child, `${tablePath}.nodes.${childId}`)
+  })
+}
+
+function assertFlowTable(table: FlowTableNode, path: string): void {
+  assertUniqueIds(table.rowIds, `${path}.rowIds`, "flow-table row")
+
+  if ((table.props.headerRowCount ?? 0) > table.rowIds.length) {
+    fail(`${path}.props.headerRowCount`, "headerRowCount cannot exceed flow-table row count")
+  }
+
+  Object.entries(table.nodes).forEach(([nodeId, node]) => {
+    const nodePath = `${path}.nodes.${nodeId}`
+    assertNodeIdMatchesKey(node, nodeId, nodePath)
+    assertNoLayoutKeys(node, nodePath)
+    assertFlowTableInternalSchema(node, nodePath)
+  })
+
+  const reachable = new Set<string>()
+  const seenCellParents = new Map<string, string>()
+  const seenContentParents = new Map<string, string>()
+
+  table.rowIds.forEach((rowId, rowIndex) => {
+    const rowPath = `${path}.nodes.${rowId}`
+    const row = table.nodes[rowId]
+
+    if (row == null) fail(`${path}.rowIds[${rowIndex}]`, `missing row "${rowId}"`)
+    if (row.type !== "flow-table-row") {
+      fail(`${path}.rowIds[${rowIndex}]`, `flow-table row id must reference flow-table-row — got "${row.type}"`)
+    }
+
+    reachable.add(rowId)
+    assertUniqueIds(row.cellIds, `${rowPath}.cellIds`, "flow-table cell")
+
+    row.cellIds.forEach((cellId, cellIndex) => {
+      const cellRefPath = `${rowPath}.cellIds[${cellIndex}]`
+      const cell = table.nodes[cellId]
+
+      if (cell == null) fail(cellRefPath, `missing cell "${cellId}"`)
+      if (cell.type !== "flow-table-cell") {
+        fail(cellRefPath, `flow-table row child must be flow-table-cell — got "${cell.type}"`)
+      }
+
+      const existingParent = seenCellParents.get(cellId)
+      if (existingParent != null && existingParent !== row.id) {
+        fail(cellRefPath, `cell "${cellId}" has multiple flow-table row parents`)
+      }
+      seenCellParents.set(cellId, row.id)
+
+      reachable.add(cellId)
+      assertFlowTableCellContents(table, cell, path, `${path}.nodes.${cellId}`, reachable, seenContentParents)
+    })
+  })
+
+  try {
+    resolveFlowTableGrid(table)
+  } catch (error) {
+    if (error instanceof FlowTableGridError) {
+      fail(`${path}.nodes`, error.message)
+    }
+    throw error
+  }
+
+  Object.keys(table.nodes).forEach((nodeId) => {
+    if (!reachable.has(nodeId)) {
+      fail(`${path}.nodes.${nodeId}`, `orphan flow-table node — not reachable from flow-table rows`)
+    }
+  })
+}
+
 // ─── Section Graph ────────────────────────────────────────────────────────────
 
 function assertSectionGraph(section: DocumentSection, path: string): void {
@@ -266,6 +386,10 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
 
     if (node.type === "table") {
       assertTable(node as unknown as TableNode, nodePath)
+      return
+    }
+    if (node.type === "flow-table") {
+      assertFlowTable(node as unknown as FlowTableNode, nodePath)
       return
     }
 
@@ -288,8 +412,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
 
       // Tree law enforcement
       if (node.type === "body") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "flow-row" && child.type !== "spacer" && child.type !== "table" && child.type !== "toc") {
-          fail(childPath, `body child must be paragraph, row, flow-row, spacer, table, or toc — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "flow-row" && child.type !== "spacer" && child.type !== "table" && child.type !== "flow-table" && child.type !== "toc") {
+          fail(childPath, `body child must be paragraph, row, flow-row, spacer, table, flow-table, or toc — got "${child.type}"`)
         }
       }
 
@@ -304,8 +428,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
       }
 
       if (node.type === "stack") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "table" && child.type !== "toc") {
-          fail(childPath, `stack child must be paragraph, row, spacer, table, or toc — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "table" && child.type !== "flow-table" && child.type !== "toc") {
+          fail(childPath, `stack child must be paragraph, row, spacer, table, flow-table, or toc — got "${child.type}"`)
         }
       }
 

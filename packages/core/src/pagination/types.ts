@@ -86,7 +86,20 @@ export interface ParagraphRenderProps {
 
 export interface PageFragment {
   nodeId: string
-  nodeType: "paragraph" | "spacer" | "stack" | "flow-stack" | "table-cell" | "row" | "flow-row" | "body" | "table" | "toc"
+  nodeType:
+    | "paragraph"
+    | "spacer"
+    | "stack"
+    | "flow-stack"
+    | "table-cell"
+    | "flow-table-cell"
+    | "row"
+    | "flow-row"
+    | "flow-table-row"
+    | "body"
+    | "table"
+    | "flow-table"
+    | "toc"
   parentNodeId?: string
   pageIndex: number
   x: number
@@ -97,8 +110,8 @@ export interface PageFragment {
   renderProps?: ParagraphRenderProps
   boxRenderProps?: ParagraphBoxRenderProps
   cellRenderProps?: TableCellRenderProps
-  // Paragraph split metadata — populated by pagination paths that split or
-  // explicitly track paragraph continuation.
+  // Split metadata — populated by pagination paths that split or explicitly
+  // track continuation for paragraph, row, cell, or box fragments.
   fragmentIndex?: number   // 0-based position among fragments of the same nodeId
   lineStart?: number       // index of first line in the source paragraph's measured lines
   lineEnd?: number         // exclusive end index (lineStart + this fragment's line count)
@@ -107,7 +120,10 @@ export interface PageFragment {
   warnings?: PageFragmentWarning[]
 }
 
-export type PageFragmentWarningCode = "forced-table-split-overflow" | "forced-flow-row-split-overflow"
+export type PageFragmentWarningCode =
+  | "forced-table-split-overflow"
+  | "forced-flow-row-split-overflow"
+  | "forced-flow-table-split-overflow"
 
 export interface PageFragmentWarning {
   code: PageFragmentWarningCode

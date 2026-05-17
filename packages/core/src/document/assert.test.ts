@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { DocumentNode, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../schema"
 import { pt } from "../schema"
 import { assertDocument, DocumentAssertionError } from "./assert"
 
@@ -23,6 +23,29 @@ function paragraph(id: string, text = "Cell"): ParagraphNode {
 }
 
 function tableDoc(table: TableNode): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+        },
+        bodyRootId: "body",
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: [table.id] },
+          [table.id]: table as unknown as LayoutNode,
+        },
+      }],
+    },
+  }
+}
+
+function flowTableDoc(table: FlowTableNode): DocumentNode {
   return {
     version: 1,
     document: {
@@ -74,6 +97,14 @@ function cell(id: string, childId: string, props: TableCellNode["props"] = {}): 
 
 function row(id: string, cellIds: string[]): TableRowNode {
   return { id, type: "table-row", props: {}, cellIds }
+}
+
+function flowCell(id: string, childId: string, props: FlowTableCellNode["props"] = {}): FlowTableCellNode {
+  return { id, type: "flow-table-cell", props, childIds: [childId] }
+}
+
+function flowRow(id: string, cellIds: string[]): FlowTableRowNode {
+  return { id, type: "flow-table-row", props: {}, cellIds }
 }
 
 describe("assertDocument table invariants", () => {
@@ -150,6 +181,96 @@ describe("assertDocument table invariants", () => {
   })
 })
 
+describe("assertDocument flow-table invariants", () => {
+  it("allows a valid flow-table with cell box styling and rowspan occupancy", () => {
+    const p1 = paragraph("p1")
+    const p2 = paragraph("p2")
+    const p3 = paragraph("p3")
+    const c1 = flowCell("c1", p1.id, {
+      rowspan: 2,
+      box: {
+        fill: "D9EAF7",
+        padding: { top: pt(4), right: pt(4), bottom: pt(4), left: pt(4) },
+        border: { top: { style: "solid", width: pt(1), color: "1F2937" } },
+      },
+    })
+    const c2 = flowCell("c2", p2.id)
+    const c3 = flowCell("c3", p3.id)
+    const r1 = flowRow("r1", [c1.id, c2.id])
+    const r2 = flowRow("r2", [c3.id])
+    const table: FlowTableNode = {
+      id: "flow-table",
+      type: "flow-table",
+      props: { headerRowCount: 1 },
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [r1.id, r2.id],
+      nodes: {
+        [r1.id]: r1,
+        [r2.id]: r2,
+        [c1.id]: c1,
+        [c2.id]: c2,
+        [c3.id]: c3,
+        [p1.id]: p1,
+        [p2.id]: p2,
+        [p3.id]: p3,
+      },
+    }
+
+    expect(() => assertDocument(flowTableDoc(table))).not.toThrow()
+  })
+
+  it("rejects flow-table rows that do not fill every column", () => {
+    const p1 = paragraph("p1")
+    const c1 = flowCell("c1", p1.id)
+    const r1 = flowRow("r1", [c1.id])
+    const table: FlowTableNode = {
+      id: "flow-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [r1.id],
+      nodes: { [r1.id]: r1, [c1.id]: c1, [p1.id]: p1 },
+    }
+
+    expect(() => assertDocument(flowTableDoc(table))).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(flowTableDoc(table))).toThrow("flow-table row \"r1\" must fill all 2 columns")
+  })
+
+  it("rejects legacy table internals inside flow-table", () => {
+    const p1 = paragraph("p1")
+    const legacyCell = cell("c1", p1.id)
+    const legacyRow = row("r1", [legacyCell.id])
+    const table: FlowTableNode = {
+      id: "flow-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }],
+      rowIds: [legacyRow.id],
+      nodes: { [legacyRow.id]: legacyRow, [legacyCell.id]: legacyCell, [p1.id]: p1 } as unknown as FlowTableNode["nodes"],
+    }
+
+    expect(() => assertDocument(flowTableDoc(table))).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(flowTableDoc(table))).toThrow("unsupported flow-table internal node type \"table-row\"")
+  })
+
+  it("rejects headerRowCount larger than the flow-table row count", () => {
+    const p1 = paragraph("p1")
+    const c1 = flowCell("c1", p1.id)
+    const r1 = flowRow("r1", [c1.id])
+    const table: FlowTableNode = {
+      id: "flow-table",
+      type: "flow-table",
+      props: { headerRowCount: 2 },
+      columns: [{ width: pt(100) }],
+      rowIds: [r1.id],
+      nodes: { [r1.id]: r1, [c1.id]: c1, [p1.id]: p1 },
+    }
+
+    expect(() => assertDocument(flowTableDoc(table))).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(flowTableDoc(table))).toThrow("headerRowCount cannot exceed flow-table row count")
+  })
+})
+
 describe("assertDocument flow-row / flow-stack invariants", () => {
   it("allows a valid two-stack flow-row", () => {
     const p1 = paragraph("p1", "Left")
@@ -214,7 +335,7 @@ describe("assertDocument flow-row / flow-stack invariants", () => {
     }, ["fs1"])
 
     expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
-    expect(() => assertDocument(doc)).toThrow("body child must be paragraph, row, flow-row, spacer, table, or toc")
+    expect(() => assertDocument(doc)).toThrow("body child must be paragraph, row, flow-row, spacer, table, flow-table, or toc")
   })
 
   it("rejects non-paragraph and non-spacer children inside flow-stack", () => {

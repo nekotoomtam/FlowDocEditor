@@ -17,6 +17,7 @@ const NODE_LABELS: Record<SelectionContextNode["type"], string> = {
   "flow-row": "Row",
   "flow-stack": "Stack",
   table: "Table",
+  "flow-table": "Flow table",
   "table-row": "Table row",
   "table-cell": "Table cell",
   toc: "Table of contents",
