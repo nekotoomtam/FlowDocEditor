@@ -121,6 +121,12 @@ Flow Table C2 foundation:
   `rowspan` or `colspan`.
 - Deleting a row/column that is the origin of a continuing span must no-op
   until a later patch defines content/origin movement rules.
+- C2.3A allows direct Flow Table cell `rowspan`/`colspan` edits only through a
+  core operation that keeps the grid valid. Expansion may consume only empty
+  cells that are wholly inside the requested span rectangle. Shrinking creates
+  empty replacement cells in vacated slots.
+- C2.3A must not merge non-empty content, move a span origin, or make the
+  property panel patch span props directly.
 
 ## Pagination-Related Authoring Rules
 
@@ -156,6 +162,6 @@ behavior:
 
 - Selection and editing for multiple paragraphs inside one table cell.
 - Explicit table or column resize UI.
-- Span-aware authoring UI for `rowspan` and `colspan`.
+- Content-merge authoring UI for `rowspan` and `colspan`.
 - Split-at-row-boundary within rowspan-linked groups.
 - Visual regression tests for editor/PDF parity on multi-page tables.

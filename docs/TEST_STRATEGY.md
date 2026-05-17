@@ -299,6 +299,10 @@ Current strengths:
   through spans, shrink-only `rowspan`/`colspan` behavior, blocked origin-moving
   deletes, subtree cleanup, width preservation, and property-panel enablement
   from the same core safe-delete helpers.
+- Flow Table C2.3A operation coverage protects safe direct `rowspan`/`colspan`
+  edits: empty-cell expansion, non-empty-cell blocking, shrink replacement
+  cells, grid validity, and PropertyPanel span controls wired through a core
+  operation.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual

@@ -457,9 +457,42 @@ describe("PropertyPanel selection context", () => {
 
     expect(markup).toContain("Flow table cell")
     expect(markup).toContain("Row 1, Col 1")
+    expect(markup).toContain("data-testid=\"flow-table-cell-rowspan-input\"")
+    expect(markup).toContain("data-testid=\"flow-table-cell-colspan-input\"")
+    expect(markup).toContain("data-testid=\"info-hint\"")
     expect(markup).toContain("↑ Above")
     expect(markup).toContain("Right →")
     expect(markup).toContain("Delete column")
+  })
+
+  it("renders C2.3A flow-table cell span controls with the current span values", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithSpannedFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "ftc1",
+      selectionAnchorNodeId: "p1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("data-testid=\"flow-table-cell-rowspan-input\"")
+    expect(markup).toContain("data-testid=\"flow-table-cell-colspan-input\"")
+    expect(markup).toContain("value=\"2\"")
   })
 
   it("enables C2.2 safe flow-table delete controls for spanned tables", () => {

@@ -34,6 +34,10 @@ Implementation status:
 - C2.2 conservative span-aware row/column deletion is available for targets
   that do not require moving a span origin. Deleting inside a span shrinks the
   covering cell; deleting a row/column that owns a continuing span still no-ops.
+- C2.3A safe cell span controls are available. A selected Flow Table cell can
+  expand its `rowspan`/`colspan` only through empty cells that are wholly inside
+  the new span rectangle. Shrinking a span creates empty replacement cells for
+  vacated slots.
 - Merge/unmerge and span-origin movement remain deferred.
 - Broader property editing and row/column/span operations remain intentionally
   incremental.
@@ -243,6 +247,10 @@ Flow Table must define a strict grid law before implementation:
 - Row/column deletion through spans may shrink covering cells only when the
   deleted target is not the origin of a continuing span. Deletion that would
   require moving an origin cell or deciding where to move content must no-op.
+- Direct cell span authoring must preserve grid law through a core operation.
+  Expansion may consume only empty cells whose entire current span is inside the
+  requested rectangle. Shrinking must fill vacated slots with new empty cells.
+  It must not merge non-empty content or move the selected cell's origin.
 - Operations that add or remove rows/columns must preserve the grid law or fail
   clearly.
 
@@ -380,8 +388,8 @@ v1 editor support should be static and explicit:
   row break allowance, and basic cell text/vertical alignment
 - text editing can stay conservative and reuse current safe cell-edit paths
 - live cross-page WYSIWYG editing inside Flow Table is deferred
-- span editing UI is deferred unless the model and operations are already
-  protected by tests
+- safe span editing UI may expose `rowspan`/`colspan` only through core
+  operations that preserve grid law; content merge/unmerge remains deferred
 
 ## Migration And Compatibility
 
@@ -426,7 +434,9 @@ Suggested order:
     add row/add column only.
 16. Add C2.2 conservative span-aware row/column deletion. Current status:
     implemented only for targets that do not move span origins.
-17. Add C2 span-origin movement, merge/unmerge, and broader span authoring
+17. Add C2.3A safe cell span controls. Current status: implemented for
+    empty-cell expansion and empty-cell replacement on shrink.
+18. Add C2 span-origin movement, content merge/unmerge, and broader span authoring
     operations.
 
 ## Test Plan

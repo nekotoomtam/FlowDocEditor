@@ -60,6 +60,11 @@ export interface ParagraphBoxStyleChanges {
   border?: Partial<Record<ParagraphBoxEdge, ParagraphBoxBorderSide | null>> | null
 }
 
+export interface FlowTableCellSpanChanges {
+  colspan?: number
+  rowspan?: number
+}
+
 // ─── Tree Helpers ──────────────────────────────────────────────────────────────
 
 function findParentInfo(nodes: Nodes, childId: string): ParentInfo | null {
@@ -529,6 +534,112 @@ interface FlowTableColumnRemovalPlan {
   shrinkColspanCellIds: string[]
 }
 
+interface FlowTableCellSpanUpdatePlan {
+  cellId: string
+  columnIndex: number
+  colspan: number
+  rowspan: number
+  consumeCellIds: string[]
+  createSlots: Array<{ rowIndex: number; columnIndex: number }>
+}
+
+function slotKey(rowIndex: number, columnIndex: number): string {
+  return `${rowIndex}:${columnIndex}`
+}
+
+function flowTableCellPropsWithSpan(
+  props: FlowTableCellNode["props"],
+  colspan: number,
+  rowspan: number,
+): FlowTableCellNode["props"] {
+  const next = { ...props }
+  if (colspan > 1) next.colspan = colspan
+  else delete next.colspan
+  if (rowspan > 1) next.rowspan = rowspan
+  else delete next.rowspan
+  return next
+}
+
+function resolveRequestedFlowTableSpan(value: number | undefined, current: number): number | null {
+  if (value == null) return current
+  if (!Number.isInteger(value) || value < 1) return null
+  return value
+}
+
+function isEmptyFlowTableCell(table: FlowTableNode, cellId: string): boolean {
+  const cell = table.nodes[cellId]
+  if (cell?.type !== "flow-table-cell") return false
+  return cell.childIds.every((childId) => {
+    const child = table.nodes[childId]
+    if (child?.type !== "paragraph") return false
+    return isPlainTextParagraph(child) && getPlainText(child).trim().length === 0
+  })
+}
+
+function deleteFlowTableCellSubtree(nodes: FlowTableNode["nodes"], cellId: string): void {
+  const cell = nodes[cellId]
+  if (cell?.type !== "flow-table-cell") return
+  cell.childIds.forEach((childId) => { delete nodes[childId] })
+  delete nodes[cellId]
+}
+
+function getFlowTableCellSpanUpdatePlan(
+  table: FlowTableNode,
+  cellId: string,
+  changes: FlowTableCellSpanChanges,
+): FlowTableCellSpanUpdatePlan | null {
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return null
+  const placement = resolved.grid.placementsByCellId.get(cellId)
+  if (placement == null) return null
+
+  const colspan = resolveRequestedFlowTableSpan(changes.colspan, placement.colspan)
+  const rowspan = resolveRequestedFlowTableSpan(changes.rowspan, placement.rowspan)
+  if (colspan == null || rowspan == null) return null
+  if (colspan === placement.colspan && rowspan === placement.rowspan) return null
+  if (placement.columnIndex + colspan > resolved.grid.columnCount) return null
+  if (placement.rowIndex + rowspan > resolved.grid.rowCount) return null
+
+  const newSlotKeys = new Set<string>()
+  const createSlots: Array<{ rowIndex: number; columnIndex: number }> = []
+  const consumeCellIds = new Set<string>()
+
+  for (let rowIndex = placement.rowIndex; rowIndex < placement.rowIndex + rowspan; rowIndex++) {
+    for (let columnIndex = placement.columnIndex; columnIndex < placement.columnIndex + colspan; columnIndex++) {
+      newSlotKeys.add(slotKey(rowIndex, columnIndex))
+    }
+  }
+
+  for (let rowIndex = placement.rowIndex; rowIndex < placement.rowIndex + rowspan; rowIndex++) {
+    for (let columnIndex = placement.columnIndex; columnIndex < placement.columnIndex + colspan; columnIndex++) {
+      const slot = resolved.grid.slotMatrix[rowIndex]?.[columnIndex]
+      if (slot == null || slot.cellId === cellId) continue
+      const coveredPlacement = resolved.grid.placementsByCellId.get(slot.cellId)
+      if (coveredPlacement == null) return null
+      const whollyCovered = coveredPlacement.coveredSlots.every((coveredSlot) =>
+        newSlotKeys.has(slotKey(coveredSlot.rowIndex, coveredSlot.columnIndex)),
+      )
+      if (!whollyCovered || !isEmptyFlowTableCell(table, slot.cellId)) return null
+      consumeCellIds.add(slot.cellId)
+    }
+  }
+
+  placement.coveredSlots.forEach((coveredSlot) => {
+    if (!newSlotKeys.has(slotKey(coveredSlot.rowIndex, coveredSlot.columnIndex))) {
+      createSlots.push({ rowIndex: coveredSlot.rowIndex, columnIndex: coveredSlot.columnIndex })
+    }
+  })
+
+  return {
+    cellId,
+    columnIndex: placement.columnIndex,
+    colspan,
+    rowspan,
+    consumeCellIds: Array.from(consumeCellIds),
+    createSlots,
+  }
+}
+
 function getFlowTableRowRemovalPlan(table: FlowTableNode, rowIndex: number): FlowTableRowRemovalPlan | null {
   if (table.rowIds.length <= 1) return null
   const rowId = table.rowIds[rowIndex]
@@ -582,6 +693,14 @@ export function canRemoveFlowTableRow(table: FlowTableNode, rowIndex: number): b
 
 export function canRemoveFlowTableColumn(table: FlowTableNode, colIndex: number): boolean {
   return getFlowTableColumnRemovalPlan(table, colIndex) != null
+}
+
+export function canUpdateFlowTableCellSpan(
+  table: FlowTableNode,
+  cellId: string,
+  changes: FlowTableCellSpanChanges,
+): boolean {
+  return getFlowTableCellSpanUpdatePlan(table, cellId, changes) != null
 }
 
 function insertInlineField(
@@ -1390,6 +1509,77 @@ export function removeFlowTableColumn(doc: DocumentNode, tableId: string, colInd
 
     return { ...table, columns, nodes: internalNodes }
   })
+}
+
+export function updateFlowTableCellSpan(
+  doc: DocumentNode,
+  cellId: string,
+  changes: FlowTableCellSpanChanges,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    for (const [tableId, node] of Object.entries(section.nodes)) {
+      if (node.type !== "flow-table") continue
+      const table = node as unknown as FlowTableNode
+      const cell = table.nodes[cellId]
+      if (cell?.type !== "flow-table-cell") continue
+
+      const plan = getFlowTableCellSpanUpdatePlan(table, cellId, changes)
+      if (plan == null) return doc
+
+      const internalNodes: FlowTableNode["nodes"] = { ...table.nodes }
+      const consumed = new Set(plan.consumeCellIds)
+      const originColumns = new Map<string, number>()
+
+      plan.consumeCellIds.forEach((consumeCellId) => {
+        deleteFlowTableCellSubtree(internalNodes, consumeCellId)
+      })
+
+      const currentCell = internalNodes[cellId] as FlowTableCellNode | undefined
+      if (currentCell?.type !== "flow-table-cell") return doc
+      internalNodes[cellId] = {
+        ...currentCell,
+        props: flowTableCellPropsWithSpan(currentCell.props, plan.colspan, plan.rowspan),
+      }
+
+      const resolved = tryResolveFlowTableGrid(table)
+      if (!resolved.ok) return doc
+      resolved.grid.placements.forEach((placement) => {
+        if (!consumed.has(placement.cellId)) originColumns.set(placement.cellId, placement.columnIndex)
+      })
+      originColumns.set(cellId, plan.columnIndex)
+
+      const createdByRow = new Map<number, string[]>()
+      plan.createSlots
+        .sort((a, b) => a.rowIndex - b.rowIndex || a.columnIndex - b.columnIndex)
+        .forEach((slot) => {
+          const newCellId = createEmptyFlowTableCell(internalNodes)
+          originColumns.set(newCellId, slot.columnIndex)
+          const rowCells = createdByRow.get(slot.rowIndex) ?? []
+          rowCells.push(newCellId)
+          createdByRow.set(slot.rowIndex, rowCells)
+        })
+
+      table.rowIds.forEach((rowId, rowIndex) => {
+        const row = internalNodes[rowId] as FlowTableRowNode | undefined
+        if (row?.type !== "flow-table-row") return
+        const cellIds = [
+          ...row.cellIds.filter((rowCellId) => !consumed.has(rowCellId)),
+          ...(createdByRow.get(rowIndex) ?? []),
+        ].sort((left, right) => (originColumns.get(left) ?? 0) - (originColumns.get(right) ?? 0))
+        internalNodes[rowId] = { ...row, cellIds }
+      })
+
+      const newTable: FlowTableNode = { ...table, nodes: internalNodes }
+      if (!tryResolveFlowTableGrid(newTable).ok) return doc
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
 }
 
 export function updateSectionMargin(

@@ -16,7 +16,7 @@ import type {
 } from "@/schema"
 import { pt } from "@/schema"
 import { canRemoveFlowTableColumn, canRemoveFlowTableRow, isPlainTextParagraph } from "@/document"
-import type { FieldRefInlineChanges, ParagraphBoxStyleChanges } from "@/document"
+import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges } from "@/document"
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import { resolveFlowStackResizePairShares } from "./flowStackResize"
@@ -50,6 +50,7 @@ interface Props {
   onUpdateFieldRef: (fieldRefId: string, changes: FieldRefInlineChanges) => void
   onUpdateParagraphBoxStyle: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
   onUpdateFlowStackBoxStyle?: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
+  onUpdateFlowTableCellSpan?: (cellId: string, changes: FlowTableCellSpanChanges) => void
   onSelectContextNode: (nodeId: string) => void
   onDelete: (nodeId: string) => void
   tableOps: TableOps
@@ -1070,7 +1071,7 @@ const borderStyleIconLine: React.CSSProperties = {
 
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
-export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
+export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
   const [contextOpen, setContextOpen] = useState(false)
   const [paragraphPanelTab, setParagraphPanelTab] = useState<ParagraphPanelTab>("text")
   const [flowContainerPanelTab, setFlowContainerPanelTab] = useState<FlowContainerPanelTab>("layout")
@@ -1973,6 +1974,54 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   ))}
                 </div>
               </div>
+              {info && pos && table && (
+                <div>
+                  <div style={labelWithInfo}>
+                    <label style={inlineLabel}>Span</label>
+                    <InfoHint text="Expanding can only consume empty Flow Table cells. Shrinking creates empty replacement cells; content merge and span-origin movement are deferred." />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, color: "#6b7280" }}>
+                      Rows
+                      <input
+                        data-testid="flow-table-cell-rowspan-input"
+                        type="number"
+                        min={1}
+                        max={Math.max(1, table.rowIds.length - pos.rowIndex)}
+                        step={1}
+                        value={pos.rowspan}
+                        onChange={(e) => {
+                          const value = Math.min(
+                            Math.max(1, Number(e.target.value) || 1),
+                            Math.max(1, table.rowIds.length - pos.rowIndex),
+                          )
+                          onUpdateFlowTableCellSpan?.(selectedNodeId, { rowspan: value })
+                        }}
+                        style={input}
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, color: "#6b7280" }}>
+                      Columns
+                      <input
+                        data-testid="flow-table-cell-colspan-input"
+                        type="number"
+                        min={1}
+                        max={Math.max(1, table.columns.length - pos.colIndex)}
+                        step={1}
+                        value={pos.colspan}
+                        onChange={(e) => {
+                          const value = Math.min(
+                            Math.max(1, Number(e.target.value) || 1),
+                            Math.max(1, table.columns.length - pos.colIndex),
+                          )
+                          onUpdateFlowTableCellSpan?.(selectedNodeId, { colspan: value })
+                        }}
+                        style={input}
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
               {info && pos && table && (
                 <>
                   <div>

@@ -24,6 +24,42 @@ Each entry should include:
 
 ## 2026-05-17
 
+### Add Flow Table C2.3A Safe Cell Span Controls
+
+Goal: Let the PropertyPanel author Flow Table cell `rowspan`/`colspan` through
+a core operation without enabling content merge, span-origin movement, or
+direct panel-side table patching.
+
+Completed:
+
+- Added `updateFlowTableCellSpan(...)` and
+  `canUpdateFlowTableCellSpan(...)` to the document operations layer.
+- Expansion now succeeds only when every consumed cell is empty and wholly
+  inside the requested span rectangle.
+- Shrinking a selected span creates empty replacement cells in the vacated grid
+  slots so the Flow Table remains valid.
+- Kept non-empty content merge and span-origin movement out of scope; blocked
+  attempts no-op.
+- Wired Flow Table cell PropertyPanel span controls through the new core
+  operation.
+- Added focused core and app coverage for empty-cell expansion, non-empty-cell
+  blocking, shrink replacement cells, and rendered span controls.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/flowTableGrid.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+
+Notes:
+
+- This is not general merge/unmerge. Cells with authored content are not merged
+  or moved.
+- Cross-page WYSIWYG editing inside Flow Table remains deferred.
+
 ### Add Flow Table C2.2 Conservative Span-Aware Delete
 
 Goal: Let Flow Table delete rows/columns through spans only when the operation

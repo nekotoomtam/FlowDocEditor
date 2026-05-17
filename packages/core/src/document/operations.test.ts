@@ -20,6 +20,7 @@ import {
   addFlowTableColumn,
   addFlowTableRow,
   addFlowStackColumn,
+  canUpdateFlowTableCellSpan,
   canRemoveFlowTableColumn,
   canRemoveFlowTableRow,
   deleteNode,
@@ -29,6 +30,7 @@ import {
   removeFlowTableColumn,
   removeFlowTableRow,
   splitParagraphAtIndex,
+  updateFlowTableCellSpan,
   updateFieldRefInline,
   updateFlowStackBoxStyle,
   updateParagraphBoxStyle,
@@ -1426,6 +1428,72 @@ describe("flow-table structural operations", () => {
 
     expect(canRemoveFlowTableColumn(table, 0)).toBe(false)
     expect(removeFlowTableColumn(doc, "flow-table", 0)).toBe(doc)
+  })
+
+  it("expands a flow-table cell span only through empty cells", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["", ""],
+        ["", ""],
+      ],
+      columnWidths: [100, 100],
+    })
+    const before = getFlowTable(doc)
+
+    expect(canUpdateFlowTableCellSpan(before, "flow-cell-0-0", { colspan: 2, rowspan: 2 })).toBe(true)
+    const updated = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    assertDocument(updated)
+    const table = getFlowTable(updated)
+    const grid = resolveFlowTableGrid(table)
+    const placement = grid.placementsByCellId.get("flow-cell-0-0")
+
+    expect(placement).toMatchObject({ columnIndex: 0, rowIndex: 0, colspan: 2, rowspan: 2 })
+    expect(grid.placements).toHaveLength(1)
+    expect(table.nodes["flow-cell-0-1"]).toBeUndefined()
+    expect(table.nodes["flow-cell-1-0"]).toBeUndefined()
+    expect(table.nodes["flow-cell-1-1"]).toBeUndefined()
+  })
+
+  it("does not expand a flow-table cell span through non-empty cells", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+      columnWidths: [100, 100],
+    })
+    const table = getFlowTable(doc)
+
+    expect(canUpdateFlowTableCellSpan(table, "flow-cell-0-0", { colspan: 2 })).toBe(false)
+    expect(updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2 })).toBe(doc)
+  })
+
+  it("shrinks a flow-table cell span by creating empty replacement cells", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["", ""],
+        ["", ""],
+      ],
+      columnWidths: [100, 100],
+    })
+    const spanned = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    const shrunk = updateFlowTableCellSpan(spanned, "flow-cell-0-0", { colspan: 1, rowspan: 1 })
+    assertDocument(shrunk)
+    const table = getFlowTable(shrunk)
+    const grid = resolveFlowTableGrid(table)
+    const selected = table.nodes["flow-cell-0-0"]
+
+    expect(selected?.type).toBe("flow-table-cell")
+    if (selected?.type !== "flow-table-cell") return
+    expect(selected.props.colspan).toBeUndefined()
+    expect(selected.props.rowspan).toBeUndefined()
+    expect(grid.placements).toHaveLength(4)
+    expect(grid.slotMatrix[0][0].cellId).toBe("flow-cell-0-0")
+    table.rowIds.forEach((rowId) => {
+      const row = table.nodes[rowId]
+      expect(row?.type).toBe("flow-table-row")
+      if (row?.type === "flow-table-row") expect(row.cellIds).toHaveLength(2)
+    })
   })
 
   it("does not delete the last flow-table column", () => {
