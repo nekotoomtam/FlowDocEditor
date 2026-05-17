@@ -1,4 +1,4 @@
-import type { DocumentNode, LayoutNode, TableNode } from "../schema"
+import type { DocumentNode, FlowTableNode, LayoutNode, TableNode } from "../schema"
 import type {
   DragSource,
   PaletteBlockType,
@@ -35,8 +35,8 @@ function findLocation(document: DocumentNode, nodeId: string): NodeLocation | nu
     const node = section.nodes[nodeId]
     if (node == null) {
       for (const candidate of Object.values(section.nodes)) {
-        if (candidate.type !== "table") continue
-        const inner = (candidate as unknown as TableNode).nodes[nodeId]
+        if (candidate.type !== "table" && candidate.type !== "flow-table") continue
+        const inner = (candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]
         if (inner?.type === "paragraph") {
           return { section, node: inner, parent: null, index: 0 }
         }

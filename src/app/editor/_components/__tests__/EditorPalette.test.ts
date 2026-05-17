@@ -14,6 +14,8 @@ describe("EditorPalette", () => {
     expect(markup).toContain("Single column")
     expect(markup).toContain("Columns")
     expect(markup).toContain("Multi-page columns")
+    expect(markup).toContain("Flow table")
+    expect(markup).toContain("3×3 flow table")
     expect(markup).not.toContain("Flow cols")
   })
 })

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest"
 import type { DataSnapshotV1, FieldScalarValue } from "../dataSnapshot"
 import type { FieldRegistryV1 } from "../fieldRegistry"
-import type { DocumentNode, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../schema"
+import type {
+  DocumentNode,
+  FlowTableCellNode,
+  FlowTableNode,
+  FlowTableRowNode,
+  LayoutNode,
+  ParagraphNode,
+  TableCellNode,
+  TableNode,
+  TableRowNode,
+} from "../schema"
 import { pt } from "../schema"
 import { bindDocument, bindDocumentWithSnapshot, type BindingContext } from "./index"
 
@@ -66,6 +76,24 @@ function makeTableDoc(paragraph: ParagraphNode): DocumentNode {
   return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
 }
 
+function makeFlowTableDoc(paragraph: ParagraphNode): DocumentNode {
+  const cell: FlowTableCellNode = { id: "flow-cell", type: "flow-table-cell", props: {}, childIds: [paragraph.id] }
+  const row: FlowTableRowNode = { id: "flow-row", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+  const table: FlowTableNode = {
+    id: "flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(200) }],
+    rowIds: [row.id],
+    nodes: {
+      [row.id]: row,
+      [cell.id]: cell,
+      [paragraph.id]: paragraph,
+    },
+  }
+  return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
+}
+
 function fieldRef(id: string, key: string, fallback?: string): ParagraphNode["children"][number] {
   return { id, type: "fieldRef", key, label: key, fallback }
 }
@@ -82,6 +110,16 @@ function textOfTableParagraph(doc: DocumentNode, tableId: string, paragraphId: s
   expect(table.type).toBe("table")
   if (table.type !== "table") return ""
   const paragraph = (table as unknown as TableNode).nodes[paragraphId]
+  expect(paragraph.type).toBe("paragraph")
+  if (paragraph.type !== "paragraph") return ""
+  return paragraph.children.map((child) => child.type === "text" ? child.text : `[${child.type}]`).join("")
+}
+
+function textOfFlowTableParagraph(doc: DocumentNode, tableId: string, paragraphId: string): string {
+  const table = doc.document.sections[0].nodes[tableId]
+  expect(table.type).toBe("flow-table")
+  if (table.type !== "flow-table") return ""
+  const paragraph = (table as unknown as FlowTableNode).nodes[paragraphId]
   expect(paragraph.type).toBe("paragraph")
   if (paragraph.type !== "paragraph") return ""
   return paragraph.children.map((child) => child.type === "text" ? child.text : `[${child.type}]`).join("")
@@ -145,6 +183,16 @@ describe("binding scalar fieldRef contract", () => {
     const result = bind(makeTableDoc(paragraph), { item: { sku: "A-001" } })
 
     expect(textOfTableParagraph(result, "table", "cell_p")).toBe("SKU A-001")
+  })
+
+  it("binds scalar fieldRefs inside flow-table-cell paragraphs", () => {
+    const paragraph = makeParagraph("flow_cell_p", [
+      { id: "t1", type: "text", text: "SKU " },
+      fieldRef("f1", "item.sku"),
+    ])
+    const result = bind(makeFlowTableDoc(paragraph), { item: { sku: "A-001" } })
+
+    expect(textOfFlowTableParagraph(result, "flow-table", "flow_cell_p")).toBe("SKU A-001")
   })
 
   it("does not mutate the template document", () => {

@@ -9,7 +9,7 @@ import type { LayoutNode } from "../schema"
 
 // ─── Drag Source ──────────────────────────────────────────────────────────────
 
-export type PaletteBlockType = "paragraph" | "row" | "columns" | "flow-columns" | "table"
+export type PaletteBlockType = "paragraph" | "row" | "columns" | "flow-columns" | "table" | "flow-table"
 
 export interface FieldDragData {
   key: string

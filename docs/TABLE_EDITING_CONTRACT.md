@@ -91,6 +91,37 @@ Table operations must preserve document validity.
 - Operations that cannot preserve the table grid should no-op or fail clearly
   rather than leaving cleanup work for the UI.
 
+Flow Table C1 operations:
+
+- `flow-table` has separate row/column operations from legacy `table`.
+- C1 supports add/remove row and add/remove column only for span-free Flow
+  Tables where every cell has `rowspan=1` and `colspan=1`.
+- If a Flow Table contains any span, C1 structural operations no-op. Span-aware
+  row/column edits belong to the later C2 span operation slice.
+- Flow Table row deletion must clamp `headerRowCount` in the same way as legacy
+  table row deletion.
+- Flow Table column insertion/deletion must preserve total authored table width
+  by splitting the target column or transferring removed width to a neighbor.
+
+Flow Table C2 foundation:
+
+- Span-aware structural operations must use the shared Flow Table grid resolver
+  to decide cell origin positions, covered slots, and row/column boundaries.
+- Operation code must not maintain a second ad hoc rowspan/colspan cursor once
+  it needs to edit spanned Flow Tables.
+- The C2.0 resolver metadata does not change editor behavior by itself. It is
+  preparation for later span-aware add/remove and merge/unmerge patches.
+- C2.1 allows add-row and add-column operations on spanned Flow Tables. When
+  the insert boundary cuts through `rowspan` or `colspan`, the covering origin
+  cell expands its span and the new row/column creates cells only in uncovered
+  slots.
+- C2.2 allows conservative row/column deletion on spanned Flow Tables only when
+  the operation does not move a span origin.
+- Deleting a target covered by a span from above/left may shrink the covering
+  `rowspan` or `colspan`.
+- Deleting a row/column that is the origin of a continuing span must no-op
+  until a later patch defines content/origin movement rules.
+
 ## Pagination-Related Authoring Rules
 
 These authored props directly affect cross-page behavior:

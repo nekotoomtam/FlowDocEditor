@@ -7,6 +7,9 @@ import type {
   FlowRowProps,
   FlowStackNode,
   FlowStackProps,
+  FlowTableCellNode,
+  FlowTableNode,
+  FlowTableRowNode,
   LayoutNode,
   PageSettings,
   ParagraphNode,
@@ -261,6 +264,43 @@ export function createDefaultTable(rowCount = 3, colCount = 3): TableNode {
         left: { style: "solid", width: pt(0.5), color: "000000" },
       },
     },
+    columns: Array.from({ length: colCount }, () => ({ width: pt(colWidthPt) })),
+    rowIds,
+    nodes: internalNodes,
+  }
+}
+
+export function createFlowTableCellNode(childIds: string[]): FlowTableCellNode {
+  return { id: createId("ftcell"), type: "flow-table-cell", props: {}, childIds }
+}
+
+export function createFlowTableRowNode(cellIds: string[]): FlowTableRowNode {
+  return { id: createId("ftrow"), type: "flow-table-row", props: {}, cellIds }
+}
+
+export function createDefaultFlowTable(rowCount = 3, colCount = 3): FlowTableNode {
+  const colWidthPt = 150
+  const internalNodes: FlowTableNode["nodes"] = {}
+  const rowIds: string[] = []
+
+  for (let r = 0; r < rowCount; r++) {
+    const cellIds: string[] = []
+    for (let c = 0; c < colCount; c++) {
+      const para = createParagraphNode("", { spacingBefore: pt(2), spacingAfter: pt(2) })
+      const cell = createFlowTableCellNode([para.id])
+      internalNodes[para.id] = para
+      internalNodes[cell.id] = cell
+      cellIds.push(cell.id)
+    }
+    const row = createFlowTableRowNode(cellIds)
+    internalNodes[row.id] = row
+    rowIds.push(row.id)
+  }
+
+  return {
+    id: createId("flow-table"),
+    type: "flow-table",
+    props: {},
     columns: Array.from({ length: colCount }, () => ({ width: pt(colWidthPt) })),
     rowIds,
     nodes: internalNodes,

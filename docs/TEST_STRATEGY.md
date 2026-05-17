@@ -148,6 +148,10 @@ Protects:
 - product DOCX table structure is present in generated XML
 - flow-row DOCX fixed-layout table projection preserves paginated stack widths,
   gaps, styled boxes, and marker text once
+- flow-table DOCX fixed-layout table projection preserves paginated row heights,
+  cell widths, repeated header fragments, styled boxes, and marker text once
+- flow-table DOCX span projection preserves renderer-facing `colspan` and
+  `rowspan` metadata as Word `gridSpan` and vertical merge XML
 - opt-in PDF raster checks can verify selected paragraph-box and flow-row pixels
   when a local rasterizer such as `pdftoppm` or ImageMagick plus Ghostscript is
   available
@@ -277,6 +281,24 @@ Current strengths:
 - Table operation coverage protects row/column structural edits, subtree
   cleanup, total-width preservation, header-row clamping, and last-row/column
   deletion guards.
+- Flow Table editor entry coverage protects explicit 3x3 palette insertion,
+  body/flow-stack placement law, palette visibility, and selection context for
+  table/row/cell ancestry.
+- Flow Table C1 operation coverage protects span-free row/column add/delete,
+  subtree cleanup, width preservation, header-row clamping, last-row/column
+  guards, and no-op behavior when spans are present.
+- Flow Table C2.0 resolver coverage protects mutation-oriented grid metadata:
+  origin slots, covered slots, placement lookup, duplicate cell references,
+  invalid spans, and typed invalid-result handling before span-aware operations
+  are enabled.
+- Flow Table C2.1 operation coverage protects add-row/add-column through
+  rowspan/colspan boundaries, span expansion, uncovered-slot cell creation,
+  width preservation, conservative spanned deletion no-ops, and property-panel
+  enablement for add-only spanned tables.
+- Flow Table C2.2 operation coverage protects conservative row/column deletion
+  through spans, shrink-only `rowspan`/`colspan` behavior, blocked origin-moving
+  deletes, subtree cleanup, width preservation, and property-panel enablement
+  from the same core safe-delete helpers.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual

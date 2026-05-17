@@ -33,6 +33,7 @@ import { resolveDocxFontName } from "../../font-registry"
  * - spacer          → empty Paragraph + spacingAfter
  * - row+stack       → layout Table (invisible borders)
  * - table+row+stack → data Table (มี border จาก cellRenderProps)
+ * - flow-table      → fixed data Table projected from paginated geometry
  */
 
 // ─── Group Types ──────────────────────────────────────────────────────────────
@@ -62,20 +63,24 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
   const stackMap = new Map<string, StackGroup>()
   const tableRowIds = new Set(
     fragments
-      .filter((fragment) => fragment.nodeType === "table-cell" && fragment.parentNodeId)
+      .filter((fragment) =>
+        (fragment.nodeType === "table-cell" || fragment.nodeType === "flow-table-cell") &&
+        fragment.parentNodeId,
+      )
       .map((fragment) => fragment.parentNodeId!),
   )
 
   for (const fragment of fragments) {
-    if (fragment.nodeType === "table") {
+    if (fragment.nodeType === "table" || fragment.nodeType === "flow-table") {
       const group: TableGroup = { tableFragment: fragment, rows: [] }
       tableMap.set(fragment.nodeId, group)
       items.push({ kind: "table", group })
-    } else if (fragment.nodeType === "row" || fragment.nodeType === "flow-row") {
+    } else if (fragment.nodeType === "row" || fragment.nodeType === "flow-row" || fragment.nodeType === "flow-table-row") {
       if (fragment.parentNodeId && tableRowIds.has(fragment.nodeId)) {
         if (!tableMap.has(fragment.parentNodeId)) {
+          const tableNodeType = fragment.nodeType === "flow-table-row" ? "flow-table" : "table"
           const group: TableGroup = {
-            tableFragment: { ...fragment, nodeId: fragment.parentNodeId, nodeType: "table", parentNodeId: undefined },
+            tableFragment: { ...fragment, nodeId: fragment.parentNodeId, nodeType: tableNodeType, parentNodeId: undefined },
             rows: [],
           }
           tableMap.set(fragment.parentNodeId, group)
@@ -84,12 +89,12 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
         const rowGroup: TableRowGroup = { rowFragment: fragment, cells: [] }
         tableRowMap.set(fragment.nodeId, rowGroup)
         tableMap.get(fragment.parentNodeId)!.rows.push(rowGroup)
-      } else {
+      } else if (fragment.nodeType !== "flow-table-row") {
         const group: RowGroup = { rowFragment: fragment, stacks: [] }
         rowMap.set(fragment.nodeId, group)
         items.push({ kind: "row", group })
       }
-    } else if (fragment.nodeType === "table-cell") {
+    } else if (fragment.nodeType === "table-cell" || fragment.nodeType === "flow-table-cell") {
       if (fragment.parentNodeId && tableRowMap.has(fragment.parentNodeId)) {
         const cellGroup: TableCellGroup = { cellFragment: fragment, children: [] }
         tableCellMap.set(fragment.nodeId, cellGroup)
@@ -276,6 +281,11 @@ function buildCellChildren(children: PageFragment[]): Paragraph[] {
   })
 }
 
+function buildTableCellChildren(children: PageFragment[]): Paragraph[] {
+  const built = buildCellChildren(children)
+  return built.length > 0 ? built : [new Paragraph({ children: [] })]
+}
+
 function buildLayoutStackCell(stack: StackGroup, rowWidth: number, isFlowRow: boolean): TableCell {
   return new TableCell({
     width: isFlowRow
@@ -342,7 +352,75 @@ function buildLayoutTable(group: RowGroup): Table {
   })
 }
 
+function buildFlowTableCell(cellGroup: TableCellGroup): TableCell {
+  const gridProps = cellGroup.cellFragment.flowTableCellGridProps
+  return new TableCell({
+    width: { size: ptToTwips(cellGroup.cellFragment.width), type: WidthType.DXA },
+    columnSpan: gridProps && gridProps.colspan > 1 ? gridProps.colspan : undefined,
+    rowSpan: gridProps && gridProps.rowspan > 1 && cellGroup.cellFragment.continuesFrom !== true
+      ? gridProps.rowspan
+      : undefined,
+    borders: buildFragmentBoxCellBorders(cellGroup.cellFragment),
+    shading: buildFragmentBoxCellShading(cellGroup.cellFragment),
+    margins: buildFragmentBoxCellMargins(cellGroup.cellFragment) ?? { top: 0, right: 0, bottom: 0, left: 0 },
+    verticalAlign: VerticalAlignTable.TOP,
+    children: buildTableCellChildren(cellGroup.children),
+  })
+}
+
+function buildFlowTableColumnWidths(group: TableGroup): number[] | undefined {
+  const gridProps = group.tableFragment.flowTableGridProps ??
+    group.rows.find((row) => row.rowFragment.flowTableGridProps)?.rowFragment.flowTableGridProps
+  if (gridProps?.columnWidths.length) {
+    return gridProps.columnWidths.map((width) => ptToTwips(width))
+  }
+
+  const left = group.tableFragment.x
+  const right = left + group.tableFragment.width
+  const edges = [left, right]
+
+  for (const row of group.rows) {
+    for (const cell of row.cells) {
+      edges.push(cell.cellFragment.x, cell.cellFragment.x + cell.cellFragment.width)
+    }
+  }
+
+  const sortedEdges = Array.from(new Set(edges.map((edge) => Math.round(edge * 1000) / 1000)))
+    .sort((a, b) => a - b)
+  if (sortedEdges.length < 2) return undefined
+
+  return sortedEdges
+    .slice(1)
+    .map((edge, index) => Math.max(0, ptToTwips(edge - sortedEdges[index])))
+    .filter((width) => width > 0)
+}
+
+function buildFlowDataTable(group: TableGroup): Table {
+  const rows = [...group.rows]
+    .sort((a, b) => a.rowFragment.y - b.rowFragment.y || a.rowFragment.x - b.rowFragment.x)
+    .map((rowGroup) => {
+      const cells = [...rowGroup.cells]
+        .sort((a, b) => a.cellFragment.x - b.cellFragment.x || a.cellFragment.y - b.cellFragment.y)
+        .map((cellGroup) => buildFlowTableCell(cellGroup))
+
+      return new TableRow({
+        children: cells.length > 0 ? cells : [new TableCell({ children: [new Paragraph({ children: [] })] })],
+        cantSplit: true,
+        height: { value: ptToTwips(rowGroup.rowFragment.height), rule: HeightRule.EXACT },
+      })
+    })
+
+  return new Table({
+    width: { size: ptToTwips(group.tableFragment.width), type: WidthType.DXA },
+    columnWidths: buildFlowTableColumnWidths(group),
+    layout: TableLayoutType.FIXED,
+    rows,
+  })
+}
+
 function buildDataTable(group: TableGroup): Table {
+  if (group.tableFragment.nodeType === "flow-table") return buildFlowDataTable(group)
+
   const rows = group.rows.map((rowGroup) => {
     const cells = rowGroup.cells.map((cellGroup) => {
       const crp = cellGroup.cellFragment.cellRenderProps

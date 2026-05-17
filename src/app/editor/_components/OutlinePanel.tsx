@@ -16,7 +16,7 @@ function getParaText(node: LayoutNode): string {
 }
 
 function getTableSize(node: LayoutNode): string {
-  if (node.type !== "table") return ""
+  if (node.type !== "table" && node.type !== "flow-table") return ""
   return `${node.rowIds.length}×${node.columns.length}`
 }
 
@@ -118,6 +118,13 @@ function OutlineNode({ nodes, nodeId, depth, selectedNodeId, onSelect, labelOver
   if (node.type === "table") {
     return (
       <NodeRow icon="⊞" label={`ตาราง ${getTableSize(node)}`} depth={depth} nodeId={nodeId}
+        selectedNodeId={selectedNodeId} onClick={onSelect} />
+    )
+  }
+
+  if (node.type === "flow-table") {
+    return (
+      <NodeRow icon="▦" label={`Flow table ${getTableSize(node)}`} depth={depth} nodeId={nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect} />
     )
   }

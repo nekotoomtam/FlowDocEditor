@@ -1,5 +1,5 @@
 import { assertDocument, isPlainTextParagraph, normalizeDocument, updateParagraphText } from "@/document"
-import type { DocumentNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, TableNode } from "@/schema"
 import type { PaginatedDocument } from "@/pagination"
 
 export interface WysiwygTextCommitHistoryEntry {
@@ -30,8 +30,8 @@ export function getPlainParagraphTextFromDocument(doc: DocumentNode, nodeId: str
       return node.children.map((child) => child.type === "text" ? child.text : "").join("")
     }
     for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table") continue
-      const inner = (candidate as unknown as TableNode).nodes[nodeId]
+      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
+      const inner = (candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]
       if (inner?.type !== "paragraph") continue
       if (!isPlainTextParagraph(inner)) return null
       return inner.children.map((child) => child.type === "text" ? child.text : "").join("")

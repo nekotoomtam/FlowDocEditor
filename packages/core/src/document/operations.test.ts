@@ -1,16 +1,33 @@
 import { describe, expect, it } from "vitest"
-import type { DocumentNode, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../schema"
+import type {
+  DocumentNode,
+  FlowTableCellNode,
+  FlowTableNode,
+  FlowTableRowNode,
+  LayoutNode,
+  ParagraphNode,
+  TableCellNode,
+  TableNode,
+  TableRowNode,
+} from "../schema"
 import { pt } from "../schema"
 import { assertDocument } from "./assert"
+import { resolveFlowTableGrid } from "./flowTableGrid"
 import {
   applyPlacementOperation,
   addTableColumn,
   addTableRow,
+  addFlowTableColumn,
+  addFlowTableRow,
   addFlowStackColumn,
+  canRemoveFlowTableColumn,
+  canRemoveFlowTableRow,
   deleteNode,
   mergeParagraphWithPrevious,
   removeTableColumn,
   removeTableRow,
+  removeFlowTableColumn,
+  removeFlowTableRow,
   splitParagraphAtIndex,
   updateFieldRefInline,
   updateFlowStackBoxStyle,
@@ -78,6 +95,24 @@ function makeTableDoc(paragraph: ParagraphNode): DocumentNode {
   return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
 }
 
+function makeFlowTableDoc(paragraph: ParagraphNode): DocumentNode {
+  const cell: FlowTableCellNode = { id: "flow-cell", type: "flow-table-cell", props: {}, childIds: [paragraph.id] }
+  const row: FlowTableRowNode = { id: "flow-row", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+  const table: FlowTableNode = {
+    id: "flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(200) }],
+    rowIds: [row.id],
+    nodes: {
+      [row.id]: row,
+      [cell.id]: cell,
+      [paragraph.id]: paragraph,
+    },
+  }
+  return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
+}
+
 function makeGridTableDoc(options: {
   columnWidths?: number[]
   rows?: string[][]
@@ -124,11 +159,95 @@ function makeGridTableDoc(options: {
   return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
 }
 
+function makeGridFlowTableDoc(options: {
+  columnWidths?: number[]
+  rows?: string[][]
+  headerRowCount?: number
+  firstCellProps?: FlowTableCellNode["props"]
+} = {}): DocumentNode {
+  const rows = options.rows ?? [
+    ["A", "B", "C"],
+    ["D", "E", "F"],
+    ["G", "H", "I"],
+  ]
+  const columnWidths = options.columnWidths ?? rows[0].map(() => 100)
+  const tableNodes: FlowTableNode["nodes"] = {}
+  const rowIds: string[] = []
+
+  rows.forEach((rowText, rowIndex) => {
+    const cellIds: string[] = []
+    rowText.forEach((text, columnIndex) => {
+      const paragraph = makeParagraph(`fp-${rowIndex}-${columnIndex}`, [
+        { id: `ft-${rowIndex}-${columnIndex}`, type: "text", text },
+      ])
+      const cell: FlowTableCellNode = {
+        id: `flow-cell-${rowIndex}-${columnIndex}`,
+        type: "flow-table-cell",
+        props: rowIndex === 0 && columnIndex === 0 ? options.firstCellProps ?? {} : {},
+        childIds: [paragraph.id],
+      }
+      tableNodes[paragraph.id] = paragraph
+      tableNodes[cell.id] = cell
+      cellIds.push(cell.id)
+    })
+    const row: FlowTableRowNode = { id: `flow-row-${rowIndex}`, type: "flow-table-row", props: {}, cellIds }
+    tableNodes[row.id] = row
+    rowIds.push(row.id)
+  })
+
+  const table: FlowTableNode = {
+    id: "flow-table",
+    type: "flow-table",
+    props: options.headerRowCount != null ? { headerRowCount: options.headerRowCount } : {},
+    columns: columnWidths.map((width) => ({ width: pt(width) })),
+    rowIds,
+    nodes: tableNodes,
+  }
+  return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
+}
+
+function makeSpannedFlowTableDoc(): DocumentNode {
+  const p1 = makeParagraph("fsp-1", [{ id: "fst-1", type: "text", text: "A" }])
+  const p2 = makeParagraph("fsp-2", [{ id: "fst-2", type: "text", text: "B" }])
+  const p3 = makeParagraph("fsp-3", [{ id: "fst-3", type: "text", text: "C" }])
+  const c1: FlowTableCellNode = { id: "flow-cell-span", type: "flow-table-cell", props: { colspan: 2, rowspan: 2 }, childIds: [p1.id] }
+  const c2: FlowTableCellNode = { id: "flow-cell-top-right", type: "flow-table-cell", props: {}, childIds: [p2.id] }
+  const c3: FlowTableCellNode = { id: "flow-cell-bottom-right", type: "flow-table-cell", props: {}, childIds: [p3.id] }
+  const r1: FlowTableRowNode = { id: "flow-row-top", type: "flow-table-row", props: {}, cellIds: [c1.id, c2.id] }
+  const r2: FlowTableRowNode = { id: "flow-row-bottom", type: "flow-table-row", props: {}, cellIds: [c3.id] }
+  const table: FlowTableNode = {
+    id: "flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [120, 80, 60].map((width) => ({ width: pt(width) })),
+    rowIds: [r1.id, r2.id],
+    nodes: {
+      [r1.id]: r1,
+      [r2.id]: r2,
+      [c1.id]: c1,
+      [c2.id]: c2,
+      [c3.id]: c3,
+      [p1.id]: p1,
+      [p2.id]: p2,
+      [p3.id]: p3,
+    },
+  }
+  return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
+}
+
 function getTable(doc: DocumentNode): TableNode {
   return doc.document.sections[0].nodes.table as unknown as TableNode
 }
 
+function getFlowTable(doc: DocumentNode): FlowTableNode {
+  return doc.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+}
+
 function tableWidth(table: TableNode): number {
+  return table.columns.reduce((sum, column) => sum + column.width.value, 0)
+}
+
+function flowTableWidth(table: FlowTableNode): number {
   return table.columns.reduce((sum, column) => sum + column.width.value, 0)
 }
 
@@ -185,6 +304,18 @@ describe("paragraph text operations", () => {
     expect(updated.type).toBe("paragraph")
     if (updated.type !== "paragraph") return
     expect(paragraphText(updated)).toBe("Updated cell")
+  })
+
+  it("updates plain text paragraph inside a flow-table", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Flow cell text" }])
+    const result = updateParagraphText(makeFlowTableDoc(p), "p1", "Updated flow cell")
+    const table = result.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const updated = table.nodes.p1
+
+    expect(() => assertDocument(result)).not.toThrow()
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(paragraphText(updated)).toBe("Updated flow cell")
   })
 
   it("splits plain text paragraph and preserves total text", () => {
@@ -622,6 +753,45 @@ describe("flow-row / flow-stack operations", () => {
     })).toEqual([50, 50])
   })
 
+  it("inserts a default 3 by 3 flow-table from the palette", () => {
+    const updated = applyPlacementOperation(
+      makeDoc({}, []),
+      "section",
+      { kind: "insert-into-container", containerId: "body", containerType: "body", index: 0 },
+      { source: "palette", blockType: "flow-table" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+    expect(body.childIds).toHaveLength(1)
+
+    const table = section.nodes[body.childIds[0]] as unknown as FlowTableNode
+    expect(table.type).toBe("flow-table")
+    expect(table.rowIds).toHaveLength(3)
+    expect(table.columns).toHaveLength(3)
+    expect(table.columns.map((column) => column.width)).toEqual([pt(150), pt(150), pt(150)])
+
+    table.rowIds.forEach((rowId) => {
+      const row = table.nodes[rowId]
+      expect(row.type).toBe("flow-table-row")
+      if (row.type !== "flow-table-row") return
+      expect(row.cellIds).toHaveLength(3)
+      row.cellIds.forEach((cellId) => {
+        const cell = table.nodes[cellId]
+        expect(cell.type).toBe("flow-table-cell")
+        if (cell.type !== "flow-table-cell") return
+        expect(cell.childIds).toHaveLength(1)
+        const paragraph = table.nodes[cell.childIds[0]]
+        expect(paragraph.type).toBe("paragraph")
+        if (paragraph.type !== "paragraph") return
+        expect(paragraphText(paragraph)).toBe("")
+      })
+    })
+  })
+
   it("inserts a paragraph into an empty flow-stack", () => {
     const doc = makeDoc({
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
@@ -1014,4 +1184,265 @@ describe("table structural operations", () => {
     if (row.type !== "table-row") return
     expect(row.cellIds).toHaveLength(1)
   })
+})
+
+describe("flow-table structural operations", () => {
+  it("adds a row above the first row and preserves the flow-table cell shape", () => {
+    const doc = makeGridFlowTableDoc({
+      columnWidths: [120, 80],
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+    })
+    const updated = addFlowTableRow(doc, "flow-table", -1)
+    const table = getFlowTable(updated)
+    const inserted = table.nodes[table.rowIds[0]]
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.rowIds).toHaveLength(3)
+    expect(inserted.type).toBe("flow-table-row")
+    if (inserted.type !== "flow-table-row") return
+    expect(inserted.cellIds).toHaveLength(2)
+
+    inserted.cellIds.forEach((cellId) => {
+      const cell = table.nodes[cellId]
+      expect(cell.type).toBe("flow-table-cell")
+      if (cell.type !== "flow-table-cell") return
+      expect(cell.childIds).toHaveLength(1)
+      const paragraph = table.nodes[cell.childIds[0]]
+      expect(paragraph.type).toBe("paragraph")
+      if (paragraph.type !== "paragraph") return
+      expect(paragraphText(paragraph)).toBe("")
+    })
+  })
+
+  it("removes a row subtree and clamps flow-table header rows to the remaining row count", () => {
+    const doc = makeGridFlowTableDoc({ headerRowCount: 3 })
+    const before = getFlowTable(doc)
+    const removedRow = before.nodes[before.rowIds[2]]
+    expect(removedRow.type).toBe("flow-table-row")
+    if (removedRow.type !== "flow-table-row") return
+    const removedIds = new Set<string>([removedRow.id])
+    removedRow.cellIds.forEach((cellId) => {
+      removedIds.add(cellId)
+      const cell = before.nodes[cellId]
+      if (cell.type === "flow-table-cell") cell.childIds.forEach((childId) => { removedIds.add(childId) })
+    })
+
+    const updated = removeFlowTableRow(doc, "flow-table", 2)
+    const table = getFlowTable(updated)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.rowIds).toHaveLength(2)
+    expect(table.props.headerRowCount).toBe(2)
+    removedIds.forEach((id) => {
+      expect(table.nodes[id]).toBeUndefined()
+    })
+  })
+
+  it("does not delete the last flow-table row", () => {
+    const doc = makeGridFlowTableDoc({
+      columnWidths: [100],
+      rows: [["Only cell"]],
+      headerRowCount: 1,
+    })
+    const updated = removeFlowTableRow(doc, "flow-table", 0)
+    const table = getFlowTable(updated)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(updated).toBe(doc)
+    expect(table.rowIds).toHaveLength(1)
+    expect(table.props.headerRowCount).toBe(1)
+  })
+
+  it("adds a flow-table column to the left of the first column by splitting the nearest width", () => {
+    const doc = makeGridFlowTableDoc({
+      columnWidths: [120, 80],
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+    })
+    const before = getFlowTable(doc)
+    const updated = addFlowTableColumn(doc, "flow-table", -1)
+    const table = getFlowTable(updated)
+    const firstRow = table.nodes[table.rowIds[0]]
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns.map((column) => column.width.value)).toEqual([60, 60, 80])
+    expect(flowTableWidth(table)).toBe(flowTableWidth(before))
+    expect(firstRow.type).toBe("flow-table-row")
+    if (firstRow.type !== "flow-table-row") return
+    expect(firstRow.cellIds).toHaveLength(3)
+
+    const insertedCell = table.nodes[firstRow.cellIds[0]]
+    expect(insertedCell.type).toBe("flow-table-cell")
+    if (insertedCell.type !== "flow-table-cell") return
+    const insertedParagraph = table.nodes[insertedCell.childIds[0]]
+    expect(insertedParagraph.type).toBe("paragraph")
+    if (insertedParagraph.type !== "paragraph") return
+    expect(paragraphText(insertedParagraph)).toBe("")
+  })
+
+  it("adds a row through flow-table rowspans by expanding covered cells", () => {
+    const doc = makeSpannedFlowTableDoc()
+    const updated = addFlowTableRow(doc, "flow-table", 0)
+    const table = getFlowTable(updated)
+    const spanningCell = table.nodes["flow-cell-span"]
+    const insertedRow = table.nodes[table.rowIds[1]]
+    const grid = resolveFlowTableGrid(table)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.rowIds).toHaveLength(3)
+    expect(spanningCell.type).toBe("flow-table-cell")
+    if (spanningCell.type !== "flow-table-cell") return
+    expect(spanningCell.props.rowspan).toBe(3)
+    expect(insertedRow.type).toBe("flow-table-row")
+    if (insertedRow.type !== "flow-table-row") return
+    expect(insertedRow.cellIds).toHaveLength(1)
+    expect(grid.slots).toEqual([
+      ["flow-cell-span", "flow-cell-span", "flow-cell-top-right"],
+      ["flow-cell-span", "flow-cell-span", insertedRow.cellIds[0]],
+      ["flow-cell-span", "flow-cell-span", "flow-cell-bottom-right"],
+    ])
+  })
+
+  it("adds a column through flow-table colspans by expanding covered cells", () => {
+    const doc = makeSpannedFlowTableDoc()
+    const before = getFlowTable(doc)
+    const updated = addFlowTableColumn(doc, "flow-table", 0)
+    const table = getFlowTable(updated)
+    const spanningCell = table.nodes["flow-cell-span"]
+    const topRow = table.nodes["flow-row-top"]
+    const bottomRow = table.nodes["flow-row-bottom"]
+    const grid = resolveFlowTableGrid(table)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns.map((column) => column.width.value)).toEqual([60, 60, 80, 60])
+    expect(flowTableWidth(table)).toBe(flowTableWidth(before))
+    expect(spanningCell.type).toBe("flow-table-cell")
+    if (spanningCell.type !== "flow-table-cell") return
+    expect(spanningCell.props.colspan).toBe(3)
+    expect(topRow.type).toBe("flow-table-row")
+    expect(bottomRow.type).toBe("flow-table-row")
+    if (topRow.type !== "flow-table-row" || bottomRow.type !== "flow-table-row") return
+    expect(topRow.cellIds).toEqual(["flow-cell-span", "flow-cell-top-right"])
+    expect(bottomRow.cellIds).toEqual(["flow-cell-bottom-right"])
+    expect(grid.slots).toEqual([
+      ["flow-cell-span", "flow-cell-span", "flow-cell-span", "flow-cell-top-right"],
+      ["flow-cell-span", "flow-cell-span", "flow-cell-span", "flow-cell-bottom-right"],
+    ])
+  })
+
+  it("removes a flow-table column subtree and transfers its width to the left neighbor", () => {
+    const doc = makeGridFlowTableDoc({ columnWidths: [120, 80, 60] })
+    const before = getFlowTable(doc)
+    const removedIds = new Set<string>()
+    before.rowIds.forEach((rowId) => {
+      const row = before.nodes[rowId]
+      if (row.type !== "flow-table-row") return
+      const cellId = row.cellIds[1]
+      removedIds.add(cellId)
+      const cell = before.nodes[cellId]
+      if (cell.type === "flow-table-cell") cell.childIds.forEach((childId) => { removedIds.add(childId) })
+    })
+
+    const updated = removeFlowTableColumn(doc, "flow-table", 1)
+    const table = getFlowTable(updated)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns.map((column) => column.width.value)).toEqual([200, 60])
+    expect(flowTableWidth(table)).toBe(flowTableWidth(before))
+    table.rowIds.forEach((rowId) => {
+      const row = table.nodes[rowId]
+      expect(row.type).toBe("flow-table-row")
+      if (row.type !== "flow-table-row") return
+      expect(row.cellIds).toHaveLength(2)
+    })
+    removedIds.forEach((id) => {
+      expect(table.nodes[id]).toBeUndefined()
+    })
+  })
+
+  it("removes a row inside a flow-table rowspan by shrinking the covering cell", () => {
+    const doc = makeSpannedFlowTableDoc()
+    const before = getFlowTable(doc)
+    const removedRow = before.nodes["flow-row-bottom"]
+    expect(removedRow.type).toBe("flow-table-row")
+    if (removedRow.type !== "flow-table-row") return
+    const removedIds = new Set<string>([removedRow.id, "flow-cell-bottom-right", "fsp-3"])
+
+    expect(canRemoveFlowTableRow(before, 1)).toBe(true)
+    const updated = removeFlowTableRow(doc, "flow-table", 1)
+    const table = getFlowTable(updated)
+    const spanningCell = table.nodes["flow-cell-span"]
+    const grid = resolveFlowTableGrid(table)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.rowIds).toEqual(["flow-row-top"])
+    expect(spanningCell.type).toBe("flow-table-cell")
+    if (spanningCell.type !== "flow-table-cell") return
+    expect(spanningCell.props.rowspan).toBe(1)
+    expect(grid.slots).toEqual([["flow-cell-span", "flow-cell-span", "flow-cell-top-right"]])
+    removedIds.forEach((id) => {
+      expect(table.nodes[id]).toBeUndefined()
+    })
+  })
+
+  it("does not remove a row when that would move a flow-table rowspan origin", () => {
+    const doc = makeSpannedFlowTableDoc()
+    const table = getFlowTable(doc)
+
+    expect(canRemoveFlowTableRow(table, 0)).toBe(false)
+    expect(removeFlowTableRow(doc, "flow-table", 0)).toBe(doc)
+  })
+
+  it("removes a column inside a flow-table colspan by shrinking the covering cell", () => {
+    const doc = makeSpannedFlowTableDoc()
+    const before = getFlowTable(doc)
+
+    expect(canRemoveFlowTableColumn(before, 1)).toBe(true)
+    const updated = removeFlowTableColumn(doc, "flow-table", 1)
+    const table = getFlowTable(updated)
+    const spanningCell = table.nodes["flow-cell-span"]
+    const grid = resolveFlowTableGrid(table)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns.map((column) => column.width.value)).toEqual([200, 60])
+    expect(flowTableWidth(table)).toBe(flowTableWidth(before))
+    expect(spanningCell.type).toBe("flow-table-cell")
+    if (spanningCell.type !== "flow-table-cell") return
+    expect(spanningCell.props.colspan).toBe(1)
+    expect(grid.slots).toEqual([
+      ["flow-cell-span", "flow-cell-top-right"],
+      ["flow-cell-span", "flow-cell-bottom-right"],
+    ])
+  })
+
+  it("does not remove a column when that would move a flow-table colspan origin", () => {
+    const doc = makeSpannedFlowTableDoc()
+    const table = getFlowTable(doc)
+
+    expect(canRemoveFlowTableColumn(table, 0)).toBe(false)
+    expect(removeFlowTableColumn(doc, "flow-table", 0)).toBe(doc)
+  })
+
+  it("does not delete the last flow-table column", () => {
+    const doc = makeGridFlowTableDoc({
+      columnWidths: [100],
+      rows: [["Only cell"]],
+    })
+    const updated = removeFlowTableColumn(doc, "flow-table", 0)
+    const table = getFlowTable(updated)
+    const row = table.nodes[table.rowIds[0]]
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(updated).toBe(doc)
+    expect(table.columns).toHaveLength(1)
+    expect(row.type).toBe("flow-table-row")
+    if (row.type !== "flow-table-row") return
+    expect(row.cellIds).toHaveLength(1)
+  })
+
 })

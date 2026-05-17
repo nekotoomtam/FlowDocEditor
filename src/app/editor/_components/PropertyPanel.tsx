@@ -1,15 +1,30 @@
 import { useEffect, useMemo, useState } from "react"
-import type { DocumentNode, FieldRefInline, LayoutNode, TableNode, TableRowNode, TableCellNode, ParagraphNode, TocNode, ParagraphBoxBorderSide, ParagraphBoxStyle } from "@/schema"
+import type {
+  DocumentNode,
+  FieldRefInline,
+  FlowTableCellNode,
+  FlowTableNode,
+  FlowTableRowNode,
+  LayoutNode,
+  ParagraphBoxBorderSide,
+  ParagraphBoxStyle,
+  ParagraphNode,
+  TableCellNode,
+  TableNode,
+  TableRowNode,
+  TocNode,
+} from "@/schema"
 import { pt } from "@/schema"
-import { isPlainTextParagraph } from "@/document"
+import { canRemoveFlowTableColumn, canRemoveFlowTableRow, isPlainTextParagraph } from "@/document"
 import type { FieldRefInlineChanges, ParagraphBoxStyleChanges } from "@/document"
+import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import { resolveFlowStackResizePairShares } from "./flowStackResize"
 import { InfoHint } from "./InfoHint"
 import { buildSelectionContext } from "./selectionContext"
 import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
 
-type DocNode = LayoutNode | TableRowNode | TableCellNode
+type DocNode = LayoutNode | TableRowNode | TableCellNode | FlowTableRowNode | FlowTableCellNode
 type ParagraphPanelTab = "text" | "box"
 type FlowContainerPanelTab = "layout" | "box"
 
@@ -48,8 +63,8 @@ function findNode(doc: DocumentNode, nodeId: string): DocNode | null {
     const node = section.nodes[nodeId]
     if (node) return node
     for (const n of Object.values(section.nodes)) {
-      if (n.type !== "table") continue
-      const inner = (n as unknown as TableNode).nodes[nodeId]
+      if (n.type !== "table" && n.type !== "flow-table") continue
+      const inner = (n as unknown as TableNode | FlowTableNode).nodes[nodeId]
       if (inner) return inner as DocNode
     }
   }
@@ -59,6 +74,9 @@ function findNode(doc: DocumentNode, nodeId: string): DocNode | null {
 function displayNodeType(nodeType: DocNode["type"]): string {
   if (nodeType === "flow-row") return "Row"
   if (nodeType === "flow-stack") return "Stack"
+  if (nodeType === "flow-table") return "Flow table"
+  if (nodeType === "flow-table-row") return "Flow table row"
+  if (nodeType === "flow-table-cell") return "Flow table cell"
   return nodeType
 }
 
@@ -88,6 +106,49 @@ function rowOfCell(table: TableNode, cellId: string): { rowId: string; rowIndex:
     if (ci !== -1) return { rowId: table.rowIds[ri], rowIndex: ri, colIndex: ci }
   }
   return null
+}
+
+function findFlowTableOf(doc: DocumentNode, nodeId: string): { table: FlowTableNode; tableId: string } | null {
+  for (const section of doc.document.sections) {
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
+      if (table.nodes[nodeId]) return { table, tableId }
+    }
+  }
+  return null
+}
+
+function rowIndexOfFlowTable(table: FlowTableNode, rowId: string): number {
+  return table.rowIds.indexOf(rowId)
+}
+
+function rowOfFlowTableCell(table: FlowTableNode, cellId: string): {
+  rowId: string
+  rowIndex: number
+  rowEndIndex: number
+  colIndex: number
+  colEndIndex: number
+  rowspan: number
+  colspan: number
+} | null {
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return null
+  const placement = resolved.grid.placementsByCellId.get(cellId)
+  if (placement == null) return null
+  return {
+    rowId: placement.rowId,
+    rowIndex: placement.rowIndex,
+    rowEndIndex: placement.rowEndIndex,
+    colIndex: placement.columnIndex,
+    colEndIndex: placement.columnEndIndex,
+    rowspan: placement.rowspan,
+    colspan: placement.colspan,
+  }
+}
+
+function canAddFlowTableGrid(table: FlowTableNode): boolean {
+  return tryResolveFlowTableGrid(table).ok
 }
 
 function findFlowRowOfStack(doc: DocumentNode, stackId: string): { rowId: string; row: Extract<LayoutNode, { type: "flow-row" }>; index: number } | null {
@@ -1741,6 +1802,239 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                     onClick={() => tableOps.removeCol(selectedNodeId, cols - 1)}>− Last</button>
                 </div>
               </div>
+            </>
+          )
+        })()}
+
+        {/* ── Flow Table ── */}
+        {node.type === "flow-table" && (() => {
+          const table = node as unknown as FlowTableNode
+          const rows = table.rowIds.length
+          const cols = table.columns.length
+          const headerRowCount = table.props.headerRowCount ?? 0
+          const canAddGrid = canAddFlowTableGrid(table)
+          const canRemoveLastRow = canRemoveFlowTableRow(table, rows - 1)
+          const canRemoveLastCol = canRemoveFlowTableColumn(table, cols - 1)
+          return (
+            <>
+              <div style={{ fontSize: 11, color: "#6b7280" }}>{rows} rows × {cols} cols</div>
+              <div>
+                <label style={label}>Header rows</label>
+                <input type="number" min={0} max={rows}
+                  value={headerRowCount}
+                  onChange={(e) => {
+                    const value = Math.min(rows, Math.max(0, Number(e.target.value) || 0))
+                    onUpdateProps(selectedNodeId, { headerRowCount: value > 0 ? value : undefined })
+                  }}
+                  style={input} />
+              </div>
+              <div>
+                <label style={label}>Rows</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button
+                    style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
+                    disabled={!canAddGrid}
+                    title={canAddGrid ? "Add row" : "Invalid Flow Table grid"}
+                    onClick={() => tableOps.addRow(selectedNodeId)}
+                  >
+                    + Row
+                  </button>
+                  <button
+                    style={{ ...btn, opacity: canRemoveLastRow ? 1 : 0.4 }}
+                    disabled={!canRemoveLastRow}
+                    title={canRemoveLastRow ? "Remove last row" : "Span-aware row deletion is blocked for this Flow Table target"}
+                    onClick={() => tableOps.removeRow(selectedNodeId, rows - 1)}
+                  >
+                    - Last
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label style={label}>Columns</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button
+                    style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
+                    disabled={!canAddGrid}
+                    title={canAddGrid ? "Add column" : "Invalid Flow Table grid"}
+                    onClick={() => tableOps.addCol(selectedNodeId)}
+                  >
+                    + Col
+                  </button>
+                  <button
+                    style={{ ...btn, opacity: canRemoveLastCol ? 1 : 0.4 }}
+                    disabled={!canRemoveLastCol}
+                    title={canRemoveLastCol ? "Remove last column" : "Span-aware column deletion is blocked for this Flow Table target"}
+                    onClick={() => tableOps.removeCol(selectedNodeId, cols - 1)}
+                  >
+                    - Last
+                  </button>
+                </div>
+              </div>
+            </>
+          )
+        })()}
+
+        {node.type === "flow-table-row" && (() => {
+          const info = findFlowTableOf(doc, selectedNodeId)
+          if (!info) return null
+          const { table, tableId } = info
+          const ri = rowIndexOfFlowTable(table, selectedNodeId)
+          const canAddGrid = canAddFlowTableGrid(table)
+          const canRemoveRow = canRemoveFlowTableRow(table, ri)
+          return (
+            <>
+              <div style={{ fontSize: 11, color: "#6b7280" }}>Row {ri + 1} of {table.rowIds.length}</div>
+              <label style={{ ...label, display: "flex", alignItems: "center", gap: 6, marginBottom: 0 }}>
+                <input type="checkbox"
+                  checked={node.props.allowBreak ?? true}
+                  onChange={(e) => onUpdateProps(selectedNodeId, { allowBreak: e.target.checked })} />
+                Allow page break
+              </label>
+              <div>
+                <label style={label}>Insert</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button
+                    style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
+                    disabled={!canAddGrid}
+                    title={canAddGrid ? "Insert row above" : "Invalid Flow Table grid"}
+                    onClick={() => tableOps.addRow(tableId, ri - 1)}
+                  >
+                    ↑ Above
+                  </button>
+                  <button
+                    style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
+                    disabled={!canAddGrid}
+                    title={canAddGrid ? "Insert row below" : "Invalid Flow Table grid"}
+                    onClick={() => tableOps.addRow(tableId, ri)}
+                  >
+                    ↓ Below
+                  </button>
+                </div>
+              </div>
+              <button
+                style={{ ...btnDanger, opacity: canRemoveRow ? 1 : 0.4 }}
+                disabled={!canRemoveRow}
+                title={canRemoveRow ? "Delete row" : "Span-aware row deletion is blocked for this Flow Table target"}
+                onClick={() => tableOps.removeRow(tableId, ri)}
+              >
+                Delete row
+              </button>
+            </>
+          )
+        })()}
+
+        {node.type === "flow-table-cell" && (() => {
+          const cell = node as FlowTableCellNode
+          const paragraphId = cell.childIds[0]
+          const paraNode = paragraphId ? findNode(doc, paragraphId) : null
+          const text = paraNode?.type === "paragraph" ? getParagraphText(paraNode) : ""
+          const canEditText = paraNode?.type === "paragraph" ? isPlainTextParagraph(paraNode) : false
+          const fieldRefs = paraNode?.type === "paragraph" ? getParagraphFieldRefs(paraNode) : []
+          const info = findFlowTableOf(doc, selectedNodeId)
+          const table = info?.table ?? null
+          const pos = table ? rowOfFlowTableCell(table, selectedNodeId) : null
+          const canAddGrid = table ? canAddFlowTableGrid(table) : false
+          const canRemoveCol = table && pos ? canRemoveFlowTableColumn(table, pos.colIndex) : false
+          const canRemoveRow = table && pos ? canRemoveFlowTableRow(table, pos.rowIndex) : false
+          return (
+            <>
+              {pos && table && (
+                <div style={{ fontSize: 11, color: "#6b7280" }}>Row {pos.rowIndex + 1}, Col {pos.colIndex + 1}</div>
+              )}
+              {paragraphId && (
+                <div>
+                  <label style={label}>Text</label>
+                  <textarea
+                    value={text}
+                    rows={3}
+                    readOnly={!canEditText}
+                    onChange={(e) => {
+                      if (canEditText) onUpdateText(paragraphId, e.target.value)
+                    }}
+                    style={{
+                      ...input,
+                      resize: "vertical",
+                      background: canEditText ? input.background : "#f9fafb",
+                      color: canEditText ? input.color : "#9ca3af",
+                    }}
+                  />
+                </div>
+              )}
+              <FieldReferenceList refs={fieldRefs} registry={registry} onUpdateFieldRef={onUpdateFieldRef} />
+              <div>
+                <label style={label}>Vertical align</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {(["top", "middle", "bottom"] as const).map((value) => (
+                    <button key={value}
+                      onClick={() => onUpdateProps(selectedNodeId, { verticalAlign: value })}
+                      style={{ ...btn, background: (cell.props.verticalAlign ?? "top") === value ? "#dbeafe" : "#fafafa", color: (cell.props.verticalAlign ?? "top") === value ? "#1d4ed8" : "#6b7280", fontWeight: (cell.props.verticalAlign ?? "top") === value ? "bold" : "normal" }}>
+                      {value}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {info && pos && table && (
+                <>
+                  <div>
+                    <label style={label}>Insert row</label>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button
+                        style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
+                        disabled={!canAddGrid}
+                        title={canAddGrid ? "Insert row above" : "Invalid Flow Table grid"}
+                        onClick={() => tableOps.addRow(info.tableId, pos.rowIndex - 1)}
+                      >
+                        ↑ Above
+                      </button>
+                      <button
+                        style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
+                        disabled={!canAddGrid}
+                        title={canAddGrid ? "Insert row below" : "Invalid Flow Table grid"}
+                        onClick={() => tableOps.addRow(info.tableId, pos.rowEndIndex)}
+                      >
+                        ↓ Below
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label style={label}>Insert column</label>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button
+                        style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
+                        disabled={!canAddGrid}
+                        title={canAddGrid ? "Insert column left" : "Invalid Flow Table grid"}
+                        onClick={() => tableOps.addCol(info.tableId, pos.colIndex - 1)}
+                      >
+                        ← Left
+                      </button>
+                      <button
+                        style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
+                        disabled={!canAddGrid}
+                        title={canAddGrid ? "Insert column right" : "Invalid Flow Table grid"}
+                        onClick={() => tableOps.addCol(info.tableId, pos.colEndIndex)}
+                      >
+                        Right →
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    style={{ ...btnDanger, opacity: canRemoveCol ? 1 : 0.4 }}
+                    disabled={!canRemoveCol}
+                    title={canRemoveCol ? "Delete column" : "Span-aware column deletion is blocked for this Flow Table target"}
+                    onClick={() => tableOps.removeCol(info.tableId, pos.colIndex)}
+                  >
+                    Delete column
+                  </button>
+                  <button
+                    style={{ ...btnDanger, opacity: canRemoveRow ? 1 : 0.4 }}
+                    disabled={!canRemoveRow}
+                    title={canRemoveRow ? "Delete row" : "Span-aware row deletion is blocked for this Flow Table target"}
+                    onClick={() => tableOps.removeRow(info.tableId, pos.rowIndex)}
+                  >
+                    Delete row
+                  </button>
+                </>
+              )}
             </>
           )
         })()}

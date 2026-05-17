@@ -24,6 +24,209 @@ Each entry should include:
 
 ## 2026-05-17
 
+### Add Flow Table C2.2 Conservative Span-Aware Delete
+
+Goal: Let Flow Table delete rows/columns through spans only when the operation
+can preserve grid law without moving a span origin or deciding where content
+should move.
+
+Completed:
+
+- Added exported `canRemoveFlowTableRow(...)` and
+  `canRemoveFlowTableColumn(...)` helpers backed by the shared Flow Table grid
+  resolver.
+- Updated `removeFlowTableRow(...)` so deleting a row covered by a `rowspan`
+  from above shrinks the covering cell, deletes only origin cells that live
+  fully in the removed row, and still blocks deletion when the removed row owns
+  a continuing span.
+- Updated `removeFlowTableColumn(...)` with the same conservative policy for
+  `colspan`, including width transfer preservation.
+- Rewired PropertyPanel delete buttons to use the same core safe-delete helpers
+  that document mutations use.
+- Added focused tests for safe row deletion through `rowspan`, blocked row
+  origin deletion, safe column deletion through `colspan`, blocked column origin
+  deletion, and property-panel enablement/locking.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/flowTableGrid.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+
+Notes:
+
+- Span-origin movement and merge/unmerge remain intentionally deferred.
+- Browser smoke was not run for this entry yet.
+
+### Add Flow Table C2.1 Span-Aware Insert Operations
+
+Goal: Let Flow Table add-row and add-column operations work on valid spanned
+tables without enabling span-aware deletion or merge/unmerge yet.
+
+Completed:
+
+- Updated `addFlowTableRow(...)` to use the Flow Table grid resolver for
+  insert-boundary decisions.
+- When a new row cuts through an existing `rowspan`, the covering origin cell
+  now expands its `rowspan`; the inserted row creates empty cells only in
+  columns not covered by that span.
+- Updated `addFlowTableColumn(...)` with the same resolver-backed policy for
+  `colspan`, including width splitting and total table width preservation.
+- Kept spanned row/column deletion conservative: delete still no-ops until C2
+  defines origin/content movement rules.
+- Opened PropertyPanel add-row/add-column controls for valid spanned Flow
+  Tables while keeping delete controls disabled for spanned grids.
+- Added focused core tests for row insertion through `rowspan` and column
+  insertion through `colspan`, plus app markup coverage for add-only spanned
+  controls.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/flowTableGrid.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+
+Notes:
+
+- Span-aware deletion and merge/unmerge remain intentionally deferred.
+- Browser smoke was not run for this entry yet.
+
+### Add Flow Table C2.0 Grid Mutation Metadata
+
+Goal: Start C2 span-aware Flow Table work with a resolver-only foundation that
+does not change editor operations yet.
+
+Completed:
+
+- Extended `resolveFlowTableGrid(...)` with mutation-oriented metadata while
+  preserving the existing `slots` and `placements` surfaces used by layout and
+  pagination.
+- Added per-slot origin metadata so future operations can distinguish physical
+  row/column slots from the originating cell row/column.
+- Added placement end bounds, covered slot lists, and placement lookup by cell
+  id for later span-aware row/column operations.
+- Added `tryResolveFlowTableGrid(...)` for callers that need typed invalid
+  results rather than exceptions.
+- Hardened resolver validation for duplicate cell references and invalid
+  non-positive spans when the resolver is called outside document assertion.
+- Updated Flow Table spec, table editing contract, and test strategy notes for
+  the C2.0 boundary.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/flowTableGrid.test.ts`
+
+Notes:
+
+- Span-aware add/remove row/column behavior remains intentionally unchanged.
+- Merge/unmerge remains a later C2 product/operation decision.
+
+### Add Flow Table Editor Entry
+
+Goal: Start Flow Table editor usability with a small, reversible A1 slice:
+explicit 3x3 insertion plus enough selection/text support to inspect and edit
+the inserted primitive.
+
+Completed:
+
+- Added `createDefaultFlowTable()` and mapped the `flow-table` palette source
+  to a schema-valid 3x3 Flow Table with paragraph children in every cell.
+- Added `flow-table` to placement palette typing and protected body insertion
+  while keeping Flow Table insertion rejected inside `flow-stack`.
+- Added the Flow Table palette item without replacing the legacy `table`
+  palette item.
+- Extended editor selection helpers, breadcrumb context, outline, and property
+  lookup to recognize `flow-table`, `flow-table-row`, and `flow-table-cell`.
+- Reused conservative table-cell text paths for Flow Table cell text editing,
+  field references, filling, and snapshot binding.
+- Documented the current editor-entry status in the Flow Table spec and test
+  strategy.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/placement/law.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorPalette.test.ts src/app/editor/_components/__tests__/selectionContext.test.ts`
+- `npm.cmd run test -w packages/core -- src/fieldRegistry/index.test.ts src/binding/index.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+
+Notes:
+
+- Legacy `table` insertion is intentionally still present.
+- Flow Table row/column/span editing operations remain later slices.
+- Live cross-page WYSIWYG editing inside Flow Table remains deferred.
+
+### Add Flow Table DOCX Span Metadata
+
+Goal: Carry Flow Table span semantics through pagination into DOCX without
+making the DOCX renderer read authored schema or recompute table layout.
+
+Completed:
+
+- Added renderer-facing Flow Table grid metadata to paginated table and row
+  fragments.
+- Added renderer-facing Flow Table cell span metadata with column index,
+  `colspan`, and `rowspan`.
+- Updated DOCX Flow Table projection to use paginated base column widths,
+  Word `gridSpan`, and Word vertical merge metadata.
+- Added pagination assertions for Flow Table grid/span metadata.
+- Added DOCX XML coverage for Flow Table base grid columns, `gridSpan`, and
+  `vMerge` output.
+- Hardened split/repeated-header DOCX coverage so continuation pages without a
+  parent table fragment still preserve base column widths.
+- Updated Flow Table, renderer contract, and test strategy docs.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+
+Notes:
+
+- DOCX still consumes only `PaginatedDocument`; it does not import schema,
+  layout, measurers, or word breakers.
+- Split-inside-rowspan remains intentionally deferred under the current Flow
+  Table pagination policy.
+
+### Add Flow Table DOCX Fragment Projection
+
+Goal: Add the first best-effort DOCX support slice for Flow Table by projecting
+paginated fragments to editable fixed-layout Word tables without adding
+semantic span metadata yet.
+
+Completed:
+
+- Extended DOCX fragment grouping to recognize `flow-table`,
+  `flow-table-row`, and `flow-table-cell` fragments.
+- Added synthetic Flow Table grouping for continuation pages that contain
+  repeated header/body row fragments without a parent table fragment.
+- Projected Flow Table rows/cells to fixed-layout DOCX tables using paginated
+  table width, row heights, cell widths, cell box fill/border/padding metadata,
+  and editable paragraph children.
+- Added focused DOCX renderer tests for static Flow Table geometry/styling and
+  split Flow Table output with repeated headers.
+- Updated renderer contract, Flow Table spec, and test strategy notes for the
+  Phase A DOCX projection scope.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `npm.cmd test`
+
+Notes:
+
+- Semantic DOCX span metadata such as `gridSpan` and `vMerge` was intentionally
+  deferred from this Phase A slice and is covered by the later DOCX span
+  metadata entry above.
+- DOCX remains an exchange format; PDF/editor pagination remains the visual
+  authority.
+
 ### Add Flow Table Repeated Headers
 
 Goal: Bring Flow Table closer to authored table behavior by repeating

@@ -139,8 +139,12 @@ describe("flow-table static pagination", () => {
 
     expect(tableFragment).toBeTruthy()
     expect(rowFragment).toBeTruthy()
+    expect(tableFragment?.flowTableGridProps?.columnWidths).toEqual([100, 120])
+    expect(rowFragment?.flowTableGridProps?.columnWidths).toEqual([100, 120])
     expect(leftCell?.width).toBe(100)
     expect(rightCell?.x).toBe(72 + 100)
+    expect(leftCell?.flowTableCellGridProps).toMatchObject({ columnIndex: 0, colspan: 1, rowspan: 1 })
+    expect(rightCell?.flowTableCellGridProps).toMatchObject({ columnIndex: 1, colspan: 1, rowspan: 1 })
     expect(leftCell?.boxRenderProps?.fill).toBe("D9EAF7")
     expect(leftParagraph?.parentNodeId).toBe("c1")
     expect(leftParagraph?.x).toBe(72 + 6)
@@ -178,8 +182,10 @@ describe("flow-table static pagination", () => {
 
     expect(spanningCell?.width).toBe(130)
     expect(spanningCell?.height).toBeCloseTo(rows.reduce((sum, row) => sum + row.height, 0), 5)
+    expect(spanningCell?.flowTableCellGridProps).toMatchObject({ columnIndex: 0, colspan: 2, rowspan: 2 })
     expect(bottomRightCell?.x).toBe(72 + 130)
     expect(bottomRightCell?.width).toBe(80)
+    expect(bottomRightCell?.flowTableCellGridProps).toMatchObject({ columnIndex: 2, colspan: 1, rowspan: 1 })
   })
 
   it("moves an unsplittable flow-table row to the next page before overflowing the current page", () => {
@@ -242,10 +248,19 @@ describe("flow-table static pagination", () => {
     expect(rowFragments[0].isContinued).toBe(true)
     expect(rowFragments.at(-1)?.continuesFrom).toBe(true)
     expect(rowFragments.at(-1)?.isContinued).toBe(false)
+    expect(rowFragments.every((fragment) =>
+      fragment.flowTableGridProps?.columnWidths.length === 1 &&
+      fragment.flowTableGridProps.columnWidths[0] === 220,
+    )).toBe(true)
     expect(cellFragments[0].continuesFrom).toBe(false)
     expect(cellFragments[0].isContinued).toBe(true)
     expect(cellFragments.at(-1)?.continuesFrom).toBe(true)
     expect(cellFragments.at(-1)?.isContinued).toBe(false)
+    expect(cellFragments.every((fragment) =>
+      fragment.flowTableCellGridProps?.columnIndex === 0 &&
+      fragment.flowTableCellGridProps.colspan === 1 &&
+      fragment.flowTableCellGridProps.rowspan === 1,
+    )).toBe(true)
     expectContiguousLineFragments(paragraphFragments, lineCount)
   })
 

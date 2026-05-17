@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { DocumentNode, TableCellNode, TableNode, TableRowNode } from "@/schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, TableCellNode, TableNode, TableRowNode } from "@/schema"
 import { buildSelectionContext } from "../selectionContext"
 
 function flowDoc(): DocumentNode {
@@ -105,6 +105,64 @@ function tableDoc(): DocumentNode {
   } as DocumentNode
 }
 
+function flowTableDoc(): DocumentNode {
+  const table: FlowTableNode = {
+    id: "ft1",
+    type: "flow-table",
+    props: {},
+    columns: [
+      { width: { value: 100, unit: "pt" } },
+    ],
+    rowIds: ["ftr1"],
+    nodes: {
+      ftr1: { id: "ftr1", type: "flow-table-row", props: {}, cellIds: ["ftc1"] } as FlowTableRowNode,
+      ftc1: { id: "ftc1", type: "flow-table-cell", props: {}, childIds: ["p1"] } as FlowTableCellNode,
+      p1: {
+        id: "p1",
+        type: "paragraph",
+        props: {
+          align: "left",
+          fontSize: { value: 12, unit: "pt" },
+          fontFamilyKey: "default",
+          lineHeight: 1.5,
+          spacingBefore: { value: 0, unit: "pt" },
+          spacingAfter: { value: 0, unit: "pt" },
+          textIndent: { value: 0, unit: "pt" },
+          indentLeft: { value: 0, unit: "pt" },
+          indentRight: { value: 0, unit: "pt" },
+        },
+        children: [{ id: "t1", type: "text", text: "Flow cell text" }],
+      },
+    },
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 72, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 72, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["ft1"] },
+          ft1: table,
+        },
+      }],
+    },
+  } as DocumentNode
+}
+
 describe("buildSelectionContext", () => {
   it("returns a top-to-deep flow context for a paragraph inside a flow-stack", () => {
     const context = buildSelectionContext(flowDoc(), "p1")
@@ -128,5 +186,12 @@ describe("buildSelectionContext", () => {
 
     expect(context.map((item) => item.nodeId)).toEqual(["tbl1", "tr1", "tc1", "p1"])
     expect(context.map((item) => item.label)).toEqual(["Table", "Table row", "Table cell", "Paragraph"])
+  })
+
+  it("can describe flow-table parents without using the outline", () => {
+    const context = buildSelectionContext(flowTableDoc(), "p1")
+
+    expect(context.map((item) => item.nodeId)).toEqual(["ft1", "ftr1", "ftc1", "p1"])
+    expect(context.map((item) => item.label)).toEqual(["Flow table", "Flow table row", "Flow table cell", "Paragraph"])
   })
 })

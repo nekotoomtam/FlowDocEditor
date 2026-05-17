@@ -122,6 +122,13 @@ DOCX should:
 - preserve the overall layout of `flow-row` / `flow-stack` slices where
   possible by projecting them to fixed-layout Word tables from paginated
   geometry, including stack widths and inter-stack gaps
+- preserve the overall layout of `flow-table` slices where possible by
+  projecting paginated row/cell fragments to fixed-layout Word tables, including
+  repeated header fragments, exact row heights, cell widths, fills, borders, and
+  padding metadata
+- preserve Flow Table span semantics where possible from renderer-facing
+  pagination metadata, mapping `colspan` to Word `gridSpan` and `rowspan` to
+  Word vertical merge metadata
 - emit valid DOCX ZIP output
 - keep page/section structure useful for review workflows
 - document where Word/LibreOffice may reflow content after opening

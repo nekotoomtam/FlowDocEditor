@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest"
-import type { DocumentNode, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../schema"
+import type {
+  DocumentNode,
+  FlowTableCellNode,
+  FlowTableNode,
+  FlowTableRowNode,
+  LayoutNode,
+  ParagraphNode,
+  TableCellNode,
+  TableNode,
+  TableRowNode,
+} from "../schema"
 import { pt } from "../schema"
 import {
   collectDocumentFieldRefs,
@@ -69,6 +79,24 @@ function makeTableDoc(paragraph: ParagraphNode): DocumentNode {
   return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
 }
 
+function makeFlowTableDoc(paragraph: ParagraphNode): DocumentNode {
+  const cell: FlowTableCellNode = { id: "flow-cell", type: "flow-table-cell", props: {}, childIds: [paragraph.id] }
+  const row: FlowTableRowNode = { id: "flow-row", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+  const table: FlowTableNode = {
+    id: "flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(200) }],
+    rowIds: [row.id],
+    nodes: {
+      [row.id]: row,
+      [cell.id]: cell,
+      [paragraph.id]: paragraph,
+    },
+  }
+  return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
+}
+
 const registry: FieldRegistryV1 = {
   version: 1,
   fields: [
@@ -105,6 +133,25 @@ describe("field registry references", () => {
         paragraphId: "table-p",
         sectionId: "section",
         tableId: "table",
+        label: "Total",
+        fallback: undefined,
+      },
+    ])
+  })
+
+  it("collects fieldRef usages from flow-table-cell paragraphs", () => {
+    const paragraph = makeParagraph("flow-table-p", [
+      { id: "flow-table-field", type: "fieldRef", key: "invoice.total", label: "Total" },
+    ])
+    const doc = makeFlowTableDoc(paragraph)
+
+    expect(collectDocumentFieldRefs(doc)).toEqual([
+      {
+        key: "invoice.total",
+        fieldRefId: "flow-table-field",
+        paragraphId: "flow-table-p",
+        sectionId: "section",
+        tableId: "flow-table",
         label: "Total",
         fallback: undefined,
       },

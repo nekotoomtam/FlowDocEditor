@@ -925,7 +925,7 @@ async function expectPropertyPanelTitle(page, expectedTitle) {
   const panelTitle = page.getByTestId("property-panel-title")
   await panelTitle.waitFor({ state: "visible", timeout: 5000 })
   await page.waitForFunction((titleText) => {
-    const title = document.querySelector('[data-testid="property-panel-title"]')
+    const title = document.querySelector('[data-testid="property-panel-title"] > span')
     return title?.textContent?.trim() === titleText
   }, expectedTitle, { timeout: 3000 })
 }
@@ -1281,9 +1281,15 @@ async function run() {
       { timeout: 5000 },
     )
     await fillErrorPage.waitForFunction(
-      () => !document.querySelector('[data-testid="export-readiness-status"]'),
+      () => {
+        const exportButton = Array.from(document.querySelectorAll("button"))
+          .find((button) => button.textContent?.includes("Export PDF"))
+        return exportButton instanceof HTMLButtonElement &&
+          !exportButton.disabled &&
+          !document.querySelector('[data-testid="export-readiness-status"]')
+      },
       null,
-      { timeout: 10000 },
+      { timeout: 15000 },
     )
     assert(
       !(await fillErrorPage.getByRole("button", { name: "Export PDF" }).isDisabled()),
@@ -1346,7 +1352,9 @@ async function run() {
     await registryPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
     await registryPage.getByTestId("field-palette-item").filter({ hasText: "Project code" }).first().waitFor({ state: "visible", timeout: 5000 })
     const registryParagraph = registryPage.locator('[data-testid="editor-fragment"][data-node-id="registry-p1"]')
-    assert(await registryParagraph.count() === 1, "expected one registry field paragraph fragment")
+    await registryParagraph.first().waitFor({ state: "visible", timeout: 10000 })
+    const registryParagraphCount = await registryParagraph.count()
+    assert(registryParagraphCount === 1, `expected one registry field paragraph fragment, got ${registryParagraphCount}`)
     await registryParagraph.dblclick()
     await registryPage.waitForTimeout(250)
     assert(

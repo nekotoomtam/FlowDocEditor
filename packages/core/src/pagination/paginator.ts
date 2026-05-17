@@ -27,12 +27,15 @@ import type {
   ParagraphSplitDecision,
   PageFragmentWarning,
   ParagraphBoxRenderProps,
+  FlowTableCellGridRenderProps,
+  FlowTableGridRenderProps,
   ResolvedBorderSide,
   ResolvedCellBorder,
   TableCellRenderProps,
   TocEntry,
 } from "./types"
 import { createEmptyPage, getPageMetrics } from "./metrics"
+import { resolveFlowTableGrid } from "../document/flowTableGrid"
 
 /**
  * paginator — รับ FlowBox จาก layout แล้วตัดเป็น pages
@@ -1176,6 +1179,29 @@ function resolveFlowTableCellPadding(cellNode: FlowTableCellNode): { top: number
   }
 }
 
+function resolveFlowTableColumnWidths(tableNode: FlowTableNode, availableWidth: number): number[] {
+  const rawWidths = tableNode.columns.map((column) =>
+    toAbstractUnit(column.width.value, column.width.unit),
+  )
+  const totalWidth = rawWidths.reduce((sum, width) => sum + width, 0)
+  const safeAvailableWidth = Math.max(0, availableWidth)
+
+  if (rawWidths.length === 0) return []
+  if (totalWidth <= 0) {
+    const equalWidth = safeAvailableWidth / rawWidths.length
+    return rawWidths.map(() => equalWidth)
+  }
+  if (totalWidth <= safeAvailableWidth) return rawWidths
+
+  let assigned = 0
+  return rawWidths.map((rawWidth, index) => {
+    if (index === rawWidths.length - 1) return Math.max(0, safeAvailableWidth - assigned)
+    const width = safeAvailableWidth * (rawWidth / totalWidth)
+    assigned += width
+    return width
+  })
+}
+
 function pushTableCellContents(
   cellBox: FlowBox,
   tableNode: TableNode,
@@ -2049,6 +2075,8 @@ function paginateFlowTableRowFull(
   tableNodeId: string,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
+  flowTableGridProps: FlowTableGridRenderProps,
+  flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
 ): PageFlowCursor {
   pushFragment(pages, template, {
     nodeId: rowBox.nodeId,
@@ -2059,6 +2087,7 @@ function paginateFlowTableRowFull(
     y: cursor.cursorY,
     width: rowBox.width,
     height: rowBox.height,
+    flowTableGridProps,
   })
 
   const cellBoxes: FlowBox[] = []
@@ -2079,6 +2108,7 @@ function paginateFlowTableRowFull(
       width: cellBox.width,
       height: cellBox.height,
       boxRenderProps,
+      flowTableCellGridProps: flowTableCellGridPropsById.get(cellBox.nodeId),
     })
   }
 
@@ -2101,6 +2131,8 @@ function paginateFlowTableRowSplit(
   tableNodeId: string,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
+  flowTableGridProps: FlowTableGridRenderProps,
+  flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
   repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
   repeatedHeaderHeight: number = 0,
 ): PageFlowCursor {
@@ -2206,6 +2238,7 @@ function paginateFlowTableRowSplit(
       continuesFrom: heightPlaced > 0,
       isContinued: !sliceIsLast,
       warnings: sliceWarnings.get(rowBox.nodeId),
+      flowTableGridProps,
     })
 
     const contentFragments: PageFragment[] = []
@@ -2227,6 +2260,7 @@ function paginateFlowTableRowSplit(
         width: cellBox.width,
         height: sliceH,
         boxRenderProps,
+        flowTableCellGridProps: flowTableCellGridPropsById.get(cellBox.nodeId),
         continuesFrom: heightPlaced > 0,
         isContinued: !sliceIsLast,
         warnings: sliceWarnings.get(cellBox.nodeId),
@@ -2329,10 +2363,34 @@ function paginateFlowTable(
   const headerRowCount = tableNode.props.headerRowCount ?? 0
   const headerBoxes = box.children.slice(0, headerRowCount)
   const headerHeight = headerBoxes.reduce((sum, rowBox) => sum + rowBox.height, 0)
+  const flowTableGridProps: FlowTableGridRenderProps = {
+    columnWidths: resolveFlowTableColumnWidths(tableNode, box.width),
+  }
+  const flowTableCellGridPropsById = new Map<string, FlowTableCellGridRenderProps>(
+    resolveFlowTableGrid(tableNode).placements.map((placement) => [
+      placement.cellId,
+      {
+        columnIndex: placement.columnIndex,
+        colspan: placement.colspan,
+        rowspan: placement.rowspan,
+      },
+    ]),
+  )
 
   const placeHeaders = (c: PageFlowCursor): PageFlowCursor => {
     for (const rowBox of headerBoxes) {
-      c = paginateFlowTableRowFull(rowBox, tableNode, pages, template, c, box.nodeId, measurer, wordBreaker)
+      c = paginateFlowTableRowFull(
+        rowBox,
+        tableNode,
+        pages,
+        template,
+        c,
+        box.nodeId,
+        measurer,
+        wordBreaker,
+        flowTableGridProps,
+        flowTableCellGridPropsById,
+      )
     }
     return c
   }
@@ -2365,6 +2423,7 @@ function paginateFlowTable(
     y: current.cursorY,
     width: box.width,
     height: box.height,
+    flowTableGridProps,
   })
 
   for (const { rowIndices, totalHeight } of groups) {
@@ -2387,7 +2446,18 @@ function paginateFlowTable(
           current = advancePage(current, contentTop)
           if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
         }
-        current = paginateFlowTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
+        current = paginateFlowTableRowFull(
+          rowBox,
+          tableNode,
+          pages,
+          template,
+          current,
+          box.nodeId,
+          measurer,
+          wordBreaker,
+          flowTableGridProps,
+          flowTableCellGridPropsById,
+        )
       }
       continue
     }
@@ -2401,7 +2471,18 @@ function paginateFlowTable(
     const tooTallForOnePage = rowBox.height > contentBottom - contentTop
 
     if (!doesntFit && !tooTallForOnePage) {
-      current = paginateFlowTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
+      current = paginateFlowTableRowFull(
+        rowBox,
+        tableNode,
+        pages,
+        template,
+        current,
+        box.nodeId,
+        measurer,
+        wordBreaker,
+        flowTableGridProps,
+        flowTableCellGridPropsById,
+      )
     } else if (allowBreak && !isHeaderGroup) {
       current = paginateFlowTableRowSplit(
         rowBox,
@@ -2414,6 +2495,8 @@ function paginateFlowTable(
         box.nodeId,
         measurer,
         wordBreaker,
+        flowTableGridProps,
+        flowTableCellGridPropsById,
         headerRowCount > 0 ? placeHeaders : undefined,
         headerRowCount > 0 ? headerHeight : 0,
       )
@@ -2424,7 +2507,18 @@ function paginateFlowTable(
         current = nextPage
         if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
       }
-      current = paginateFlowTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
+      current = paginateFlowTableRowFull(
+        rowBox,
+        tableNode,
+        pages,
+        template,
+        current,
+        box.nodeId,
+        measurer,
+        wordBreaker,
+        flowTableGridProps,
+        flowTableCellGridPropsById,
+      )
     }
   }
 

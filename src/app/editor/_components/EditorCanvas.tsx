@@ -12,7 +12,7 @@ import {
   type ResolvedBorderSide,
 } from "@/pagination"
 import { isPlainTextParagraph } from "@/document"
-import type { DocumentNode, ParagraphNode, TableCellNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, LayoutNode, ParagraphNode, TableCellNode, TableNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
@@ -41,6 +41,9 @@ const NODE_COLORS: Record<string, string> = {
   stack:     "#e9d5ff",
   "flow-row":   "#dbeafe",
   "flow-stack": "#d7f4ef",
+  "flow-table": "#eef2ff",
+  "flow-table-row": "#e0e7ff",
+  "flow-table-cell": "#fef9c3",
   body:      "#bbf7d0",
   table:     "#fde68a",
   "table-cell": "#fef3c7",
@@ -50,10 +53,13 @@ const NODE_COLORS: Record<string, string> = {
 function displayFragmentNodeType(nodeType: PageFragment["nodeType"]): string {
   if (nodeType === "flow-row") return "row"
   if (nodeType === "flow-stack") return "stack"
+  if (nodeType === "flow-table") return "flow table"
+  if (nodeType === "flow-table-row") return "flow row"
+  if (nodeType === "flow-table-cell") return "flow cell"
   return nodeType
 }
 
-const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "table", "toc"])
+const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "table", "flow-table", "toc"])
 const PARAGRAPH_CHROME_Y = 3
 const FLOW_STACK_PARAGRAPH_CHROME_Y = 0
 const PARAGRAPH_LIVE_PREVIEW_GAP_Y = 2
@@ -79,6 +85,17 @@ function clamp(value: number, min: number, max: number): number {
 // line.x now contains the alignment offset (baked in by buildPaginatedLines).
 function lineVisualLeft(line: PaginatedLine): number {
   return line.x
+}
+
+type TableLikeNode = TableNode | FlowTableNode
+type TableCellLikeNode = TableCellNode | FlowTableCellNode
+
+function isTableLikeNode(node: LayoutNode): node is LayoutNode & TableLikeNode {
+  return node.type === "table" || node.type === "flow-table"
+}
+
+function isTableCellLikeNode(node: TableLikeNode["nodes"][string] | undefined): node is TableCellLikeNode {
+  return node?.type === "table-cell" || node?.type === "flow-table-cell"
 }
 
 function cssHex(hex: string): string {
@@ -176,10 +193,10 @@ function caretIndexFromPointer(
 function findFirstParagraphInCell(doc: DocumentNode, cellId: string): string | null {
   for (const section of doc.document.sections) {
     for (const node of Object.values(section.nodes)) {
-      if (node.type !== "table") continue
-      const table = node as unknown as TableNode
-      const cell = table.nodes[cellId] as TableCellNode | undefined
-      if (cell?.type !== "table-cell") continue
+      if (!isTableLikeNode(node)) continue
+      const table = node as unknown as TableLikeNode
+      const cell = table.nodes[cellId]
+      if (!isTableCellLikeNode(cell)) continue
       const paragraphId = cell.childIds.find((id) => {
         const paragraph = table.nodes[id]
         return paragraph?.type === "paragraph" && isPlainTextParagraph(paragraph as ParagraphNode)
@@ -195,8 +212,8 @@ function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | n
     const node = section.nodes[nodeId]
     if (node?.type === "paragraph") return node
     for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table") continue
-      const inner = (candidate as unknown as TableNode).nodes[nodeId]
+      if (!isTableLikeNode(candidate)) continue
+      const inner = (candidate as unknown as TableLikeNode).nodes[nodeId]
       if (inner?.type === "paragraph") return inner as ParagraphNode
     }
   }
@@ -228,9 +245,10 @@ function isTableCellId(doc: DocumentNode, nodeId: string | null | undefined): bo
   if (!nodeId) return false
   for (const section of doc.document.sections) {
     for (const node of Object.values(section.nodes)) {
-      if (node.type !== "table") continue
-      const table = node as unknown as TableNode
-      if (table.nodes[nodeId]?.type === "table-cell") return true
+      if (!isTableLikeNode(node)) continue
+      const table = node as unknown as TableLikeNode
+      const inner = table.nodes[nodeId]
+      if (inner?.type === "table-cell" || inner?.type === "flow-table-cell") return true
     }
   }
   return false
@@ -448,7 +466,7 @@ function PageView({
   const W = page.width * scale
   const H = page.height * scale
   const hoverNodeId = drag?.preview?.hoverNodeId ?? null
-  const SELECTABLE = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "table", "table-cell", "toc"])
+  const SELECTABLE = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "table", "table-cell", "flow-table", "flow-table-row", "flow-table-cell", "toc"])
   const editFragmentRef = useRef<{ nodeId: string; pageKey: string; fragment: PageFragment } | null>(null)
 
   useEffect(() => {
@@ -671,10 +689,12 @@ function PageView({
                 onNodePointerDown({ source: "document", nodeId }, e, clickAction)
               }
               : undefined}
-            onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "table-cell") && !drag
+            onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "table-cell" || f.nodeType === "flow-table-cell") && !drag
               ? (e) => {
                 e.stopPropagation()
-                const paragraphId = f.nodeType === "table-cell" ? findFirstParagraphInCell(doc, f.nodeId) : f.nodeId
+                const paragraphId = f.nodeType === "table-cell" || f.nodeType === "flow-table-cell"
+                  ? findFirstParagraphInCell(doc, f.nodeId)
+                  : f.nodeId
                 if (!paragraphId || !canInlineEditParagraph(doc, paragraphId)) return
                 onInlineEditStart(
                   paragraphId,

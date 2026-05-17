@@ -1,6 +1,15 @@
-import type { DocumentNode, LayoutNode, TableCellNode, TableNode, TableRowNode } from "@/schema"
+import type {
+  DocumentNode,
+  FlowTableCellNode,
+  FlowTableNode,
+  FlowTableRowNode,
+  LayoutNode,
+  TableCellNode,
+  TableNode,
+  TableRowNode,
+} from "@/schema"
 
-export type SelectionContextNode = LayoutNode | TableRowNode | TableCellNode
+export type SelectionContextNode = LayoutNode | TableRowNode | TableCellNode | FlowTableRowNode | FlowTableCellNode
 
 export interface SelectionContextItem {
   nodeId: string
@@ -20,6 +29,8 @@ const NODE_LABELS: Record<SelectionContextNode["type"], string> = {
   "flow-table": "Flow table",
   "table-row": "Table row",
   "table-cell": "Table cell",
+  "flow-table-row": "Flow table row",
+  "flow-table-cell": "Flow table cell",
   toc: "Table of contents",
 }
 
@@ -29,14 +40,24 @@ function hasChildIds(node: unknown): node is { childIds: string[] } {
     Array.isArray((node as { childIds?: unknown }).childIds)
 }
 
+type TableLikeNode = TableNode | FlowTableNode
+
+function isTableLikeNode(node: LayoutNode): node is LayoutNode & TableLikeNode {
+  return node.type === "table" || node.type === "flow-table"
+}
+
+function isTableRowLikeNode(node: TableLikeNode["nodes"][string]): node is TableRowNode | FlowTableRowNode {
+  return node.type === "table-row" || node.type === "flow-table-row"
+}
+
 export function findSelectionContextNode(doc: DocumentNode, nodeId: string): SelectionContextNode | null {
   for (const section of doc.document.sections) {
     const node = section.nodes[nodeId]
     if (node) return node as SelectionContextNode
 
     for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table") continue
-      const table = candidate as unknown as TableNode
+      if (!isTableLikeNode(candidate)) continue
+      const table = candidate as unknown as TableLikeNode
       const inner = table.nodes[nodeId]
       if (inner) return inner as SelectionContextNode
     }
@@ -51,12 +72,12 @@ function findSelectionContextParent(doc: DocumentNode, nodeId: string): { nodeId
         return { nodeId: candidateId, node: candidate as SelectionContextNode }
       }
 
-      if (candidate.type !== "table") continue
-      const table = candidate as unknown as TableNode
+      if (!isTableLikeNode(candidate)) continue
+      const table = candidate as unknown as TableLikeNode
       if (table.rowIds.includes(nodeId)) return { nodeId: candidateId, node: table as SelectionContextNode }
 
       for (const [innerId, inner] of Object.entries(table.nodes)) {
-        if (inner.type === "table-row" && inner.cellIds.includes(nodeId)) {
+        if (isTableRowLikeNode(inner) && inner.cellIds.includes(nodeId)) {
           return { nodeId: innerId, node: inner }
         }
         if (hasChildIds(inner) && inner.childIds.includes(nodeId)) {

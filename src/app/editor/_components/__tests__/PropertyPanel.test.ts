@@ -50,6 +50,134 @@ function docWithFlowParagraph(): DocumentNode {
   } as DocumentNode
 }
 
+function docWithFlowTable(): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 72, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 72, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["ft1"] },
+          ft1: {
+            id: "ft1",
+            type: "flow-table",
+            props: {},
+            columns: [
+              { width: { value: 120, unit: "pt" } },
+              { width: { value: 120, unit: "pt" } },
+            ],
+            rowIds: ["ftr1", "ftr2"],
+            nodes: {
+              ftr1: { id: "ftr1", type: "flow-table-row", props: {}, cellIds: ["ftc1", "ftc2"] },
+              ftr2: { id: "ftr2", type: "flow-table-row", props: {}, cellIds: ["ftc3", "ftc4"] },
+              ftc1: { id: "ftc1", type: "flow-table-cell", props: {}, childIds: ["p1"] },
+              ftc2: { id: "ftc2", type: "flow-table-cell", props: {}, childIds: ["p2"] },
+              ftc3: { id: "ftc3", type: "flow-table-cell", props: {}, childIds: ["p3"] },
+              ftc4: { id: "ftc4", type: "flow-table-cell", props: {}, childIds: ["p4"] },
+              p1: {
+                id: "p1",
+                type: "paragraph",
+                props: {
+                  align: "left",
+                  fontSize: { value: 12, unit: "pt" },
+                  fontFamilyKey: "default",
+                  lineHeight: 1.5,
+                  spacingBefore: { value: 0, unit: "pt" },
+                  spacingAfter: { value: 0, unit: "pt" },
+                  textIndent: { value: 0, unit: "pt" },
+                  indentLeft: { value: 0, unit: "pt" },
+                  indentRight: { value: 0, unit: "pt" },
+                },
+                children: [{ id: "t1", type: "text", text: "A" }],
+              },
+              p2: {
+                id: "p2",
+                type: "paragraph",
+                props: {
+                  align: "left",
+                  fontSize: { value: 12, unit: "pt" },
+                  fontFamilyKey: "default",
+                  lineHeight: 1.5,
+                  spacingBefore: { value: 0, unit: "pt" },
+                  spacingAfter: { value: 0, unit: "pt" },
+                  textIndent: { value: 0, unit: "pt" },
+                  indentLeft: { value: 0, unit: "pt" },
+                  indentRight: { value: 0, unit: "pt" },
+                },
+                children: [{ id: "t2", type: "text", text: "B" }],
+              },
+              p3: {
+                id: "p3",
+                type: "paragraph",
+                props: {
+                  align: "left",
+                  fontSize: { value: 12, unit: "pt" },
+                  fontFamilyKey: "default",
+                  lineHeight: 1.5,
+                  spacingBefore: { value: 0, unit: "pt" },
+                  spacingAfter: { value: 0, unit: "pt" },
+                  textIndent: { value: 0, unit: "pt" },
+                  indentLeft: { value: 0, unit: "pt" },
+                  indentRight: { value: 0, unit: "pt" },
+                },
+                children: [{ id: "t3", type: "text", text: "C" }],
+              },
+              p4: {
+                id: "p4",
+                type: "paragraph",
+                props: {
+                  align: "left",
+                  fontSize: { value: 12, unit: "pt" },
+                  fontFamilyKey: "default",
+                  lineHeight: 1.5,
+                  spacingBefore: { value: 0, unit: "pt" },
+                  spacingAfter: { value: 0, unit: "pt" },
+                  textIndent: { value: 0, unit: "pt" },
+                  indentLeft: { value: 0, unit: "pt" },
+                  indentRight: { value: 0, unit: "pt" },
+                },
+                children: [{ id: "t4", type: "text", text: "D" }],
+              },
+            },
+          },
+        },
+      }],
+    },
+  } as DocumentNode
+}
+
+function docWithSpannedFlowTable(): DocumentNode {
+  const doc = docWithFlowTable()
+  const table = doc.document.sections[0].nodes.ft1
+  if (table.type !== "flow-table") throw new Error("expected flow-table fixture")
+  table.columns = [
+    { width: { value: 120, unit: "pt" } },
+    { width: { value: 80, unit: "pt" } },
+    { width: { value: 60, unit: "pt" } },
+  ]
+  table.nodes.ftr1 = { id: "ftr1", type: "flow-table-row", props: {}, cellIds: ["ftc1", "ftc2"] }
+  table.nodes.ftr2 = { id: "ftr2", type: "flow-table-row", props: {}, cellIds: ["ftc4"] }
+  table.nodes.ftc1 = { id: "ftc1", type: "flow-table-cell", props: { colspan: 2, rowspan: 2 }, childIds: ["p1"] }
+  table.nodes.ftc2 = { id: "ftc2", type: "flow-table-cell", props: {}, childIds: ["p2"] }
+  table.nodes.ftc4 = { id: "ftc4", type: "flow-table-cell", props: {}, childIds: ["p4"] }
+  delete table.nodes.ftc3
+  delete table.nodes.p3
+  return doc
+}
+
 describe("PropertyPanel selection context", () => {
   it("shows a compact context trigger when the selected node has visible parents", () => {
     const noop = () => undefined
@@ -268,5 +396,131 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("+ Balanced col")
     expect(markup).toContain("data-testid=\"info-hint\"")
     expect(markup).toContain("Columns")
+  })
+
+  it("renders C1 flow-table row and column controls", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "ft1",
+      selectionAnchorNodeId: "ft1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("Flow table")
+    expect(markup).toContain("2 rows × 2 cols")
+    expect(markup).toContain("+ Row")
+    expect(markup).toContain("- Last")
+    expect(markup).toContain("+ Col")
+  })
+
+  it("renders C1 flow-table cell row and column controls", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "ftc1",
+      selectionAnchorNodeId: "p1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("Flow table cell")
+    expect(markup).toContain("Row 1, Col 1")
+    expect(markup).toContain("↑ Above")
+    expect(markup).toContain("Right →")
+    expect(markup).toContain("Delete column")
+  })
+
+  it("enables C2.2 safe flow-table delete controls for spanned tables", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithSpannedFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "ft1",
+      selectionAnchorNodeId: "ft1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("2 rows × 3 cols")
+    expect(markup).toContain("title=\"Add row\"")
+    expect(markup).toContain("title=\"Add column\"")
+    expect(markup).toContain("title=\"Remove last row\"")
+    expect(markup).toContain("title=\"Remove last column\"")
+  })
+
+  it("blocks C2.2 flow-table delete controls when deletion would move a span origin", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithSpannedFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "ftc1",
+      selectionAnchorNodeId: "p1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("Flow table cell")
+    expect(markup).toContain("Span-aware row deletion is blocked for this Flow Table target")
+    expect(markup).toContain("Span-aware column deletion is blocked for this Flow Table target")
   })
 })

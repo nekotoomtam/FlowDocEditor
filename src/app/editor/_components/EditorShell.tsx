@@ -4,7 +4,7 @@ import { useReducer, useCallback, useRef, useState, useEffect, useMemo, type Poi
 import { collectPaginatedLayoutWarnings, getPageDimensions, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
-import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, updateParagraphBoxStyle, updateFlowStackBoxStyle, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious, addFlowStackColumn } from "@/document"
+import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, updateParagraphBoxStyle, updateFlowStackBoxStyle, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, addFlowTableRow, removeFlowTableRow, addFlowTableColumn, removeFlowTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious, addFlowStackColumn } from "@/document"
 import type { FieldRefInlineChanges, ParagraphBoxStyleChanges } from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
@@ -12,7 +12,7 @@ import type { FieldRegistryV1 } from "@/fieldRegistry"
 import { assessDocumentDataReadiness } from "@/readiness"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
-import type { DocumentNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, TableNode } from "@/schema"
 import type { PaginatedDocument, PageFragment } from "@/pagination"
 import type {
   DragSource,
@@ -323,6 +323,27 @@ function setDocWithoutHistory(state: EditorState, newDoc: DocumentNode): EditorS
   return { ...state, doc: normalizedDoc }
 }
 
+function findTopLevelNode(doc: DocumentNode, nodeId: string) {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[nodeId]
+    if (node) return node
+  }
+  return null
+}
+
+function updateTableStructure(
+  state: EditorState,
+  tableId: string,
+  legacyOperation: (doc: DocumentNode, tableId: string) => DocumentNode,
+  flowOperation: (doc: DocumentNode, tableId: string) => DocumentNode,
+): EditorState {
+  const table = findTopLevelNode(state.doc, tableId)
+  const nextDoc = table?.type === "flow-table"
+    ? flowOperation(state.doc, tableId)
+    : legacyOperation(state.doc, tableId)
+  return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
+}
+
 function createInitialEditorState(initialDocOverride?: DocumentNode | null): EditorState {
   const initialDoc = normalizeDocument(initialDocOverride ?? loadFromStorage() ?? createDefaultDocument("Untitled"))
   return {
@@ -421,13 +442,33 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       const normalizedDoc = normalizeDocument(action.doc)
       return { ...state, past: [], doc: normalizedDoc, future: [], paginated: action.paginated ?? paginate(normalizedDoc), selectedNodeId: null, selectionAnchorNodeId: null, drag: null }
     case "TABLE_ADD_ROW":
-      return pushDoc(state, addTableRow(state.doc, action.tableId, action.afterIndex))
+      return updateTableStructure(
+        state,
+        action.tableId,
+        (doc, tableId) => addTableRow(doc, tableId, action.afterIndex),
+        (doc, tableId) => addFlowTableRow(doc, tableId, action.afterIndex),
+      )
     case "TABLE_REMOVE_ROW":
-      return pushDoc(state, removeTableRow(state.doc, action.tableId, action.rowIndex))
+      return updateTableStructure(
+        state,
+        action.tableId,
+        (doc, tableId) => removeTableRow(doc, tableId, action.rowIndex),
+        (doc, tableId) => removeFlowTableRow(doc, tableId, action.rowIndex),
+      )
     case "TABLE_ADD_COL":
-      return pushDoc(state, addTableColumn(state.doc, action.tableId, action.afterIndex))
+      return updateTableStructure(
+        state,
+        action.tableId,
+        (doc, tableId) => addTableColumn(doc, tableId, action.afterIndex),
+        (doc, tableId) => addFlowTableColumn(doc, tableId, action.afterIndex),
+      )
     case "TABLE_REMOVE_COL":
-      return pushDoc(state, removeTableColumn(state.doc, action.tableId, action.colIndex))
+      return updateTableStructure(
+        state,
+        action.tableId,
+        (doc, tableId) => removeTableColumn(doc, tableId, action.colIndex),
+        (doc, tableId) => removeFlowTableColumn(doc, tableId, action.colIndex),
+      )
     case "FLOW_ROW_ADD_COL":
       return pushDoc(state, addFlowStackColumn(state.doc, action.rowId, action.stackId, action.position))
     case "RESIZE_COLUMNS": {
@@ -505,8 +546,8 @@ function findParagraphNode(doc: DocumentNode, nodeId: string) {
     const node = section.nodes[nodeId]
     if (node?.type === "paragraph") return node
     for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table") continue
-      const inner = (candidate as unknown as TableNode).nodes[nodeId]
+      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
+      const inner = (candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]
       if (inner?.type === "paragraph") return inner
     }
   }
@@ -536,8 +577,8 @@ function findSectionIndexForNode(doc: DocumentNode, nodeId: string | null): numb
     const section = doc.document.sections[sectionIndex]
     if (section.nodes[nodeId]) return sectionIndex
     for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table") continue
-      if ((candidate as unknown as TableNode).nodes[nodeId]) return sectionIndex
+      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
+      if ((candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]) return sectionIndex
     }
   }
   return 0

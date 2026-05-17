@@ -7,6 +7,10 @@ Implementation status:
 
 - Schema, assert-layer validation, and a standalone grid resolver exist for the
   draft `flow-table` node family.
+- The grid resolver now exposes mutation-oriented slot metadata: each occupied
+  slot records its physical row/column, origin row/column, span size, and
+  whether the slot is the cell origin. This is the C2.0 foundation for
+  span-aware structural edits.
 - Static flow layout exists for authored columns, `colspan`, `rowspan`, row
   height, and cell box padding.
 - Pagination supports breakable non-rowspan row/cell continuation across pages.
@@ -16,8 +20,23 @@ Implementation status:
   continuation pages.
 - PDF and editor preview draw Flow Table cell `box` fill/border from paginated
   `flow-table-cell` fragments.
-- DOCX output, broader Flow Table renderer behavior, editor insertion, and
-  property editing are intentionally not implemented yet.
+- DOCX output has best-effort fixed-table projection from paginated Flow Table
+  fragments, including grid/span metadata.
+- Editor insertion is available as an explicit 3x3 `flow-table` palette block.
+  Initial selection/text editing support is conservative and does not replace
+  legacy `table`.
+- Span-free editor row/column operations are available as the C1 slice. They
+  intentionally no-op when the table contains `rowspan` or `colspan`; C2 owns
+  span-aware structural edits.
+- C2.1 span-aware row/column insertion is available. If an inserted row or
+  column boundary cuts through an existing span, the existing cell expands its
+  `rowspan` or `colspan`; new empty cells are created only in uncovered slots.
+- C2.2 conservative span-aware row/column deletion is available for targets
+  that do not require moving a span origin. Deleting inside a span shrinks the
+  covering cell; deleting a row/column that owns a continuing span still no-ops.
+- Merge/unmerge and span-origin movement remain deferred.
+- Broader property editing and row/column/span operations remain intentionally
+  incremental.
 
 This document drafts a new table primitive that can be developed beside the
 current `table` node. The working title is **Flow Table** and the provisional
@@ -216,6 +235,14 @@ Flow Table must define a strict grid law before implementation:
 - A cell's `rowspan` reserves the same columns in later rows.
 - Invalid overlaps, orphan cells, missing row ids, and impossible spans are
   document validity failures, not renderer concerns.
+- The shared resolver is the canonical source for authored table occupancy.
+  Mutation code should read resolver placements/slots instead of reimplementing
+  rowspan/colspan cursor logic.
+- Row/column insertion through spans should expand the covering origin cell and
+  create new cells only for slots not covered by that expanded span.
+- Row/column deletion through spans may shrink covering cells only when the
+  deleted target is not the origin of a continuing span. Deletion that would
+  require moving an origin cell or deciding where to move content must no-op.
 - Operations that add or remove rows/columns must preserve the grid law or fail
   clearly.
 
@@ -334,6 +361,12 @@ DOCX:
 
 - remains best-effort
 - should serialize Flow Table to editable Word tables when possible
+- projects paginated Flow Table row/cell fragments into fixed-layout Word
+  tables as the first DOCX support slice
+- preserves row heights, cell widths, repeated header fragments, and cell box
+  fill/border/padding metadata where Word table formatting supports it
+- emits renderer-facing Flow Table grid/span metadata so DOCX can project
+  `colspan` to Word `gridSpan` and `rowspan` to Word vertical merge metadata
 - may differ after Word/LibreOffice reflows text
 - must not become a second Flow Table layout engine
 
@@ -341,9 +374,10 @@ DOCX:
 
 v1 editor support should be static and explicit:
 
-- palette inserts a new Flow Table primitive, not legacy `table`
+- palette inserts a new 3x3 Flow Table primitive, not legacy `table`
 - selection can target table, row, and cell fragments
-- property panel can edit the first accepted v1 props
+- property panel can edit the first accepted v1 props: table header rows,
+  row break allowance, and basic cell text/vertical alignment
 - text editing can stay conservative and reuse current safe cell-edit paths
 - live cross-page WYSIWYG editing inside Flow Table is deferred
 - span editing UI is deferred unless the model and operations are already
@@ -383,7 +417,17 @@ Suggested order:
 10. Add PDF/editor cell visual primitives and focused raster tests.
 11. Add DOCX best-effort projection.
 12. Add insertion UI after schema, pagination, PDF, and editor preview have
-    enough coverage.
+    enough coverage. Current status: explicit 3x3 palette insertion exists.
+13. Add C1 span-free row/column editor operations. Current status: implemented
+    for non-spanning Flow Tables.
+14. Add C2.0 mutation-oriented grid resolver metadata. Current status:
+    implemented without changing editor operations.
+15. Add C2.1 span-aware row/column insertion. Current status: implemented for
+    add row/add column only.
+16. Add C2.2 conservative span-aware row/column deletion. Current status:
+    implemented only for targets that do not move span origins.
+17. Add C2 span-origin movement, merge/unmerge, and broader span authoring
+    operations.
 
 ## Test Plan
 
@@ -457,7 +501,8 @@ Mitigation:
 - Whether `box` should share exact TypeScript types with paragraph/flow-stack
   boxes or use table-specific aliases with the same conceptual shape.
 - Whether v1 needs manual row/column insertion operations or insertion-only
-  static fixtures are enough at first.
+  static fixtures are enough at first. Current answer: v1 has C1 span-free
+  row/column operations; span-aware edits remain C2.
 - Whether `height` should be accepted in Flow Table rows in v1.
 - How much vertical-align behavior belongs in v1.
 - Whether split-inside-rowspan should ever be supported or remain permanently

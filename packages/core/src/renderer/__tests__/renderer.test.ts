@@ -7,7 +7,7 @@ import { paginateDocument, type PageFragment } from "../../pagination"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { ptToTwips } from "../shared"
 import { pt } from "../../schema"
-import type { DocumentNode, LayoutNode, ParagraphNode, SpacerNode } from "../../schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode, SpacerNode } from "../../schema"
 
 // ─── Document Helpers ─────────────────────────────────────────────────────────
 
@@ -39,6 +39,14 @@ function makePara(id: string, text: string, overrides: Partial<ParagraphNode["pr
 
 function makeSpacer(id: string, height = 20): SpacerNode {
   return { id, type: "spacer", props: { height } }
+}
+
+function makeFlowTableCell(id: string, childIds: string[], props: FlowTableCellNode["props"] = {}): FlowTableCellNode {
+  return { id, type: "flow-table-cell", props, childIds }
+}
+
+function makeFlowTableRow(id: string, cellIds: string[], props: FlowTableRowNode["props"] = {}): FlowTableRowNode {
+  return { id, type: "flow-table-row", props, cellIds }
 }
 
 function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): DocumentNode {
@@ -531,6 +539,150 @@ describe("DocxRenderer smoke tests", () => {
     const xml = await readDocxXml(result.buffer, "word/document.xml")
 
     for (const marker of [leftLines[0], leftLines[45], leftLines[89], rightLines[0], rightLines[45], rightLines[89]]) {
+      expect(countText(xml, marker)).toBe(1)
+    }
+  })
+
+  it("emits flow-table as a fixed DOCX table using paginated geometry", async () => {
+    const p1 = makePara("ft-p1", "FLOW_TABLE_LEFT")
+    const p2 = makePara("ft-p2", "FLOW_TABLE_RIGHT")
+    const c1 = makeFlowTableCell("ft-c1", [p1.id], {
+      box: {
+        fill: "E0F2FE",
+        padding: { top: pt(3), right: pt(4), bottom: pt(5), left: pt(6) },
+        border: {
+          top: { style: "solid", width: pt(1), color: "111111" },
+          left: { style: "dashed", width: pt(1), color: "222222" },
+        },
+      },
+    })
+    const c2 = makeFlowTableCell("ft-c2", [p2.id])
+    const r1 = makeFlowTableRow("ft-r1", [c1.id, c2.id], { height: pt(36) })
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }, { width: pt(120) }],
+      rowIds: [r1.id],
+      nodes: { [r1.id]: r1, [c1.id]: c1, [c2.id]: c2, [p1.id]: p1, [p2.id]: p2 },
+    }
+    const paginated = paginate(makeDoc([table.id], { [table.id]: table as unknown as LayoutNode }))
+    const page = paginated.sections[0].pages[0]
+    const tableFragment = page.fragments.find((fragment) => fragment.nodeId === table.id && fragment.nodeType === "flow-table")!
+    const rowFragment = page.fragments.find((fragment) => fragment.nodeId === r1.id && fragment.nodeType === "flow-table-row")!
+    const cellFragments = page.fragments.filter((fragment) => fragment.parentNodeId === r1.id && fragment.nodeType === "flow-table-cell")
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(xml).toContain('w:tblLayout w:type="fixed"')
+    expect(xml).toContain(`w:tblW w:type="dxa" w:w="${ptToTwips(tableFragment.width)}"`)
+    expect(xml).toContain(`w:trHeight w:val="${ptToTwips(rowFragment.height)}" w:hRule="exact"`)
+    expect(xml).toContain("w:cantSplit")
+    for (const cell of cellFragments) {
+      const width = ptToTwips(cell.width)
+      expect(xml).toContain(`w:gridCol w:w="${width}"`)
+      expect(xml).toContain(`w:tcW w:type="dxa" w:w="${width}"`)
+    }
+    expect(xml).toContain('w:fill="E0F2FE"')
+    expect(xml).toContain("<w:tcMar>")
+    expect(xml).toContain('w:color="111111"')
+    expect(xml).toContain('w:color="222222"')
+    expect(xml).toContain('w:val="dashed"')
+    expect(countText(xml, "FLOW_TABLE_LEFT")).toBe(1)
+    expect(countText(xml, "FLOW_TABLE_RIGHT")).toBe(1)
+  })
+
+  it("emits flow-table span metadata as DOCX gridSpan and vMerge", async () => {
+    const p1 = makePara("ft-span-p1", "SPAN_CELL")
+    const p2 = makePara("ft-span-p2", "TOP_CELL")
+    const p3 = makePara("ft-span-p3", "BOTTOM_CELL")
+    const c1 = makeFlowTableCell("ft-span-c1", [p1.id], { colspan: 2, rowspan: 2 })
+    const c2 = makeFlowTableCell("ft-span-c2", [p2.id])
+    const c3 = makeFlowTableCell("ft-span-c3", [p3.id])
+    const r1 = makeFlowTableRow("ft-span-r1", [c1.id, c2.id], { height: pt(30) })
+    const r2 = makeFlowTableRow("ft-span-r2", [c3.id], { height: pt(30) })
+    const table: FlowTableNode = {
+      id: "ft-span",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(60) }, { width: pt(70) }, { width: pt(80) }],
+      rowIds: [r1.id, r2.id],
+      nodes: {
+        [r1.id]: r1,
+        [r2.id]: r2,
+        [c1.id]: c1,
+        [c2.id]: c2,
+        [c3.id]: c3,
+        [p1.id]: p1,
+        [p2.id]: p2,
+        [p3.id]: p3,
+      },
+    }
+
+    const result = await docx.render(paginate(makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })))
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(xml).toContain(`w:gridCol w:w="${ptToTwips(60)}"`)
+    expect(xml).toContain(`w:gridCol w:w="${ptToTwips(70)}"`)
+    expect(xml).toContain(`w:gridCol w:w="${ptToTwips(80)}"`)
+    expect(xml).toContain('w:gridSpan w:val="2"')
+    expect(xml).toContain("<w:vMerge")
+    expect(xml).toContain('w:val="restart"')
+    expect(countText(xml, "SPAN_CELL")).toBe(1)
+    expect(countText(xml, "TOP_CELL")).toBe(1)
+    expect(countText(xml, "BOTTOM_CELL")).toBe(1)
+  })
+
+  it("renders split flow-table slices and repeated headers in DOCX output", async () => {
+    const bodyLines = Array.from({ length: 130 }, (_, i) => `B${String(i).padStart(3, "0")}`)
+    const headerLeft = makePara("ft-header-left-p", "HDRLEFT")
+    const headerRight = makePara("ft-header-right-p", "HDRRIGHT")
+    const body = makePara("ft-body-p", bodyLines.join("\n"))
+    const shortBody = makePara("ft-short-body-p", "SHORTBODY")
+    const headerLeftCell = makeFlowTableCell("ft-header-left-cell", [headerLeft.id])
+    const headerRightCell = makeFlowTableCell("ft-header-right-cell", [headerRight.id])
+    const bodyCell = makeFlowTableCell("ft-body-cell", [body.id])
+    const shortBodyCell = makeFlowTableCell("ft-short-body-cell", [shortBody.id])
+    const headerRow = makeFlowTableRow("ft-header-row", [headerLeftCell.id, headerRightCell.id], { height: pt(24) })
+    const bodyRow = makeFlowTableRow("ft-body-row", [bodyCell.id, shortBodyCell.id])
+    const table: FlowTableNode = {
+      id: "ft-split",
+      type: "flow-table",
+      props: { headerRowCount: 1 },
+      columns: [{ width: pt(90) }, { width: pt(130) }],
+      rowIds: [headerRow.id, bodyRow.id],
+      nodes: {
+        [headerRow.id]: headerRow,
+        [bodyRow.id]: bodyRow,
+        [headerLeftCell.id]: headerLeftCell,
+        [headerRightCell.id]: headerRightCell,
+        [bodyCell.id]: bodyCell,
+        [shortBodyCell.id]: shortBodyCell,
+        [headerLeft.id]: headerLeft,
+        [headerRight.id]: headerRight,
+        [body.id]: body,
+        [shortBody.id]: shortBody,
+      },
+    }
+    const paginated = paginate(makeDoc([table.id], { [table.id]: table as unknown as LayoutNode }))
+    const pages = paginated.sections[0].pages
+    const headerParagraphs = pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === headerLeft.id && fragment.nodeType === "paragraph"),
+    )
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(pages.length).toBeGreaterThan(1)
+    expect(headerParagraphs).toHaveLength(pages.length)
+    expect(countText(xml, 'w:tblLayout w:type="fixed"')).toBe(pages.length)
+    expect(countText(xml, `w:gridCol w:w="${ptToTwips(90)}"`)).toBe(pages.length)
+    expect(countText(xml, `w:gridCol w:w="${ptToTwips(130)}"`)).toBe(pages.length)
+    expect(countText(xml, "HDRLEFT")).toBe(pages.length)
+    expect(countText(xml, "HDRRIGHT")).toBe(pages.length)
+    expect(countText(xml, "SHORTBODY")).toBe(1)
+    for (const marker of [bodyLines[0], bodyLines[45], bodyLines[89], bodyLines[129]]) {
       expect(countText(xml, marker)).toBe(1)
     }
   })

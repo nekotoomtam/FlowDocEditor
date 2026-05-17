@@ -1,7 +1,7 @@
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DocumentDataReadinessIssue } from "@/readiness"
-import type { DocumentNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, TableNode } from "@/schema"
 
 interface UsedField {
   key: string
@@ -27,11 +27,11 @@ function collectUsedFieldKeys(doc: DocumentNode): Set<string> {
           if (child.type === "fieldRef") keys.add(child.key)
         })
       }
-      if (node.type === "table") {
-        Object.values((node as unknown as TableNode).nodes).forEach((inner) => {
+      if (node.type === "table" || node.type === "flow-table") {
+        Object.values((node as unknown as TableNode | FlowTableNode).nodes).forEach((inner) => {
           if (inner.type !== "paragraph") return
-          inner.children.forEach((child) => {
-            if (child.type === "fieldRef") keys.add(child.key)
+          inner.children.forEach((child: { type: string; key?: string }) => {
+            if (child.type === "fieldRef" && typeof child.key === "string") keys.add(child.key)
           })
         })
       }

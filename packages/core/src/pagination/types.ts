@@ -55,6 +55,16 @@ export interface TableCellRenderProps {
   continuedFromPrev?: boolean  // cell ต่อจากหน้าก่อน — ไม่วาด border ด้านบน
 }
 
+export interface FlowTableGridRenderProps {
+  columnWidths: number[]
+}
+
+export interface FlowTableCellGridRenderProps {
+  columnIndex: number
+  colspan: number
+  rowspan: number
+}
+
 // ─── Render Props ─────────────────────────────────────────────────────────────
 
 export interface ParagraphBoxRenderProps {
@@ -110,6 +120,8 @@ export interface PageFragment {
   renderProps?: ParagraphRenderProps
   boxRenderProps?: ParagraphBoxRenderProps
   cellRenderProps?: TableCellRenderProps
+  flowTableGridProps?: FlowTableGridRenderProps
+  flowTableCellGridProps?: FlowTableCellGridRenderProps
   // Split metadata — populated by pagination paths that split or explicitly
   // track continuation for paragraph, row, cell, or box fragments.
   fragmentIndex?: number   // 0-based position among fragments of the same nodeId

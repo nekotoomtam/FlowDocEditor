@@ -1,6 +1,9 @@
 import type {
   DocumentNode,
   FieldRefInline,
+  FlowTableCellNode,
+  FlowTableNode,
+  FlowTableRowNode,
   FlowStackNode,
   LayoutNode,
   ParagraphBoxBorder,
@@ -25,11 +28,15 @@ import {
   createStackNode,
   getEqualWidthShares,
   DEFAULT_STACK_MIN_HEIGHT,
+  createDefaultFlowTable,
   createDefaultTable,
+  createFlowTableCellNode,
+  createFlowTableRowNode,
   createTableCellNode,
   createTableRowNode,
   createFieldRefInline,
 } from "./defaults"
+import { tryResolveFlowTableGrid } from "./flowTableGrid"
 
 // ─── Internal Types ────────────────────────────────────────────────────────────
 
@@ -281,6 +288,10 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
       const table = createDefaultTable()
       return { insertId: table.id, newNodes: { [table.id]: table as unknown as LayoutNode } }
     }
+    if (source.blockType === "flow-table") {
+      const table = createDefaultFlowTable()
+      return { insertId: table.id, newNodes: { [table.id]: table as unknown as LayoutNode } }
+    }
     const { row, nodes } = createFlowColumnsSubtree(1)
     return { insertId: row.id, newNodes: nodes }
   }
@@ -461,9 +472,116 @@ function updateTableInSection(
   return doc
 }
 
+function updateFlowTableInSection(
+  doc: DocumentNode,
+  tableId: string,
+  updater: (table: FlowTableNode) => FlowTableNode,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const tableNode = section.nodes[tableId]
+    if (tableNode?.type !== "flow-table") continue
+    const newTable = updater(tableNode as unknown as FlowTableNode)
+    if (newTable === tableNode) return doc
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes: { ...s.nodes, [tableId]: newTable as unknown as LayoutNode } } : s,
+    )
+    return { ...doc, document: { ...doc.document, sections: newSections } }
+  }
+  return doc
+}
+
 function unitWidthToPt(width: { value: number; unit: "pt" | "mm" } | undefined): number {
   if (!width) return 0
   return width.unit === "mm" ? width.value * 72 / 25.4 : width.value
+}
+
+function isSpanFreeFlowTable(table: FlowTableNode): boolean {
+  return table.rowIds.every((rowId) => {
+    const row = table.nodes[rowId]
+    if (row?.type !== "flow-table-row") return false
+    if (row.cellIds.length !== table.columns.length) return false
+    return row.cellIds.every((cellId) => {
+      const cell = table.nodes[cellId]
+      return cell?.type === "flow-table-cell" &&
+        (cell.props.colspan ?? 1) === 1 &&
+        (cell.props.rowspan ?? 1) === 1
+    })
+  })
+}
+
+function createEmptyFlowTableCell(internalNodes: FlowTableNode["nodes"]): string {
+  const para = createParagraphNode("", { spacingBefore: pt(2), spacingAfter: pt(2) })
+  const cell = createFlowTableCellNode([para.id])
+  internalNodes[para.id] = para
+  internalNodes[cell.id] = cell
+  return cell.id
+}
+
+interface FlowTableRowRemovalPlan {
+  rowId: string
+  deleteCellIds: string[]
+  shrinkRowspanCellIds: string[]
+}
+
+interface FlowTableColumnRemovalPlan {
+  deleteCellIds: string[]
+  shrinkColspanCellIds: string[]
+}
+
+function getFlowTableRowRemovalPlan(table: FlowTableNode, rowIndex: number): FlowTableRowRemovalPlan | null {
+  if (table.rowIds.length <= 1) return null
+  const rowId = table.rowIds[rowIndex]
+  if (!rowId) return null
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return null
+
+  const deleteCellIds: string[] = []
+  const shrinkRowspanCellIds: string[] = []
+
+  for (const placement of resolved.grid.placements) {
+    if (placement.rowIndex === rowIndex) {
+      if (placement.rowspan > 1) return null
+      deleteCellIds.push(placement.cellId)
+      continue
+    }
+    if (placement.rowIndex < rowIndex && rowIndex <= placement.rowEndIndex) {
+      shrinkRowspanCellIds.push(placement.cellId)
+    }
+  }
+
+  return { rowId, deleteCellIds, shrinkRowspanCellIds }
+}
+
+function getFlowTableColumnRemovalPlan(table: FlowTableNode, colIndex: number): FlowTableColumnRemovalPlan | null {
+  if (table.columns.length <= 1) return null
+  if (colIndex < 0 || colIndex >= table.columns.length) return null
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return null
+
+  const deleteCellIds: string[] = []
+  const shrinkColspanCellIds: string[] = []
+
+  for (const placement of resolved.grid.placements) {
+    if (placement.columnIndex === colIndex) {
+      if (placement.colspan > 1) return null
+      deleteCellIds.push(placement.cellId)
+      continue
+    }
+    if (placement.columnIndex < colIndex && colIndex <= placement.columnEndIndex) {
+      shrinkColspanCellIds.push(placement.cellId)
+    }
+  }
+
+  return { deleteCellIds, shrinkColspanCellIds }
+}
+
+export function canRemoveFlowTableRow(table: FlowTableNode, rowIndex: number): boolean {
+  return getFlowTableRowRemovalPlan(table, rowIndex) != null
+}
+
+export function canRemoveFlowTableColumn(table: FlowTableNode, colIndex: number): boolean {
+  return getFlowTableColumnRemovalPlan(table, colIndex) != null
 }
 
 function insertInlineField(
@@ -488,8 +606,8 @@ function insertInlineField(
       return { ...doc, document: { ...doc.document, sections: newSections } }
     }
     for (const [tableId, candidate] of Object.entries(section.nodes)) {
-      if (candidate.type !== "table") continue
-      const table = candidate as unknown as TableNode
+      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
+      const table = candidate as unknown as TableNode | FlowTableNode
       const inner = table.nodes[paragraphId]
       if (inner?.type !== "paragraph") continue
       const insertAt = Math.min(Math.max(0, index), inner.children.length)
@@ -528,8 +646,8 @@ export function updateNodeProps(
     }
     // search inside tables
     for (const [tableId, n] of Object.entries(section.nodes)) {
-      if (n.type !== "table") continue
-      const table = n as unknown as TableNode
+      if (n.type !== "table" && n.type !== "flow-table") continue
+      const table = n as unknown as TableNode | FlowTableNode
       const inner = table.nodes[nodeId]
       if (inner == null) continue
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -666,8 +784,8 @@ export function updateParagraphBoxStyle(
     }
 
     for (const [tableId, n] of Object.entries(section.nodes)) {
-      if (n.type !== "table") continue
-      const table = n as unknown as TableNode
+      if (n.type !== "table" && n.type !== "flow-table") continue
+      const table = n as unknown as TableNode | FlowTableNode
       const inner = table.nodes[paragraphId]
       if (inner?.type !== "paragraph") continue
       const updated = applyBoxStyleChanges(inner, changes)
@@ -803,8 +921,8 @@ export function updateParagraphText(
     }
     // search inside tables
     for (const [tableId, n] of Object.entries(section.nodes)) {
-      if (n.type !== "table") continue
-      const table = n as unknown as TableNode
+      if (n.type !== "table" && n.type !== "flow-table") continue
+      const table = n as unknown as TableNode | FlowTableNode
       const inner = table.nodes[nodeId]
       if (inner?.type !== "paragraph") continue
       if (!isPlainTextParagraph(inner)) continue
@@ -837,8 +955,8 @@ export function updateFieldRefInline(
         return { ...doc, document: { ...doc.document, sections: newSections } }
       }
 
-      if (node.type !== "table") continue
-      const table = node as unknown as TableNode
+      if (node.type !== "table" && node.type !== "flow-table") continue
+      const table = node as unknown as TableNode | FlowTableNode
       for (const [innerId, inner] of Object.entries(table.nodes)) {
         if (inner.type !== "paragraph") continue
         const updated = updateFieldRefInParagraph(inner, fieldRefId, changes)
@@ -1094,6 +1212,176 @@ export function removeTableColumn(doc: DocumentNode, tableId: string, colIndex: 
     })
 
     const columns = table.columns.filter((_, i) => i !== colIndex)
+    if (columns.length > 0 && removedWidth > 0) {
+      const absorbIndex = Math.min(Math.max(0, colIndex - 1), columns.length - 1)
+      const absorbWidth = unitWidthToPt(columns[absorbIndex]?.width)
+      columns[absorbIndex] = { ...columns[absorbIndex], width: pt(absorbWidth + removedWidth) }
+    }
+
+    return { ...table, columns, nodes: internalNodes }
+  })
+}
+
+export function addFlowTableRow(doc: DocumentNode, tableId: string, afterIndex?: number): DocumentNode {
+  return updateFlowTableInSection(doc, tableId, (table) => {
+    const resolved = tryResolveFlowTableGrid(table)
+    if (!resolved.ok) return table
+    const insertAt = afterIndex !== undefined
+      ? Math.min(Math.max(0, afterIndex + 1), table.rowIds.length)
+      : table.rowIds.length
+    const internalNodes = { ...table.nodes }
+    const coveredColumns = new Set<number>()
+
+    resolved.grid.placements.forEach((placement) => {
+      if (!(placement.rowIndex < insertAt && insertAt <= placement.rowEndIndex)) return
+      const cell = internalNodes[placement.cellId] as FlowTableCellNode | undefined
+      if (cell?.type !== "flow-table-cell") return
+      internalNodes[placement.cellId] = {
+        ...cell,
+        props: { ...cell.props, rowspan: placement.rowspan + 1 },
+      }
+      for (let columnIndex = placement.columnIndex; columnIndex <= placement.columnEndIndex; columnIndex++) {
+        coveredColumns.add(columnIndex)
+      }
+    })
+
+    const cellIds: string[] = []
+
+    for (let c = 0; c < table.columns.length; c++) {
+      if (coveredColumns.has(c)) continue
+      cellIds.push(createEmptyFlowTableCell(internalNodes))
+    }
+
+    const row = createFlowTableRowNode(cellIds)
+    internalNodes[row.id] = row
+    const rowIds = [...table.rowIds]
+    rowIds.splice(insertAt, 0, row.id)
+    return { ...table, rowIds, nodes: internalNodes }
+  })
+}
+
+export function removeFlowTableRow(doc: DocumentNode, tableId: string, rowIndex: number): DocumentNode {
+  return updateFlowTableInSection(doc, tableId, (table) => {
+    const plan = getFlowTableRowRemovalPlan(table, rowIndex)
+    if (plan == null) return table
+
+    const internalNodes = { ...table.nodes }
+
+    plan.shrinkRowspanCellIds.forEach((cellId) => {
+      const cell = internalNodes[cellId] as FlowTableCellNode | undefined
+      if (cell?.type !== "flow-table-cell") return
+      const rowspan = cell.props.rowspan ?? 1
+      internalNodes[cellId] = { ...cell, props: { ...cell.props, rowspan: Math.max(1, rowspan - 1) } }
+    })
+
+    const row = internalNodes[plan.rowId] as FlowTableRowNode | undefined
+    if (row?.type === "flow-table-row") {
+      plan.deleteCellIds.forEach((cellId) => {
+        const cell = internalNodes[cellId] as FlowTableCellNode | undefined
+        if (cell?.type !== "flow-table-cell") return
+        cell.childIds.forEach((id) => { delete internalNodes[id] })
+        delete internalNodes[cellId]
+      })
+      delete internalNodes[plan.rowId]
+    }
+
+    const rowIds = table.rowIds.filter((_, i) => i !== rowIndex)
+    const headerRowCount = table.props.headerRowCount
+    const props = headerRowCount != null && headerRowCount > rowIds.length
+      ? { ...table.props, headerRowCount: rowIds.length }
+      : table.props
+    return { ...table, props, rowIds, nodes: internalNodes }
+  })
+}
+
+export function addFlowTableColumn(doc: DocumentNode, tableId: string, afterColIndex?: number): DocumentNode {
+  return updateFlowTableInSection(doc, tableId, (table) => {
+    const resolved = tryResolveFlowTableGrid(table)
+    if (!resolved.ok) return table
+    const insertAt = afterColIndex != null
+      ? Math.min(Math.max(0, afterColIndex + 1), table.columns.length)
+      : table.columns.length
+    const splitIndex = afterColIndex != null
+      ? Math.min(Math.max(0, afterColIndex), table.columns.length - 1)
+      : table.columns.length - 1
+    const splitWidth = Math.max(24, unitWidthToPt(table.columns[splitIndex]?.width) || 150)
+    const insertedWidth = Math.max(24, splitWidth / 2)
+    const remainingWidth = Math.max(24, splitWidth - insertedWidth)
+
+    const columns = table.columns.map((column, index) =>
+      index === splitIndex ? { ...column, width: pt(remainingWidth) } : column,
+    )
+    columns.splice(insertAt, 0, { width: pt(insertedWidth) })
+
+    const internalNodes = { ...table.nodes }
+    const coveredRows = new Set<number>()
+
+    resolved.grid.placements.forEach((placement) => {
+      if (!(placement.columnIndex < insertAt && insertAt <= placement.columnEndIndex)) return
+      const cell = internalNodes[placement.cellId] as FlowTableCellNode | undefined
+      if (cell?.type !== "flow-table-cell") return
+      internalNodes[placement.cellId] = {
+        ...cell,
+        props: { ...cell.props, colspan: placement.colspan + 1 },
+      }
+      for (let rowIndex = placement.rowIndex; rowIndex <= placement.rowEndIndex; rowIndex++) {
+        coveredRows.add(rowIndex)
+      }
+    })
+
+    table.rowIds.forEach((rowId, rowIndex) => {
+      if (coveredRows.has(rowIndex)) return
+      const row = internalNodes[rowId] as FlowTableRowNode | undefined
+      if (row?.type !== "flow-table-row") return
+      const cellId = createEmptyFlowTableCell(internalNodes)
+      const cellInsertIndex = row.cellIds.findIndex((existingCellId) => {
+        const placement = resolved.grid.placementsByCellId.get(existingCellId)
+        return placement != null && placement.columnIndex >= insertAt
+      })
+      const insertCellAt = cellInsertIndex === -1 ? row.cellIds.length : cellInsertIndex
+      internalNodes[rowId] = {
+        ...row,
+        cellIds: [...row.cellIds.slice(0, insertCellAt), cellId, ...row.cellIds.slice(insertCellAt)],
+      }
+    })
+
+    return { ...table, columns, nodes: internalNodes }
+  })
+}
+
+export function removeFlowTableColumn(doc: DocumentNode, tableId: string, colIndex: number): DocumentNode {
+  return updateFlowTableInSection(doc, tableId, (table) => {
+    const plan = getFlowTableColumnRemovalPlan(table, colIndex)
+    if (plan == null) return table
+
+    const internalNodes = { ...table.nodes }
+    const removedWidth = unitWidthToPt(table.columns[colIndex]?.width)
+    const deleteCellIds = new Set(plan.deleteCellIds)
+
+    plan.shrinkColspanCellIds.forEach((cellId) => {
+      const cell = internalNodes[cellId] as FlowTableCellNode | undefined
+      if (cell?.type !== "flow-table-cell") return
+      const colspan = cell.props.colspan ?? 1
+      internalNodes[cellId] = { ...cell, props: { ...cell.props, colspan: Math.max(1, colspan - 1) } }
+    })
+
+    table.rowIds.forEach((rowId) => {
+      const row = internalNodes[rowId] as FlowTableRowNode | undefined
+      if (row?.type !== "flow-table-row") return
+      row.cellIds.forEach((cellId) => {
+        if (!deleteCellIds.has(cellId)) return
+        const cell = internalNodes[cellId] as FlowTableCellNode | undefined
+        if (cell?.type !== "flow-table-cell") return
+        cell.childIds.forEach((id) => { delete internalNodes[id] })
+        delete internalNodes[cellId]
+      })
+      internalNodes[rowId] = {
+        ...row,
+        cellIds: row.cellIds.filter((cellId) => !deleteCellIds.has(cellId)),
+      }
+    })
+
+    const columns = table.columns.filter((_, index) => index !== colIndex)
     if (columns.length > 0 && removedWidth > 0) {
       const absorbIndex = Math.min(Math.max(0, colIndex - 1), columns.length - 1)
       const absorbWidth = unitWidthToPt(columns[absorbIndex]?.width)

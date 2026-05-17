@@ -68,6 +68,28 @@ describe("placement law flow-row / flow-stack sources", () => {
     })
   })
 
+  it("allows flow-table palette insertion into the body", () => {
+    const doc = makeDoc({}, [])
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "center",
+        intent: "insertInside",
+        target: { kind: "node", nodeId: "body", nodeType: "body" },
+      },
+      { source: "palette", blockType: "flow-table" },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.operation).toEqual({
+      kind: "insert-into-container",
+      containerId: "body",
+      containerType: "body",
+      index: 0,
+    })
+  })
+
   it("rejects flow-columns inside old stack containers", () => {
     const doc = makeDoc({
       row1: { id: "row1", type: "row", props: {}, childIds: ["stack1"] },
@@ -209,6 +231,27 @@ describe("placement law flow-row / flow-stack sources", () => {
         target: { kind: "node", nodeId: "fs1", nodeType: "flow-stack" },
       },
       { source: "palette", blockType: "table" },
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe("invalid-parent")
+  })
+
+  it("rejects flow-table insertion inside a flow-stack", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: [] },
+    }, ["fr1"])
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "center",
+        intent: "insertInside",
+        target: { kind: "node", nodeId: "fs1", nodeType: "flow-stack" },
+      },
+      { source: "palette", blockType: "flow-table" },
     )
 
     expect(result.ok).toBe(false)

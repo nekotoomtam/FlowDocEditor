@@ -4,6 +4,7 @@ const BLOCKS: { type: PaletteBlockType; label: string; icon: string; desc: strin
   { type: "paragraph", label: "Paragraph", icon: "¶", desc: "Text block" },
   { type: "row",       label: "Row",       icon: "▥", desc: "Single column" },
   { type: "columns",   label: "Columns",   icon: "⊞", desc: "Multi-page columns" },
+  { type: "flow-table", label: "Flow table", icon: "▦", desc: "3×3 flow table" },
   { type: "table",     label: "Table",     icon: "⊡", desc: "3×3 table" },
 ]
 

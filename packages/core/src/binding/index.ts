@@ -9,7 +9,7 @@
 import type { DataSnapshotIssue, DataSnapshotV1, FieldScalarValue } from "../dataSnapshot"
 import { validateDataSnapshot } from "../dataSnapshot"
 import type { FieldRegistryV1 } from "../fieldRegistry"
-import type { DocumentNode, FieldRefInline, LayoutNode, ParagraphNode, TableNode } from "../schema"
+import type { DocumentNode, FieldRefInline, FlowTableNode, LayoutNode, ParagraphNode, TableNode } from "../schema"
 
 // ─── Field Registry ───────────────────────────────────────────────────────────
 
@@ -130,14 +130,18 @@ function bindParagraphWithResolver(
   }
 }
 
-function bindTableWithResolver(
-  table: TableNode,
+type TableLikeNode = TableNode | FlowTableNode
+
+function bindTableWithResolver<T extends TableLikeNode>(
+  table: T,
   resolveValue: FieldRefValueResolver,
   resolveFallback: FieldRefFallbackResolver,
-): TableNode {
-  const nodes: TableNode["nodes"] = {}
+): T {
+  const nodes: T["nodes"] = {} as T["nodes"]
   Object.entries(table.nodes).forEach(([nodeId, node]) => {
-    nodes[nodeId] = node.type === "paragraph" ? bindParagraphWithResolver(node, resolveValue, resolveFallback) : node
+    nodes[nodeId] = (node.type === "paragraph"
+      ? bindParagraphWithResolver(node, resolveValue, resolveFallback)
+      : node) as T["nodes"][string]
   })
   return { ...table, nodes }
 }
@@ -149,6 +153,7 @@ function bindLayoutNodeWithResolver(
 ): LayoutNode {
   if (node.type === "paragraph") return bindParagraphWithResolver(node, resolveValue, resolveFallback)
   if (node.type === "table") return bindTableWithResolver(node as unknown as TableNode, resolveValue, resolveFallback) as unknown as LayoutNode
+  if (node.type === "flow-table") return bindTableWithResolver(node as unknown as FlowTableNode, resolveValue, resolveFallback) as unknown as LayoutNode
   return node
 }
 
