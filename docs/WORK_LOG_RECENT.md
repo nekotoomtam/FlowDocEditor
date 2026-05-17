@@ -22,7 +22,98 @@ Each entry should include:
 
 ---
 
+## 2026-05-18
+
+### Add Flow Table C2.7A Merged Cell Multi-Paragraph Text Editing
+
+Goal: Keep content appended by non-empty Flow Table merge visible and editable
+from the PropertyPanel without changing schema, pagination, export, or merge
+metadata.
+
+Completed:
+
+- Updated the selected Flow Table cell PropertyPanel to render every paragraph
+  child as its own text area instead of only the first child paragraph.
+- Kept mixed-inline paragraphs read-only through the existing
+  `isPlainTextParagraph(...)` guard.
+- Kept text updates on the existing `updateParagraphText(...)` operation, which
+  already supports paragraphs nested inside `flow-table` nodes.
+- Added PropertyPanel coverage for a merged cell containing multiple paragraph
+  children.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Files changed:
+
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- `$env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:editor`
+
+Notes:
+
+- This patch does not add paragraph add/delete/reorder controls.
+- Canvas-level selection ergonomics for multiple paragraph children remain
+  deferred.
+
 ## 2026-05-17
+
+### Add Flow Table C2.6 Neighbor-Origin Merge Left/Up
+
+Goal: Add practical `Merge left` and `Merge up` controls without introducing
+true span-origin movement or source-cell content mapping metadata.
+
+Completed:
+
+- Added a core `resolveFlowTableCellMergeTarget(...)` helper that resolves
+  directional merge intent into the existing span operation target.
+- Kept `Merge right`/`Merge down` as selected-cell expansion and added
+  `Merge left`/`Merge up` as neighbor-origin actions when an aligned left/upper
+  origin can consume the selected cell.
+- Reused `updateFlowTableCellSpan(...)` for all content append and grid-law
+  preservation.
+- Moved editor selection to the surviving neighbor after left/up merge.
+- Added focused operation coverage for merge left, merge up, and misaligned
+  left-neighbor blocking.
+- Updated PropertyPanel coverage for the new left/up affordances.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/flowTableGrid.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- `$env:SMOKE_BROWSER_CHANNEL='chrome'; npm.cmd run smoke:editor`
+
+Notes:
+
+- Default bundled-Chromium `npm.cmd run smoke:editor` timed out after 240s
+  before emitting pass/fail detail. The same smoke passed with system Chrome.
+- True arbitrary span-origin movement remains deferred.
+- Source-cell content mapping restoration remains deferred.
 
 ### Add Flow Table C2.5A Non-Empty Merge Append
 

@@ -2788,6 +2788,7 @@ export default function EditorShell() {
                       onUpdateParagraphBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
                       onUpdateFlowStackBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId, changes })}
                       onUpdateFlowTableCellSpan={(cellId, changes) => dispatch({ type: "UPDATE_FLOW_TABLE_CELL_SPAN", cellId, changes })}
+                      onSelectNode={(nodeId) => dispatch({ type: "SELECT_NODE", nodeId, anchorNodeId: nodeId })}
                       onSelectContextNode={(nodeId) => dispatch({
                         type: "SELECT_NODE",
                         nodeId,

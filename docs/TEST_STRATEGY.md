@@ -310,6 +310,14 @@ Current strengths:
   child-block append, consumed-cell removal, placeholder discard, grid validity,
   and unmerge behavior that keeps combined content in the selected cell while
   creating empty replacement cells.
+- Flow Table C2.6 coverage protects neighbor-origin `Merge left`/`Merge up` by
+  asserting the aligned left/upper neighbor is selected as the surviving origin,
+  consumed content is appended in row-major order, misaligned neighbors are
+  blocked, and PropertyPanel exposes the left/up affordances without patching
+  span props directly.
+- Flow Table C2.7A coverage protects merged-cell PropertyPanel text visibility
+  by rendering every paragraph child in a selected Flow Table cell as its own
+  text area while continuing to use the existing paragraph text operation.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual

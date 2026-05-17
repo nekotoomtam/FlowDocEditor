@@ -15,7 +15,7 @@ import type {
   TocNode,
 } from "@/schema"
 import { pt } from "@/schema"
-import { canRemoveFlowTableColumn, canRemoveFlowTableRow, canUpdateFlowTableCellSpan, isPlainTextParagraph } from "@/document"
+import { canRemoveFlowTableColumn, canRemoveFlowTableRow, canUpdateFlowTableCellSpan, isPlainTextParagraph, resolveFlowTableCellMergeTarget } from "@/document"
 import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges } from "@/document"
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
@@ -51,6 +51,7 @@ interface Props {
   onUpdateParagraphBoxStyle: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
   onUpdateFlowStackBoxStyle?: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
   onUpdateFlowTableCellSpan?: (cellId: string, changes: FlowTableCellSpanChanges) => void
+  onSelectNode?: (nodeId: string) => void
   onSelectContextNode: (nodeId: string) => void
   onDelete: (nodeId: string) => void
   tableOps: TableOps
@@ -1071,7 +1072,7 @@ const borderStyleIconLine: React.CSSProperties = {
 
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
-export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
+export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectNode, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
   const [contextOpen, setContextOpen] = useState(false)
   const [paragraphPanelTab, setParagraphPanelTab] = useState<ParagraphPanelTab>("text")
   const [flowContainerPanelTab, setFlowContainerPanelTab] = useState<FlowContainerPanelTab>("layout")
@@ -1926,45 +1927,66 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
 
         {node.type === "flow-table-cell" && (() => {
           const cell = node as FlowTableCellNode
-          const paragraphId = cell.childIds[0]
-          const paraNode = paragraphId ? findNode(doc, paragraphId) : null
-          const text = paraNode?.type === "paragraph" ? getParagraphText(paraNode) : ""
-          const canEditText = paraNode?.type === "paragraph" ? isPlainTextParagraph(paraNode) : false
-          const fieldRefs = paraNode?.type === "paragraph" ? getParagraphFieldRefs(paraNode) : []
+          const paragraphs = cell.childIds.flatMap((paragraphId) => {
+            const paraNode = findNode(doc, paragraphId)
+            if (paraNode?.type !== "paragraph") return []
+            return [{
+              id: paragraphId,
+              text: getParagraphText(paraNode),
+              canEditText: isPlainTextParagraph(paraNode),
+              fieldRefs: getParagraphFieldRefs(paraNode),
+            }]
+          })
           const info = findFlowTableOf(doc, selectedNodeId)
           const table = info?.table ?? null
           const pos = table ? rowOfFlowTableCell(table, selectedNodeId) : null
           const canAddGrid = table ? canAddFlowTableGrid(table) : false
           const canRemoveCol = table && pos ? canRemoveFlowTableColumn(table, pos.colIndex) : false
           const canRemoveRow = table && pos ? canRemoveFlowTableRow(table, pos.rowIndex) : false
-          const canMergeRight = table && pos ? canUpdateFlowTableCellSpan(table, selectedNodeId, { colspan: pos.colspan + 1 }) : false
-          const canMergeDown = table && pos ? canUpdateFlowTableCellSpan(table, selectedNodeId, { rowspan: pos.rowspan + 1 }) : false
+          const mergeLeft = table ? resolveFlowTableCellMergeTarget(table, selectedNodeId, "left") : null
+          const mergeRight = table ? resolveFlowTableCellMergeTarget(table, selectedNodeId, "right") : null
+          const mergeUp = table ? resolveFlowTableCellMergeTarget(table, selectedNodeId, "up") : null
+          const mergeDown = table ? resolveFlowTableCellMergeTarget(table, selectedNodeId, "down") : null
+          const canMergeLeft = mergeLeft != null
+          const canMergeRight = mergeRight != null
+          const canMergeUp = mergeUp != null
+          const canMergeDown = mergeDown != null
           const canUnmerge = table && pos ? canUpdateFlowTableCellSpan(table, selectedNodeId, { colspan: 1, rowspan: 1 }) : false
+          const applyMerge = (target: { cellId: string; changes: FlowTableCellSpanChanges } | null) => {
+            if (target == null) return
+            onUpdateFlowTableCellSpan?.(target.cellId, target.changes)
+            if (target.cellId !== selectedNodeId) onSelectNode?.(target.cellId)
+          }
           return (
             <>
               {pos && table && (
                 <div style={{ fontSize: 11, color: "#6b7280" }}>Row {pos.rowIndex + 1}, Col {pos.colIndex + 1}</div>
               )}
-              {paragraphId && (
-                <div>
-                  <label style={label}>Text</label>
-                  <textarea
-                    value={text}
-                    rows={3}
-                    readOnly={!canEditText}
-                    onChange={(e) => {
-                      if (canEditText) onUpdateText(paragraphId, e.target.value)
-                    }}
-                    style={{
-                      ...input,
-                      resize: "vertical",
-                      background: canEditText ? input.background : "#f9fafb",
-                      color: canEditText ? input.color : "#9ca3af",
-                    }}
-                  />
+              {paragraphs.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {paragraphs.map((paragraph, index) => (
+                    <div key={paragraph.id} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                      <label style={label}>{paragraphs.length > 1 ? `Text ${index + 1}` : "Text"}</label>
+                      <textarea
+                        data-testid={`flow-table-cell-text-${index}`}
+                        value={paragraph.text}
+                        rows={3}
+                        readOnly={!paragraph.canEditText}
+                        onChange={(e) => {
+                          if (paragraph.canEditText) onUpdateText(paragraph.id, e.target.value)
+                        }}
+                        style={{
+                          ...input,
+                          resize: "vertical",
+                          background: paragraph.canEditText ? input.background : "#f9fafb",
+                          color: paragraph.canEditText ? input.color : "#9ca3af",
+                        }}
+                      />
+                      <FieldReferenceList refs={paragraph.fieldRefs} registry={registry} onUpdateFieldRef={onUpdateFieldRef} />
+                    </div>
+                  ))}
                 </div>
               )}
-              <FieldReferenceList refs={fieldRefs} registry={registry} onUpdateFieldRef={onUpdateFieldRef} />
               <div>
                 <label style={label}>Vertical align</label>
                 <div style={{ display: "flex", gap: 4 }}>
@@ -2023,25 +2045,41 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                       />
                     </label>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4, marginTop: 6 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 4, marginTop: 6 }}>
                     <button
-                      style={{ ...btn, opacity: canMergeRight ? 1 : 0.4 }}
-                      disabled={!canMergeRight}
-                      title={canMergeRight ? "Merge right and append content" : "Merge right needs a fully covered cell inside the next span"}
-                      onClick={() => onUpdateFlowTableCellSpan?.(selectedNodeId, { colspan: pos.colspan + 1 })}
+                      style={{ ...btn, opacity: canMergeUp ? 1 : 0.4 }}
+                      disabled={!canMergeUp}
+                      title={canMergeUp ? "Merge up into the neighboring origin and append content" : "Merge up needs an aligned neighboring origin above"}
+                      onClick={() => applyMerge(mergeUp)}
                     >
-                      Merge right
+                      Merge up
                     </button>
                     <button
                       style={{ ...btn, opacity: canMergeDown ? 1 : 0.4 }}
                       disabled={!canMergeDown}
                       title={canMergeDown ? "Merge down and append content" : "Merge down needs a fully covered cell inside the next span"}
-                      onClick={() => onUpdateFlowTableCellSpan?.(selectedNodeId, { rowspan: pos.rowspan + 1 })}
+                      onClick={() => applyMerge(mergeDown)}
                     >
                       Merge down
                     </button>
                     <button
-                      style={{ ...btn, opacity: canUnmerge ? 1 : 0.4 }}
+                      style={{ ...btn, opacity: canMergeLeft ? 1 : 0.4 }}
+                      disabled={!canMergeLeft}
+                      title={canMergeLeft ? "Merge left into the neighboring origin and append content" : "Merge left needs an aligned neighboring origin on the left"}
+                      onClick={() => applyMerge(mergeLeft)}
+                    >
+                      Merge left
+                    </button>
+                    <button
+                      style={{ ...btn, opacity: canMergeRight ? 1 : 0.4 }}
+                      disabled={!canMergeRight}
+                      title={canMergeRight ? "Merge right and append content" : "Merge right needs a fully covered cell inside the next span"}
+                      onClick={() => applyMerge(mergeRight)}
+                    >
+                      Merge right
+                    </button>
+                    <button
+                      style={{ ...btn, opacity: canUnmerge ? 1 : 0.4, gridColumn: "1 / -1" }}
                       disabled={!canUnmerge}
                       title={canUnmerge ? "Split selected span into empty cells" : "Selected cell is already 1 by 1"}
                       onClick={() => onUpdateFlowTableCellSpan?.(selectedNodeId, { colspan: 1, rowspan: 1 })}

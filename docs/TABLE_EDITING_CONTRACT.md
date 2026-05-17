@@ -133,11 +133,19 @@ Flow Table C2 foundation:
   cells are wholly inside the requested span rectangle. Consumed cell child
   blocks are appended to the selected cell in row-major order; empty placeholder
   paragraphs are discarded.
+- C2.6 allows `Merge left` and `Merge up` only when one aligned neighboring
+  origin can consume the selected cell. The surviving origin is the existing
+  left/upper neighbor, content is appended in row-major order, and editor
+  selection moves to that surviving cell.
+- C2.7A allows the Flow Table cell PropertyPanel to surface every paragraph
+  child in the selected cell. This keeps content appended by non-empty merge
+  visible and editable without adding source-cell mapping metadata.
 - Unmerge after content merge must not attempt to restore original source-cell
   mapping. It keeps the combined content in the selected cell and creates empty
   replacement cells.
-- These controls must not move a span origin or make the property panel patch
-  span props directly.
+- These controls must not move an authored span origin or make the property
+  panel patch span props directly. Left/up merge is a neighbor-origin action,
+  not selected-cell origin movement.
 
 ## Pagination-Related Authoring Rules
 
@@ -171,8 +179,10 @@ behavior:
 
 ## Current Deferred Work
 
-- Selection and editing for multiple paragraphs inside one table cell.
+- Canvas selection/editing ergonomics for multiple paragraphs inside one table
+  cell.
 - Explicit table or column resize UI.
 - Content-mapping restoration after merged non-empty cells are unmerged.
+- True span-origin movement for arbitrary left/up span authoring.
 - Split-at-row-boundary within rowspan-linked groups.
 - Visual regression tests for editor/PDF parity on multi-page tables.

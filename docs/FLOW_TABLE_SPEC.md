@@ -46,7 +46,13 @@ Implementation status:
 - C2.5A non-empty merge is available for selected-cell expansion. Consumed
   cells are removed and their non-empty child blocks are appended to the
   selected cell in row-major order.
-- Restoring original content-to-cell mapping after unmerge and span-origin
+- C2.6 neighbor-origin merge is available for `Merge left` and `Merge up`.
+  These actions keep the aligned left/upper neighbor as the surviving origin,
+  consume the selected cell through the same span operation, append content in
+  row-major order, and move editor selection to the surviving neighbor.
+- C2.7A PropertyPanel text editing surfaces every paragraph child in a selected
+  Flow Table cell, including paragraphs appended by non-empty merge.
+- Restoring original content-to-cell mapping after unmerge and true span-origin
   movement remain deferred.
 - Broader property editing and row/column/span operations remain intentionally
   incremental.
@@ -257,9 +263,11 @@ Flow Table must define a strict grid law before implementation:
   deleted target is not the origin of a continuing span. Deletion that would
   require moving an origin cell or deciding where to move content must no-op.
 - Direct cell span authoring must preserve grid law through a core operation.
-  Expansion may consume only empty cells whose entire current span is inside the
-  requested rectangle. Shrinking must fill vacated slots with new empty cells.
-  It must not merge non-empty content or move the selected cell's origin.
+  Expansion may consume only cells whose entire current span is inside the
+  requested rectangle. Non-empty merge appends consumed child blocks in
+  row-major order. Shrinking must fill vacated slots with new empty cells.
+  Merge left/up must use an existing aligned neighbor origin rather than moving
+  the selected cell's authored origin.
 - Operations that add or remove rows/columns must preserve the grid law or fail
   clearly.
 
@@ -450,8 +458,12 @@ Suggested order:
 18. Add C2.3B/C2.4 safe empty-cell merge and unmerge controls. Current status:
     implemented using the C2.3A span operation.
 19. Add C2.5A non-empty merge with row-major content append. Current status:
-    implemented for selected-cell expansion only.
-20. Add C2 span-origin movement, content-mapping restoration, and broader span authoring
+    implemented for selected-cell expansion.
+20. Add C2.6 neighbor-origin merge left/up. Current status: implemented for
+    aligned neighboring origins without true span-origin movement.
+21. Add C2.7A merged-cell multi-paragraph text editing in the PropertyPanel.
+    Current status: implemented for existing paragraph children.
+22. Add C2 span-origin movement, content-mapping restoration, and broader span authoring
     operations.
 
 ## Test Plan

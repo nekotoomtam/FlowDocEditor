@@ -178,6 +178,20 @@ function docWithSpannedFlowTable(): DocumentNode {
   return doc
 }
 
+function docWithMergedFlowTableCellContent(): DocumentNode {
+  const doc = docWithFlowTable()
+  const table = doc.document.sections[0].nodes.ft1
+  if (table.type !== "flow-table") throw new Error("expected flow-table fixture")
+  table.nodes.ftr1 = { id: "ftr1", type: "flow-table-row", props: {}, cellIds: ["ftc1"] }
+  table.nodes.ftr2 = { id: "ftr2", type: "flow-table-row", props: {}, cellIds: [] }
+  table.nodes.ftc1 = { id: "ftc1", type: "flow-table-cell", props: { colspan: 2, rowspan: 2 }, childIds: ["p1", "p2", "p3"] }
+  delete table.nodes.ftc2
+  delete table.nodes.ftc3
+  delete table.nodes.ftc4
+  delete table.nodes.p4
+  return doc
+}
+
 describe("PropertyPanel selection context", () => {
   it("shows a compact context trigger when the selected node has visible parents", () => {
     const noop = () => undefined
@@ -460,6 +474,10 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"flow-table-cell-rowspan-input\"")
     expect(markup).toContain("data-testid=\"flow-table-cell-colspan-input\"")
     expect(markup).toContain("data-testid=\"info-hint\"")
+    expect(markup).toContain("Merge up")
+    expect(markup).toContain("Merge up needs an aligned neighboring origin above")
+    expect(markup).toContain("Merge left")
+    expect(markup).toContain("Merge left needs an aligned neighboring origin on the left")
     expect(markup).toContain("Merge right")
     expect(markup).toContain("Merge right and append content")
     expect(markup).toContain("Merge down")
@@ -468,6 +486,35 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("↑ Above")
     expect(markup).toContain("Right →")
     expect(markup).toContain("Delete column")
+  })
+
+  it("enables flow-table merge left when an aligned neighboring origin can consume the selected cell", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "ftc2",
+      selectionAnchorNodeId: "p2",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("Row 1, Col 2")
+    expect(markup).toContain("Merge left into the neighboring origin and append content")
   })
 
   it("renders C2.3A flow-table cell span controls with the current span values", () => {
@@ -500,6 +547,42 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("value=\"2\"")
     expect(markup).toContain("Unmerge")
     expect(markup).toContain("Split selected span into empty cells")
+  })
+
+  it("renders every paragraph child in a merged flow-table cell", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithMergedFlowTableCellContent(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "ftc1",
+      selectionAnchorNodeId: "p1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("Text 1")
+    expect(markup).toContain("Text 2")
+    expect(markup).toContain("Text 3")
+    expect(markup).toContain("data-testid=\"flow-table-cell-text-0\"")
+    expect(markup).toContain("data-testid=\"flow-table-cell-text-1\"")
+    expect(markup).toContain("data-testid=\"flow-table-cell-text-2\"")
+    expect(markup).toContain(">A</textarea>")
+    expect(markup).toContain(">B</textarea>")
+    expect(markup).toContain(">C</textarea>")
   })
 
   it("enables C2.2 safe flow-table delete controls for spanned tables", () => {

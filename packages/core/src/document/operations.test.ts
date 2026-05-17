@@ -29,6 +29,7 @@ import {
   removeTableRow,
   removeFlowTableColumn,
   removeFlowTableRow,
+  resolveFlowTableCellMergeTarget,
   splitParagraphAtIndex,
   updateFlowTableCellSpan,
   updateFieldRefInline,
@@ -1527,6 +1528,61 @@ describe("flow-table structural operations", () => {
     expect(bottomRow?.type).toBe("flow-table-row")
     if (bottomRow?.type !== "flow-table-row") return
     expect(bottomRow.cellIds).toEqual(["flow-cell-1-1"])
+  })
+
+  it("resolves merge left into the neighboring origin and appends selected content", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [["A", "B"]],
+      columnWidths: [100, 100],
+    })
+    const table = getFlowTable(doc)
+
+    const target = resolveFlowTableCellMergeTarget(table, "flow-cell-0-1", "left")
+    expect(target).toEqual({ cellId: "flow-cell-0-0", changes: { colspan: 2 } })
+
+    const updated = updateFlowTableCellSpan(doc, target?.cellId ?? "", target?.changes ?? {})
+    assertDocument(updated)
+    const updatedTable = getFlowTable(updated)
+    const grid = resolveFlowTableGrid(updatedTable)
+    const topRow = updatedTable.nodes["flow-row-0"]
+
+    expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 2, rowspan: 1 })
+    expect(flowTableCellParagraphTexts(updatedTable, "flow-cell-0-0")).toEqual(["A", "B"])
+    expect(updatedTable.nodes["flow-cell-0-1"]).toBeUndefined()
+    expect(topRow?.type).toBe("flow-table-row")
+    if (topRow?.type !== "flow-table-row") return
+    expect(topRow.cellIds).toEqual(["flow-cell-0-0"])
+  })
+
+  it("resolves merge up into the neighboring origin and appends selected content", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [["A"], ["B"]],
+      columnWidths: [100],
+    })
+    const table = getFlowTable(doc)
+
+    const target = resolveFlowTableCellMergeTarget(table, "flow-cell-1-0", "up")
+    expect(target).toEqual({ cellId: "flow-cell-0-0", changes: { rowspan: 2 } })
+
+    const updated = updateFlowTableCellSpan(doc, target?.cellId ?? "", target?.changes ?? {})
+    assertDocument(updated)
+    const updatedTable = getFlowTable(updated)
+    const grid = resolveFlowTableGrid(updatedTable)
+    const bottomRow = updatedTable.nodes["flow-row-1"]
+
+    expect(grid.placementsByCellId.get("flow-cell-0-0")).toMatchObject({ colspan: 1, rowspan: 2 })
+    expect(flowTableCellParagraphTexts(updatedTable, "flow-cell-0-0")).toEqual(["A", "B"])
+    expect(updatedTable.nodes["flow-cell-1-0"]).toBeUndefined()
+    expect(bottomRow?.type).toBe("flow-table-row")
+    if (bottomRow?.type !== "flow-table-row") return
+    expect(bottomRow.cellIds).toEqual([])
+  })
+
+  it("does not resolve merge left when the neighboring origin does not align with the selected span", () => {
+    const doc = makeSpannedFlowTableDoc()
+    const table = getFlowTable(doc)
+
+    expect(resolveFlowTableCellMergeTarget(table, "flow-cell-bottom-right", "left")).toBeNull()
   })
 
   it("shrinks a flow-table cell span by creating empty replacement cells", () => {

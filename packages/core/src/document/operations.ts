@@ -65,6 +65,13 @@ export interface FlowTableCellSpanChanges {
   rowspan?: number
 }
 
+export type FlowTableCellMergeDirection = "left" | "right" | "up" | "down"
+
+export interface FlowTableCellMergeTarget {
+  cellId: string
+  changes: FlowTableCellSpanChanges
+}
+
 // ─── Tree Helpers ──────────────────────────────────────────────────────────────
 
 function findParentInfo(nodes: Nodes, childId: string): ParentInfo | null {
@@ -643,6 +650,73 @@ function getFlowTableCellSpanUpdatePlan(
       .map((item) => item.cellId),
     createSlots,
   }
+}
+
+export function resolveFlowTableCellMergeTarget(
+  table: FlowTableNode,
+  cellId: string,
+  direction: FlowTableCellMergeDirection,
+): FlowTableCellMergeTarget | null {
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return null
+  const placement = resolved.grid.placementsByCellId.get(cellId)
+  if (placement == null) return null
+
+  if (direction === "right") {
+    const changes = { colspan: placement.colspan + 1 }
+    return getFlowTableCellSpanUpdatePlan(table, cellId, changes) != null ? { cellId, changes } : null
+  }
+
+  if (direction === "down") {
+    const changes = { rowspan: placement.rowspan + 1 }
+    return getFlowTableCellSpanUpdatePlan(table, cellId, changes) != null ? { cellId, changes } : null
+  }
+
+  if (direction === "left") {
+    if (placement.columnIndex === 0) return null
+    const neighborColumn = placement.columnIndex - 1
+    let targetCellId: string | null = null
+    for (let rowIndex = placement.rowIndex; rowIndex <= placement.rowEndIndex; rowIndex++) {
+      const slot = resolved.grid.slotMatrix[rowIndex]?.[neighborColumn]
+      if (slot == null) return null
+      if (targetCellId == null) targetCellId = slot.cellId
+      else if (targetCellId !== slot.cellId) return null
+    }
+    if (targetCellId == null || targetCellId === cellId) return null
+    const target = resolved.grid.placementsByCellId.get(targetCellId)
+    if (target == null) return null
+    const aligned =
+      target.rowIndex === placement.rowIndex &&
+      target.rowEndIndex === placement.rowEndIndex &&
+      target.columnEndIndex === placement.columnIndex - 1
+    if (!aligned) return null
+    const changes = { colspan: target.colspan + placement.colspan }
+    return getFlowTableCellSpanUpdatePlan(table, target.cellId, changes) != null
+      ? { cellId: target.cellId, changes }
+      : null
+  }
+
+  if (placement.rowIndex === 0) return null
+  const neighborRow = placement.rowIndex - 1
+  let targetCellId: string | null = null
+  for (let columnIndex = placement.columnIndex; columnIndex <= placement.columnEndIndex; columnIndex++) {
+    const slot = resolved.grid.slotMatrix[neighborRow]?.[columnIndex]
+    if (slot == null) return null
+    if (targetCellId == null) targetCellId = slot.cellId
+    else if (targetCellId !== slot.cellId) return null
+  }
+  if (targetCellId == null || targetCellId === cellId) return null
+  const target = resolved.grid.placementsByCellId.get(targetCellId)
+  if (target == null) return null
+  const aligned =
+    target.columnIndex === placement.columnIndex &&
+    target.columnEndIndex === placement.columnEndIndex &&
+    target.rowEndIndex === placement.rowIndex - 1
+  if (!aligned) return null
+  const changes = { rowspan: target.rowspan + placement.rowspan }
+  return getFlowTableCellSpanUpdatePlan(table, target.cellId, changes) != null
+    ? { cellId: target.cellId, changes }
+    : null
 }
 
 function getFlowTableRowRemovalPlan(table: FlowTableNode, rowIndex: number): FlowTableRowRemovalPlan | null {
