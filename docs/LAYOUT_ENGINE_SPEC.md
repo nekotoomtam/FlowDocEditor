@@ -340,7 +340,8 @@ Current policy direction:
   paragraphs, but only within a row that permits splitting; see 4.3
 - flow-table row: non-rowspan single-row groups split by default;
   `allowBreak=false` keeps a row together when possible; rowspan-linked Flow
-  Table groups are atomic in v1; repeated headers remain deferred
+  Table groups are atomic in v1; `headerRowCount` repeats authored header rows
+  on body continuation pages
 - flow-table cell content: splits by the same measured line boundaries as body
   paragraphs, but only within a non-rowspan row that permits splitting
 - TOC placeholder: estimated-height placeholder in pass 1; if generated TOC

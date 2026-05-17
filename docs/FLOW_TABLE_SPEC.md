@@ -12,10 +12,12 @@ Implementation status:
 - Pagination supports breakable non-rowspan row/cell continuation across pages.
   Short sibling cell content is not duplicated on continuation slices.
 - Rowspan-linked row groups remain atomic in v1.
+- Core pagination repeats `headerRowCount` Flow Table header rows on body
+  continuation pages.
 - PDF and editor preview draw Flow Table cell `box` fill/border from paginated
   `flow-table-cell` fragments.
-- Repeated headers, DOCX output, broader Flow Table renderer behavior, editor
-  insertion, and property editing are intentionally not implemented yet.
+- DOCX output, broader Flow Table renderer behavior, editor insertion, and
+  property editing are intentionally not implemented yet.
 
 This document drafts a new table primitive that can be developed beside the
 current `table` node. The working title is **Flow Table** and the provisional

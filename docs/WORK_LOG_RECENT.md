@@ -24,6 +24,35 @@ Each entry should include:
 
 ## 2026-05-17
 
+### Add Flow Table Repeated Headers
+
+Goal: Bring Flow Table closer to authored table behavior by repeating
+`headerRowCount` rows during core pagination, without adding DOCX projection or
+editor UI yet.
+
+Completed:
+
+- Reused the legacy table pagination policy for Flow Table header repetition.
+- Added `placeHeaders` support for Flow Table body continuation pages.
+- Updated Flow Table row splitting so repeated headers consume continuation page
+  height before body row split decisions.
+- Kept header rows atomic; body rows still split only in non-rowspan groups.
+- Added focused tests for normal repeated headers and tall repeated headers that
+  leave limited body capacity.
+- Updated Flow Table, cross-page, and layout specs to record the new behavior.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts src/document/flowTableGrid.test.ts src/document/assert.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- DOCX Flow Table projection, editor insertion/property UI, and
+  split-inside-rowspan remain intentionally deferred.
+
 ### Draw Flow Table Cell Boxes In PDF And Editor
 
 Goal: Make the first Flow Table visual output consume paginated

@@ -2101,6 +2101,8 @@ function paginateFlowTableRowSplit(
   tableNodeId: string,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
+  repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
+  repeatedHeaderHeight: number = 0,
 ): PageFlowCursor {
   const fromSplits = new Map<string, SplitPoint>()
   for (const cellBox of rowBox.children) fromSplits.set(cellBox.nodeId, { childIdx: 0, lineIdx: 0 })
@@ -2115,6 +2117,7 @@ function paginateFlowTableRowSplit(
 
     if (availH < MINIMUM_ROW_SPLIT_HEIGHT) {
       current = advancePage(current, contentTop)
+      current = repeatHeaders ? repeatHeaders(current) : current
       continue
     }
 
@@ -2141,9 +2144,11 @@ function paginateFlowTableRowSplit(
 
       if (hasRemainingContent && !hasContentProgress) {
         const progressKey = splitProgressKey(rowBox, fromSplits)
-        if (current.cursorY > contentTop && retriedNoProgressKey !== progressKey) {
+        const cleanContinuationY = contentTop + repeatedHeaderHeight
+        if (current.cursorY > cleanContinuationY && retriedNoProgressKey !== progressKey) {
           retriedNoProgressKey = progressKey
           current = advancePage(current, contentTop)
+          current = repeatHeaders ? repeatHeaders(current) : current
           continue
         }
 
@@ -2253,6 +2258,7 @@ function paginateFlowTableRowSplit(
 
     if (!sliceIsLast) {
       current = advancePage(current, contentTop)
+      current = repeatHeaders ? repeatHeaders(current) : current
     }
   }
 
@@ -2320,6 +2326,17 @@ function paginateFlowTable(
 
   let current = cursor
   const groups = buildFlowTableRowspanGroups(tableNode, box.children)
+  const headerRowCount = tableNode.props.headerRowCount ?? 0
+  const headerBoxes = box.children.slice(0, headerRowCount)
+  const headerHeight = headerBoxes.reduce((sum, rowBox) => sum + rowBox.height, 0)
+
+  const placeHeaders = (c: PageFlowCursor): PageFlowCursor => {
+    for (const rowBox of headerBoxes) {
+      c = paginateFlowTableRowFull(rowBox, tableNode, pages, template, c, box.nodeId, measurer, wordBreaker)
+    }
+    return c
+  }
+
   const firstGroup = groups[0]
   if (firstGroup) {
     const firstRowBox = box.children[firstGroup.rowIndices[0]]
@@ -2327,7 +2344,8 @@ function paginateFlowTable(
     const firstRowAllowBreak = firstRowNode?.type === "flow-table-row"
       ? firstRowNode.props.allowBreak ?? true
       : true
-    const firstGroupIsAtomic = firstGroup.rowIndices.length > 1 || !firstRowAllowBreak
+    const firstGroupIsHeader = firstGroup.rowIndices.every((rowIndex) => rowIndex < headerRowCount)
+    const firstGroupIsAtomic = firstGroupIsHeader || firstGroup.rowIndices.length > 1 || !firstRowAllowBreak
     const firstGroupNeedsCleanSplitStart = !firstGroupIsAtomic &&
       current.cursorY > contentTop &&
       contentBottom - current.cursorY < MINIMUM_ROW_SPLIT_HEIGHT
@@ -2350,19 +2368,24 @@ function paginateFlowTable(
   })
 
   for (const { rowIndices, totalHeight } of groups) {
+    const isHeaderGroup = rowIndices.every((rowIndex) => rowIndex < headerRowCount)
+
     if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
       current = advancePage(current, contentTop)
+      if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
     }
 
     if (rowIndices.length > 1) {
       if (shouldMoveBlockToNextPage(current.cursorY, totalHeight, contentTop, contentBottom)) {
         current = advancePage(current, contentTop)
+        if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
       }
       for (const rowIndex of rowIndices) {
         const rowBox = box.children[rowIndex]
         if (!rowBox) continue
         if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
           current = advancePage(current, contentTop)
+          if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
         }
         current = paginateFlowTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
       }
@@ -2379,11 +2402,28 @@ function paginateFlowTable(
 
     if (!doesntFit && !tooTallForOnePage) {
       current = paginateFlowTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
-    } else if (allowBreak) {
-      current = paginateFlowTableRowSplit(rowBox, tableNode, pages, template, contentTop, contentBottom, current, box.nodeId, measurer, wordBreaker)
+    } else if (allowBreak && !isHeaderGroup) {
+      current = paginateFlowTableRowSplit(
+        rowBox,
+        tableNode,
+        pages,
+        template,
+        contentTop,
+        contentBottom,
+        current,
+        box.nodeId,
+        measurer,
+        wordBreaker,
+        headerRowCount > 0 ? placeHeaders : undefined,
+        headerRowCount > 0 ? headerHeight : 0,
+      )
     } else {
       const nextPage = advancePage(current, contentTop)
-      if (nextPage.cursorY + rowBox.height <= contentBottom) current = nextPage
+      const reservedForHeaders = isHeaderGroup ? 0 : headerHeight
+      if (nextPage.cursorY + reservedForHeaders + rowBox.height <= contentBottom) {
+        current = nextPage
+        if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
+      }
       current = paginateFlowTableRowFull(rowBox, tableNode, pages, template, current, box.nodeId, measurer, wordBreaker)
     }
   }

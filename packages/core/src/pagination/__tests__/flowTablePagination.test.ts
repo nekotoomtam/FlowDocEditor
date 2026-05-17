@@ -249,6 +249,91 @@ describe("flow-table static pagination", () => {
     expectContiguousLineFragments(paragraphFragments, lineCount)
   })
 
+  it("repeats flow-table headers on body row continuation pages", () => {
+    const bodyLineCount = 130
+    const header = makePara("header", "Header")
+    const body = makePara("body-p", makeLines("Body", bodyLineCount))
+    const headerCell = makeCell("header-cell", [header.id])
+    const bodyCell = makeCell("body-cell", [body.id])
+    const headerRow = makeRow("header-row", [headerCell.id], { height: pt(24) })
+    const bodyRow = makeRow("body-row", [bodyCell.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: { headerRowCount: 1 },
+      columns: [{ width: pt(220) }],
+      rowIds: [headerRow.id, bodyRow.id],
+      nodes: {
+        [headerRow.id]: headerRow,
+        [bodyRow.id]: bodyRow,
+        [headerCell.id]: headerCell,
+        [bodyCell.id]: bodyCell,
+        [header.id]: header,
+        [body.id]: body,
+      },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const pages = result.sections[0].pages
+    const headerRows = fragmentsFor(result, headerRow.id, "flow-table-row")
+    const headerParagraphs = fragmentsFor(result, header.id, "paragraph")
+    const bodyRows = fragmentsFor(result, bodyRow.id, "flow-table-row")
+    const bodyParagraphs = fragmentsFor(result, body.id, "paragraph")
+
+    expect(pages.length).toBeGreaterThan(1)
+    expect(headerRows).toHaveLength(pages.length)
+    expect(headerParagraphs).toHaveLength(pages.length)
+    expect(headerRows.every((fragment) => fragment.y === 72)).toBe(true)
+    expect(bodyRows.length).toBeGreaterThan(1)
+    expect(bodyRows.every((fragment) => fragment.y === 72 + 24)).toBe(true)
+    expectContiguousLineFragments(bodyParagraphs, bodyLineCount)
+  })
+
+  it("keeps flow-table body split accounting when repeated headers consume most page height", () => {
+    const bodyLineCount = 30
+    const header = makePara("header", "Tall header")
+    const body = makePara("body-p", makeLines("Body", bodyLineCount))
+    const headerCell = makeCell("header-cell", [header.id])
+    const bodyCell = makeCell("body-cell", [body.id])
+    const headerRow = makeRow("header-row", [headerCell.id], { height: pt(650) })
+    const bodyRow = makeRow("body-row", [bodyCell.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: { headerRowCount: 1 },
+      columns: [{ width: pt(220) }],
+      rowIds: [headerRow.id, bodyRow.id],
+      nodes: {
+        [headerRow.id]: headerRow,
+        [bodyRow.id]: bodyRow,
+        [headerCell.id]: headerCell,
+        [bodyCell.id]: bodyCell,
+        [header.id]: header,
+        [body.id]: body,
+      },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const headerRows = fragmentsFor(result, headerRow.id, "flow-table-row")
+    const bodyRows = fragmentsFor(result, bodyRow.id, "flow-table-row")
+    const bodyParagraphs = fragmentsFor(result, body.id, "paragraph")
+    const warningSummary = collectPaginatedLayoutWarnings(result)
+
+    expect(headerRows.length).toBeGreaterThan(1)
+    expect(bodyRows.length).toBeGreaterThan(1)
+    expect(bodyRows.every((fragment) => fragment.y === 72 + 650)).toBe(true)
+    expectContiguousLineFragments(bodyParagraphs, bodyLineCount)
+    expect(warningSummary.find((warning) => warning.code === "forced-flow-table-split-overflow")).toBeUndefined()
+  })
+
   it("does not duplicate shorter sibling cell content on flow-table row continuation", () => {
     const longLineCount = 120
     const short = makePara("short", "Short cell")
