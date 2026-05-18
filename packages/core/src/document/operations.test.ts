@@ -1725,6 +1725,156 @@ describe("flow-table structural operations", () => {
     expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][1].cellId)).toEqual(["D"])
   })
 
+  it("shifts flow-table mergeMap row offsets when adding a row through a content-merged cell", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+      columnWidths: [100, 100],
+    })
+    const merged = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    const inserted = addFlowTableRow(merged, "flow-table", 0)
+    assertDocument(inserted)
+    const insertedTable = getFlowTable(inserted)
+    const cell = insertedTable.nodes["flow-cell-0-0"]
+
+    expect(cell.type).toBe("flow-table-cell")
+    if (cell.type !== "flow-table-cell") return
+    expect(cell.props.rowspan).toBe(3)
+    expect(cell.props.mergeMap).toEqual({
+      version: 1,
+      entries: [
+        { rowOffset: 0, colOffset: 0, childIds: ["fp-0-0"] },
+        { rowOffset: 0, colOffset: 1, childIds: ["fp-0-1"] },
+        { rowOffset: 2, colOffset: 0, childIds: ["fp-1-0"] },
+        { rowOffset: 2, colOffset: 1, childIds: ["fp-1-1"] },
+      ],
+    })
+
+    const unmerged = updateFlowTableCellSpan(inserted, "flow-cell-0-0", { colspan: 1, rowspan: 1 })
+    assertDocument(unmerged)
+    const table = getFlowTable(unmerged)
+    const grid = resolveFlowTableGrid(table)
+
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[0][1].cellId)).toEqual(["B"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][0].cellId)).toEqual([""])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][1].cellId)).toEqual([""])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[2][0].cellId)).toEqual(["C"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[2][1].cellId)).toEqual(["D"])
+  })
+
+  it("shifts flow-table mergeMap column offsets when adding a column through a content-merged cell", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+      columnWidths: [100, 100],
+    })
+    const merged = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    const inserted = addFlowTableColumn(merged, "flow-table", 0)
+    assertDocument(inserted)
+    const insertedTable = getFlowTable(inserted)
+    const cell = insertedTable.nodes["flow-cell-0-0"]
+
+    expect(cell.type).toBe("flow-table-cell")
+    if (cell.type !== "flow-table-cell") return
+    expect(cell.props.colspan).toBe(3)
+    expect(cell.props.mergeMap).toEqual({
+      version: 1,
+      entries: [
+        { rowOffset: 0, colOffset: 0, childIds: ["fp-0-0"] },
+        { rowOffset: 0, colOffset: 2, childIds: ["fp-0-1"] },
+        { rowOffset: 1, colOffset: 0, childIds: ["fp-1-0"] },
+        { rowOffset: 1, colOffset: 2, childIds: ["fp-1-1"] },
+      ],
+    })
+
+    const unmerged = updateFlowTableCellSpan(inserted, "flow-cell-0-0", { colspan: 1, rowspan: 1 })
+    assertDocument(unmerged)
+    const table = getFlowTable(unmerged)
+    const grid = resolveFlowTableGrid(table)
+
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[0][1].cellId)).toEqual([""])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[0][2].cellId)).toEqual(["B"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][0].cellId)).toEqual(["C"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][1].cellId)).toEqual([""])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][2].cellId)).toEqual(["D"])
+  })
+
+  it("shifts flow-table mergeMap offsets back when removing an inserted empty row through a merged cell", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+      columnWidths: [100, 100],
+    })
+    const merged = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    const inserted = addFlowTableRow(merged, "flow-table", 0)
+    const removed = removeFlowTableRow(inserted, "flow-table", 1)
+    assertDocument(removed)
+    const removedTable = getFlowTable(removed)
+    const cell = removedTable.nodes["flow-cell-0-0"]
+
+    expect(cell.type).toBe("flow-table-cell")
+    if (cell.type !== "flow-table-cell") return
+    expect(cell.props.mergeMap).toEqual({
+      version: 1,
+      entries: [
+        { rowOffset: 0, colOffset: 0, childIds: ["fp-0-0"] },
+        { rowOffset: 0, colOffset: 1, childIds: ["fp-0-1"] },
+        { rowOffset: 1, colOffset: 0, childIds: ["fp-1-0"] },
+        { rowOffset: 1, colOffset: 1, childIds: ["fp-1-1"] },
+      ],
+    })
+
+    const unmerged = updateFlowTableCellSpan(removed, "flow-cell-0-0", { colspan: 1, rowspan: 1 })
+    const table = getFlowTable(unmerged)
+    const grid = resolveFlowTableGrid(table)
+
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[0][1].cellId)).toEqual(["B"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][0].cellId)).toEqual(["C"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][1].cellId)).toEqual(["D"])
+  })
+
+  it("keeps deleted-slot flow-table mergeMap content on the origin when removing a mapped column", () => {
+    const doc = makeGridFlowTableDoc({
+      rows: [
+        ["A", "B"],
+        ["C", "D"],
+      ],
+      columnWidths: [100, 100],
+    })
+    const merged = updateFlowTableCellSpan(doc, "flow-cell-0-0", { colspan: 2, rowspan: 2 })
+    const removed = removeFlowTableColumn(merged, "flow-table", 1)
+    assertDocument(removed)
+    const removedTable = getFlowTable(removed)
+    const cell = removedTable.nodes["flow-cell-0-0"]
+
+    expect(cell.type).toBe("flow-table-cell")
+    if (cell.type !== "flow-table-cell") return
+    expect(cell.props.colspan).toBe(1)
+    expect(cell.props.mergeMap).toEqual({
+      version: 1,
+      entries: [
+        { rowOffset: 0, colOffset: 0, childIds: ["fp-0-0"] },
+        { rowOffset: 1, colOffset: 0, childIds: ["fp-1-0"] },
+      ],
+    })
+
+    const unmerged = updateFlowTableCellSpan(removed, "flow-cell-0-0", { colspan: 1, rowspan: 1 })
+    const table = getFlowTable(unmerged)
+    const grid = resolveFlowTableGrid(table)
+
+    expect(flowTableCellParagraphTexts(table, "flow-cell-0-0")).toEqual(["A", "B", "D"])
+    expect(flowTableCellParagraphTexts(table, grid.slotMatrix[1][0].cellId)).toEqual(["C"])
+  })
+
   it("does not delete the last flow-table column", () => {
     const doc = makeGridFlowTableDoc({
       columnWidths: [100],

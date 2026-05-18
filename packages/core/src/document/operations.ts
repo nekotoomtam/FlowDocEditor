@@ -588,6 +588,79 @@ function mergeFlowTableMergeMapEntries(entries: FlowTableCellMergeMapEntry[]): F
   return merged.length > 0 ? { version: 1, entries: merged } : undefined
 }
 
+function normalizeFlowTableCellMergeMapForOperation(
+  cell: FlowTableCellNode,
+  entries: FlowTableCellMergeMapEntry[],
+  rowspan: number,
+  colspan: number,
+): FlowTableCellMergeMap | undefined {
+  const cellChildIds = new Set(cell.childIds)
+  const mappedChildIds = new Set<string>()
+  const boundedEntries: FlowTableCellMergeMapEntry[] = []
+
+  entries.forEach((entry) => {
+    if (entry.rowOffset < 0 || entry.rowOffset >= rowspan || entry.colOffset < 0 || entry.colOffset >= colspan) return
+    const childIds = entry.childIds.filter((childId) => cellChildIds.has(childId) && !mappedChildIds.has(childId))
+    if (childIds.length === 0) return
+    childIds.forEach((childId) => { mappedChildIds.add(childId) })
+    boundedEntries.push({ ...entry, childIds })
+  })
+
+  return mergeFlowTableMergeMapEntries(boundedEntries)
+}
+
+function updateFlowTableCellPropsMergeMap(
+  props: FlowTableCellNode["props"],
+  mergeMap: FlowTableCellMergeMap | undefined,
+): FlowTableCellNode["props"] {
+  const next = { ...props }
+  if (mergeMap) next.mergeMap = mergeMap
+  else delete next.mergeMap
+  return next
+}
+
+type FlowTableMergeMapAxis = "row" | "column"
+
+function shiftFlowTableCellMergeMapForAxisInsert(
+  cell: FlowTableCellNode,
+  axis: FlowTableMergeMapAxis,
+  insertOffset: number,
+  rowspan: number,
+  colspan: number,
+): FlowTableCellMergeMap | undefined {
+  const mergeMap = cell.props.mergeMap
+  if (mergeMap == null) return undefined
+
+  const entries = mergeMap.entries.map((entry) =>
+    axis === "row"
+      ? { ...entry, rowOffset: entry.rowOffset >= insertOffset ? entry.rowOffset + 1 : entry.rowOffset }
+      : { ...entry, colOffset: entry.colOffset >= insertOffset ? entry.colOffset + 1 : entry.colOffset },
+  )
+  return normalizeFlowTableCellMergeMapForOperation(cell, entries, rowspan, colspan)
+}
+
+function shiftFlowTableCellMergeMapForAxisRemoval(
+  cell: FlowTableCellNode,
+  axis: FlowTableMergeMapAxis,
+  removedOffset: number,
+  rowspan: number,
+  colspan: number,
+): FlowTableCellMergeMap | undefined {
+  const mergeMap = cell.props.mergeMap
+  if (mergeMap == null) return undefined
+
+  const entries = mergeMap.entries.flatMap((entry): FlowTableCellMergeMapEntry[] => {
+    const offset = axis === "row" ? entry.rowOffset : entry.colOffset
+    if (offset === removedOffset) return []
+    return [
+      axis === "row"
+        ? { ...entry, rowOffset: offset > removedOffset ? offset - 1 : offset }
+        : { ...entry, colOffset: offset > removedOffset ? offset - 1 : offset },
+    ]
+  })
+  return normalizeFlowTableCellMergeMapForOperation(cell, entries, rowspan, colspan)
+}
+
 function buildFlowTableCellMergeMapForSpanUpdate(
   table: FlowTableNode,
   plan: FlowTableCellSpanUpdatePlan,
@@ -1574,9 +1647,17 @@ export function addFlowTableRow(doc: DocumentNode, tableId: string, afterIndex?:
       if (!(placement.rowIndex < insertAt && insertAt <= placement.rowEndIndex)) return
       const cell = internalNodes[placement.cellId] as FlowTableCellNode | undefined
       if (cell?.type !== "flow-table-cell") return
+      const nextRowspan = placement.rowspan + 1
+      const mergeMap = shiftFlowTableCellMergeMapForAxisInsert(
+        cell,
+        "row",
+        insertAt - placement.rowIndex,
+        nextRowspan,
+        placement.colspan,
+      )
       internalNodes[placement.cellId] = {
         ...cell,
-        props: { ...cell.props, rowspan: placement.rowspan + 1 },
+        props: updateFlowTableCellPropsMergeMap({ ...cell.props, rowspan: nextRowspan }, mergeMap),
       }
       for (let columnIndex = placement.columnIndex; columnIndex <= placement.columnEndIndex; columnIndex++) {
         coveredColumns.add(columnIndex)
@@ -1602,14 +1683,28 @@ export function removeFlowTableRow(doc: DocumentNode, tableId: string, rowIndex:
   return updateFlowTableInSection(doc, tableId, (table) => {
     const plan = getFlowTableRowRemovalPlan(table, rowIndex)
     if (plan == null) return table
+    const resolved = tryResolveFlowTableGrid(table)
+    if (!resolved.ok) return table
 
     const internalNodes = { ...table.nodes }
 
     plan.shrinkRowspanCellIds.forEach((cellId) => {
       const cell = internalNodes[cellId] as FlowTableCellNode | undefined
       if (cell?.type !== "flow-table-cell") return
-      const rowspan = cell.props.rowspan ?? 1
-      internalNodes[cellId] = { ...cell, props: { ...cell.props, rowspan: Math.max(1, rowspan - 1) } }
+      const placement = resolved.grid.placementsByCellId.get(cellId)
+      if (placement == null) return
+      const rowspan = Math.max(1, placement.rowspan - 1)
+      const mergeMap = shiftFlowTableCellMergeMapForAxisRemoval(
+        cell,
+        "row",
+        rowIndex - placement.rowIndex,
+        rowspan,
+        placement.colspan,
+      )
+      internalNodes[cellId] = {
+        ...cell,
+        props: updateFlowTableCellPropsMergeMap({ ...cell.props, rowspan }, mergeMap),
+      }
     })
 
     const row = internalNodes[plan.rowId] as FlowTableRowNode | undefined
@@ -1658,9 +1753,17 @@ export function addFlowTableColumn(doc: DocumentNode, tableId: string, afterColI
       if (!(placement.columnIndex < insertAt && insertAt <= placement.columnEndIndex)) return
       const cell = internalNodes[placement.cellId] as FlowTableCellNode | undefined
       if (cell?.type !== "flow-table-cell") return
+      const nextColspan = placement.colspan + 1
+      const mergeMap = shiftFlowTableCellMergeMapForAxisInsert(
+        cell,
+        "column",
+        insertAt - placement.columnIndex,
+        placement.rowspan,
+        nextColspan,
+      )
       internalNodes[placement.cellId] = {
         ...cell,
-        props: { ...cell.props, colspan: placement.colspan + 1 },
+        props: updateFlowTableCellPropsMergeMap({ ...cell.props, colspan: nextColspan }, mergeMap),
       }
       for (let rowIndex = placement.rowIndex; rowIndex <= placement.rowEndIndex; rowIndex++) {
         coveredRows.add(rowIndex)
@@ -1691,6 +1794,8 @@ export function removeFlowTableColumn(doc: DocumentNode, tableId: string, colInd
   return updateFlowTableInSection(doc, tableId, (table) => {
     const plan = getFlowTableColumnRemovalPlan(table, colIndex)
     if (plan == null) return table
+    const resolved = tryResolveFlowTableGrid(table)
+    if (!resolved.ok) return table
 
     const internalNodes = { ...table.nodes }
     const removedWidth = unitWidthToPt(table.columns[colIndex]?.width)
@@ -1699,8 +1804,20 @@ export function removeFlowTableColumn(doc: DocumentNode, tableId: string, colInd
     plan.shrinkColspanCellIds.forEach((cellId) => {
       const cell = internalNodes[cellId] as FlowTableCellNode | undefined
       if (cell?.type !== "flow-table-cell") return
-      const colspan = cell.props.colspan ?? 1
-      internalNodes[cellId] = { ...cell, props: { ...cell.props, colspan: Math.max(1, colspan - 1) } }
+      const placement = resolved.grid.placementsByCellId.get(cellId)
+      if (placement == null) return
+      const colspan = Math.max(1, placement.colspan - 1)
+      const mergeMap = shiftFlowTableCellMergeMapForAxisRemoval(
+        cell,
+        "column",
+        colIndex - placement.columnIndex,
+        placement.rowspan,
+        colspan,
+      )
+      internalNodes[cellId] = {
+        ...cell,
+        props: updateFlowTableCellPropsMergeMap({ ...cell.props, colspan }, mergeMap),
+      }
     })
 
     table.rowIds.forEach((rowId) => {

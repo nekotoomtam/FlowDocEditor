@@ -62,6 +62,11 @@ Implementation status:
   stay with the origin cell; mapped children from released slots move to the
   replacement cells created for those slots. Restored cells do not carry a new
   merge map in this slice.
+- C2.8D merge-map row/column operation maintenance is available. Inserting a
+  row or column through a mapped span shifts later relative offsets forward;
+  deleting a row or column through a mapped span drops mappings for the deleted
+  slots, keeps those child blocks on the origin cell to avoid data loss, and
+  shifts later offsets back.
 - True span-origin movement remains deferred.
 - Broader property editing and row/column/span operations remain intentionally
   incremental.
@@ -489,7 +494,10 @@ Suggested order:
     implemented for span expansion.
 24. Add C2.8C merge-map restoration during Flow Table cell shrink/unmerge.
     Current status: implemented for existing relative slot metadata.
-25. Add C2 span-origin movement and broader span authoring operations.
+25. Add C2.8D merge-map maintenance during Flow Table row/column insertion
+    and deletion. Current status: implemented for conservative shift/prune
+    semantics.
+26. Add C2 span-origin movement and broader span authoring operations.
 
 ## Test Plan
 

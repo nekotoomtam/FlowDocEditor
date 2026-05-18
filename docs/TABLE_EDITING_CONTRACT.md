@@ -152,6 +152,11 @@ Flow Table C2 foundation:
   cells created for those slots. Unmapped child blocks stay with the origin cell
   to avoid data loss. Restored cells do not receive a new `mergeMap` in this
   slice.
+- C2.8D keeps `mergeMap` conservative under row/column insertion and deletion.
+  Inserting a row/column through a mapped span shifts mappings at or after the
+  inserted relative offset forward. Deleting a row/column through a mapped span
+  drops mappings for deleted source slots, keeps those child blocks on the
+  origin cell, and shifts mappings after the deleted relative offset back.
 - These controls must not move an authored span origin or make the property
   panel patch span props directly. Left/up merge is a neighbor-origin action,
   not selected-cell origin movement.

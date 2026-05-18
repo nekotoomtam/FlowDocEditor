@@ -24,6 +24,53 @@ Each entry should include:
 
 ## 2026-05-18
 
+### Add Flow Table C2.8D Merge Map Row/Column Maintenance
+
+Goal: Keep Flow Table merge-map metadata valid and useful when row/column
+operations edit spans that already contain mapped merged content.
+
+Completed:
+
+- Added operation helpers to normalize shifted/pruned `mergeMap` entries after
+  row/column structural edits.
+- Shifted mapped row offsets forward when inserting a row through a mapped span.
+- Shifted mapped column offsets forward when inserting a column through a
+  mapped span.
+- Shifted offsets back when deleting an inserted empty row through a mapped
+  span.
+- Pruned mappings for deleted source slots while keeping their child blocks on
+  the origin cell to avoid data loss.
+- Added focused operation coverage for insert-row, insert-column, remove
+  inserted-row, and mapped-column deletion fallback behavior.
+- Updated Flow Table spec, table editing contract, and test strategy notes.
+
+Files changed:
+
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts src/document/assert.test.ts src/document/normalize.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+
+Notes:
+
+- This does not add true arbitrary span-origin movement.
+- Deleting a source slot intentionally preserves child content on the origin
+  cell instead of trying to restore a deleted slot.
+- The project version marker test was aligned to the already-accepted `0.5.6`
+  root package marker so the app suite can pass after the prior release bump.
+
 ### Add Flow Table C2.8C Merge Map Restoration
 
 Goal: Use Flow Table merge-map metadata to restore merged content during

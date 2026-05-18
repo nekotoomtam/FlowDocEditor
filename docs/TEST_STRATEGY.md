@@ -331,6 +331,11 @@ Current strengths:
   slots, partial shrink keeps in-span mapped content with the surviving origin,
   released slots receive their mapped child blocks, and restored cells clear
   stale merge-map metadata.
+- Flow Table C2.8D coverage protects merge-map maintenance across row/column
+  operations by asserting inserted row/column offsets shift forward through a
+  mapped span, deleting an inserted empty row shifts offsets back, and deleting
+  a mapped column keeps deleted-slot content on the origin while pruning stale
+  mappings.
 - Renderer smoke tests protect PDF/DOCX from obvious breakage. Focused editor
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual
