@@ -264,6 +264,44 @@ describe("flow-table static pagination", () => {
     expectContiguousLineFragments(paragraphFragments, lineCount)
   })
 
+  it("splits a breakable colspan-only flow-table cell across pages", () => {
+    const lineCount = 130
+    const p1 = makePara("p1", makeLines("Wide", lineCount))
+    const p2 = makePara("p2", "Short")
+    const c1 = makeCell("c1", [p1.id], { colspan: 2 })
+    const c2 = makeCell("c2", [p2.id])
+    const r1 = makeRow("r1", [c1.id, c2.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(90) }, { width: pt(110) }, { width: pt(80) }],
+      rowIds: [r1.id],
+      nodes: { r1, c1, c2, p1, p2 },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const rowFragments = fragmentsFor(result, "r1", "flow-table-row")
+    const wideCellFragments = fragmentsFor(result, "c1", "flow-table-cell")
+    const wideParagraphFragments = fragmentsFor(result, "p1", "paragraph")
+    const shortParagraphFragments = fragmentsFor(result, "p2", "paragraph")
+
+    expect(rowFragments.length).toBeGreaterThan(1)
+    expect(wideCellFragments.length).toBe(rowFragments.length)
+    expect(wideCellFragments.every((fragment) =>
+      fragment.width === 200 &&
+      fragment.flowTableCellGridProps?.columnIndex === 0 &&
+      fragment.flowTableCellGridProps.colspan === 2 &&
+      fragment.flowTableCellGridProps.rowspan === 1,
+    )).toBe(true)
+    expect(shortParagraphFragments).toHaveLength(1)
+    expectContiguousLineFragments(wideParagraphFragments, lineCount)
+  })
+
   it("repeats flow-table headers on body row continuation pages", () => {
     const bodyLineCount = 130
     const header = makePara("header", "Header")

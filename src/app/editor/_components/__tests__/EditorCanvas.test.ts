@@ -4,7 +4,12 @@ import { describe, expect, it } from "vitest"
 import { defaultTextMeasurer } from "@/layout"
 import type { PaginatedDocument, PageFragment, ParagraphRenderProps } from "@/pagination"
 import type { DocumentNode } from "@/schema"
-import { buildWysiwygDraftVisualPreview, EditorCanvas } from "../EditorCanvas"
+import {
+  buildWysiwygDraftVisualPreview,
+  buildWysiwygTableCellDraftVisualChromeFragments,
+  EditorCanvas,
+  shouldStartInlineEditOnSingleClick,
+} from "../EditorCanvas"
 
 const renderProps: ParagraphRenderProps = {
   align: "left",
@@ -492,9 +497,29 @@ describe("EditorCanvas flow-row / flow-stack static preview", () => {
 })
 
 describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
+  it("allows table-cell paragraphs to enter inline edit from a single click action", () => {
+    expect(shouldStartInlineEditOnSingleClick({
+      canInlineEditParagraph: true,
+      isTableCellParagraph: true,
+    })).toBe(true)
+  })
+
+  it("keeps table and row structure chrome invisible while cell chrome remains visible", () => {
+    const markup = renderCanvas(makeTableCellPaginated("flow-table"), makeFlowTableCellDoc())
+    const structureGroups = markup.match(/<g[^>]*data-table-structure-chrome="true"[\s\S]*?<\/g>/g) ?? []
+
+    expect(structureGroups).toHaveLength(2)
+    expect(structureGroups.every((group) => group.includes("fill=\"transparent\""))).toBe(true)
+    expect(structureGroups.every((group) => group.includes("stroke=\"transparent\""))).toBe(true)
+    expect(structureGroups.every((group) => group.includes("opacity=\"0\""))).toBe(true)
+    expect(markup).toContain("data-node-type=\"flow-table-cell\"")
+    expect(markup).toContain("fill=\"#fef9c3\"")
+  })
+
   it("builds a conservative table-cell continuation preview before settled draft pagination", () => {
+    const paginated = makeTableCellPaginated()
     const preview = buildWysiwygDraftVisualPreview({
-      paginated: makeTableCellPaginated(),
+      paginated,
       doc: makeTableCellDoc(),
       nodeId: "cell-p",
       draftText: "A\nB\nC",
@@ -522,11 +547,49 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     expect(preview?.fragments[0].lines?.map((line) => line.text)).toEqual(["A", "B"])
     expect(preview?.fragments[1].lines?.map((line) => line.text)).toEqual(["C"])
     expect(preview?.caretPageIndex).toBe(1)
+
+    const chromeByPage = buildWysiwygTableCellDraftVisualChromeFragments({ paginated, preview })
+    const sourceChrome = chromeByPage.get(0) ?? []
+    expect(sourceChrome.map((fragment) => fragment.nodeType)).toEqual(["table", "row", "table-cell"])
+    expect(sourceChrome.every((fragment) => fragment.continuesFrom === false)).toBe(true)
+    expect(sourceChrome.every((fragment) => fragment.isContinued)).toBe(true)
+
+    const chrome = chromeByPage.get(1) ?? []
+    expect(chrome.map((fragment) => fragment.nodeType)).toEqual(["table", "row", "table-cell"])
+    expect(chrome.every((fragment) => fragment.continuesFrom)).toBe(true)
+    expect(chrome.every((fragment) => fragment.height === preview?.fragments[1].height)).toBe(true)
+  })
+
+  it("extends source-page table-cell chrome to the split slice height", () => {
+    const paginated = makeTableCellPaginated()
+    for (const fragment of paginated.sections[0].pages[0].fragments) {
+      if (fragment.nodeType === "table" || fragment.nodeType === "row" || fragment.nodeType === "table-cell") {
+        fragment.height = 12
+      }
+    }
+
+    const preview = buildWysiwygDraftVisualPreview({
+      paginated,
+      doc: makeTableCellDoc(),
+      nodeId: "cell-p",
+      draftText: "A\nB\nC",
+      caretOffset: 5,
+      textMeasurer: defaultTextMeasurer,
+    })
+    const sourceChrome = buildWysiwygTableCellDraftVisualChromeFragments({ paginated, preview }).get(0) ?? []
+    const sourceTable = sourceChrome.find((fragment) => fragment.nodeType === "table")
+    const sourceRow = sourceChrome.find((fragment) => fragment.nodeType === "row")
+    const sourceCell = sourceChrome.find((fragment) => fragment.nodeType === "table-cell")
+
+    expect(sourceRow?.height).toBe(28)
+    expect(sourceCell?.height).toBe(28)
+    expect(sourceTable?.height).toBe(28)
   })
 
   it("builds the same conservative preview for flow-table-cell paragraphs", () => {
+    const paginated = makeTableCellPaginated("flow-table")
     const preview = buildWysiwygDraftVisualPreview({
-      paginated: makeTableCellPaginated("flow-table"),
+      paginated,
       doc: makeFlowTableCellDoc(),
       nodeId: "cell-p",
       draftText: "A\nB\nC",
@@ -540,6 +603,39 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
       parentNodeId: "ftc1",
       pageIndex: 1,
       continuesFrom: true,
+    })
+
+    const chrome = buildWysiwygTableCellDraftVisualChromeFragments({ paginated, preview }).get(1) ?? []
+    expect(chrome.map((fragment) => fragment.nodeType)).toEqual(["flow-table", "flow-table-row", "flow-table-cell"])
+  })
+
+  it("preserves colspan-only flow-table cell width in visual chrome", () => {
+    const paginated = makeTableCellPaginated("flow-table")
+    for (const page of paginated.sections[0].pages) {
+      for (const fragment of page.fragments) {
+        if (fragment.nodeId === "ft1" || fragment.nodeId === "ftr1" || fragment.nodeId === "ftc1") {
+          fragment.width = 200
+        }
+        if (fragment.nodeId === "ftc1" && fragment.nodeType === "flow-table-cell") {
+          fragment.flowTableCellGridProps = { columnIndex: 0, colspan: 2, rowspan: 1 }
+        }
+      }
+    }
+    const preview = buildWysiwygDraftVisualPreview({
+      paginated,
+      doc: makeFlowTableCellDoc(),
+      nodeId: "cell-p",
+      draftText: "A\nB\nC",
+      caretOffset: 5,
+      textMeasurer: defaultTextMeasurer,
+    })
+    const chrome = buildWysiwygTableCellDraftVisualChromeFragments({ paginated, preview }).get(1) ?? []
+    const cellChrome = chrome.find((fragment) => fragment.nodeId === "ftc1")
+
+    expect(cellChrome).toMatchObject({
+      nodeType: "flow-table-cell",
+      width: 200,
+      flowTableCellGridProps: { columnIndex: 0, colspan: 2, rowspan: 1 },
     })
   })
 
@@ -576,6 +672,8 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     })
 
     expect(markup).toContain("data-page-index=\"1\"")
+    expect(markup.match(/data-wysiwyg-table-cell-visual-chrome="true"/g)).toHaveLength(6)
+    expect(markup.match(/data-wysiwyg-table-cell-structure-chrome="true"/g)).toHaveLength(4)
     expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
     expect(markup).toContain("data-wysiwyg-reflow-kind=\"soft\"")
     expect(markup).toContain(">C</text>")
@@ -595,6 +693,7 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     })
 
     expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-table-cell-visual-chrome")
     expect(markup).not.toContain("data-wysiwyg-table-cell-preview-candidate")
     expect(markup).not.toContain(">C</text>")
     expect(markup).not.toContain("<textarea")

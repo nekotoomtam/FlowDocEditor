@@ -5,6 +5,12 @@ import {
   WYSIWYG_STAGE3_BOUNDARY_APPEND_TEXT,
   WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT,
   WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID,
+  WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_NODE_ID,
+  WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_APPEND_TEXT,
+  WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_CELL_ID,
+  WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_INITIAL_TEXT,
+  WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_MARKER,
+  WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID,
   WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM,
   WYSIWYG_STAGE3_STACK_CONTROL_NODE_ID,
   WYSIWYG_STAGE3_STACK_LEFT_ID,
@@ -13,6 +19,10 @@ import {
   WYSIWYG_STAGE3_STACK_TARGET_APPEND_TEXT,
   WYSIWYG_STAGE3_STACK_TARGET_INITIAL_TEXT,
   WYSIWYG_STAGE3_STACK_TARGET_NODE_ID,
+  WYSIWYG_STAGE3_TABLE_TARGET_APPEND_TEXT,
+  WYSIWYG_STAGE3_TABLE_TARGET_INITIAL_TEXT,
+  WYSIWYG_STAGE3_TABLE_TARGET_MARKER,
+  WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID,
   WYSIWYG_STAGE3_TARGET_MARKER,
   WYSIWYG_STAGE3_TARGET_NODE_ID,
   makeWysiwygStage3BoundaryDocument,
@@ -27,10 +37,14 @@ import { getPlainParagraphTextFromDocument } from "../wysiwygTextCommit"
 import { applyWysiwygTextInputKey } from "../useWysiwygTextSession"
 
 function targetLineText(paginated: ReturnType<typeof paginateDocument>): string {
+  return paragraphLineText(paginated, WYSIWYG_STAGE3_TARGET_NODE_ID)
+}
+
+function paragraphLineText(paginated: ReturnType<typeof paginateDocument>, nodeId: string): string {
   return paginated.sections
     .flatMap((section) => section.pages)
     .flatMap((page) => page.fragments)
-    .filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_TARGET_NODE_ID)
+    .filter((fragment) => fragment.nodeId === nodeId)
     .flatMap((fragment) => fragment.lines ?? [])
     .map((line) => line.text)
     .join("")
@@ -155,6 +169,116 @@ describe("WYSIWYG Stage 3 stress scenario", () => {
       textMeasurer: defaultTextMeasurer,
     })
     expect(bodyPreview?.fragments.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it("covers table-cell draft pagination overflow and shrink-back", () => {
+    const doc = makeWysiwygStage3BoundaryDocument()
+    const initialPaginated = paginateDocument(doc, defaultTextMeasurer)
+    const initialFragments = allFragments(initialPaginated)
+      .filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID)
+
+    expect(() => assertPaginatedDocument(initialPaginated)).not.toThrow()
+    expect(initialFragments).toHaveLength(1)
+    expect(compactText(paragraphLineText(initialPaginated, WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID)))
+      .toBe(compactText(WYSIWYG_STAGE3_TABLE_TARGET_INITIAL_TEXT))
+
+    const draftText = `${WYSIWYG_STAGE3_TABLE_TARGET_INITIAL_TEXT}${WYSIWYG_STAGE3_TABLE_TARGET_APPEND_TEXT}`
+    const draftDoc = buildWysiwygTextDraftPreviewDocument({
+      doc,
+      nodeId: WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID,
+      draftText,
+    })
+    const draftPaginated = paginateDocument(draftDoc, defaultTextMeasurer)
+
+    expect(() => assertPaginatedDocument(draftPaginated)).not.toThrow()
+    expect(countWysiwygTextDraftFragments(draftPaginated, WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID)).toBeGreaterThanOrEqual(2)
+    expect(new Set(
+      allFragments(draftPaginated)
+        .filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID)
+        .map((fragment) => fragment.pageIndex),
+    ).size).toBeGreaterThanOrEqual(2)
+    expect(paragraphLineText(draftPaginated, WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID))
+      .toContain(WYSIWYG_STAGE3_TABLE_TARGET_MARKER)
+    expect(compactText(paragraphLineText(draftPaginated, WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID)))
+      .toBe(compactText(draftText))
+
+    const shrunkDoc = buildWysiwygTextDraftPreviewDocument({
+      doc: draftDoc,
+      nodeId: WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID,
+      draftText: WYSIWYG_STAGE3_TABLE_TARGET_INITIAL_TEXT,
+    })
+    const shrunkPaginated = paginateDocument(shrunkDoc, defaultTextMeasurer)
+
+    expect(() => assertPaginatedDocument(shrunkPaginated)).not.toThrow()
+    expect(countWysiwygTextDraftFragments(shrunkPaginated, WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID)).toBe(1)
+    expect(compactText(paragraphLineText(shrunkPaginated, WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID)))
+      .toBe(compactText(WYSIWYG_STAGE3_TABLE_TARGET_INITIAL_TEXT))
+  })
+
+  it("covers colspan-only flow-table-cell draft pagination overflow and shrink-back", () => {
+    const doc = makeWysiwygStage3BoundaryDocument()
+    const initialPaginated = paginateDocument(doc, defaultTextMeasurer)
+    const initialFragments = allFragments(initialPaginated)
+      .filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID)
+    const initialCellFragments = allFragments(initialPaginated)
+      .filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_CELL_ID)
+
+    expect(() => assertPaginatedDocument(initialPaginated)).not.toThrow()
+    expect(initialFragments).toHaveLength(1)
+    expect(initialCellFragments).toHaveLength(1)
+    expect(initialCellFragments[0].nodeType).toBe("flow-table-cell")
+    expect(initialCellFragments[0].flowTableCellGridProps).toEqual({
+      columnIndex: 0,
+      colspan: 2,
+      rowspan: 1,
+    })
+    expect(compactText(paragraphLineText(initialPaginated, WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID)))
+      .toBe(compactText(WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_INITIAL_TEXT))
+
+    const draftText =
+      `${WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_INITIAL_TEXT}${WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_APPEND_TEXT}`
+    const draftDoc = buildWysiwygTextDraftPreviewDocument({
+      doc,
+      nodeId: WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID,
+      draftText,
+    })
+    const draftPaginated = paginateDocument(draftDoc, defaultTextMeasurer)
+    const draftCellFragments = allFragments(draftPaginated)
+      .filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_CELL_ID)
+    const siblingFragments = allFragments(draftPaginated)
+      .filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_NODE_ID)
+
+    expect(() => assertPaginatedDocument(draftPaginated)).not.toThrow()
+    expect(countWysiwygTextDraftFragments(draftPaginated, WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID))
+      .toBeGreaterThanOrEqual(2)
+    expect(new Set(
+      allFragments(draftPaginated)
+        .filter((fragment) => fragment.nodeId === WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID)
+        .map((fragment) => fragment.pageIndex),
+    ).size).toBeGreaterThanOrEqual(2)
+    expect(draftCellFragments.length).toBeGreaterThanOrEqual(2)
+    expect(draftCellFragments.every((fragment) => (
+      fragment.flowTableCellGridProps?.colspan === 2 &&
+      fragment.flowTableCellGridProps?.rowspan === 1 &&
+      fragment.width === initialCellFragments[0].width
+    ))).toBe(true)
+    expect(siblingFragments).toHaveLength(1)
+    expect(paragraphLineText(draftPaginated, WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID))
+      .toContain(WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_MARKER)
+    expect(compactText(paragraphLineText(draftPaginated, WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID)))
+      .toBe(compactText(draftText))
+
+    const shrunkDoc = buildWysiwygTextDraftPreviewDocument({
+      doc: draftDoc,
+      nodeId: WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID,
+      draftText: WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_INITIAL_TEXT,
+    })
+    const shrunkPaginated = paginateDocument(shrunkDoc, defaultTextMeasurer)
+
+    expect(() => assertPaginatedDocument(shrunkPaginated)).not.toThrow()
+    expect(countWysiwygTextDraftFragments(shrunkPaginated, WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID)).toBe(1)
+    expect(compactText(paragraphLineText(shrunkPaginated, WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID)))
+      .toBe(compactText(WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_INITIAL_TEXT))
   })
 
   it("deletes a selected overflow append from the heavy boundary draft without corrupting pagination", () => {

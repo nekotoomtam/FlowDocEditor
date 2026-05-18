@@ -98,6 +98,32 @@ describe("wysiwygDraftVisualPreview", () => {
     expect(fragments[1].lines?.map((candidate) => [candidate.text, candidate.y])).toEqual([["three", 20], ["four", 30]])
   })
 
+  it("can preserve source-page boundary lines for table-cell live preview", () => {
+    const draftLines = [
+      line("one", 70, 0, 3),
+      line("two", 80, 4, 7),
+      line("three", 90, 8, 13),
+      line("four", 100, 14, 18),
+    ]
+
+    const fragments = splitWysiwygDraftVisualFragments({
+      sourceFragment: fragment(),
+      draftLines,
+      draftHeight: 40,
+      pages: [page(0), page(1)],
+      preserveBoundarySingleLines: true,
+    })
+
+    expect(fragments).toHaveLength(2)
+    expect(fragments[0].lines?.map((candidate) => candidate.text)).toEqual(["one", "two", "three"])
+    expect(fragments[0]).toMatchObject({
+      pageIndex: 0,
+      lineEnd: 3,
+      isContinued: true,
+    })
+    expect(fragments[1].lines?.map((candidate) => candidate.text)).toEqual(["four"])
+  })
+
   it("keeps a same-page draft as one fragment with the measured draft height", () => {
     const fragments = splitWysiwygDraftVisualFragments({
       sourceFragment: fragment(),
@@ -138,6 +164,28 @@ describe("wysiwygDraftVisualPreview", () => {
       caretOffset: 18,
       textMeasurer: fixedMeasurer,
     })).toBe(1)
+  })
+
+  it("can keep a boundary caret on the source visual fragment", () => {
+    const fragments = splitWysiwygDraftVisualFragments({
+      sourceFragment: fragment(),
+      draftLines: [
+        line("one", 70, 0, 3),
+        line("two", 80, 4, 7),
+        line("three", 90, 8, 13),
+        line("four", 100, 14, 18),
+      ],
+      draftHeight: 40,
+      pages: [page(0), page(1)],
+      preserveBoundarySingleLines: true,
+    })
+
+    expect(resolveWysiwygDraftVisualCaretPageIndex({
+      fragments,
+      caretOffset: 13,
+      textMeasurer: fixedMeasurer,
+      preferPreviousPageAtFragmentEnd: true,
+    })).toBe(0)
   })
 
   it("shifts downstream page fragments when inserting a live continuation preview", () => {

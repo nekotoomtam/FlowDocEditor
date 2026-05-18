@@ -350,6 +350,9 @@ describe("WYSIWYG caret mapping contract", () => {
     ])
     expect(findWysiwygPageIndexInFragmentRanges(ranges, 4)).toBe(0)
     expect(findWysiwygPageIndexInFragmentRanges(ranges, 5)).toBe(1)
+    expect(findWysiwygPageIndexInFragmentRanges(ranges, 5, {
+      preferPreviousPageAtFragmentEnd: true,
+    })).toBe(0)
     expect(findWysiwygPageIndexForOffset(paginated, "p1", null)).toBeNull()
   })
 

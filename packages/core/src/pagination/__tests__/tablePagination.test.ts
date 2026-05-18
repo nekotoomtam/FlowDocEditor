@@ -783,6 +783,24 @@ describe("tablePagination — multi-page row split", () => {
     expect(shortCellParagraphs[0].lines?.map((line) => line.text).join("")).toBe("Short")
   })
 
+  it("splits a breakable colspan-only table cell across pages", () => {
+    const lineCount = 120
+    const longText = Array.from({ length: lineCount }, (_, i) => `Wide ${i}`).join("\n")
+    const tbl = makeTable("tbl", [120, 140, 180], [
+      [{ text: longText, colspan: 2 }, { text: "Short" }],
+    ])
+    const row = tbl.nodes["tbl-row0"]
+    if (row?.type === "table-row") row.props = { ...row.props, allowBreak: true }
+
+    const result = paginate(makeDoc(["tbl"], { tbl }))
+
+    assertPaginatedDocument(result)
+    expect(getFragments(result, "tbl-row0").length).toBeGreaterThan(1)
+    expect(getFragments(result, "tbl-c0-0").every((fragment) => fragment.width === 260)).toBe(true)
+    expect(getFragments(result, "tbl-p0-1")).toHaveLength(1)
+    expectContiguousLineAccounting(result, "tbl-p0-0", lineCount)
+  })
+
   it("repeats table headers during breakable row continuation", () => {
     const longText = Array.from({ length: 120 }, (_, i) => `Body ${i}`).join("\n")
     const tbl = makeTable("tbl", [451], [

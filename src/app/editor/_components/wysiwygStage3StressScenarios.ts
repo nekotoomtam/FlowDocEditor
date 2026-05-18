@@ -1,5 +1,5 @@
 import { pt } from "@/schema"
-import type { DocumentNode, LayoutNode, ParagraphNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode, TableNode } from "@/schema"
 
 export const WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM = "flowdocTestScenario"
 export const WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID = "wysiwyg-stage3-boundary"
@@ -11,6 +11,14 @@ export const WYSIWYG_STAGE3_STACK_RIGHT_ID = "stage3-stack-right"
 export const WYSIWYG_STAGE3_STACK_TARGET_NODE_ID = "stage3-stack-target"
 export const WYSIWYG_STAGE3_STACK_CONTROL_NODE_ID = "stage3-stack-control"
 export const WYSIWYG_STAGE3_STACK_TARGET_MARKER = "STAGE4_STACK_MARKER"
+export const WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID = "stage3-table-cell-target"
+export const WYSIWYG_STAGE3_TABLE_TARGET_CELL_ID = "stage3-table-cell-target-cell"
+export const WYSIWYG_STAGE3_TABLE_TARGET_MARKER = "STAGE3_TABLE_CELL_MARKER"
+export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID = "stage3-flow-table-colspan-target"
+export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_CELL_ID = "stage3-flow-table-colspan-target-cell"
+export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_NODE_ID = "stage3-flow-table-colspan-sibling"
+export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_CELL_ID = "stage3-flow-table-colspan-sibling-cell"
+export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_MARKER = "STAGE3_FLOW_TABLE_COLSPAN_MARKER"
 
 export const WYSIWYG_STAGE3_BOUNDARY_APPEND_TEXT = [
   " ",
@@ -49,6 +57,39 @@ export const WYSIWYG_STAGE3_STACK_TARGET_APPEND_TEXT = [
   "Another line keeps local line wrapping under column width pressure.",
 ].join("\n")
 
+const TABLE_TARGET_INITIAL_LINES = [
+  "Table cell target line 1 starts as ordinary editable cell content.",
+  "Table cell target line 2 keeps the row breakable under pagination.",
+  "Table cell target line 3 keeps Thai text in the table path: ทดสอบเซลล์.",
+]
+
+export const WYSIWYG_STAGE3_TABLE_TARGET_INITIAL_TEXT = TABLE_TARGET_INITIAL_LINES.join("\n")
+
+export const WYSIWYG_STAGE3_TABLE_TARGET_APPEND_TEXT = [
+  "",
+  WYSIWYG_STAGE3_TABLE_TARGET_MARKER,
+  ...Array.from({ length: 14 }, (_unused, index) => (
+    `Table cell responsive line ${index + 1} ไทยอังกฤษ ${"tablecellboundary".repeat(8)}`
+  )),
+].join("\n")
+
+const FLOW_TABLE_COLSPAN_TARGET_INITIAL_LINES = [
+  "Flow Table colspan target line 1 starts inside a two-column cell.",
+  "Flow Table colspan target line 2 keeps the row breakable with a sibling cell.",
+  "Flow Table colspan target line 3 keeps Thai text in the flow-table path: ทดสอบเซลล์รวม.",
+]
+
+export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_INITIAL_TEXT =
+  FLOW_TABLE_COLSPAN_TARGET_INITIAL_LINES.join("\n")
+
+export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_APPEND_TEXT = [
+  "",
+  WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_MARKER,
+  ...Array.from({ length: 18 }, (_unused, index) => (
+    `Flow Table colspan responsive line ${index + 1} ไทยอังกฤษ ${"flowtablecolspanboundary".repeat(6)}`
+  )),
+].join("\n")
+
 function paragraph(id: string, text: string, overrides: Partial<ParagraphNode["props"]> = {}): ParagraphNode {
   return {
     id,
@@ -83,11 +124,18 @@ function stressTable(): TableNode {
   for (let rowIndex = 0; rowIndex < 5; rowIndex += 1) {
     const cellIds: string[] = []
     for (let colIndex = 0; colIndex < 1; colIndex += 1) {
-      const paragraphId = `stage3-table-p${rowIndex}-${colIndex}`
-      const cellId = `stage3-table-c${rowIndex}-${colIndex}`
+      const isTargetCell = rowIndex === 1 && colIndex === 0
+      const paragraphId = isTargetCell
+        ? WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID
+        : `stage3-table-p${rowIndex}-${colIndex}`
+      const cellId = isTargetCell
+        ? WYSIWYG_STAGE3_TABLE_TARGET_CELL_ID
+        : `stage3-table-c${rowIndex}-${colIndex}`
       nodes[paragraphId] = paragraph(
         paragraphId,
-        `Dense cell ${rowIndex + 1}.${colIndex + 1} ${"layout text ".repeat(8)}`,
+        isTargetCell
+          ? WYSIWYG_STAGE3_TABLE_TARGET_INITIAL_TEXT
+          : `Dense cell ${rowIndex + 1}.${colIndex + 1} ${"layout text ".repeat(8)}`,
         { fontSize: pt(9), lineHeight: 1.2, spacingAfter: pt(0) },
       )
       nodes[cellId] = { id: cellId, type: "table-cell", props: { padding: pt(3) }, childIds: [paragraphId] }
@@ -104,6 +152,88 @@ function stressTable(): TableNode {
     props: { headerRowCount: 1 },
     columns: [{ width: pt(451) }],
     rowIds,
+    nodes,
+  }
+}
+
+function stressFlowTable(): FlowTableNode {
+  const nodes: FlowTableNode["nodes"] = {
+    "stage3-flow-table-header-p1": paragraph(
+      "stage3-flow-table-header-p1",
+      "Flow header 1",
+      { fontSize: pt(8), lineHeight: 1.1, spacingAfter: pt(0) },
+    ),
+    "stage3-flow-table-header-p2": paragraph(
+      "stage3-flow-table-header-p2",
+      "Flow header 2",
+      { fontSize: pt(8), lineHeight: 1.1, spacingAfter: pt(0) },
+    ),
+    "stage3-flow-table-header-c1": {
+      id: "stage3-flow-table-header-c1",
+      type: "flow-table-cell",
+      props: { colspan: 2, box: { padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) } } },
+      childIds: ["stage3-flow-table-header-p1"],
+    },
+    "stage3-flow-table-header-c2": {
+      id: "stage3-flow-table-header-c2",
+      type: "flow-table-cell",
+      props: { box: { padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) } } },
+      childIds: ["stage3-flow-table-header-p2"],
+    },
+    "stage3-flow-table-header-row": {
+      id: "stage3-flow-table-header-row",
+      type: "flow-table-row",
+      props: { height: pt(24) },
+      cellIds: ["stage3-flow-table-header-c1", "stage3-flow-table-header-c2"],
+    },
+    [WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID]: paragraph(
+      WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID,
+      WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_INITIAL_TEXT,
+      { fontSize: pt(9), lineHeight: 1.2, spacingAfter: pt(0) },
+    ),
+    [WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_NODE_ID]: paragraph(
+      WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_NODE_ID,
+      "Short sibling content should render once, not repeat on continuation slices.",
+      { fontSize: pt(9), lineHeight: 1.2, spacingAfter: pt(0) },
+    ),
+    [WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_CELL_ID]: {
+      id: WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_CELL_ID,
+      type: "flow-table-cell",
+      props: {
+        colspan: 2,
+        rowspan: 1,
+        box: {
+          fill: "FFF7CC",
+          padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) },
+        },
+      },
+      childIds: [WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_NODE_ID],
+    },
+    [WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_CELL_ID]: {
+      id: WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_CELL_ID,
+      type: "flow-table-cell",
+      props: {
+        box: {
+          fill: "E0F2FE",
+          padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) },
+        },
+      },
+      childIds: [WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_NODE_ID],
+    },
+    "stage3-flow-table-target-row": {
+      id: "stage3-flow-table-target-row",
+      type: "flow-table-row",
+      props: {},
+      cellIds: [WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_CELL_ID, WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_CELL_ID],
+    },
+  }
+
+  return {
+    id: "stage3-flow-table-colspan",
+    type: "flow-table",
+    props: { headerRowCount: 1 },
+    columns: [{ width: pt(150) }, { width: pt(151) }, { width: pt(150) }],
+    rowIds: ["stage3-flow-table-header-row", "stage3-flow-table-target-row"],
     nodes,
   }
 }
@@ -153,6 +283,7 @@ export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
   const downstream = Array.from({ length: 10 }, (_, index) => downstreamParagraph(index + 1))
   const stackRowNodes = stressStackRow()
   const table = stressTable()
+  const flowTable = stressFlowTable()
   const nodes: Record<string, LayoutNode> = {
     "stage3-body": {
       id: "stage3-body",
@@ -163,6 +294,7 @@ export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
         target.id,
         ...downstream.map((node) => node.id),
         WYSIWYG_STAGE3_STACK_ROW_ID,
+        flowTable.id,
         table.id,
       ],
     },
@@ -170,6 +302,7 @@ export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
     [target.id]: target,
     ...stackRowNodes,
     [table.id]: table,
+    [flowTable.id]: flowTable,
   }
 
   for (const node of downstream) nodes[node.id] = node

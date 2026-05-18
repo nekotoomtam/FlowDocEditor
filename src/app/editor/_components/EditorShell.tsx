@@ -113,6 +113,7 @@ export interface DragState {
 interface PendingClickAction {
   type: "inline-edit"
   nodeId: string
+  selectNodeId?: string
   caretIndex: number | null
   pageIndex: number | null
 }
@@ -1219,9 +1220,12 @@ export default function EditorShell() {
         return
       }
       const ranges = getWysiwygParagraphFragmentRanges(paginated, nodeId)
+      const isTableCellParagraph = isParagraphInsideTableCell(draftDoc, nodeId)
       const nextPageIndex = source.caretOffset == null
         ? null
-        : findWysiwygPageIndexInFragmentRanges(ranges, source.caretOffset)
+        : findWysiwygPageIndexInFragmentRanges(ranges, source.caretOffset, {
+            preferPreviousPageAtFragmentEnd: isTableCellParagraph,
+          })
       paginatedRef.current = paginated
       optimisticLayoutRef.current = { doc: draftDoc, paginated }
       if (nextPageIndex !== null) {
@@ -1235,7 +1239,7 @@ export default function EditorShell() {
       const currentFragmentCount = countWysiwygTextDraftFragments(paginated, nodeId)
       setWysiwygDraftPaginationNodeId(shouldScheduleResponsiveContainerDraftPagination({
         isFlowStackParagraph: isParagraphInsideFlowStack(draftDoc, nodeId),
-        isTableCellParagraph: isParagraphInsideTableCell(draftDoc, nodeId),
+        isTableCellParagraph,
         draftPaginationActive: wysiwygDraftPaginationNodeIdRef.current === nodeId,
         currentFragmentCount,
       }) ? nodeId : null)
@@ -1758,7 +1762,9 @@ export default function EditorShell() {
   useEffect(() => {
     if (!inlineEditNodeId || inlineEditCaretIndex === null) return
     if (inlineEditVisualLocked || !inlineEditDocumentVisualReady) return
-    const nextPageIndex = findWysiwygPageIndexInFragmentRanges(inlineEditFragmentRanges, inlineEditCaretIndex)
+    const nextPageIndex = findWysiwygPageIndexInFragmentRanges(inlineEditFragmentRanges, inlineEditCaretIndex, {
+      preferPreviousPageAtFragmentEnd: isParagraphInsideTableCell(previewDoc, inlineEditNodeId),
+    })
     if (nextPageIndex === null || nextPageIndex === inlineEditPageIndex) return
     const previousPageIndex = inlineEditPageIndexRef.current
     inlineEditPageIndexRef.current = nextPageIndex
@@ -2281,7 +2287,7 @@ export default function EditorShell() {
         const { source, clickAction } = pendingDragRef.current
         pendingDragRef.current = null
         if (clickAction?.type === "inline-edit") {
-          dispatch({ type: "SELECT_NODE", nodeId: clickAction.nodeId })
+          dispatch({ type: "SELECT_NODE", nodeId: clickAction.selectNodeId ?? clickAction.nodeId })
           setRightRailMode("properties")
           handleInlineEditStart(clickAction.nodeId, clickAction.caretIndex, clickAction.pageIndex)
           return

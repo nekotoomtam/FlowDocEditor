@@ -970,6 +970,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
     expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
     expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
+    expect(markup).toContain("caret-color:transparent")
     expect(markup).not.toContain("<textarea")
   })
 

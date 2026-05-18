@@ -50,6 +50,8 @@ The canvas should make the table structure directly editable.
   that cell.
 - The property panel for `table-cell` is the main surface for cell text and cell
   props.
+- Clicking an editable paragraph inside a table cell may enter inline edit in a
+  single click while keeping the parent cell selected for the property panel.
 - Flow Table row chrome is visual-only on the canvas until a dedicated row
   handle/gutter exists. Cell hit targets own merged and row-spanning cell areas,
   so lower row fragments must not steal clicks from an overlapping cell or draw
@@ -67,9 +69,17 @@ The canvas should make the table structure directly editable.
   visual preview; table/flow-table pagination owns the continuation split.
 - Table-aware page-boundary visual preview must pass a separate eligibility
   gate before rendering. The first rendering slice is conservative: it may draw
-  only paragraph continuation fragments for active table-cell edits before
-  settled draft pagination exists. It must not synthesize row/cell chrome, and
-  real table pagination wins once a settled split or responsive marker exists.
+  paragraph source/continuation fragments plus visual-only parent table/row/cell
+  chrome for active table-cell edits before settled draft pagination exists. The
+  chrome is non-interactive preview state, not document state. Table/row
+  structure scaffolds may reserve geometry for this preview but should not paint
+  visible fills, strokes, or labels; cell chrome remains visible as the edit
+  target. Source-page chrome may extend to the split slice height and shift
+  downstream fragments so text does not paint outside the active row while the
+  browser preview is settling. Table-cell preview may preserve a single usable
+  boundary line instead of applying body-paragraph widow/orphan prevention, so
+  the last editable line on the source page remains reachable. Real table
+  pagination wins once a settled split or responsive marker exists.
 - Body paragraphs must keep their normal click-to-edit behavior. Table-specific
   selection should not make non-table paragraph editing worse.
 - If a cell has no editable paragraph, the editor may no-op or create a valid
@@ -190,6 +200,9 @@ These authored props directly affect cross-page behavior:
 - `allowBreak=false`: a single-row group should move as a whole when possible.
 - `allowBreak=true` or omitted: a single-row group may split by table-cell
   paragraph line boundaries.
+- `colspan>1` with `rowspan=1` remains in the single-row split lane. The
+  spanned cell may split across pages using its full rendered width, while
+  shorter sibling cells must not duplicate content on continuation pages.
 - Rowspan-linked groups stay atomic until split-at-row-boundary inside rowspan
   groups is explicitly implemented.
 

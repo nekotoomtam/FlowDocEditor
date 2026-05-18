@@ -30,6 +30,7 @@ import {
 } from "./wysiwygReflow"
 import {
   createWysiwygDraftVisualPreview,
+  shiftPageFragmentY,
   shiftWysiwygDraftPreviewDownstreamFragments,
   splitWysiwygDraftVisualFragments,
   type WysiwygDraftVisualPreview,
@@ -63,6 +64,13 @@ function displayFragmentNodeType(nodeType: PageFragment["nodeType"]): string {
   return nodeType
 }
 
+export function shouldStartInlineEditOnSingleClick(input: {
+  canInlineEditParagraph: boolean
+  isTableCellParagraph: boolean
+}): boolean {
+  return input.canInlineEditParagraph
+}
+
 const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "table", "flow-table", "toc"])
 const PARAGRAPH_CHROME_Y = 3
 const FLOW_STACK_PARAGRAPH_CHROME_Y = 0
@@ -75,9 +83,136 @@ const READ_ONLY_ZONE_FILL: Record<"header" | "footer", string> = {
   footer: "#fce7f3",
 }
 
+function isTableCellFragment(fragment: PageFragment | null | undefined): boolean {
+  return fragment?.nodeType === "table-cell" || fragment?.nodeType === "flow-table-cell"
+}
+
+function isTableRowFragment(fragment: PageFragment | null | undefined): boolean {
+  return fragment?.nodeType === "row" || fragment?.nodeType === "flow-table-row"
+}
+
+function isTableRootFragment(fragment: PageFragment | null | undefined): boolean {
+  return fragment?.nodeType === "table" || fragment?.nodeType === "flow-table"
+}
+
+function isTableStructureFragment(fragment: PageFragment, siblings: PageFragment[]): boolean {
+  if (isTableRootFragment(fragment)) return true
+  if (!isTableRowFragment(fragment) || !fragment.parentNodeId) return false
+  return siblings.some((candidate) =>
+    candidate.nodeId === fragment.parentNodeId &&
+    isTableRootFragment(candidate)
+  )
+}
+
+function findPageByIndex(paginated: PaginatedDocument, pageIndex: number): PaginatedPage | null {
+  for (const section of paginated.sections) {
+    const page = section.pages.find((candidate) => candidate.index === pageIndex)
+    if (page) return page
+  }
+  return null
+}
+
+function tableCellDraftVisualChromeKey(fragment: PageFragment): string {
+  return [
+    fragment.nodeType,
+    fragment.nodeId,
+    fragment.parentNodeId ?? "root",
+    fragment.pageIndex,
+  ].join(":")
+}
+
+export function buildWysiwygTableCellDraftVisualChromeFragments(input: {
+  paginated: PaginatedDocument
+  preview: WysiwygDraftVisualPreview | null
+}): Map<number, PageFragment[]> {
+  const byPageIndex = new Map<number, PageFragment[]>()
+  if (!input.preview) return byPageIndex
+
+  const sourceParagraph = input.preview.fragments.find((fragment) => !fragment.continuesFrom)
+  if (!sourceParagraph?.parentNodeId) return byPageIndex
+
+  const sourcePage = findPageByIndex(input.paginated, sourceParagraph.pageIndex)
+  if (!sourcePage) return byPageIndex
+
+  const sourceCell = sourcePage.fragments.find((fragment) =>
+    fragment.nodeId === sourceParagraph.parentNodeId &&
+    isTableCellFragment(fragment)
+  )
+  if (!sourceCell?.parentNodeId) return byPageIndex
+
+  const sourceRow = sourcePage.fragments.find((fragment) =>
+    fragment.nodeId === sourceCell.parentNodeId &&
+    isTableRowFragment(fragment)
+  )
+  if (!sourceRow?.parentNodeId) return byPageIndex
+
+  const sourceTable = sourcePage.fragments.find((fragment) =>
+    fragment.nodeId === sourceRow.parentNodeId &&
+    isTableRootFragment(fragment)
+  )
+  if (!sourceTable) return byPageIndex
+
+  const sourceCells = sourcePage.fragments.filter((fragment) =>
+    fragment.parentNodeId === sourceRow.nodeId &&
+    isTableCellFragment(fragment)
+  )
+  if (sourceCells.length === 0) return byPageIndex
+
+  for (const draftFragment of input.preview.fragments) {
+    const targetPage = findPageByIndex(input.paginated, draftFragment.pageIndex)
+    if (!targetPage) continue
+    const hasRealParagraphFragment = targetPage.fragments.some((fragment) =>
+      fragment.nodeId === draftFragment.nodeId &&
+      fragment.nodeType === "paragraph"
+    )
+    if (draftFragment.continuesFrom && hasRealParagraphFragment) continue
+
+    const continuedSliceHeight = Math.max(1, targetPage.contentBox.y + targetPage.contentBox.height - draftFragment.y)
+    const rowHeight = draftFragment.isContinued
+      ? continuedSliceHeight
+      : Math.max(1, draftFragment.height, draftFragment.continuesFrom ? 0 : sourceRow.height)
+    const tableHeight = draftFragment.continuesFrom
+      ? rowHeight
+      : sourceTable.height + Math.max(0, rowHeight - sourceRow.height)
+    const pageIndex = draftFragment.pageIndex
+    const continuationFlags = {
+      continuesFrom: draftFragment.continuesFrom,
+      isContinued: draftFragment.isContinued,
+    }
+    const fragments: PageFragment[] = [
+      {
+        ...sourceTable,
+        pageIndex,
+        y: draftFragment.continuesFrom ? draftFragment.y : sourceTable.y,
+        height: tableHeight,
+        ...continuationFlags,
+      },
+      {
+        ...sourceRow,
+        pageIndex,
+        y: draftFragment.continuesFrom ? draftFragment.y : sourceRow.y,
+        height: rowHeight,
+        ...continuationFlags,
+      },
+      ...sourceCells.map((cell): PageFragment => ({
+        ...cell,
+        pageIndex,
+        y: draftFragment.continuesFrom ? draftFragment.y : cell.y,
+        height: rowHeight,
+        ...continuationFlags,
+      })),
+    ]
+
+    byPageIndex.set(pageIndex, fragments)
+  }
+
+  return byPageIndex
+}
+
 type PendingClickAction = {
   type: "inline-edit"
   nodeId: string
+  selectNodeId?: string
   caretIndex: number | null
   pageIndex: number | null
 }
@@ -425,7 +560,7 @@ function PageView({
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
-  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygTextReflowDecision,
+  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygTextReflowDecision,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
@@ -442,6 +577,7 @@ function PageView({
   wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
   wysiwygTextDraftPaginationActive: boolean
   wysiwygDraftVisualPreview: WysiwygDraftVisualPreview | null
+  wysiwygTableCellDraftVisualChromeByPageIndex: Map<number, PageFragment[]>
   wysiwygTextPointerFragments: WysiwygTextPointerFragmentTarget[]
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
@@ -478,21 +614,59 @@ function PageView({
   }, [inlineEditNodeId])
   const wysiwygCaretMappingEnabled = wysiwygInlineEditEnabled || wysiwygTextEngineEnabled
   const visualDraftFragmentForPage = wysiwygDraftVisualPreview?.fragmentsByPageIndex.get(page.index) ?? null
+  const tableCellDraftVisualChromeFragments = visualDraftFragmentForPage
+    ? wysiwygTableCellDraftVisualChromeByPageIndex.get(page.index) ?? []
+    : []
+  const tableCellDraftVisualChromeSet = new Set(tableCellDraftVisualChromeFragments)
+  const allTableCellDraftVisualChromeByKey = new Map(
+    tableCellDraftVisualChromeFragments.map((fragment) => [tableCellDraftVisualChromeKey(fragment), fragment] as const),
+  )
   const hasRealVisualDraftFragment = visualDraftFragmentForPage
     ? page.fragments.some((fragment) =>
       fragment.nodeId === visualDraftFragmentForPage.nodeId &&
       fragment.nodeType === "paragraph"
     )
     : false
+  const sourceTableCellDraftVisualChromeByKey = hasRealVisualDraftFragment
+    ? allTableCellDraftVisualChromeByKey
+    : new Map<string, PageFragment>()
+  const tableCellDraftVisualRowChrome = tableCellDraftVisualChromeFragments.find(isTableRowFragment)
+  const realTableCellDraftVisualRow = tableCellDraftVisualRowChrome
+    ? page.fragments.find((fragment) =>
+      fragment.nodeId === tableCellDraftVisualRowChrome.nodeId &&
+      fragment.nodeType === tableCellDraftVisualRowChrome.nodeType &&
+      fragment.parentNodeId === tableCellDraftVisualRowChrome.parentNodeId
+    ) ?? null
+    : null
+  const tableCellDraftSourceShiftY = hasRealVisualDraftFragment && tableCellDraftVisualRowChrome && realTableCellDraftVisualRow
+    ? Math.max(0, tableCellDraftVisualRowChrome.height - realTableCellDraftVisualRow.height)
+    : 0
+  const sourceShiftStartY = realTableCellDraftVisualRow
+    ? realTableCellDraftVisualRow.y + realTableCellDraftVisualRow.height
+    : null
+  const sourceShiftYWithGap = tableCellDraftSourceShiftY > 0
+    ? tableCellDraftSourceShiftY + (PARAGRAPH_LIVE_PREVIEW_GAP_Y / scale)
+    : 0
+  const sourceShiftedPageFragments = sourceShiftYWithGap > 0 && sourceShiftStartY !== null
+    ? page.fragments.map((fragment) => {
+      if (sourceTableCellDraftVisualChromeByKey.has(tableCellDraftVisualChromeKey(fragment))) return fragment
+      if (fragment.nodeId === visualDraftFragmentForPage?.nodeId && fragment.nodeType === "paragraph") return fragment
+      if (fragment.y < sourceShiftStartY - 0.5) return fragment
+      return shiftPageFragmentY(fragment, sourceShiftYWithGap)
+    })
+    : page.fragments
   const shiftedPageFragments = visualDraftFragmentForPage && !hasRealVisualDraftFragment
     ? shiftWysiwygDraftPreviewDownstreamFragments({
       fragments: page.fragments,
-      draftFragment: visualDraftFragmentForPage,
+      draftFragment: {
+        ...visualDraftFragmentForPage,
+        height: tableCellDraftVisualRowChrome?.height ?? visualDraftFragmentForPage.height,
+      },
       extraShiftY: (PARAGRAPH_CHROME_Y * 2 + PARAGRAPH_LIVE_PREVIEW_GAP_Y) / scale,
     })
-    : page.fragments
+    : sourceShiftedPageFragments
   const renderFragments = visualDraftFragmentForPage && !hasRealVisualDraftFragment
-    ? [visualDraftFragmentForPage, ...shiftedPageFragments]
+    ? [...tableCellDraftVisualChromeFragments, visualDraftFragmentForPage, ...shiftedPageFragments]
     : shiftedPageFragments
   const headerFragments = page.headerFragments ?? []
   const footerFragments = page.footerFragments ?? []
@@ -504,7 +678,7 @@ function PageView({
     fragment.nodeId === visualDraftFragmentForPage.nodeId &&
     fragment.nodeType === "paragraph"
       ? visualDraftFragmentForPage
-      : fragment
+      : sourceTableCellDraftVisualChromeByKey.get(tableCellDraftVisualChromeKey(fragment)) ?? fragment
   )
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
@@ -602,6 +776,10 @@ function PageView({
       {/* fragments */}
       {renderFragments.map((f, i) => {
         const color = NODE_COLORS[f.nodeType] ?? "#f3f4f6"
+        const isWysiwygTableCellDraftVisualChrome = tableCellDraftVisualChromeSet.has(f) ||
+          sourceTableCellDraftVisualChromeByKey.has(tableCellDraftVisualChromeKey(f))
+        const isWysiwygTableCellDraftStructureChrome = isWysiwygTableCellDraftVisualChrome && !isTableCellFragment(f)
+        const isTableStructureChrome = isTableStructureFragment(f, renderFragments)
         const isHovered = f.nodeId === hoverNodeId
         const isFlowTableRowVisualOnly = f.nodeType === "flow-table-row"
         const isLayoutNode = doc.document.sections.some((s) => s.nodes[f.nodeId] != null)
@@ -658,11 +836,22 @@ function PageView({
           ((f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && Boolean(displayFragment.boxRenderProps))
         const chromeFill = isFlowTableRowVisualOnly
           ? "transparent"
+          : isTableStructureChrome ? "transparent"
+          : isWysiwygTableCellDraftStructureChrome ? "transparent"
+          : isWysiwygTableCellDraftVisualChrome ? color
           : hasAuthoredFragmentBox && !isInlineEditing ? "transparent" : isInlineEditing ? "#dbeafe" : color
         const chromeStroke = isFlowTableRowVisualOnly || (hasAuthoredFragmentBox && !isInlineEditing && !isHovered)
           ? "transparent"
+          : isTableStructureChrome ? "transparent"
+          : isWysiwygTableCellDraftStructureChrome ? "transparent"
+          : isWysiwygTableCellDraftVisualChrome ? "#60a5fa"
           : isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"
-        const chromeOpacity = isFlowTableRowVisualOnly ? 0 : hasAuthoredFragmentBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
+        const chromeOpacity = isFlowTableRowVisualOnly
+          ? 0
+          : isTableStructureChrome ? 0
+          : isWysiwygTableCellDraftStructureChrome ? 0
+          : isWysiwygTableCellDraftVisualChrome ? 0.34
+          : hasAuthoredFragmentBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
         const selectionPad = isFlowStackParagraph ? 0 : 1
         const fragmentKey = isInlineEditing
           ? `inline-edit-${f.nodeId}`
@@ -679,13 +868,20 @@ function PageView({
             data-line-start={displayFragment.lineStart ?? undefined}
             data-line-end={displayFragment.lineEnd ?? undefined}
             data-parent-node-id={displayFragment.parentNodeId ?? undefined}
+            data-table-structure-chrome={isTableStructureChrome ? "true" : undefined}
+            data-wysiwyg-table-cell-visual-chrome={isWysiwygTableCellDraftVisualChrome ? "true" : undefined}
+            data-wysiwyg-table-cell-structure-chrome={isWysiwygTableCellDraftStructureChrome ? "true" : undefined}
             onPointerDown={!isFlowTableRowVisualOnly && (isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
-                const clickAction = canInlineEditThisParagraph && !isTableCellParagraph
+                const clickAction = shouldStartInlineEditOnSingleClick({
+                  canInlineEditParagraph: canInlineEditThisParagraph,
+                  isTableCellParagraph,
+                })
                   ? {
                       type: "inline-edit" as const,
                       nodeId: f.nodeId,
+                      selectNodeId: isTableCellParagraph && f.parentNodeId ? f.parentNodeId : f.nodeId,
                       caretIndex: wysiwygCaretMappingEnabled
                         ? caretIndexFromPointer(displayFragment, e, scale, textMeasurer, true)
                         : null,
@@ -713,7 +909,7 @@ function PageView({
               }
               : undefined}
             style={{
-              pointerEvents: isFlowTableRowVisualOnly ? "none" : undefined,
+              pointerEvents: isFlowTableRowVisualOnly || isWysiwygTableCellDraftVisualChrome ? "none" : undefined,
               cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default",
             }}
           >
@@ -766,7 +962,7 @@ function PageView({
                 </g>
               )
             })()}
-            {!isFlowTableRowVisualOnly && (
+            {!isFlowTableRowVisualOnly && !isTableStructureChrome && !isWysiwygTableCellDraftVisualChrome && (
               <text x={displayFragment.x * scale + 3} y={displayFragment.y * scale + 8} fontSize={6} fill="#374151"
                 style={{ pointerEvents: "none", userSelect: "none" }}>
                 {displayFragmentNodeType(f.nodeType)}
@@ -1012,6 +1208,7 @@ export function buildWysiwygDraftVisualPreview(input: {
       draftLines: draftLayout.lines,
       draftHeight: draftLayout.height,
       pages: section.pages,
+      preserveBoundarySingleLines: isTableCellParagraph,
     })
 
     if (isTableCellParagraph) {
@@ -1037,6 +1234,7 @@ export function buildWysiwygDraftVisualPreview(input: {
       fragments: draftFragments,
       caretOffset: input.caretOffset,
       textMeasurer: input.textMeasurer,
+      preferPreviousPageAtFragmentEnd: isTableCellParagraph,
     })
   }
 
@@ -1104,6 +1302,12 @@ export function EditorCanvas({
     wysiwygTextEngineEnabled,
     wysiwygTextExistingSplitActive,
   ])
+  const wysiwygTableCellDraftVisualChromeByPageIndex = useMemo(() =>
+    buildWysiwygTableCellDraftVisualChromeFragments({
+      paginated,
+      preview: wysiwygDraftVisualPreview,
+    }),
+  [paginated, wysiwygDraftVisualPreview])
   const wysiwygTextPointerFragments = useMemo<WysiwygTextPointerFragmentTarget[]>(() => {
     if (!wysiwygTextEngineEnabled || !wysiwygTextDraftNodeId) return []
     const sourceFragments = wysiwygDraftVisualPreview?.fragments ?? sections.flatMap((section) =>
@@ -1205,6 +1409,7 @@ export function EditorCanvas({
                   wysiwygTextSelection={wysiwygTextSelection}
                   wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive}
                   wysiwygDraftVisualPreview={wysiwygDraftVisualPreview}
+                  wysiwygTableCellDraftVisualChromeByPageIndex={wysiwygTableCellDraftVisualChromeByPageIndex}
                   wysiwygTextPointerFragments={wysiwygTextPointerFragments}
                   onWysiwygTextDraftChange={onWysiwygTextDraftChange}
                   onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}

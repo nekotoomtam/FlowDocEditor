@@ -1473,6 +1473,7 @@ export function WysiwygTextLayer({
             outline: "none",
             background: "transparent",
             color: "transparent",
+            caretColor: "transparent",
           }}
         />
       </foreignObject>

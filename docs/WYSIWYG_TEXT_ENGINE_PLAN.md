@@ -258,9 +258,24 @@ Current implementation note:
   already responsive table-cell pagination stay on their existing lanes. The
   first rendering slice uses that gate to draw a conservative paragraph-only
   continuation preview for active table-cell and flow-table-cell edits before
-  settled draft pagination exists. It does not synthesize table row/cell chrome
-  on the continuation page, and it fails back to settled table pagination once a
-  real split or draft-pagination marker exists.
+  settled draft pagination exists. Phase B adds non-interactive visual-only
+  parent table/row/cell chrome around the source and continuation fragments so
+  the active cell does not look detached from the table while waiting for settled
+  draft pagination. Table/row structure scaffolds stay invisible while cell
+  chrome remains visible as the edit target. The source slice also shifts
+  downstream fragments when the active row grows to the page split height, and
+  it preserves usable boundary lines for table cells instead of applying the
+  body-paragraph widow/orphan preview rule. It fails back to settled table
+  pagination once a real split or draft-pagination marker exists. Phase A now
+  includes a deterministic table-cell boundary smoke that opens the Stage 3 stress
+  scenario, edits `stage3-table-cell-target`, confirms real draft pagination
+  splits the cell paragraph across pages, verifies the active text-engine layer
+  keeps two pointer fragments with no textarea fallback, and checks the first
+  table-cell browser-preview pagination starts within the responsive threshold.
+  The same smoke runner also has a Flow Table colspan-only target gate for
+  `stage3-flow-table-colspan-target`; it verifies `colspan>1,rowspan=1` keeps
+  its wide cell chrome, splits through responsive draft pagination, and does not
+  duplicate the shorter sibling paragraph.
 - Row-stack paragraphs remain eligible for the text-engine lane, but they are
   guarded out of the body-paragraph live split preview. Heavy stack edits must
   preserve the current atomic row contract: the edited paragraph stays one

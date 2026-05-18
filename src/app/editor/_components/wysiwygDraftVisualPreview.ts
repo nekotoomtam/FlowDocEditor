@@ -71,6 +71,7 @@ export function splitWysiwygDraftVisualFragments(input: {
   draftLines: PaginatedLine[]
   draftHeight: number
   pages: PaginatedPage[]
+  preserveBoundarySingleLines?: boolean
 }): PageFragment[] {
   const { sourceFragment, draftLines, draftHeight, pages } = input
   if (pages.length === 0) return []
@@ -124,8 +125,10 @@ export function splitWysiwygDraftVisualFragments(input: {
     }
 
     const remainingAfterCount = draftLines.length - (lineIndex + count)
-    if (count === 1 && remainingAfterCount > 0 && !atContentTop) continue
-    if (remainingAfterCount === 1 && count >= 2 && !atContentTop) count -= 1
+    if (input.preserveBoundarySingleLines !== true) {
+      if (count === 1 && remainingAfterCount > 0 && !atContentTop) continue
+      if (remainingAfterCount === 1 && count >= 2 && !atContentTop) count -= 1
+    }
     if (count === 0) continue
 
     const positionedLines: PaginatedLine[] = []
@@ -165,11 +168,19 @@ export function resolveWysiwygDraftVisualCaretPageIndex(input: {
   fragments: PageFragment[]
   caretOffset: number | null
   textMeasurer?: TextMeasurer
+  preferPreviousPageAtFragmentEnd?: boolean
 }): number | null {
   if (input.caretOffset == null) return null
   for (const fragment of input.fragments) {
     const range = getFragmentTextRange(fragment)
     if (!range) continue
+    if (
+      input.preferPreviousPageAtFragmentEnd === true &&
+      input.caretOffset === range.end &&
+      fragment.isContinued
+    ) {
+      return fragment.pageIndex
+    }
     if (input.caretOffset >= range.start && input.caretOffset <= range.end) {
       return fragment.pageIndex
     }
@@ -188,6 +199,7 @@ export function createWysiwygDraftVisualPreview(input: {
   fragments: PageFragment[]
   caretOffset: number | null
   textMeasurer?: TextMeasurer
+  preferPreviousPageAtFragmentEnd?: boolean
 }): WysiwygDraftVisualPreview | null {
   if (input.fragments.length === 0) return null
   const fragmentsByPageIndex = new Map<number, PageFragment>()
@@ -202,6 +214,7 @@ export function createWysiwygDraftVisualPreview(input: {
       fragments: input.fragments,
       caretOffset: input.caretOffset,
       textMeasurer: input.textMeasurer,
+      preferPreviousPageAtFragmentEnd: input.preferPreviousPageAtFragmentEnd,
     }),
   }
 }

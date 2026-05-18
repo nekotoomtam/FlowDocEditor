@@ -24,6 +24,96 @@ Each entry should include:
 
 ## 2026-05-18
 
+### Phase A/B Table-Cell Draft Pagination Baseline
+
+Goal: Start the table-cell cross-page roadmap with a deterministic Phase A
+baseline for real draft pagination responsiveness, then add the smallest Phase
+B visual-only table chrome preview before settled draft pagination exists.
+
+Completed:
+
+- Added a stable Stage 3 table-cell target paragraph and marker inside the
+  existing `wysiwyg-stage3-boundary` stress scenario.
+- Added unit coverage that appends heavy text to the target table-cell
+  paragraph, verifies it splits across multiple fragments/pages, and verifies
+  shrink-back returns to one fragment.
+- Added an automated browser smoke that edits the target table cell through the
+  WYSIWYG text engine, requires browser-preview pagination, and checks the
+  first pagination starts within the responsive threshold.
+- Added a conservative visual-only table/row/cell chrome preview around active
+  table-cell continuation fragments while waiting for settled draft pagination.
+  The chrome is non-interactive and clears once real draft pagination owns the
+  split.
+- Extended that preview back to the source page slice so the active row/cell
+  chrome grows to the split height and downstream source-page fragments shift
+  out of the active row instead of covering the draft text.
+- Adjusted table-cell draft visual splitting to preserve usable boundary lines
+  instead of applying body-paragraph widow/orphan prevention, and kept exact
+  fragment-boundary carets on the source page for table-cell edits.
+- Enabled single-click inline editing for editable paragraphs inside table
+  cells while preserving parent-cell selection for the property panel.
+- Kept table/row structure scaffolds invisible on the canvas while preserving
+  visible cell chrome, so active table-cell splits do not show a large grouping
+  background as editable space.
+- Hid the native caret on the offscreen WYSIWYG input bridge so the bridge does
+  not show as a fixed left-edge caret on the first line of a continuation page.
+- Added colspan-only split regression coverage for legacy tables, Flow Tables,
+  and canvas visual chrome so `colspan>1,rowspan=1` stays in the cross-page
+  table-cell lane before the later rowspan split-group design.
+- Added a deterministic Stage 3 Flow Table colspan-only target and smoke command
+  so browser coverage exercises WYSIWYG typing in a `flow-table-cell` with
+  `colspan>1,rowspan=1`.
+- Added a Flow Table rowspan pagination roadmap that records the current atomic
+  group evidence and keeps future split work behind explicit row-boundary and
+  content-splitting phases.
+- Documented the new smoke command and the current Phase A/B scope boundary.
+
+Files changed:
+
+- `package.json`
+- `scripts/wysiwyg-table-cell-boundary-smoke.mjs`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `src/app/editor/_components/wysiwygStage3StressScenarios.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts src/pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:wysiwyg-table-cell-boundary`
+- `npm.cmd run smoke:wysiwyg-flow-table-colspan-boundary`
+- `git diff --check`
+
+Notes:
+
+- The browser smoke reported two active target fragments across pages 1 and 2,
+  two pointer fragments, no textarea fallback, and first table-cell
+  browser-preview pagination after 215 ms on the latest run.
+- The Flow Table colspan smoke is the browser gate for the colspan-only lane;
+  the latest run reported two active target fragments across pages 1 and 2,
+  one shorter sibling paragraph, no textarea fallback, and first browser-preview
+  pagination after 294 ms. It does not change the deferred `rowspan` split
+  policy.
+- This is intentionally still Phase B only. It adds active-cell visual chrome
+  before settled pagination, but does not add full multi-cell live table preview
+  or rowspan split behavior.
+- An already-running local dev server without perf tracing was stopped before
+  the isolated smoke run, after approval.
+
 ### C4 Export And WYSIWYG Verification Pass
 
 Goal: Run the C4 verification pass after the table-cell text-engine and

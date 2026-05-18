@@ -152,6 +152,43 @@ geometry derived from paginated fragments, shrink final slices where the table
 policy allows it, and warn on forced progress. It must still keep table
 grid/span semantics native to the table engine.
 
+## Rowspan Pagination Roadmap
+
+Current model:
+
+- `packages/core/src/layout/flow.ts` measures a `rowspan>1` Flow Table cell only
+  at its origin row. The emitted cell flow box spans the summed height of the
+  covered rows.
+- `packages/core/src/pagination/paginator.ts` groups rows touched by `rowspan`
+  through `buildFlowTableRowspanGroups(...)`.
+- `paginateFlowTable(...)` treats `rowIndices.length > 1` as atomic and places
+  each row with `paginateFlowTableRowFull(...)`, so all rows in a rowspan-linked
+  group stay on the same page today.
+
+Design direction for future patches:
+
+- R1 should add explicit split metadata for rowspan groups without changing
+  authored schema: group row indices, row slice boundaries, origin cells that
+  continue across the boundary, and covered slots that should receive visual
+  continuation chrome.
+- R2 may split a rowspan-linked group only at row boundaries first. A spanning
+  cell fragment may continue on the next page for chrome/grid fidelity, but
+  content movement must remain deterministic and traceable to the origin cell.
+- R3 may split inside the content of a rowspan origin cell. This should reuse
+  the existing cell content split-point helpers instead of adding a second
+  paragraph slicer.
+- Header repetition, forced-progress warnings, and shorter sibling non-duplicate
+  rules must stay aligned with the non-rowspan Flow Table split path.
+
+Guardrails:
+
+- Do not move an authored span origin to another row as part of pagination.
+- Do not add computed page/slice data to `DocumentNode`.
+- Do not make the editor draw a rowspan continuation that core pagination
+  cannot reproduce.
+- Keep legacy `table` behavior unchanged unless a separate design accepts the
+  same rowspan split policy there too.
+
 ## Current Evidence
 
 The current code/docs show why Flow Table should be designed as a separate

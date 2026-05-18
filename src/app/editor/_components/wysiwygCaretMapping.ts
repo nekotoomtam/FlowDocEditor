@@ -240,6 +240,7 @@ export function getWysiwygParagraphFragmentRanges(
 export function findWysiwygPageIndexInFragmentRanges(
   ranges: WysiwygParagraphFragmentRange[],
   offset: number | null,
+  options: { preferPreviousPageAtFragmentEnd?: boolean } = {},
 ): number | null {
   if (offset === null) return null
   if (ranges.length === 0) return null
@@ -248,6 +249,13 @@ export function findWysiwygPageIndexInFragmentRanges(
   for (const range of ranges) {
     if (offset < range.start) break
     candidate = range
+    if (
+      options.preferPreviousPageAtFragmentEnd === true &&
+      offset === range.end &&
+      range !== ranges[ranges.length - 1]
+    ) {
+      break
+    }
     if (offset < range.end) break
   }
 
@@ -258,10 +266,12 @@ export function findWysiwygPageIndexForOffset(
   paginated: PaginatedDocument,
   nodeId: string,
   offset: number | null,
+  options: { preferPreviousPageAtFragmentEnd?: boolean } = {},
 ): number | null {
   return findWysiwygPageIndexInFragmentRanges(
     getWysiwygParagraphFragmentRanges(paginated, nodeId),
     offset,
+    options,
   )
 }
 
