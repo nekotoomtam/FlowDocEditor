@@ -25,6 +25,7 @@ export interface WysiwygTextReflowDecision {
 export interface WysiwygDraftPaginationDelayInput {
   reflow?: WysiwygTextReflowDecision | null
   isFlowStackParagraph: boolean
+  isTableCellParagraph?: boolean
   draftPaginationActive?: boolean
   defaultDelayMs: number
   flowStackBoundaryDelayMs: number
@@ -40,6 +41,31 @@ export interface WysiwygResponsiveFlowStackDraftPaginationInput {
   isFlowStackParagraph: boolean
   draftPaginationActive: boolean
   currentFragmentCount: number
+}
+
+export interface WysiwygResponsiveTableCellDraftPaginationInput {
+  isTableCellParagraph: boolean
+  draftPaginationActive: boolean
+  currentFragmentCount: number
+}
+
+export interface WysiwygResponsiveContainerDraftPaginationInput {
+  isFlowStackParagraph: boolean
+  isTableCellParagraph: boolean
+  draftPaginationActive: boolean
+  currentFragmentCount: number
+}
+
+export interface WysiwygLocalDraftLinesInput {
+  reflow: WysiwygTextReflowDecision
+  isTableCellParagraph: boolean
+}
+
+export interface WysiwygTableCellDraftVisualPreviewInput {
+  reflow: WysiwygTextReflowDecision
+  isTableCellParagraph: boolean
+  isFlowStackParagraph: boolean
+  draftPaginationActive: boolean
 }
 
 export interface WysiwygDraftPaginationSessionSource {
@@ -148,6 +174,10 @@ export function classifyWysiwygTextReflow(input: {
 }
 
 export function resolveWysiwygDraftPaginationDelayMs(input: WysiwygDraftPaginationDelayInput): number {
+  if (input.isTableCellParagraph) {
+    if (input.draftPaginationActive) return input.flowStackBoundaryDelayMs
+    if (input.reflow?.shouldQueueSettledPagination) return input.flowStackBoundaryDelayMs
+  }
   if (!input.isFlowStackParagraph) return input.defaultDelayMs
   if (input.draftPaginationActive) return input.flowStackBoundaryDelayMs
   if (
@@ -174,6 +204,36 @@ export function shouldScheduleResponsiveFlowStackDraftPagination(
 ): boolean {
   return input.isFlowStackParagraph &&
     (input.draftPaginationActive || input.currentFragmentCount > 1)
+}
+
+export function shouldScheduleResponsiveTableCellDraftPagination(
+  input: WysiwygResponsiveTableCellDraftPaginationInput,
+): boolean {
+  return input.isTableCellParagraph &&
+    (input.draftPaginationActive || input.currentFragmentCount > 1)
+}
+
+export function shouldScheduleResponsiveContainerDraftPagination(
+  input: WysiwygResponsiveContainerDraftPaginationInput,
+): boolean {
+  return shouldScheduleResponsiveFlowStackDraftPagination(input) ||
+    shouldScheduleResponsiveTableCellDraftPagination(input)
+}
+
+export function shouldUseWysiwygLocalDraftLines(input: WysiwygLocalDraftLinesInput): boolean {
+  if (!input.reflow.shouldPatchActiveLines) return false
+  if (input.isTableCellParagraph && input.reflow.kind === "hard-page-boundary") return false
+  return true
+}
+
+export function shouldPrepareWysiwygTableCellDraftVisualPreview(
+  input: WysiwygTableCellDraftVisualPreviewInput,
+): boolean {
+  if (!input.isTableCellParagraph) return false
+  if (input.isFlowStackParagraph) return false
+  if (input.draftPaginationActive) return false
+  if (input.reflow.kind !== "hard-page-boundary") return false
+  return input.reflow.shouldPatchActiveLines && input.reflow.shouldQueueSettledPagination
 }
 
 export function resolveWysiwygDraftPaginationSource(input: {

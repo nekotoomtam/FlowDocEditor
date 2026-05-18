@@ -24,7 +24,11 @@ import {
   WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
 import type { WysiwygTextSelection, WysiwygTextSessionDraftChange } from "./useWysiwygTextSession"
-import { classifyWysiwygTextReflow } from "./wysiwygReflow"
+import {
+  classifyWysiwygTextReflow,
+  shouldPrepareWysiwygTableCellDraftVisualPreview,
+  shouldUseWysiwygLocalDraftLines,
+} from "./wysiwygReflow"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 
@@ -761,6 +765,7 @@ interface WysiwygTextLayerProps {
   pointerFragments?: WysiwygTextPointerFragmentTarget[]
   reflowKind?: WysiwygTextReflowDecision["kind"]
   liveTextEcho?: WysiwygLiveTextEcho | null
+  tableCellDraftVisualPreviewCandidate?: boolean
 }
 
 function measureLiveEchoTextWidth(
@@ -871,6 +876,7 @@ export function WysiwygTextLayer({
   pointerFragments = [],
   reflowKind,
   liveTextEcho,
+  tableCellDraftVisualPreviewCandidate = false,
 }: WysiwygTextLayerProps) {
   const layerRef = useRef<SVGGElement | null>(null)
   const inputBridgeRef = useRef<HTMLDivElement | null>(null)
@@ -1424,6 +1430,7 @@ export function WysiwygTextLayer({
         data-wysiwyg-text-engine-layer="true"
         data-wysiwyg-pointer-fragment-count={pointerFragmentTargets.length}
         data-wysiwyg-reflow-kind={reflowKind}
+        data-wysiwyg-table-cell-preview-candidate={tableCellDraftVisualPreviewCandidate ? "true" : undefined}
         data-inline-edit-node-id={fragment.nodeId}
         data-inline-edit-visual-mode="text-engine"
         tabIndex={0}
@@ -1641,8 +1648,8 @@ export function ParagraphTextSurface({
     hasSelectionOverlay,
     isWysiwygEnabled: wysiwygInlineEditEnabled,
   })
-  const supportsLocalDraftLayout = !fragment.continuesFrom && !fragment.isContinued && !isTableCellParagraph
-  const supportsPaginatedDraftLayout = wysiwygTextDraftPaginationActive && !isTableCellParagraph
+  const supportsLocalDraftLayout = !fragment.continuesFrom && !fragment.isContinued
+  const supportsPaginatedDraftLayout = wysiwygTextDraftPaginationActive
   const useWysiwygTextEngineLayer = shouldUseWysiwygTextEngineLayer({
     enabled: wysiwygTextEngineEnabled,
     isEditing,
@@ -1676,7 +1683,17 @@ export function ParagraphTextSurface({
     textEngineDraftLayout?.height,
     textEngineDraftLines,
   ])
-  const textEngineVisualDraftLines = textEngineReflowDecision.shouldPatchActiveLines
+  const useTextEngineLocalDraftLines = shouldUseWysiwygLocalDraftLines({
+    reflow: textEngineReflowDecision,
+    isTableCellParagraph,
+  })
+  const tableCellDraftVisualPreviewCandidate = shouldPrepareWysiwygTableCellDraftVisualPreview({
+    reflow: textEngineReflowDecision,
+    isTableCellParagraph,
+    isFlowStackParagraph,
+    draftPaginationActive: wysiwygTextDraftPaginationActive,
+  })
+  const textEngineVisualDraftLines = useTextEngineLocalDraftLines
     ? wysiwygTextVisualDraftLines ?? textEngineDraftLines
     : null
   const textEngineLiveTextEcho = !textEngineReflowDecision.shouldPatchActiveLines &&
@@ -1812,6 +1829,7 @@ export function ParagraphTextSurface({
           pointerFragments={wysiwygTextPointerFragments}
           reflowKind={textEngineReflowDecision.kind}
           liveTextEcho={textEngineLiveTextEcho}
+          tableCellDraftVisualPreviewCandidate={tableCellDraftVisualPreviewCandidate}
         />
       )
     }

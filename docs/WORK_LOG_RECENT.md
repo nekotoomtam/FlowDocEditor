@@ -24,6 +24,412 @@ Each entry should include:
 
 ## 2026-05-18
 
+### C4 Export And WYSIWYG Verification Pass
+
+Goal: Run the C4 verification pass after the table-cell text-engine and
+continuation-preview work, with PDF as the main export/parity signal.
+
+Completed:
+
+- Fixed the PDF visual regression launcher so WinGet Poppler is passed to the
+  renderer tests as `FLOWDOC_PDFTOPPM_PATH` when the installed `pdftoppm.exe`
+  is found. This avoids shell/path differences between the wrapper script and
+  the Vitest child process.
+- Re-ran the opt-in PDF raster visual regression gate with Poppler.
+- Re-ran the Stage 4C WYSIWYG smoke for text-engine selection, clipboard, IME,
+  and immediate-input performance behavior.
+- Re-ran the editor smoke for broader editor/export readiness behavior.
+- Re-ran the full core and app test suites.
+
+Files changed:
+
+- `scripts/run-pdf-visual-regression.mjs`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:pdf-visual`
+- `npm.cmd run smoke:wysiwyg-stage4c`
+- `npm.cmd run smoke:editor`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- The first sandboxed PDF visual run could not execute WinGet Poppler and
+  failed before raster assertions. The successful run used the same test command
+  outside the sandbox so `pdftoppm.exe` could execute.
+- No renderer, document schema, pagination, or export API behavior changed in
+  this slice.
+
+### Verify Settled Table Cell Continuation Editing
+
+Goal: Close C2.5B by proving active editing can re-enter a settled split
+table-cell continuation without using the temporary continuation preview.
+
+Completed:
+
+- Added a focused split table-cell paginated fixture with real first-page and
+  continuation-page paragraph fragments.
+- Verified the continuation page uses the flagged text-engine layer when draft
+  pagination is active.
+- Verified the temporary table-cell preview candidate is absent and the
+  textarea fallback does not mount for the settled continuation edit.
+
+Files changed:
+
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+
+Notes:
+
+- Runtime behavior did not require a code change in this slice.
+- This keeps row/cell chrome generation out of the temporary preview path.
+
+### Keep Table Cell Draft Preview Behind Settled Pagination
+
+Goal: Tighten C2.5A so the conservative table-cell continuation preview only
+acts as a bridge before responsive draft pagination becomes active.
+
+Completed:
+
+- Added the draft-pagination marker and existing-split marker to the editor
+  canvas memo dependencies for the table-cell preview builder.
+- Added focused canvas coverage proving that once draft pagination is active,
+  the temporary continuation preview no longer renders the extra draft page
+  text.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This does not change table pagination, export, row/cell chrome, or document
+  schema.
+
+### Render Conservative Table Cell Draft Continuation Preview
+
+Goal: Continue C by showing active table-cell and flow-table-cell page-boundary
+draft text before settled draft pagination arrives, without changing table
+pagination truth.
+
+Completed:
+
+- Extended the WYSIWYG draft visual preview builder with a guarded table-cell
+  branch.
+- Reused the C1 eligibility gate so only table-cell page-boundary drafts before
+  settled draft pagination can render a preview.
+- Returned `null` for same-page cell edits, already split cell paragraphs, and
+  active settled draft-pagination markers so paginator-owned fragments win.
+- Rendered conservative paragraph-only continuation fragments through the editor
+  canvas and text-engine layer.
+- Added focused coverage for legacy table cells, Flow Table cells, same-page
+  rejection, settled-pagination rejection, and canvas rendering.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+
+Notes:
+
+- The preview is paragraph-only and does not synthesize row/cell chrome on the
+  continuation page.
+- PDF/DOCX export and core pagination remain unchanged.
+
+### Add Table Cell Draft Visual Preview Gate
+
+Goal: Start the C path for table-cell cross-page typing without reusing the
+body-paragraph live preview or bypassing table pagination.
+
+Completed:
+
+- Added a pure eligibility helper for the future table-aware visual preview
+  lane.
+- Surfaced the gate on the active flagged text-engine layer as diagnostic
+  state only.
+- Limited the candidate case to table-cell and flow-table-cell page-boundary
+  edits before settled responsive draft pagination is active.
+- Kept same-page cell edits, body paragraphs, flow-stack paragraphs, and
+  already responsive draft-pagination edits on their existing paths.
+- Added focused decision coverage for the new gate.
+
+Files changed:
+
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+
+Notes:
+
+- This does not render a table-aware continuation preview yet.
+- The next patch can wire this gate into a preview builder that draws only
+  geometry the table pagination path can reproduce.
+
+### Keep Split Table Cell Draft Pagination Responsive
+
+Goal: Keep table-cell and flow-table-cell typing responsive after draft
+pagination has already split the active paragraph across pages.
+
+Completed:
+
+- Added a shared responsive-container draft-pagination decision helper for
+  flow-stack and table-cell paragraphs.
+- Reused the same decision when scheduling from active draft changes and when a
+  draft-pagination result settles.
+- Preserved the responsive marker for split table-cell and flow-table-cell
+  paragraphs so follow-up typing and shrink-back do not fall back to the normal
+  body-paragraph delay.
+- Added focused reflow coverage for the combined responsive container decision.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- Browser smoke on `http://localhost:4000/editor`: entered an existing Flow
+  Table cell paragraph, typed a line break through the WYSIWYG input bridge,
+  confirmed the paragraph stayed on the text-engine layer with no textarea
+  fallback, and observed hard-local responsive behavior after the combined
+  scheduling decision changed.
+
+Notes:
+
+- This does not add table-aware visual continuation preview.
+- The continuation layout still comes from responsive draft pagination.
+
+### Guard Table Cell Local Draft Preview
+
+Goal: Make the B1 active cell preview rule explicit so same-page cell edits can
+render draft lines immediately without pretending to split table cells across
+pages.
+
+Completed:
+
+- Added a pure decision helper for local WYSIWYG draft-line rendering.
+- Allowed same-page table-cell and flow-table-cell hard-local edits to render
+  draft lines in the active text-engine layer.
+- Kept table-cell and flow-table-cell hard-page-boundary edits on the settled
+  pagination visual path instead of reusing body-paragraph cross-page preview.
+- Added focused surface and reflow coverage for table-cell hard-local and
+  page-boundary behavior.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- Browser smoke on `http://localhost:4000/editor`: entered a Flow Table cell
+  paragraph, typed a same-page line break through the WYSIWYG input bridge,
+  confirmed no textarea fallback mounted, and observed the active cell text stay
+  on the text-engine layer while geometry settled quickly through responsive
+  draft pagination.
+
+Notes:
+
+- This does not add a table-aware cross-page visual preview.
+- Page-boundary table-cell edits still rely on responsive draft pagination from
+  the prior patch.
+
+### Add Responsive Table Cell Draft Pagination
+
+Goal: Reduce visible delay when typing or pressing Enter inside table-cell and
+flow-table-cell paragraphs without bypassing table pagination constraints.
+
+Completed:
+
+- Added an exported editor helper to detect paragraphs owned by legacy table
+  cells and Flow Table cells.
+- Kept table-cell and flow-table-cell text-engine edits off same-page local
+  height patching.
+- Scheduled responsive draft pagination for table-cell and flow-table-cell
+  hard-local and page-boundary reflow decisions.
+- Kept already split active table-cell paragraphs on the responsive pagination
+  path while the draft-pagination marker is active.
+- Added focused reflow and eligibility coverage for the responsive table-cell
+  path.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/wysiwygTextEligibility.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- Browser smoke on `http://localhost:4000/editor`: entered a Flow Table cell
+  paragraph through the flagged text-engine layer, pressed Enter and typed
+  additional text, confirmed the paragraph stayed on the WYSIWYG text-engine
+  layer with no textarea fallback, and observed the active paragraph/cell
+  geometry settle on the responsive path.
+
+Notes:
+
+- This does not add a table-aware live preview equivalent to body paragraphs.
+- Table row/cell geometry still comes from draft pagination, keeping the
+  preview aligned with current table pagination semantics.
+
+### Hide Flow Table Row Chrome And Enable Cell Text Engine Path
+
+Goal: Fix Flow Table merged-cell editing so lower row fragments do not visually
+cover merged cells, and cell paragraphs use the same flagged text-engine edit
+path as normal paragraphs.
+
+Completed:
+
+- Kept `flow-table-row` fragments in the canvas as geometry/debug fragments but
+  removed their visible chrome, labels, and selection outline.
+- Preserved `flow-table-cell` fragments as the visible and hit-testable merged
+  cell surface.
+- Allowed plain `table-cell` and `flow-table-cell` paragraphs to enter the
+  flagged WYSIWYG text-engine lane.
+- Kept the existing table-cell boundary Backspace guard separate from the text
+  engine eligibility change.
+- Updated focused editor text-surface and eligibility coverage.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygTextEligibility.ts`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `npm.cmd run test:app`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- Browser smoke on `http://localhost:4000/editor`: verified Flow Table row
+  fragments render with transparent fill/stroke, zero opacity, no row label, no
+  row selection outline, and `pointer-events: none`; double-clicked a Flow Table
+  cell paragraph, typed through the flagged WYSIWYG text-engine layer, and
+  confirmed no textarea fallback was mounted.
+
+Notes:
+
+- This does not add a Flow Table row handle/gutter.
+- Same-page row/cell height patching remains guarded; table layout still
+  settles through existing preview and authoritative pagination.
+
+### Make Flow Table Row Chrome Pointer-Transparent
+
+Goal: Prevent Flow Table row fragments from stealing canvas clicks from merged
+or row-spanning cells that visually overlap later row chrome.
+
+Completed:
+
+- Made `flow-table-row` fragments visual-only for pointer hit testing in the
+  editor canvas.
+- Kept `flow-table-cell` fragments as the primary canvas hit target for merged
+  and row-spanning cell areas.
+- Added focused `EditorCanvas` coverage that asserts row fragments are
+  pointer-transparent while merged cell fragments remain hit-testable.
+- Updated editor UX and table editing contracts for the Flow Table row-chrome
+  policy.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `git diff --check`
+- `npm.cmd test`
+- `npm.cmd run review:gate`
+- Browser smoke on `http://localhost:4000/editor`: inserted a Flow table from
+  the palette, merged the first cell right/down, verified row fragments were
+  pointer-transparent, and clicked the lower-row-overlap area inside the merged
+  cell; the PropertyPanel remained on `FLOW TABLE CELL`.
+
+Notes:
+
+- This does not add a dedicated row handle/gutter.
+- Flow Table row model data and property-panel path inspection remain intact.
+
 ### Add Flow Table C2.8D Merge Map Row/Column Maintenance
 
 Goal: Keep Flow Table merge-map metadata valid and useful when row/column

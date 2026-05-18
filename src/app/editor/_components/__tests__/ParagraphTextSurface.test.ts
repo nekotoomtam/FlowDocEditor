@@ -142,6 +142,62 @@ function makeTableDoc(text = "Cell text"): DocumentNode {
   } as unknown as DocumentNode
 }
 
+function makeFlowTableDoc(text = "Flow cell text"): DocumentNode {
+  const paragraph = {
+    id: "p1",
+    type: "paragraph",
+    props: {
+      align: "left",
+      fontSize: { value: 12, unit: "pt" },
+      fontFamilyKey: "default",
+      lineHeight: 1,
+      spacingBefore: { value: 0, unit: "pt" },
+      spacingAfter: { value: 0, unit: "pt" },
+      textIndent: { value: 0, unit: "pt" },
+      indentLeft: { value: 0, unit: "pt" },
+      indentRight: { value: 0, unit: "pt" },
+    },
+    children: [{ id: "p1-text", type: "text", text }],
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 72, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 72, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["ft1"] },
+          ft1: {
+            id: "ft1",
+            type: "flow-table",
+            props: {},
+            rowIds: ["r1"],
+            columns: [{ width: { value: 100, unit: "percent" } }],
+            nodes: {
+              r1: { id: "r1", type: "flow-table-row", props: {}, cellIds: ["c1"] },
+              c1: { id: "c1", type: "flow-table-cell", props: {}, childIds: ["p1"] },
+              p1: paragraph,
+            },
+          },
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
 function makeStackDoc(text = "Stack text"): DocumentNode {
   const paragraph = {
     id: "p1",
@@ -864,7 +920,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("<textarea")
   })
 
-  it("keeps table-cell paragraphs on the guarded non-text-engine edit path", () => {
+  it("uses the text-engine lane for table-cell paragraphs while keeping cell boundary rules separate", () => {
     const fragment = makeFragment({
       parentNodeId: "c1",
       lines: [{
@@ -911,9 +967,304 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).not.toContain("data-wysiwyg-text-engine-layer=\"true\"")
-    expect(markup).not.toContain("data-wysiwyg-input-bridge=\"true\"")
-    expect(markup).toContain("<textarea")
+    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
+    expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("uses the text-engine lane for flow-table-cell paragraphs", () => {
+    const fragment = makeFragment({
+      parentNodeId: "c1",
+      lines: [{
+        text: "Flow cell text",
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 14,
+        segments: [{ kind: "word", text: "Flow cell text", start: 0, end: 14, x: 0, width: 100, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeFlowTableDoc("Flow cell text"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Flow cell text draft",
+      wysiwygTextCaretOffset: 20,
+      showTextSegments: false,
+      initialCaretIndex: 0,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
+    expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("renders table-cell local draft lines for same-page line-count changes", () => {
+    const fragment = makeFragment({
+      parentNodeId: "c1",
+      width: 120,
+      height: 12,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [{
+        text: "Cell",
+        x: 10,
+        y: 20,
+        width: 40,
+        height: 12,
+        segments: [{ kind: "word", text: "Cell", start: 0, end: 4, x: 0, width: 40, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeTableDoc("Cell"),
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 200,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Cell\nnext",
+      wysiwygTextCaretOffset: 9,
+      showTextSegments: false,
+      initialCaretIndex: 4,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-local\"")
+    expect(markup).toContain("Cell")
+    expect(markup).toContain("next")
+    expect(markup).not.toContain("data-wysiwyg-table-cell-preview-candidate")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("renders flow-table-cell local draft lines for same-page line-count changes", () => {
+    const fragment = makeFragment({
+      parentNodeId: "c1",
+      width: 120,
+      height: 12,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [{
+        text: "Flow",
+        x: 10,
+        y: 20,
+        width: 40,
+        height: 12,
+        segments: [{ kind: "word", text: "Flow", start: 0, end: 4, x: 0, width: 40, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeFlowTableDoc("Flow"),
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 200,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Flow\nnext",
+      wysiwygTextCaretOffset: 9,
+      showTextSegments: false,
+      initialCaretIndex: 4,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-local\"")
+    expect(markup).toContain("Flow")
+    expect(markup).toContain("next")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("keeps table-cell page-boundary draft text on the settled pagination visual path", () => {
+    const fragment = makeFragment({
+      parentNodeId: "c1",
+      y: 20,
+      width: 120,
+      height: 12,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [{
+        text: "A",
+        x: 10,
+        y: 20,
+        width: 10,
+        height: 12,
+        segments: [{ kind: "word", text: "A", start: 0, end: 1, x: 0, width: 10, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeTableDoc("A"),
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 30,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "A\nB",
+      wysiwygTextCaretOffset: 3,
+      showTextSegments: false,
+      initialCaretIndex: 1,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
+    expect(markup).toContain("data-wysiwyg-table-cell-preview-candidate=\"true\"")
+    expect(markup).toContain("A")
+    expect(markup).not.toContain(">B<")
+    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+    expect(markup).not.toContain("<textarea")
+  })
+
+  it("clears the table-cell preview candidate once draft pagination is already active", () => {
+    const fragment = makeFragment({
+      parentNodeId: "c1",
+      y: 20,
+      width: 120,
+      height: 12,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [{
+        text: "A",
+        x: 10,
+        y: 20,
+        width: 10,
+        height: 12,
+        segments: [{ kind: "word", text: "A", start: 0, end: 1, x: 0, width: 10, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeTableDoc("A"),
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 30,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "A\nB",
+      wysiwygTextCaretOffset: 3,
+      wysiwygTextDraftPaginationActive: true,
+      showTextSegments: false,
+      initialCaretIndex: 1,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
+    expect(markup).not.toContain("data-wysiwyg-table-cell-preview-candidate")
+    expect(markup).not.toContain("<textarea")
   })
 
   it("keeps row-stack paragraphs on the text-engine path without textarea fallback", () => {

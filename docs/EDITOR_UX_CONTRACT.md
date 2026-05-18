@@ -36,6 +36,9 @@ Users should be able to:
   `table-cell`, not only the internal paragraph.
 - Structural containers such as rows, stacks, tables, table rows, and table cells
   should be selectable when their properties are editable.
+- Flow Table cell hit targets take priority over row chrome. `flow-table-row`
+  fragments are visual-only in the canvas until a dedicated row handle/gutter
+  exists, so row chrome does not steal clicks from merged or row-spanning cells.
 - Selection should not silently mutate the document.
 - Background clicks should clear selection and close inline edit through the
   normal edit transaction path.
@@ -145,6 +148,9 @@ Paragraph box styling is defined in
   possible and must not reuse stale SVG paragraph snapshots as the edit visual.
 - Backspace at the true start of a table-cell paragraph should not call the
   body-paragraph merge operation.
+- When the flagged WYSIWYG text engine is enabled, paragraphs inside `table-cell`
+  and `flow-table-cell` should use the same active paragraph text-engine path as
+  body paragraphs. Table-cell boundary Backspace remains table-specific.
 
 ## Undo/Redo Rules
 
@@ -167,6 +173,9 @@ Table-specific interaction rules are defined in
 - insert/delete column preserves total table width
 - row `allowBreak` and table `headerRowCount` are visible authored controls
 - table operations should not leave the editor in an invalid document state
+- Flow Table row chrome is geometry/debug state only until a dedicated row
+  handle exists; it should not draw visible row labels, fills, strokes, or
+  selection outlines over merged cell hit areas.
 - margin resizing with tables should expose a visible, predictable drag affordance
   and enough feedback that users understand the table is being reflowed.
 

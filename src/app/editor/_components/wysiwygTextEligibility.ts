@@ -28,10 +28,10 @@ function isTableCellNodeId(doc: DocumentNode, nodeId: string | null | undefined)
   return false
 }
 
-function isParagraphInsideTableCell(
+export function isParagraphInsideTableCell(
   doc: DocumentNode,
   nodeId: string,
-  parentNodeId: string | null | undefined,
+  parentNodeId?: string | null,
 ): boolean {
   if (isTableCellNodeId(doc, parentNodeId)) return true
   for (const section of doc.document.sections) {
@@ -91,7 +91,6 @@ export function isWysiwygTextEngineFragmentEligible(input: {
 }): boolean {
   const fragment = findWysiwygTextEngineFragment(input.paginated, input.nodeId, input.pageIndex)
   if (!fragment) return false
-  if (isParagraphInsideTableCell(input.doc, input.nodeId, fragment.parentNodeId)) return false
   const paragraph = findParagraphNode(input.doc, input.nodeId)
   return paragraph !== null && isPlainTextParagraph(paragraph)
 }

@@ -77,7 +77,7 @@ import {
 } from "./wysiwygDraftPreview"
 import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
 import { resolveEditorTestScenarioFromLocation } from "./wysiwygStage3StressScenarios"
-import { isParagraphInsideFlowStack, isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
+import { isParagraphInsideFlowStack, isParagraphInsideTableCell, isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
 import { commitWysiwygTextEditState, getPlainParagraphTextFromDocument } from "./wysiwygTextCommit"
 import { useInlineEditSession } from "./useInlineEditSession"
 import {
@@ -95,7 +95,7 @@ import {
   resolveWysiwygDraftPaginationSource,
   resolveWysiwygDraftPaginationDelayMs,
   shouldCoalesceWysiwygDraftPaginationRequest,
-  shouldScheduleResponsiveFlowStackDraftPagination,
+  shouldScheduleResponsiveContainerDraftPagination,
   shouldUseWysiwygDraftPaginationFrame,
   type WysiwygDraftPaginationLatestSnapshot,
   type WysiwygTextReflowDecision,
@@ -1233,8 +1233,9 @@ export default function EditorShell() {
         }
       }
       const currentFragmentCount = countWysiwygTextDraftFragments(paginated, nodeId)
-      setWysiwygDraftPaginationNodeId(shouldScheduleResponsiveFlowStackDraftPagination({
-        isFlowStackParagraph: isParagraphInsideFlowStack(docRef.current, nodeId),
+      setWysiwygDraftPaginationNodeId(shouldScheduleResponsiveContainerDraftPagination({
+        isFlowStackParagraph: isParagraphInsideFlowStack(draftDoc, nodeId),
+        isTableCellParagraph: isParagraphInsideTableCell(draftDoc, nodeId),
         draftPaginationActive: wysiwygDraftPaginationNodeIdRef.current === nodeId,
         currentFragmentCount,
       }) ? nodeId : null)
@@ -1390,16 +1391,21 @@ export default function EditorShell() {
     }
     handleInlineEditCaretChange(nodeId, caretIndex)
     const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
-    const useResponsiveFlowStackDraftPagination = shouldScheduleResponsiveFlowStackDraftPagination({
+    const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
+    const draftPaginationActive = wysiwygDraftPaginationNodeId === nodeId
+    const currentFragmentCount = countWysiwygTextDraftFragments(paginatedRef.current, nodeId)
+    const useResponsiveDraftPagination = shouldScheduleResponsiveContainerDraftPagination({
       isFlowStackParagraph,
-      draftPaginationActive: wysiwygDraftPaginationNodeId === nodeId,
-      currentFragmentCount: countWysiwygTextDraftFragments(paginatedRef.current, nodeId),
+      isTableCellParagraph,
+      draftPaginationActive,
+      currentFragmentCount,
     })
-    if (useResponsiveFlowStackDraftPagination) {
+    if (useResponsiveDraftPagination) {
       setWysiwygDraftPaginationNodeId(nodeId)
       scheduleWysiwygDraftPagination(nodeId, resolveWysiwygDraftPaginationDelayMs({
         draftPaginationActive: true,
         isFlowStackParagraph,
+        isTableCellParagraph,
         defaultDelayMs: WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS,
         flowStackBoundaryDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
       }))
@@ -1425,9 +1431,12 @@ export default function EditorShell() {
   const handleWysiwygTextReflowDecision = useCallback((nodeId: string, reflow: WysiwygTextReflowDecision) => {
     if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionState.nodeId !== nodeId) return
     if (!reflow.shouldQueueSettledPagination) return
+    const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
+    const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
     scheduleWysiwygDraftPagination(nodeId, resolveWysiwygDraftPaginationDelayMs({
       reflow,
-      isFlowStackParagraph: isParagraphInsideFlowStack(docRef.current, nodeId),
+      isFlowStackParagraph,
+      isTableCellParagraph,
       defaultDelayMs: WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS,
       flowStackBoundaryDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
     }))

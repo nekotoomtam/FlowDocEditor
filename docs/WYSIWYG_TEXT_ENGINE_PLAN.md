@@ -146,8 +146,16 @@ Current implementation note:
   checks can exercise overflow, shrink-back, and undo/redo using real keypress
   events without relying on clipboard-backed `fill()` / `type()` automation.
 - Plain body paragraph continuation fragments can stay on the text-engine path
-  after exit/re-enter. Table-cell fragments still fail closed until their row
-  and cell contracts are explicitly implemented.
+  after exit/re-enter. Plain table-cell and flow-table-cell paragraphs now use
+  the same flagged text-engine layer for active editing, while row/cell height
+  and pagination ownership still settle through the existing preview and
+  authoritative pagination lanes. Table-cell and flow-table-cell edits use a
+  responsive draft-pagination handoff for line-count and page-boundary changes
+  so row/cell geometry catches up close to the input frame without enabling a
+  table-specific same-page height patch. Same-page cell draft lines may render
+  immediately inside the active text-engine layer, but page-boundary cell edits
+  do not use body-paragraph cross-page preview; they wait for responsive table
+  pagination so row/cell splits stay reproducible.
 
 Stage 3 closure evidence:
 
@@ -230,12 +238,29 @@ Current implementation note:
 - `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` is the real OS IME gate. It must be
   completed for Windows Chrome and Windows Edge with Thai IME before claiming
   high real-world IME confidence from Stage 4C.
-- Full screen reader product validation, cross-fragment edit semantics beyond
-  same-paragraph selection, and table-cell text-engine editing are still
-  deferred Stage 4/5 work.
-- Table-cell paragraphs remain a guarded decision gate for the text-engine lane:
-  the current implementation keeps them out of text-engine eligibility and live
-  draft visual preview so row/cell pagination constraints are not bypassed.
+- Full screen reader product validation and cross-fragment edit semantics
+  beyond same-paragraph selection are still deferred Stage 4/5 work.
+- Table-cell paragraphs are eligible for the flagged text-engine lane, but they
+  remain a production validation gate: local active text uses the shared
+  paragraph text engine, while same-page row/cell height patching stays guarded
+  so table pagination constraints are not bypassed. Hard local and
+  page-boundary edits schedule responsive draft pagination for the active
+  table-cell paragraph instead of waiting for the normal body-paragraph settling
+  delay. Local draft line rendering is allowed for same-page table-cell edits
+  only; page-boundary table-cell draft text remains on the settled pagination
+  visual path. Once draft pagination has split a table-cell paragraph into
+  multiple fragments, subsequent edits keep the active paragraph on the
+  responsive pagination path so cross-page typing and shrink-back do not fall
+  back to the normal body-paragraph delay. The first table-aware continuation
+  preview foundation is a pure eligibility gate: only table-cell page-boundary
+  edits before settled draft pagination are candidates for a future visual
+  preview; body paragraphs, flow-stack paragraphs, same-page cell edits, and
+  already responsive table-cell pagination stay on their existing lanes. The
+  first rendering slice uses that gate to draw a conservative paragraph-only
+  continuation preview for active table-cell and flow-table-cell edits before
+  settled draft pagination exists. It does not synthesize table row/cell chrome
+  on the continuation page, and it fails back to settled table pagination once a
+  real split or draft-pagination marker exists.
 - Row-stack paragraphs remain eligible for the text-engine lane, but they are
   guarded out of the body-paragraph live split preview. Heavy stack edits must
   preserve the current atomic row contract: the edited paragraph stays one

@@ -50,6 +50,26 @@ The canvas should make the table structure directly editable.
   that cell.
 - The property panel for `table-cell` is the main surface for cell text and cell
   props.
+- Flow Table row chrome is visual-only on the canvas until a dedicated row
+  handle/gutter exists. Cell hit targets own merged and row-spanning cell areas,
+  so lower row fragments must not steal clicks from an overlapping cell or draw
+  visible row labels/fills/strokes over that cell area.
+- Paragraphs inside `table-cell` and `flow-table-cell` use the same flagged
+  WYSIWYG text-engine edit lane as body paragraphs. Table-specific boundary
+  rules, including Backspace at the true start of a cell paragraph, remain
+  separate.
+- Active table-cell and flow-table-cell text-engine edits use responsive draft
+  pagination for line-count and page-boundary changes. Same-page row/cell height
+  patching remains guarded so the editor does not show table geometry that the
+  paginator cannot reproduce.
+- Same-page active cell draft lines may render immediately in the text-engine
+  layer. Page-boundary cell edits must not reuse the body-paragraph cross-page
+  visual preview; table/flow-table pagination owns the continuation split.
+- Table-aware page-boundary visual preview must pass a separate eligibility
+  gate before rendering. The first rendering slice is conservative: it may draw
+  only paragraph continuation fragments for active table-cell edits before
+  settled draft pagination exists. It must not synthesize row/cell chrome, and
+  real table pagination wins once a settled split or responsive marker exists.
 - Body paragraphs must keep their normal click-to-edit behavior. Table-specific
   selection should not make non-table paragraph editing worse.
 - If a cell has no editable paragraph, the editor may no-op or create a valid

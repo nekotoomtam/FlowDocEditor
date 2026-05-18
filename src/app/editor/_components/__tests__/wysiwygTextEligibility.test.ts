@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import type { PaginatedDocument, PageFragment } from "@/pagination"
-import { isParagraphInsideFlowStack, isWysiwygTextEngineFragmentEligible } from "../wysiwygTextEligibility"
+import { isParagraphInsideFlowStack, isParagraphInsideTableCell, isWysiwygTextEngineFragmentEligible } from "../wysiwygTextEligibility"
 
 const paragraph: ParagraphNode = {
   id: "p1",
@@ -100,13 +100,16 @@ describe("isWysiwygTextEngineFragmentEligible", () => {
     })).toBe(true)
   })
 
-  it("rejects table-cell paragraphs", () => {
+  it("allows table-cell paragraphs through the same flagged text engine path", () => {
     const tableParagraph = { ...paragraph, id: "p1" }
     const table = {
       id: "tbl",
       type: "table",
       props: {},
+      columns: [{ width: { value: 100, unit: "percent" } }],
+      rowIds: ["r1"],
       nodes: {
+        r1: { id: "r1", type: "table-row", props: {}, cellIds: ["c1"] },
         c1: { id: "c1", type: "table-cell", props: {}, childIds: ["p1"] },
         p1: tableParagraph,
       },
@@ -117,7 +120,30 @@ describe("isWysiwygTextEngineFragmentEligible", () => {
       paginated: makePaginated({ parentNodeId: "c1" }),
       nodeId: "p1",
       pageIndex: 0,
-    })).toBe(false)
+    })).toBe(true)
+  })
+
+  it("allows flow-table-cell paragraphs through the same flagged text engine path", () => {
+    const tableParagraph = { ...paragraph, id: "p1" }
+    const table = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: { value: 100, unit: "percent" } }],
+      rowIds: ["r1"],
+      nodes: {
+        r1: { id: "r1", type: "flow-table-row", props: {}, cellIds: ["c1"] },
+        c1: { id: "c1", type: "flow-table-cell", props: {}, childIds: ["p1"] },
+        p1: tableParagraph,
+      },
+    }
+
+    expect(isWysiwygTextEngineFragmentEligible({
+      doc: makeDoc({ body: { id: "body", type: "body", props: {}, childIds: ["ft1"] }, ft1: table }),
+      paginated: makePaginated({ parentNodeId: "c1" }),
+      nodeId: "p1",
+      pageIndex: 0,
+    })).toBe(true)
   })
 })
 
@@ -133,5 +159,46 @@ describe("isParagraphInsideFlowStack", () => {
     expect(isParagraphInsideFlowStack(doc, "p1", "fs1")).toBe(true)
     expect(isParagraphInsideFlowStack(doc, "p1")).toBe(true)
     expect(isParagraphInsideFlowStack(makeDoc(), "p1")).toBe(false)
+  })
+})
+
+describe("isParagraphInsideTableCell", () => {
+  it("detects paragraph ownership from a legacy table-cell parent id or authored children", () => {
+    const table = {
+      id: "tbl",
+      type: "table",
+      props: {},
+      columns: [{ width: { value: 100, unit: "percent" } }],
+      rowIds: ["r1"],
+      nodes: {
+        r1: { id: "r1", type: "table-row", props: {}, cellIds: ["c1"] },
+        c1: { id: "c1", type: "table-cell", props: {}, childIds: ["p1"] },
+        p1: paragraph,
+      },
+    }
+    const doc = makeDoc({ body: { id: "body", type: "body", props: {}, childIds: ["tbl"] }, tbl: table })
+
+    expect(isParagraphInsideTableCell(doc, "p1", "c1")).toBe(true)
+    expect(isParagraphInsideTableCell(doc, "p1")).toBe(true)
+    expect(isParagraphInsideTableCell(makeDoc(), "p1")).toBe(false)
+  })
+
+  it("detects paragraph ownership from a flow-table-cell parent id or authored children", () => {
+    const table = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: { value: 100, unit: "percent" } }],
+      rowIds: ["r1"],
+      nodes: {
+        r1: { id: "r1", type: "flow-table-row", props: {}, cellIds: ["c1"] },
+        c1: { id: "c1", type: "flow-table-cell", props: {}, childIds: ["p1"] },
+        p1: paragraph,
+      },
+    }
+    const doc = makeDoc({ body: { id: "body", type: "body", props: {}, childIds: ["ft1"] }, ft1: table })
+
+    expect(isParagraphInsideTableCell(doc, "p1", "c1")).toBe(true)
+    expect(isParagraphInsideTableCell(doc, "p1")).toBe(true)
   })
 })

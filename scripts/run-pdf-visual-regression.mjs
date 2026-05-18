@@ -76,28 +76,26 @@ function buildEnv() {
   env.Path = `${nodeBin};${env.Path ?? ""}`
   env.PATH = `${nodeBin};${env.PATH ?? ""}`
 
-  if (!commandCanStart("pdftoppm", ["-v"])) {
-    const defaultWingetPopplerBin = process.platform === "win32" && process.env.LOCALAPPDATA
-      ? join(
-          process.env.LOCALAPPDATA,
-          "Microsoft",
-          "WinGet",
-          "Packages",
-          "oschwartz10612.Poppler_Microsoft.Winget.Source_8wekyb3d8bbwe",
-          "poppler-25.07.0",
-          "Library",
-          "bin",
-        )
-      : null
-    const popplerBin = findWingetPopplerBin()
-    const fallbackBin = popplerBin ?? defaultWingetPopplerBin
-    if (fallbackBin) {
-      const pdftoppmPath = join(fallbackBin, "pdftoppm.exe")
-      env.Path = `${fallbackBin};${env.Path ?? ""}`
-      env.PATH = `${fallbackBin};${env.PATH ?? ""}`
-      if (existsSync(pdftoppmPath)) env.FLOWDOC_PDFTOPPM_PATH = pdftoppmPath
-      console.log(`Using Poppler from ${fallbackBin}`)
-    }
+  const defaultWingetPopplerBin = process.platform === "win32" && process.env.LOCALAPPDATA
+    ? join(
+        process.env.LOCALAPPDATA,
+        "Microsoft",
+        "WinGet",
+        "Packages",
+        "oschwartz10612.Poppler_Microsoft.Winget.Source_8wekyb3d8bbwe",
+        "poppler-25.07.0",
+        "Library",
+        "bin",
+      )
+    : null
+  const popplerBin = findWingetPopplerBin()
+  const fallbackBin = popplerBin ?? defaultWingetPopplerBin
+  if (fallbackBin) {
+    const pdftoppmPath = join(fallbackBin, "pdftoppm.exe")
+    env.Path = `${fallbackBin};${env.Path ?? ""}`
+    env.PATH = `${fallbackBin};${env.PATH ?? ""}`
+    if (existsSync(pdftoppmPath)) env.FLOWDOC_PDFTOPPM_PATH = pdftoppmPath
+    console.log(`Using Poppler from ${fallbackBin}`)
   }
 
   return env

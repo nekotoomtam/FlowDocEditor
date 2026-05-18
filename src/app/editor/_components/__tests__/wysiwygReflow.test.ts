@@ -5,7 +5,11 @@ import {
   resolveWysiwygDraftPaginationSource,
   resolveWysiwygDraftPaginationDelayMs,
   shouldCoalesceWysiwygDraftPaginationRequest,
+  shouldScheduleResponsiveContainerDraftPagination,
   shouldScheduleResponsiveFlowStackDraftPagination,
+  shouldScheduleResponsiveTableCellDraftPagination,
+  shouldPrepareWysiwygTableCellDraftVisualPreview,
+  shouldUseWysiwygLocalDraftLines,
   shouldUseWysiwygDraftPaginationFrame,
 } from "../wysiwygReflow"
 
@@ -163,6 +167,42 @@ describe("resolveWysiwygDraftPaginationDelayMs", () => {
     })).toBe(defaultDelayMs)
   })
 
+  it("uses the short delay for table-cell page-boundary handoff", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(resolveWysiwygDraftPaginationDelayMs({
+      reflow,
+      isFlowStackParagraph: false,
+      isTableCellParagraph: true,
+      defaultDelayMs,
+      flowStackBoundaryDelayMs,
+    })).toBe(flowStackBoundaryDelayMs)
+  })
+
+  it("uses the short delay for table-cell same-page line-count changes", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment(),
+      draftLines: [line("Hello"), line("world", 32)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(resolveWysiwygDraftPaginationDelayMs({
+      reflow,
+      isFlowStackParagraph: false,
+      isTableCellParagraph: true,
+      defaultDelayMs,
+      flowStackBoundaryDelayMs,
+    })).toBe(flowStackBoundaryDelayMs)
+  })
+
   it("keeps active flow-stack draft pagination responsive after the first split", () => {
     expect(resolveWysiwygDraftPaginationDelayMs({
       draftPaginationActive: true,
@@ -273,6 +313,201 @@ describe("shouldScheduleResponsiveFlowStackDraftPagination", () => {
       isFlowStackParagraph: false,
       draftPaginationActive: false,
       currentFragmentCount: 2,
+    })).toBe(false)
+  })
+})
+
+describe("shouldScheduleResponsiveTableCellDraftPagination", () => {
+  it("keeps re-entered split table-cell paragraphs on the responsive pagination path", () => {
+    expect(shouldScheduleResponsiveTableCellDraftPagination({
+      isTableCellParagraph: true,
+      draftPaginationActive: false,
+      currentFragmentCount: 2,
+    })).toBe(true)
+  })
+
+  it("keeps the first active table-cell split handoff responsive while the marker is set", () => {
+    expect(shouldScheduleResponsiveTableCellDraftPagination({
+      isTableCellParagraph: true,
+      draftPaginationActive: true,
+      currentFragmentCount: 1,
+    })).toBe(true)
+  })
+
+  it("does not make unsplit table-cell edits responsive before a split marker exists", () => {
+    expect(shouldScheduleResponsiveTableCellDraftPagination({
+      isTableCellParagraph: true,
+      draftPaginationActive: false,
+      currentFragmentCount: 1,
+    })).toBe(false)
+  })
+
+  it("does not promote non-table split paragraphs to the table-cell responsive path", () => {
+    expect(shouldScheduleResponsiveTableCellDraftPagination({
+      isTableCellParagraph: false,
+      draftPaginationActive: false,
+      currentFragmentCount: 2,
+    })).toBe(false)
+  })
+})
+
+describe("shouldScheduleResponsiveContainerDraftPagination", () => {
+  it("keeps split flow-stack paragraphs on the responsive path", () => {
+    expect(shouldScheduleResponsiveContainerDraftPagination({
+      isFlowStackParagraph: true,
+      isTableCellParagraph: false,
+      draftPaginationActive: false,
+      currentFragmentCount: 2,
+    })).toBe(true)
+  })
+
+  it("keeps split table-cell paragraphs on the responsive path after pagination settles", () => {
+    expect(shouldScheduleResponsiveContainerDraftPagination({
+      isFlowStackParagraph: false,
+      isTableCellParagraph: true,
+      draftPaginationActive: false,
+      currentFragmentCount: 2,
+    })).toBe(true)
+  })
+
+  it("keeps first split handoff responsive while the marker is active", () => {
+    expect(shouldScheduleResponsiveContainerDraftPagination({
+      isFlowStackParagraph: false,
+      isTableCellParagraph: true,
+      draftPaginationActive: true,
+      currentFragmentCount: 1,
+    })).toBe(true)
+  })
+
+  it("does not promote ordinary split body paragraphs to the container responsive path", () => {
+    expect(shouldScheduleResponsiveContainerDraftPagination({
+      isFlowStackParagraph: false,
+      isTableCellParagraph: false,
+      draftPaginationActive: false,
+      currentFragmentCount: 2,
+    })).toBe(false)
+  })
+})
+
+describe("shouldUseWysiwygLocalDraftLines", () => {
+  it("allows body paragraph page-boundary draft lines so the body preview can split them", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(shouldUseWysiwygLocalDraftLines({
+      reflow,
+      isTableCellParagraph: false,
+    })).toBe(true)
+  })
+
+  it("allows table-cell draft lines for same-page line-count changes", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment(),
+      draftLines: [line("Hello"), line("world", 32)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(shouldUseWysiwygLocalDraftLines({
+      reflow,
+      isTableCellParagraph: true,
+    })).toBe(true)
+  })
+
+  it("keeps table-cell page-boundary edits on the settled pagination visual path", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(shouldUseWysiwygLocalDraftLines({
+      reflow,
+      isTableCellParagraph: true,
+    })).toBe(false)
+  })
+})
+
+describe("shouldPrepareWysiwygTableCellDraftVisualPreview", () => {
+  it("marks table-cell page-boundary edits as eligible for the table-aware preview lane", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(shouldPrepareWysiwygTableCellDraftVisualPreview({
+      reflow,
+      isTableCellParagraph: true,
+      isFlowStackParagraph: false,
+      draftPaginationActive: false,
+    })).toBe(true)
+  })
+
+  it("keeps same-page table-cell edits out of the table-aware preview lane", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment(),
+      draftLines: [line("Hello"), line("world", 32)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(shouldPrepareWysiwygTableCellDraftVisualPreview({
+      reflow,
+      isTableCellParagraph: true,
+      isFlowStackParagraph: false,
+      draftPaginationActive: false,
+    })).toBe(false)
+  })
+
+  it("does not promote body or flow-stack paragraphs to the table-aware preview lane", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(shouldPrepareWysiwygTableCellDraftVisualPreview({
+      reflow,
+      isTableCellParagraph: false,
+      isFlowStackParagraph: false,
+      draftPaginationActive: false,
+    })).toBe(false)
+    expect(shouldPrepareWysiwygTableCellDraftVisualPreview({
+      reflow,
+      isTableCellParagraph: true,
+      isFlowStackParagraph: true,
+      draftPaginationActive: false,
+    })).toBe(false)
+  })
+
+  it("prefers settled draft pagination after the active table-cell marker exists", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(shouldPrepareWysiwygTableCellDraftVisualPreview({
+      reflow,
+      isTableCellParagraph: true,
+      isFlowStackParagraph: false,
+      draftPaginationActive: true,
     })).toBe(false)
   })
 })
