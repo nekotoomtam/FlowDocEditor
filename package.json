@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "0.5.9",
+  "version": "0.5.10",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -25,6 +25,7 @@
     "smoke:editor": "node scripts/editor-smoke.mjs",
     "smoke:wysiwyg-table-cell-boundary": "node scripts/wysiwyg-table-cell-boundary-smoke.mjs",
     "smoke:wysiwyg-flow-table-colspan-boundary": "node scripts/wysiwyg-table-cell-boundary-smoke.mjs --target=flow-table-colspan",
+    "smoke:wysiwyg-flow-table-rowspan-boundary": "node scripts/wysiwyg-table-cell-boundary-smoke.mjs --target=flow-table-rowspan",
     "smoke:wysiwyg-stage4c": "node scripts/wysiwyg-stage4c-smoke.mjs",
     "smoke:wysiwyg-reenter": "node scripts/wysiwyg-reenter-drift-probe.mjs",
     "smoke:wysiwyg-thai-repeat": "node scripts/wysiwyg-thai-repeat-reenter-probe.mjs",

@@ -24,6 +24,45 @@ Each entry should include:
 
 ## 2026-05-19
 
+### Flow Table Rowspan Live Typing Browser Smoke
+
+Goal: Add focused browser evidence that WYSIWYG live typing can drive a Flow
+Table `rowspan` continuation without duplicating sibling cell content.
+
+Completed:
+
+- Added a dev/test-only Stage 3 Flow Table `rowspan=2` target fixture after the
+  existing table-cell/colspan fixtures so existing smoke geometry stays stable.
+- Added unit coverage for initial, overflow, and shrink-back draft pagination of
+  the rowspan Flow Table cell.
+- Extended the shared table-cell boundary smoke script with a
+  `flow-table-rowspan` target.
+- Added `npm run smoke:wysiwyg-flow-table-rowspan-boundary` and documented the
+  command in the browser smoke checklist.
+
+Files changed:
+
+- `src/app/editor/_components/wysiwygStage3StressScenarios.ts`
+- `src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- `scripts/wysiwyg-table-cell-boundary-smoke.mjs`
+- `package.json`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- `npm.cmd run smoke:wysiwyg-flow-table-rowspan-boundary`
+- `npm.cmd run smoke:wysiwyg-flow-table-colspan-boundary`
+- `npm.cmd run smoke:wysiwyg-table-cell-boundary`
+- `npm.cmd run type-check`
+
+Notes:
+
+- The new smoke verifies live typing and settled browser preview pagination for
+  a simple `rowspan=2` Flow Table cell. It does not claim arbitrary complex
+  mixed rowspan/colspan browser editing or legacy `table` rowspan behavior.
+
 ### Flow Table Rowspan R3B/R3C Mixed Span And Forced Warning Coverage
 
 Goal: Close the next core pagination risks after R3A by proving mixed

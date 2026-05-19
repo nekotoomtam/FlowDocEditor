@@ -321,6 +321,9 @@ Automated command:
 - For the colspan-only Flow Table target, use
   `npm.cmd run smoke:wysiwyg-flow-table-colspan-boundary` on Windows
   PowerShell or `npm run smoke:wysiwyg-flow-table-colspan-boundary` elsewhere.
+- For the rowspan Flow Table target, use
+  `npm.cmd run smoke:wysiwyg-flow-table-rowspan-boundary` on Windows
+  PowerShell or `npm run smoke:wysiwyg-flow-table-rowspan-boundary` elsewhere.
 - Use `SMOKE_PORT=<port>` to choose a dev-server port.
 - Use `SMOKE_BASE_URL=http://localhost:<port>/editor` only when pointing at an
   already-running server with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1` and
@@ -342,11 +345,14 @@ multiline payload, and verifies:
 This check protects Phase A table-cell cross-page typing responsiveness and
 guards that Phase B visual-only chrome does not remain after settled browser
 preview pagination. Focused `EditorCanvas` unit coverage owns the pre-settled
-chrome shape. This smoke does not claim rowspan splitting or full multi-cell
-live table preview. The Flow Table colspan variant uses the same script against
+chrome shape. The base table-cell smoke does not claim full multi-cell live
+table preview. The Flow Table colspan variant uses the same script against
 `stage3-flow-table-colspan-target`, additionally checking that the target cell
 keeps colspan-width chrome and the shorter sibling paragraph is not duplicated
-on continuation slices.
+on continuation slices. The Flow Table rowspan variant uses the same script
+against `stage3-flow-table-rowspan-target`, checking that the active cell
+continues through multiple row parents and the authored sibling paragraphs are
+not duplicated.
 
 ### Editor State Race And Reconciliation
 

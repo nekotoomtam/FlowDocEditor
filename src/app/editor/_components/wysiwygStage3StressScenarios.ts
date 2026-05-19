@@ -19,6 +19,11 @@ export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_CELL_ID = "stage3-flow-tab
 export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_NODE_ID = "stage3-flow-table-colspan-sibling"
 export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_SIBLING_CELL_ID = "stage3-flow-table-colspan-sibling-cell"
 export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_MARKER = "STAGE3_FLOW_TABLE_COLSPAN_MARKER"
+export const WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_NODE_ID = "stage3-flow-table-rowspan-target"
+export const WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_CELL_ID = "stage3-flow-table-rowspan-target-cell"
+export const WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TOP_SIBLING_NODE_ID = "stage3-flow-table-rowspan-top-sibling"
+export const WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_BOTTOM_SIBLING_NODE_ID = "stage3-flow-table-rowspan-bottom-sibling"
+export const WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_MARKER = "STAGE3_FLOW_TABLE_ROWSPAN_MARKER"
 
 export const WYSIWYG_STAGE3_BOUNDARY_APPEND_TEXT = [
   " ",
@@ -87,6 +92,23 @@ export const WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_APPEND_TEXT = [
   WYSIWYG_STAGE3_FLOW_TABLE_COLSPAN_TARGET_MARKER,
   ...Array.from({ length: 18 }, (_unused, index) => (
     `Flow Table colspan responsive line ${index + 1} ไทยอังกฤษ ${"flowtablecolspanboundary".repeat(6)}`
+  )),
+].join("\n")
+
+const FLOW_TABLE_ROWSPAN_TARGET_INITIAL_LINES = [
+  "Flow Table rowspan target line 1 starts inside a two-row cell.",
+  "Flow Table rowspan target line 2 keeps row-boundary continuation reachable.",
+  "Flow Table rowspan target line 3 keeps Thai text in the rowspan path: ทดสอบเซลล์ข้ามแถว.",
+]
+
+export const WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_INITIAL_TEXT =
+  FLOW_TABLE_ROWSPAN_TARGET_INITIAL_LINES.join("\n")
+
+export const WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_APPEND_TEXT = [
+  "",
+  WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_MARKER,
+  ...Array.from({ length: 18 }, (_unused, index) => (
+    `Flow Table rowspan responsive line ${index + 1} ไทยอังกฤษ ${"flowtablerowspanboundary".repeat(6)}`
   )),
 ].join("\n")
 
@@ -238,6 +260,110 @@ function stressFlowTable(): FlowTableNode {
   }
 }
 
+function stressFlowTableRowspan(): FlowTableNode {
+  const nodes: FlowTableNode["nodes"] = {
+    [WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_NODE_ID]: paragraph(
+      WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_NODE_ID,
+      WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_INITIAL_TEXT,
+      { fontSize: pt(9), lineHeight: 1.2, spacingAfter: pt(0) },
+    ),
+    [WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TOP_SIBLING_NODE_ID]: paragraph(
+      WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TOP_SIBLING_NODE_ID,
+      "Top sibling content should stay in the first authored row.",
+      { fontSize: pt(9), lineHeight: 1.2, spacingAfter: pt(0) },
+    ),
+    [WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_BOTTOM_SIBLING_NODE_ID]: paragraph(
+      WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_BOTTOM_SIBLING_NODE_ID,
+      "Bottom sibling content should stay in the second authored row.",
+      { fontSize: pt(9), lineHeight: 1.2, spacingAfter: pt(0) },
+    ),
+    [WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_CELL_ID]: {
+      id: WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_CELL_ID,
+      type: "flow-table-cell",
+      props: {
+        rowspan: 2,
+        box: {
+          fill: "ECFDF5",
+          padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) },
+        },
+      },
+      childIds: [WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_NODE_ID],
+    },
+    "stage3-flow-table-rowspan-top-sibling-cell": {
+      id: "stage3-flow-table-rowspan-top-sibling-cell",
+      type: "flow-table-cell",
+      props: {
+        box: {
+          fill: "E0F2FE",
+          padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) },
+        },
+      },
+      childIds: [WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TOP_SIBLING_NODE_ID],
+    },
+    "stage3-flow-table-rowspan-top-empty-cell": {
+      id: "stage3-flow-table-rowspan-top-empty-cell",
+      type: "flow-table-cell",
+      props: {
+        box: {
+          fill: "F8FAFC",
+          padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) },
+        },
+      },
+      childIds: [],
+    },
+    "stage3-flow-table-rowspan-bottom-sibling-cell": {
+      id: "stage3-flow-table-rowspan-bottom-sibling-cell",
+      type: "flow-table-cell",
+      props: {
+        box: {
+          fill: "FCE7F3",
+          padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) },
+        },
+      },
+      childIds: [WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_BOTTOM_SIBLING_NODE_ID],
+    },
+    "stage3-flow-table-rowspan-bottom-empty-cell": {
+      id: "stage3-flow-table-rowspan-bottom-empty-cell",
+      type: "flow-table-cell",
+      props: {
+        box: {
+          fill: "F8FAFC",
+          padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) },
+        },
+      },
+      childIds: [],
+    },
+    "stage3-flow-table-rowspan-row1": {
+      id: "stage3-flow-table-rowspan-row1",
+      type: "flow-table-row",
+      props: { height: pt(42) },
+      cellIds: [
+        WYSIWYG_STAGE3_FLOW_TABLE_ROWSPAN_TARGET_CELL_ID,
+        "stage3-flow-table-rowspan-top-sibling-cell",
+        "stage3-flow-table-rowspan-top-empty-cell",
+      ],
+    },
+    "stage3-flow-table-rowspan-row2": {
+      id: "stage3-flow-table-rowspan-row2",
+      type: "flow-table-row",
+      props: {},
+      cellIds: [
+        "stage3-flow-table-rowspan-bottom-sibling-cell",
+        "stage3-flow-table-rowspan-bottom-empty-cell",
+      ],
+    },
+  }
+
+  return {
+    id: "stage3-flow-table-rowspan",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(150) }, { width: pt(151) }, { width: pt(150) }],
+    rowIds: ["stage3-flow-table-rowspan-row1", "stage3-flow-table-rowspan-row2"],
+    nodes,
+  }
+}
+
 function stressStackRow(): Record<string, LayoutNode> {
   const target = paragraph(
     WYSIWYG_STAGE3_STACK_TARGET_NODE_ID,
@@ -284,6 +410,7 @@ export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
   const stackRowNodes = stressStackRow()
   const table = stressTable()
   const flowTable = stressFlowTable()
+  const flowTableRowspan = stressFlowTableRowspan()
   const nodes: Record<string, LayoutNode> = {
     "stage3-body": {
       id: "stage3-body",
@@ -296,6 +423,7 @@ export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
         WYSIWYG_STAGE3_STACK_ROW_ID,
         flowTable.id,
         table.id,
+        flowTableRowspan.id,
       ],
     },
     [spacer.id]: spacer,
@@ -303,6 +431,7 @@ export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
     ...stackRowNodes,
     [table.id]: table,
     [flowTable.id]: flowTable,
+    [flowTableRowspan.id]: flowTableRowspan,
   }
 
   for (const node of downstream) nodes[node.id] = node

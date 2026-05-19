@@ -23,6 +23,14 @@ const FLOW_TABLE_COLSPAN_APPEND_TEXT = [
   )),
 ].join("\n")
 
+const FLOW_TABLE_ROWSPAN_APPEND_TEXT = [
+  "",
+  "STAGE3_FLOW_TABLE_ROWSPAN_MARKER",
+  ...Array.from({ length: 18 }, (_unused, index) => (
+    `Flow Table rowspan responsive line ${index + 1} ไทยอังกฤษ ${"flowtablerowspanboundary".repeat(6)}`
+  )),
+].join("\n")
+
 const SMOKE_TARGETS = {
   "table-cell": {
     id: "table-cell",
@@ -44,6 +52,20 @@ const SMOKE_TARGETS = {
     appendText: FLOW_TABLE_COLSPAN_APPEND_TEXT,
     expectedCellNodeType: "flow-table-cell",
     expectColspanWidth: true,
+  },
+  "flow-table-rowspan": {
+    id: "flow-table-rowspan",
+    label: "flow-table rowspan cell",
+    nodeId: "stage3-flow-table-rowspan-target",
+    cellId: "stage3-flow-table-rowspan-target-cell",
+    siblingNodeIds: [
+      "stage3-flow-table-rowspan-top-sibling",
+      "stage3-flow-table-rowspan-bottom-sibling",
+    ],
+    marker: "STAGE3_FLOW_TABLE_ROWSPAN_MARKER",
+    appendText: FLOW_TABLE_ROWSPAN_APPEND_TEXT,
+    expectedCellNodeType: "flow-table-cell",
+    expectRowspanContinuation: true,
   },
 }
 
@@ -268,6 +290,7 @@ async function assertTableCellBoundaryFlow(page) {
       targetNodeId,
       targetCellId,
       siblingNodeId,
+      siblingNodeIds,
       siblingCellId,
     } = input
     const readFragmentBoxes = (nodeId) => {
@@ -279,6 +302,7 @@ async function assertTableCellBoundaryFlow(page) {
           return {
             nodeType: fragment.getAttribute("data-node-type"),
             pageIndex: fragment.getAttribute("data-page-index"),
+            parentNodeId: fragment.getAttribute("data-parent-node-id"),
             width: box?.width ?? 0,
             height: box?.height ?? 0,
           }
@@ -301,12 +325,19 @@ async function assertTableCellBoundaryFlow(page) {
       siblingParagraphCount: siblingNodeId
         ? document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${siblingNodeId}"]`).length
         : null,
+      siblingParagraphCounts: siblingNodeIds
+        ? siblingNodeIds.map((nodeId) => ({
+            nodeId,
+            count: document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${nodeId}"]`).length,
+          }))
+        : [],
       siblingCellBoxes: readFragmentBoxes(siblingCellId),
     }
   }, {
     targetNodeId: smokeTarget.nodeId,
     targetCellId: smokeTarget.cellId,
     siblingNodeId: smokeTarget.siblingNodeId,
+    siblingNodeIds: smokeTarget.siblingNodeIds,
     siblingCellId: smokeTarget.siblingCellId,
   })
   const perf = await readTableCellPerf(page)
@@ -334,6 +365,11 @@ async function assertTableCellBoundaryFlow(page) {
   if (smokeTarget.siblingNodeId) {
     assert(state.siblingParagraphCount === 1, `expected shorter sibling paragraph once, got ${state.siblingParagraphCount}`)
   }
+  if (smokeTarget.siblingNodeIds) {
+    for (const sibling of state.siblingParagraphCounts) {
+      assert(sibling.count === 1, `expected sibling paragraph ${sibling.nodeId} once, got ${sibling.count}`)
+    }
+  }
   if (smokeTarget.expectColspanWidth) {
     const minTargetWidth = Math.min(...state.cellBoxes.map((box) => box.width))
     const maxSiblingWidth = Math.max(...state.siblingCellBoxes.map((box) => box.width))
@@ -344,6 +380,12 @@ async function assertTableCellBoundaryFlow(page) {
       `expected colspan target width > sibling width, got target ${minTargetWidth} and sibling ${maxSiblingWidth}`,
     )
   }
+  if (smokeTarget.expectRowspanContinuation) {
+    const parentRowIds = state.cellBoxes
+      .map((box) => box.parentNodeId)
+      .filter((parentNodeId, index, all) => parentNodeId && all.indexOf(parentNodeId) === index)
+    assert(parentRowIds.length >= 2, `expected rowspan continuation across row parents, got ${JSON.stringify(state.cellBoxes)}`)
+  }
 
   return {
     target: smokeTarget.id,
@@ -353,6 +395,7 @@ async function assertTableCellBoundaryFlow(page) {
     pointerFragments: state.pointerFragmentCount,
     cellFragments: state.cellBoxes.length,
     siblingParagraphs: state.siblingParagraphCount,
+    siblingParagraphCounts: state.siblingParagraphCounts,
     performanceTrace: {
       draftUpdates: perf.draftUpdates,
       browserPreviewPaginations: perf.browserPreviewPaginations,
