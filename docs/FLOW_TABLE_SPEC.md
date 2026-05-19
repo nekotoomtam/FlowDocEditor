@@ -13,9 +13,14 @@ Implementation status:
   span-aware structural edits.
 - Static flow layout exists for authored columns, `colspan`, `rowspan`, row
   height, and cell box padding.
-- Pagination supports breakable non-rowspan row/cell continuation across pages.
-  Short sibling cell content is not duplicated on continuation slices.
-- Rowspan-linked row groups remain atomic in v1.
+- Pagination supports breakable row/cell continuation across pages. Short
+  sibling cell content is not duplicated on continuation slices.
+- R1 Flow Table rowspan pagination planner metadata exists.
+- R2A Flow Table rowspan-linked groups can split at row boundaries when every
+  row in the group is breakable. Continuation cell fragments keep the authored
+  cell `nodeId` and use the visible row fragment as `parentNodeId`.
+- R3A Flow Table spanning-cell paragraph content can split across those
+  row-boundary continuation slices using the existing cell split-point helpers.
 - Core pagination repeats `headerRowCount` Flow Table header rows on body
   continuation pages.
 - PDF and editor preview draw Flow Table cell `box` fill/border from paginated
@@ -160,23 +165,23 @@ Current model:
   at its origin row. The emitted cell flow box spans the summed height of the
   covered rows.
 - `packages/core/src/pagination/paginator.ts` groups rows touched by `rowspan`
-  through `buildFlowTableRowspanGroups(...)`.
-- `paginateFlowTable(...)` treats `rowIndices.length > 1` as atomic and places
-  each row with `paginateFlowTableRowFull(...)`, so all rows in a rowspan-linked
-  group stay on the same page today.
+  through `planFlowTableRowspanGroups(...)`.
+- `paginateFlowTable(...)` keeps `allowBreak=false` rowspan-linked groups
+  atomic. Breakable rowspan-linked groups can split at row boundaries, and
+  spanning-cell paragraph content may split across those page slices.
 
 Design direction for future patches:
 
-- R1 should add explicit split metadata for rowspan groups without changing
-  authored schema: group row indices, row slice boundaries, origin cells that
-  continue across the boundary, and covered slots that should receive visual
-  continuation chrome.
-- R2 may split a rowspan-linked group only at row boundaries first. A spanning
-  cell fragment may continue on the next page for chrome/grid fidelity, but
-  content movement must remain deterministic and traceable to the origin cell.
-- R3 may split inside the content of a rowspan origin cell. This should reuse
-  the existing cell content split-point helpers instead of adding a second
-  paragraph slicer.
+- R1 adds explicit split metadata for rowspan groups without changing authored
+  schema or pagination output: group row indices, row slice boundaries, origin
+  cells that continue across the boundary, and covered slots that should receive
+  visual continuation chrome.
+- R2A splits a rowspan-linked group only at row boundaries first. A spanning
+  cell fragment may continue on the next page for chrome/grid fidelity, keeps
+  the authored cell `nodeId`, and uses the visible row fragment as
+  `parentNodeId`.
+- R3A splits inside the content of a rowspan origin cell by reusing the existing
+  cell content split-point helpers instead of adding a second paragraph slicer.
 - Header repetition, forced-progress warnings, and shorter sibling non-duplicate
   rules must stay aligned with the non-rowspan Flow Table split path.
 
@@ -397,17 +402,19 @@ Headers:
 Rowspan:
 
 - Any row connected by the same rowspan forms a rowspan-linked row group.
-- Rowspan-linked row groups are atomic in v1. Pagination should move the whole
-  group to a clean page when possible.
-- If a rowspan-linked group is taller than one clean page, v1 may use forced
-  overflow with an explicit Flow Table warning, but it must not silently split
-  inside the rowspan group.
-- Split-at-row-boundary or split-inside-cell behavior inside rowspan groups
-  remains deferred for v1.
-- A future split-inside-rowspan design must define active rowspan cell slices
-  across pages, border and padding continuation rules, row height distribution
-  per page slice, repeated-header interaction, and line accounting inside
-  spanning cells.
+- Breakable rowspan-linked row groups may split at row boundaries. The spanning
+  cell emits one `flow-table-cell` fragment per page slice it covers, keeping
+  its authored `nodeId` and original grid/span metadata.
+- Continuation spanning-cell fragments use the visible row fragment as
+  `parentNodeId`; this is render containment, not authored parentage.
+- If any row in the rowspan-linked group has `allowBreak=false`, the group
+  remains atomic and moves as a unit when possible.
+- If a row-boundary slice contains a row taller than one clean page, that row may
+  force whole-row progress.
+- Paragraph content inside a spanning cell uses the existing Flow Table cell
+  split-point helpers across row-boundary continuation slices. Continuation
+  paragraph fragments stay parented to the authored spanning cell, while
+  continuation cell chrome uses the visible row as render parent.
 
 Colspan:
 

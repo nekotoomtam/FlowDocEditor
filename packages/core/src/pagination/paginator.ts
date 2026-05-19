@@ -36,6 +36,12 @@ import type {
 } from "./types"
 import { createEmptyPage, getPageMetrics } from "./metrics"
 import { resolveFlowTableGrid } from "../document/flowTableGrid"
+import {
+  planFlowTableRowspanGroupSlice,
+  planFlowTableRowspanGroups,
+  type FlowTableRowspanGroupPlan,
+  type FlowTableRowspanSlicePlan,
+} from "./flowTableRowspanPlan"
 
 /**
  * paginator — รับ FlowBox จาก layout แล้วตัดเป็น pages
@@ -2299,48 +2305,272 @@ function paginateFlowTableRowSplit(
   return current
 }
 
-function buildFlowTableRowspanGroups(tableNode: FlowTableNode, rowBoxes: FlowBox[]): RowspanGroup[] {
-  const n = tableNode.rowIds.length
-  const parent = Array.from({ length: n }, (_, i) => i)
+function flowTableRowAllowsBreak(tableNode: FlowTableNode, rowIndex: number): boolean {
+  const rowId = tableNode.rowIds[rowIndex]
+  const rowNode = tableNode.nodes[rowId]
+  return rowNode?.type === "flow-table-row" ? rowNode.props.allowBreak ?? true : true
+}
 
-  function find(x: number): number {
-    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x] }
-    return x
-  }
-  function union(a: number, b: number): void {
-    const ra = find(a), rb = find(b)
-    if (ra !== rb) parent[ra] = rb
+function flowTableRowspanGroupAllowsRowBoundarySplit(tableNode: FlowTableNode, group: FlowTableRowspanGroupPlan): boolean {
+  return group.rowIndices.every((rowIndex) => flowTableRowAllowsBreak(tableNode, rowIndex))
+}
+
+function flowTableRowspanSliceHeight(group: FlowTableRowspanGroupPlan, rowStartIndex: number, rowEndIndex: number): number {
+  return group.rows
+    .filter((row) => row.rowIndex >= rowStartIndex && row.rowIndex <= rowEndIndex)
+    .reduce((sum, row) => sum + row.height, 0)
+}
+
+function flowTableRowspanCellOriginBox(rowBoxes: FlowBox[], cellId: string, originRowIndex: number): FlowBox | null {
+  return rowBoxes[originRowIndex]?.children.find((cellBox) => cellBox.nodeId === cellId) ?? null
+}
+
+function flowTableRowspanSliceFragmentOrder(fragment: PageFragment): number {
+  if (fragment.nodeType === "flow-table-row") return 0
+  if (fragment.nodeType === "flow-table-cell") return 1
+  return 2
+}
+
+function pushFlowTableRowspanGroupSlice(
+  group: FlowTableRowspanGroupPlan,
+  slice: FlowTableRowspanSlicePlan,
+  rowBoxes: FlowBox[],
+  tableNode: FlowTableNode,
+  pages: PaginatedPage[],
+  template: PaginatedPage,
+  cursor: PageFlowCursor,
+  tableNodeId: string,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  flowTableGridProps: FlowTableGridRenderProps,
+  flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
+  rowspanContentSplits: Map<string, SplitPoint>,
+): PageFlowCursor {
+  const sliceTopRowBox = rowBoxes[slice.rowStartIndex]
+  if (!sliceTopRowBox) return cursor
+
+  const sliceTopY = sliceTopRowBox.y
+  const fragments: PageFragment[] = []
+  const contentFragments: PageFragment[] = []
+  const spanningCellById = new Map(group.spanningCells.map((cell) => [cell.cellId, cell]))
+  const emittedCellIds = new Set<string>()
+  const collectSpanningCellContent = (
+    cellBox: FlowBox,
+    cellPageY: number,
+    cellHeight: number,
+    isContinued: boolean,
+  ): void => {
+    const from = rowspanContentSplits.get(cellBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }
+    const to = isContinued
+      ? computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, cellHeight), measurer, wordBreaker, from)
+      : null
+
+    contentFragments.push(...collectFlowTableCellSlice(
+      cellBox,
+      tableNode,
+      measurer,
+      cursor.pageIndex,
+      cellPageY,
+      from,
+      to,
+      wordBreaker,
+      cursor.pageNumberOffset,
+    ))
+
+    if (isContinued) {
+      rowspanContentSplits.set(cellBox.nodeId, endSplitPoint(cellBox, to))
+    }
   }
 
-  for (let rowIdx = 0; rowIdx < n; rowIdx++) {
-    const rowId = tableNode.rowIds[rowIdx]
-    const rowNode = tableNode.nodes[rowId]
-    if (rowNode?.type !== "flow-table-row") continue
-    for (const cellId of rowNode.cellIds) {
-      const cellNode = tableNode.nodes[cellId]
-      if (cellNode?.type !== "flow-table-cell") continue
-      const rowspan = cellNode.props.rowspan ?? 1
-      if (rowspan <= 1) continue
-      for (let dr = 1; dr < rowspan && rowIdx + dr < n; dr++) {
-        union(rowIdx, rowIdx + dr)
+  for (const rowIndex of slice.rowIndices) {
+    const rowBox = rowBoxes[rowIndex]
+    if (!rowBox) continue
+    const rowPageY = cursor.cursorY + (rowBox.y - sliceTopY)
+
+    fragments.push({
+      nodeId: rowBox.nodeId,
+      nodeType: "flow-table-row",
+      parentNodeId: tableNodeId,
+      pageIndex: cursor.pageIndex,
+      x: rowBox.x,
+      y: rowPageY,
+      width: rowBox.width,
+      height: rowBox.height,
+      flowTableGridProps,
+    })
+
+    for (const cellBox of rowBox.children) {
+      if (emittedCellIds.has(cellBox.nodeId)) continue
+      const cellNode = tableNode.nodes[cellBox.nodeId]
+      const boxRenderProps = cellNode?.type === "flow-table-cell"
+        ? resolveFlowTableCellBoxRenderProps(cellNode)
+        : undefined
+      const spanningCell = spanningCellById.get(cellBox.nodeId)
+      const cellStartRowIndex = spanningCell
+        ? Math.max(spanningCell.rowIndex, slice.rowStartIndex)
+        : rowIndex
+      if (cellStartRowIndex !== rowIndex) continue
+      const cellEndRowIndex = spanningCell
+        ? Math.min(spanningCell.rowEndIndex, slice.rowEndIndex)
+        : rowIndex
+      const cellPageY = cursor.cursorY + ((rowBoxes[cellStartRowIndex]?.y ?? rowBox.y) - sliceTopY)
+      const cellHeight = spanningCell
+        ? flowTableRowspanSliceHeight(group, cellStartRowIndex, cellEndRowIndex)
+        : cellBox.height
+      const continuesFrom = spanningCell ? spanningCell.rowIndex < slice.rowStartIndex : false
+      const isContinued = spanningCell ? spanningCell.rowEndIndex > slice.rowEndIndex : false
+
+      fragments.push({
+        nodeId: cellBox.nodeId,
+        nodeType: "flow-table-cell",
+        parentNodeId: rowBoxes[cellStartRowIndex]?.nodeId ?? rowBox.nodeId,
+        pageIndex: cursor.pageIndex,
+        x: cellBox.x,
+        y: cellPageY,
+        width: cellBox.width,
+        height: cellHeight,
+        boxRenderProps,
+        flowTableCellGridProps: flowTableCellGridPropsById.get(cellBox.nodeId),
+        continuesFrom,
+        isContinued,
+      })
+      emittedCellIds.add(cellBox.nodeId)
+
+      if (spanningCell) {
+        collectSpanningCellContent(cellBox, cellPageY, cellHeight, isContinued)
+      } else if (!continuesFrom) {
+        contentFragments.push(...collectFlowTableCellContents(
+          cellBox,
+          tableNode,
+          measurer,
+          cursor.pageIndex,
+          cellPageY,
+          wordBreaker,
+          cursor.pageNumberOffset,
+        ))
       }
     }
   }
 
-  const groupMap = new Map<number, number[]>()
-  for (let i = 0; i < n; i++) {
-    const root = find(i)
-    if (!groupMap.has(root)) groupMap.set(root, [])
-    groupMap.get(root)!.push(i)
+  for (const cellId of slice.continuedFromPreviousCellIds) {
+    if (emittedCellIds.has(cellId)) continue
+    const spanningCell = spanningCellById.get(cellId)
+    if (!spanningCell) continue
+    const originCellBox = flowTableRowspanCellOriginBox(rowBoxes, cellId, spanningCell.rowIndex)
+    if (!originCellBox) continue
+    const cellNode = tableNode.nodes[cellId]
+    const boxRenderProps = cellNode?.type === "flow-table-cell"
+      ? resolveFlowTableCellBoxRenderProps(cellNode)
+      : undefined
+    const cellStartRowIndex = Math.max(spanningCell.rowIndex, slice.rowStartIndex)
+    const cellEndRowIndex = Math.min(spanningCell.rowEndIndex, slice.rowEndIndex)
+    const cellPageY = cursor.cursorY + ((rowBoxes[cellStartRowIndex]?.y ?? sliceTopY) - sliceTopY)
+    const cellHeight = flowTableRowspanSliceHeight(group, cellStartRowIndex, cellEndRowIndex)
+    const isContinued = spanningCell.rowEndIndex > slice.rowEndIndex
+
+    fragments.push({
+      nodeId: cellId,
+      nodeType: "flow-table-cell",
+      parentNodeId: rowBoxes[cellStartRowIndex]?.nodeId ?? sliceTopRowBox.nodeId,
+      pageIndex: cursor.pageIndex,
+      x: originCellBox.x,
+      y: cellPageY,
+      width: originCellBox.width,
+      height: cellHeight,
+      boxRenderProps,
+      flowTableCellGridProps: flowTableCellGridPropsById.get(cellId),
+      continuesFrom: true,
+      isContinued,
+    })
+    emittedCellIds.add(cellId)
+    collectSpanningCellContent(originCellBox, cellPageY, cellHeight, isContinued)
   }
 
-  return Array.from(groupMap.values())
-    .map((g) => g.sort((a, b) => a - b))
-    .sort((a, b) => a[0] - b[0])
-    .map((rowIndices) => ({
-      rowIndices,
-      totalHeight: rowIndices.reduce((sum, i) => sum + (rowBoxes[i]?.height ?? 0), 0),
-    }))
+  [...fragments, ...contentFragments]
+    .sort((a, b) =>
+      a.y - b.y ||
+      flowTableRowspanSliceFragmentOrder(a) - flowTableRowspanSliceFragmentOrder(b) ||
+      a.x - b.x ||
+      a.nodeId.localeCompare(b.nodeId)
+    )
+    .forEach((fragment) => pushFragment(pages, template, fragment))
+
+  return { ...cursor, cursorY: cursor.cursorY + slice.height }
+}
+
+function paginateFlowTableRowspanGroupSplit(
+  group: FlowTableRowspanGroupPlan,
+  rowBoxes: FlowBox[],
+  tableNode: FlowTableNode,
+  pages: PaginatedPage[],
+  template: PaginatedPage,
+  contentTop: number,
+  contentBottom: number,
+  cursor: PageFlowCursor,
+  tableNodeId: string,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  flowTableGridProps: FlowTableGridRenderProps,
+  flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
+  repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
+): PageFlowCursor {
+  let current = cursor
+  let rowOffset = 0
+  const rowspanContentSplits = new Map<string, SplitPoint>()
+  for (const cell of group.spanningCells) {
+    rowspanContentSplits.set(cell.cellId, { childIdx: 0, lineIdx: 0 })
+  }
+
+  while (rowOffset < group.rows.length) {
+    if (shouldMoveToNextPage(current.cursorY, contentBottom) || contentBottom - current.cursorY < MINIMUM_ROW_SPLIT_HEIGHT) {
+      current = advancePage(current, contentTop)
+      current = repeatHeaders ? repeatHeaders(current) : current
+    }
+
+    const availableHeight = contentBottom - current.cursorY
+    let sliceHeight = 0
+    let endOffset = rowOffset
+
+    while (endOffset < group.rows.length) {
+      const nextRowHeight = group.rows[endOffset].height
+      if (sliceHeight > 0 && sliceHeight + nextRowHeight > availableHeight) break
+      sliceHeight += nextRowHeight
+      endOffset += 1
+      if (sliceHeight >= availableHeight) break
+    }
+
+    if (endOffset === rowOffset) {
+      sliceHeight = group.rows[rowOffset].height
+      endOffset = rowOffset + 1
+    }
+
+    const rowStartIndex = group.rows[rowOffset].rowIndex
+    const rowEndIndex = group.rows[endOffset - 1].rowIndex
+    const slice = planFlowTableRowspanGroupSlice(group, rowStartIndex, rowEndIndex)
+    current = pushFlowTableRowspanGroupSlice(
+      group,
+      slice,
+      rowBoxes,
+      tableNode,
+      pages,
+      template,
+      current,
+      tableNodeId,
+      measurer,
+      wordBreaker,
+      flowTableGridProps,
+      flowTableCellGridPropsById,
+      rowspanContentSplits,
+    )
+    rowOffset = endOffset
+
+    if (rowOffset < group.rows.length) {
+      current = advancePage(current, contentTop)
+      current = repeatHeaders ? repeatHeaders(current) : current
+    }
+  }
+
+  return current
 }
 
 function paginateFlowTable(
@@ -2359,7 +2589,7 @@ function paginateFlowTable(
   if (!tableNode || tableNode.type !== "flow-table") return cursor
 
   let current = cursor
-  const groups = buildFlowTableRowspanGroups(tableNode, box.children)
+  const groups = planFlowTableRowspanGroups(tableNode, box.children)
   const headerRowCount = tableNode.props.headerRowCount ?? 0
   const headerBoxes = box.children.slice(0, headerRowCount)
   const headerHeight = headerBoxes.reduce((sum, rowBox) => sum + rowBox.height, 0)
@@ -2403,7 +2633,9 @@ function paginateFlowTable(
       ? firstRowNode.props.allowBreak ?? true
       : true
     const firstGroupIsHeader = firstGroup.rowIndices.every((rowIndex) => rowIndex < headerRowCount)
-    const firstGroupIsAtomic = firstGroupIsHeader || firstGroup.rowIndices.length > 1 || !firstRowAllowBreak
+    const firstGroupIsAtomic = firstGroupIsHeader ||
+      (firstGroup.rowIndices.length > 1 && !flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, firstGroup)) ||
+      (firstGroup.rowIndices.length === 1 && !firstRowAllowBreak)
     const firstGroupNeedsCleanSplitStart = !firstGroupIsAtomic &&
       current.cursorY > contentTop &&
       contentBottom - current.cursorY < MINIMUM_ROW_SPLIT_HEIGHT
@@ -2426,7 +2658,7 @@ function paginateFlowTable(
     flowTableGridProps,
   })
 
-  for (const { rowIndices, totalHeight } of groups) {
+  for (const { rowIndices, rowIds, rows, totalHeight, spanningCells } of groups) {
     const isHeaderGroup = rowIndices.every((rowIndex) => rowIndex < headerRowCount)
 
     if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
@@ -2435,6 +2667,26 @@ function paginateFlowTable(
     }
 
     if (rowIndices.length > 1) {
+      if (!isHeaderGroup && flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, { rowIndices, rowIds, rows, totalHeight, spanningCells })) {
+        current = paginateFlowTableRowspanGroupSplit(
+          { rowIndices, rowIds, rows, totalHeight, spanningCells },
+          box.children,
+          tableNode,
+          pages,
+          template,
+          contentTop,
+          contentBottom,
+          current,
+          box.nodeId,
+          measurer,
+          wordBreaker,
+          flowTableGridProps,
+          flowTableCellGridPropsById,
+          headerRowCount > 0 ? placeHeaders : undefined,
+        )
+        continue
+      }
+
       if (shouldMoveBlockToNextPage(current.cursorY, totalHeight, contentTop, contentBottom)) {
         current = advancePage(current, contentTop)
         if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)

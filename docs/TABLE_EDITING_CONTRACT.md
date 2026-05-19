@@ -203,8 +203,13 @@ These authored props directly affect cross-page behavior:
 - `colspan>1` with `rowspan=1` remains in the single-row split lane. The
   spanned cell may split across pages using its full rendered width, while
   shorter sibling cells must not duplicate content on continuation pages.
-- Rowspan-linked groups stay atomic until split-at-row-boundary inside rowspan
-  groups is explicitly implemented.
+- Flow Table rowspan-linked groups may split at row boundaries when every row in
+  the group is breakable. Continuation cell fragments keep the authored cell
+  `nodeId`, but their `parentNodeId` is the visible row fragment for that page.
+  Paragraph content inside the spanning cell may split across those continuation
+  slices and remains parented to the authored spanning cell.
+- Legacy table rowspan-linked groups stay atomic until a separate design accepts
+  the same row-boundary split policy.
 
 Changing these rules requires updating `docs/CROSS_PAGE_BEHAVIOR.md`, adding or
 adjusting fixtures, and keeping the full test suite green.
@@ -231,5 +236,7 @@ behavior:
 - Explicit table or column resize UI.
 - Broader content-mapping controls beyond merge-map-backed shrink/unmerge.
 - True span-origin movement for arbitrary left/up span authoring.
-- Split-at-row-boundary within rowspan-linked groups.
+- Mixed rowspan/colspan continuation edge cases and forced-progress warnings
+  inside Flow Table rowspan slices.
+- Split-at-row-boundary within legacy table rowspan-linked groups.
 - Visual regression tests for editor/PDF parity on multi-page tables.

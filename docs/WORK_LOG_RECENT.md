@@ -22,6 +22,135 @@ Each entry should include:
 
 ---
 
+## 2026-05-19
+
+### Flow Table Rowspan R3A Spanning-Cell Content Split
+
+Goal: Let content inside a spanning Flow Table cell flow across the row-boundary
+continuation slices introduced by R2A without changing authored table schema.
+
+Completed:
+
+- Added per-spanning-cell split cursors while paginating a breakable rowspan
+  group.
+- Reused the existing Flow Table cell split-point helpers for spanning-cell
+  paragraph content instead of adding a separate slicer.
+- Emitted paragraph continuation fragments across rowspan row-boundary slices,
+  keeping paragraph fragments parented to the authored spanning cell.
+- Preserved visible-row parentage for continuation `flow-table-cell` chrome.
+- Added regression coverage for line-contiguous paragraph fragments inside a
+  `rowspan=3` spanning cell split across pages.
+- Updated Flow Table and cross-page contracts to mark R3A content flow as
+  implemented for the row-boundary split path.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTableRowspanPlan.test.ts src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This remains a row-boundary split policy. It does not add editor live-preview,
+  PDF visual tuning, or legacy `table` rowspan splitting.
+- Mixed rowspan/colspan continuation edge cases and forced-progress warnings
+  inside rowspan slices remain follow-up risk areas.
+
+### Flow Table Rowspan R2A Row-Boundary Split
+
+Goal: Add the first visible rowspan pagination behavior by splitting Flow Table
+rowspan-linked groups at row boundaries while keeping split-inside-rowspan text
+flow deferred.
+
+Completed:
+
+- Wired the R1 rowspan planner into Flow Table pagination.
+- Added row-boundary pagination for breakable rowspan-linked Flow Table groups.
+- Emitted continuation `flow-table-cell` fragments for spanning cells, keeping
+  the authored cell `nodeId`, original grid/span metadata, and continuation
+  flags.
+- Used the visible row fragment as the continuation cell `parentNodeId` so
+  render containment follows the page slice being drawn.
+- Preserved atomic behavior when any row in the rowspan-linked group has
+  `allowBreak=false`.
+- Repeated Flow Table headers before body-row rowspan continuations.
+- Updated table/page-boundary specs to document R2A and keep spanning-cell
+  content flow as deferred R3 work.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/flowTableRowspanPlan.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `packages/core/src/pagination/__tests__/flowTableRowspanPlan.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTableRowspanPlan.test.ts src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- R2A does not split paragraph content inside the spanning cell. The origin cell
+  fragment still owns spanning-cell content in this slice; R3 must define line
+  accounting, padding, and border continuation for split-inside-rowspan content.
+
+### Flow Table Rowspan R1 Planner Foundation
+
+Goal: Start the rowspan roadmap with metadata-only planning so future
+row-boundary splitting can be implemented without changing document schema or
+current pagination output in the first step.
+
+Completed:
+
+- Added a Flow Table rowspan pagination planner that resolves rowspan-linked
+  row groups from the existing Flow Table grid metadata.
+- Added row-boundary slice planning for a rowspan group, including carried cell
+  ids for cells that continue from a previous slice or continue to a later
+  slice.
+- Kept the planner separate from `paginateFlowTable(...)`; current visible
+  rowspan pagination behavior remains atomic.
+- Added focused tests for grouped covered-slot metadata, row-boundary slice
+  packing, too-tall single-row progress, and invalid slice-height guarding.
+- Updated the Flow Table spec to mark R1 as a planner foundation and keep R2
+  row-boundary output changes as the next explicit gate.
+
+Files changed:
+
+- `packages/core/src/pagination/flowTableRowspanPlan.ts`
+- `packages/core/src/pagination/__tests__/flowTableRowspanPlan.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTableRowspanPlan.test.ts`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTableRowspanPlan.test.ts src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- R1 intentionally does not alter `PaginatedDocument` fragments. R2 still needs
+  a separate implementation patch for actual row-boundary rowspan continuation
+  fragments.
+
 ## 2026-05-18
 
 ### Phase A/B Table-Cell Draft Pagination Baseline

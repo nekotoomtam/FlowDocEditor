@@ -422,7 +422,7 @@ describe("flow-table static pagination", () => {
     expectContiguousLineFragments(longParagraphFragments, longLineCount)
   })
 
-  it("keeps rowspan-linked flow-table rows atomic while non-rowspan rows can split", () => {
+  it("splits rowspan-linked flow-table rows at row boundaries with continuation cell chrome", () => {
     const before = makeSpacer("before", 650)
     const p1 = makePara("p1", "Spanning")
     const p2 = makePara("p2", "Top")
@@ -451,14 +451,155 @@ describe("flow-table static pagination", () => {
 
     const tableFragment = fragmentsFor(result, "ft1", "flow-table")[0]
     const rowFragments = pageFragments(result).filter((fragment) => fragment.nodeType === "flow-table-row")
-    const spanningCell = fragmentsFor(result, "c1", "flow-table-cell")[0]
+    const spanningCells = fragmentsFor(result, "c1", "flow-table-cell")
+    const topCell = fragmentsFor(result, "c2", "flow-table-cell")[0]
+    const bottomCell = fragmentsFor(result, "c3", "flow-table-cell")[0]
 
     expect(result.sections[0].pages).toHaveLength(2)
-    expect(tableFragment.pageIndex).toBe(1)
+    expect(tableFragment.pageIndex).toBe(0)
+    expect(rowFragments.map((fragment) => fragment.pageIndex)).toEqual([0, 1])
+    expect(rowFragments.map((fragment) => fragment.y)).toEqual([722, 72])
+    expect(spanningCells).toHaveLength(2)
+    expect(spanningCells.map((fragment) => fragment.pageIndex)).toEqual([0, 1])
+    expect(spanningCells.map((fragment) => fragment.parentNodeId)).toEqual(["r1", "r2"])
+    expect(spanningCells.map((fragment) => fragment.height)).toEqual([40, 40])
+    expect(spanningCells[0].continuesFrom).toBe(false)
+    expect(spanningCells[0].isContinued).toBe(true)
+    expect(spanningCells[1].continuesFrom).toBe(true)
+    expect(spanningCells[1].isContinued).toBe(false)
+    expect(spanningCells[0].flowTableCellGridProps).toEqual({ columnIndex: 0, colspan: 1, rowspan: 2 })
+    expect(spanningCells[1].flowTableCellGridProps).toEqual({ columnIndex: 0, colspan: 1, rowspan: 2 })
+    expect(topCell.pageIndex).toBe(0)
+    expect(bottomCell.pageIndex).toBe(1)
+  })
+
+  it("splits spanning flow-table cell paragraph content across rowspan continuation slices", () => {
+    const before = makeSpacer("before", 650)
+    const p1 = makePara("p1", makeLines("Span", 7))
+    const p2 = makePara("p2", "Top")
+    const p3 = makePara("p3", "Middle")
+    const p4 = makePara("p4", "Bottom")
+    const c1 = makeCell("c1", [p1.id], { rowspan: 3 })
+    const c2 = makeCell("c2", [p2.id])
+    const c3 = makeCell("c3", [p3.id])
+    const c4 = makeCell("c4", [p4.id])
+    const r1 = makeRow("r1", [c1.id, c2.id], { height: pt(40) })
+    const r2 = makeRow("r2", [c3.id], { height: pt(40) })
+    const r3 = makeRow("r3", [c4.id], { height: pt(40) })
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [r1.id, r2.id, r3.id],
+      nodes: { r1, r2, r3, c1, c2, c3, c4, p1, p2, p3, p4 },
+    }
+    const doc = makeDoc([before.id, table.id], {
+      [before.id]: before,
+      [table.id]: table as unknown as LayoutNode,
+    })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const spanningCells = fragmentsFor(result, "c1", "flow-table-cell")
+    const spanningParagraphFragments = fragmentsFor(result, "p1", "paragraph")
+
+    expect(spanningCells).toHaveLength(2)
+    expect(spanningCells.map((fragment) => fragment.pageIndex)).toEqual([0, 1])
+    expect(spanningCells.map((fragment) => fragment.parentNodeId)).toEqual(["r1", "r2"])
+    expect(spanningCells.map((fragment) => fragment.height)).toEqual([40, 80])
+    expect(spanningCells[0].isContinued).toBe(true)
+    expect(spanningCells[1].continuesFrom).toBe(true)
+    expect(spanningParagraphFragments.map((fragment) => fragment.pageIndex)).toEqual([0, 1])
+    expect(spanningParagraphFragments.map((fragment) => fragment.parentNodeId)).toEqual(["c1", "c1"])
+    expectContiguousLineFragments(spanningParagraphFragments, 7)
+  })
+
+  it("keeps allowBreak=false rowspan-linked flow-table rows atomic", () => {
+    const before = makeSpacer("before", 650)
+    const p1 = makePara("p1", "Spanning")
+    const p2 = makePara("p2", "Top")
+    const p3 = makePara("p3", "Bottom")
+    const c1 = makeCell("c1", [p1.id], { rowspan: 2 })
+    const c2 = makeCell("c2", [p2.id])
+    const c3 = makeCell("c3", [p3.id])
+    const r1 = makeRow("r1", [c1.id, c2.id], { height: pt(40), allowBreak: false })
+    const r2 = makeRow("r2", [c3.id], { height: pt(40) })
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [r1.id, r2.id],
+      nodes: { r1, r2, c1, c2, c3, p1, p2, p3 },
+    }
+    const doc = makeDoc([before.id, table.id], {
+      [before.id]: before,
+      [table.id]: table as unknown as LayoutNode,
+    })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const rowFragments = pageFragments(result).filter((fragment) => fragment.nodeType === "flow-table-row")
+    const spanningCells = fragmentsFor(result, "c1", "flow-table-cell")
+
     expect(rowFragments.map((fragment) => fragment.pageIndex)).toEqual([1, 1])
     expect(rowFragments.map((fragment) => fragment.y)).toEqual([72, 112])
-    expect(spanningCell.pageIndex).toBe(1)
-    expect(spanningCell.height).toBeCloseTo(80, 5)
+    expect(spanningCells).toHaveLength(1)
+    expect(spanningCells[0].pageIndex).toBe(1)
+    expect(spanningCells[0].height).toBeCloseTo(80, 5)
+  })
+
+  it("repeats flow-table headers before a rowspan row-boundary continuation", () => {
+    const before = makeSpacer("before", 620)
+    const hp1 = makePara("hp1", "Header left")
+    const hp2 = makePara("hp2", "Header right")
+    const p1 = makePara("p1", "Spanning")
+    const p2 = makePara("p2", "Top")
+    const p3 = makePara("p3", "Bottom")
+    const hc1 = makeCell("hc1", [hp1.id])
+    const hc2 = makeCell("hc2", [hp2.id])
+    const c1 = makeCell("c1", [p1.id], { rowspan: 2 })
+    const c2 = makeCell("c2", [p2.id])
+    const c3 = makeCell("c3", [p3.id])
+    const headerRow = makeRow("header", [hc1.id, hc2.id], { height: pt(24) })
+    const r1 = makeRow("r1", [c1.id, c2.id], { height: pt(40) })
+    const r2 = makeRow("r2", [c3.id], { height: pt(40) })
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: { headerRowCount: 1 },
+      columns: [{ width: pt(100) }, { width: pt(100) }],
+      rowIds: [headerRow.id, r1.id, r2.id],
+      nodes: { header: headerRow, r1, r2, hc1, hc2, c1, c2, c3, hp1, hp2, p1, p2, p3 },
+    }
+    const doc = makeDoc([before.id, table.id], {
+      [before.id]: before,
+      [table.id]: table as unknown as LayoutNode,
+    })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const headerRows = fragmentsFor(result, "header", "flow-table-row")
+    const bodyRows = pageFragments(result)
+      .filter((fragment) => fragment.nodeType === "flow-table-row" && fragment.nodeId !== "header")
+    const spanningCells = fragmentsFor(result, "c1", "flow-table-cell")
+
+    expect(headerRows.map((fragment) => fragment.pageIndex)).toEqual([0, 1])
+    expect(headerRows.map((fragment) => fragment.y)).toEqual([692, 72])
+    expect(bodyRows.map((fragment) => fragment.pageIndex)).toEqual([0, 1])
+    expect(bodyRows.map((fragment) => fragment.y)).toEqual([716, 96])
+    expect(spanningCells).toHaveLength(2)
+    expect(spanningCells.map((fragment) => fragment.parentNodeId)).toEqual(["r1", "r2"])
+    expect(spanningCells.map((fragment) => fragment.y)).toEqual([716, 96])
+    expect(spanningCells[0].isContinued).toBe(true)
+    expect(spanningCells[1].continuesFrom).toBe(true)
   })
 
   it("warns when a flow-table row split must force one unit of overflow progress", () => {
