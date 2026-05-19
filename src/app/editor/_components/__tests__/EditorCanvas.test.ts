@@ -922,4 +922,103 @@ describe("EditorCanvas paragraph box preview", () => {
     expect(markup).not.toContain("stroke=\"#2563eb\"")
     expect(mergedCellGroup).not.toContain("pointer-events:none")
   })
+
+  it("renders flow-table rowspan continuation cells under the visible row hit area", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      { nodeId: "ft1", nodeType: "flow-table", pageIndex: 0, x: 36, y: 72, width: 240, height: 40 },
+      { nodeId: "ftr1", nodeType: "flow-table-row", parentNodeId: "ft1", pageIndex: 0, x: 36, y: 72, width: 240, height: 40 },
+      {
+        nodeId: "ftc-merged",
+        nodeType: "flow-table-cell",
+        parentNodeId: "ftr1",
+        pageIndex: 0,
+        x: 36,
+        y: 72,
+        width: 120,
+        height: 40,
+        isContinued: true,
+        flowTableCellGridProps: { columnIndex: 0, colspan: 2, rowspan: 3 },
+      },
+      { nodeId: "ftc-top", nodeType: "flow-table-cell", parentNodeId: "ftr1", pageIndex: 0, x: 156, y: 72, width: 120, height: 40 },
+    ]
+    paginated.sections[0].pages.push({
+      index: 1,
+      width: 300,
+      height: 400,
+      contentBox: { x: 36, y: 72, width: 228, height: 256 },
+      headerFragments: [],
+      footerFragments: [],
+      fragments: [
+        { nodeId: "ft1", nodeType: "flow-table", pageIndex: 1, x: 36, y: 72, width: 240, height: 80 },
+        { nodeId: "ftr2", nodeType: "flow-table-row", parentNodeId: "ft1", pageIndex: 1, x: 36, y: 72, width: 240, height: 40 },
+        {
+          nodeId: "ftc-merged",
+          nodeType: "flow-table-cell",
+          parentNodeId: "ftr2",
+          pageIndex: 1,
+          x: 36,
+          y: 72,
+          width: 120,
+          height: 80,
+          continuesFrom: true,
+          flowTableCellGridProps: { columnIndex: 0, colspan: 2, rowspan: 3 },
+        },
+        { nodeId: "ftc-middle", nodeType: "flow-table-cell", parentNodeId: "ftr2", pageIndex: 1, x: 156, y: 72, width: 120, height: 40 },
+        { nodeId: "ftr3", nodeType: "flow-table-row", parentNodeId: "ft1", pageIndex: 1, x: 36, y: 112, width: 240, height: 40 },
+        { nodeId: "ftc-bottom", nodeType: "flow-table-cell", parentNodeId: "ftr3", pageIndex: 1, x: 156, y: 112, width: 120, height: 40 },
+      ],
+    })
+    const paragraph = paragraphNode("cell-p", "A")
+    const doc = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [{
+          id: "section",
+          type: "section",
+          bodyRootId: "body",
+          page: {
+            size: "A4",
+            orientation: "portrait",
+            margin: {
+              top: { value: 72, unit: "pt" },
+              right: { value: 36, unit: "pt" },
+              bottom: { value: 72, unit: "pt" },
+              left: { value: 36, unit: "pt" },
+            },
+          },
+          nodes: {
+            body: { id: "body", type: "body", props: {}, childIds: ["ft1"] },
+            ft1: {
+              id: "ft1",
+              type: "flow-table",
+              props: {},
+              columns: [{ width: { value: 60, unit: "pt" } }, { width: { value: 60, unit: "pt" } }, { width: { value: 120, unit: "pt" } }],
+              rowIds: ["ftr1", "ftr2", "ftr3"],
+              nodes: {
+                ftr1: { id: "ftr1", type: "flow-table-row", props: {}, cellIds: ["ftc-merged", "ftc-top"] },
+                ftr2: { id: "ftr2", type: "flow-table-row", props: {}, cellIds: ["ftc-middle"] },
+                ftr3: { id: "ftr3", type: "flow-table-row", props: {}, cellIds: ["ftc-bottom"] },
+                "ftc-merged": { id: "ftc-merged", type: "flow-table-cell", props: { colspan: 2, rowspan: 3 }, childIds: ["cell-p"] },
+                "ftc-top": { id: "ftc-top", type: "flow-table-cell", props: {}, childIds: [] },
+                "ftc-middle": { id: "ftc-middle", type: "flow-table-cell", props: {}, childIds: [] },
+                "ftc-bottom": { id: "ftc-bottom", type: "flow-table-cell", props: {}, childIds: [] },
+                "cell-p": paragraph,
+              },
+            },
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+
+    const markup = renderCanvas(paginated, doc, "ftc-merged")
+    const continuationCellGroup = markup.match(/<g[^>]*data-node-id="ftc-merged"[^>]*data-page-index="1"[^>]*>/)?.[0] ?? ""
+    const continuationRowGroup = markup.match(/<g[^>]*data-node-id="ftr2"[^>]*data-node-type="flow-table-row"[^>]*>/)?.[0] ?? ""
+
+    expect(markup.match(/data-node-id="ftc-merged"/g)).toHaveLength(2)
+    expect(continuationCellGroup).toContain("data-parent-node-id=\"ftr2\"")
+    expect(continuationCellGroup).not.toContain("pointer-events:none")
+    expect(continuationRowGroup).toContain("pointer-events:none")
+  })
 })

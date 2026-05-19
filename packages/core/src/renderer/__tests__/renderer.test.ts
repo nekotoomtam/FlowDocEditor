@@ -84,6 +84,74 @@ function countText(xml: string, text: string): number {
   return xml.match(new RegExp(escaped, "g"))?.length ?? 0
 }
 
+function makeLines(prefix: string, count: number): string {
+  return Array.from({ length: count }, (_, i) => `${prefix}${String(i + 1).padStart(3, "0")}`).join("\n")
+}
+
+function makeFlowTableRowspanContinuationDoc(): DocumentNode {
+  const before = makeSpacer("before-flow-table-rowspan", 650)
+  const spanText = makePara("ft-rowspan-span-p", makeLines("S", 7), { spacingAfter: pt(0) })
+  const topThird = makePara("ft-rowspan-top-third-p", "TOP3", { spacingAfter: pt(0) })
+  const topFourth = makePara("ft-rowspan-top-fourth-p", "TOP4", { spacingAfter: pt(0) })
+  const middleThird = makePara("ft-rowspan-middle-third-p", "MID3", { spacingAfter: pt(0) })
+  const middleFourth = makePara("ft-rowspan-middle-fourth-p", "MID4", { spacingAfter: pt(0) })
+  const bottomThird = makePara("ft-rowspan-bottom-third-p", "BOT3", { spacingAfter: pt(0) })
+  const bottomFourth = makePara("ft-rowspan-bottom-fourth-p", "BOT4", { spacingAfter: pt(0) })
+  const spanCell = makeFlowTableCell("ft-rowspan-span-cell", [spanText.id], {
+    colspan: 2,
+    rowspan: 3,
+    box: {
+      fill: "FFF7CC",
+      border: {
+        top: { style: "solid", width: pt(1), color: "1F2937" },
+        right: { style: "solid", width: pt(1), color: "1F2937" },
+        bottom: { style: "solid", width: pt(1), color: "1F2937" },
+        left: { style: "solid", width: pt(1), color: "1F2937" },
+      },
+    },
+  })
+  const topThirdCell = makeFlowTableCell("ft-rowspan-top-third-cell", [topThird.id])
+  const topFourthCell = makeFlowTableCell("ft-rowspan-top-fourth-cell", [topFourth.id])
+  const middleThirdCell = makeFlowTableCell("ft-rowspan-middle-third-cell", [middleThird.id])
+  const middleFourthCell = makeFlowTableCell("ft-rowspan-middle-fourth-cell", [middleFourth.id])
+  const bottomThirdCell = makeFlowTableCell("ft-rowspan-bottom-third-cell", [bottomThird.id])
+  const bottomFourthCell = makeFlowTableCell("ft-rowspan-bottom-fourth-cell", [bottomFourth.id])
+  const topRow = makeFlowTableRow("ft-rowspan-top-row", [spanCell.id, topThirdCell.id, topFourthCell.id], { height: pt(40) })
+  const middleRow = makeFlowTableRow("ft-rowspan-middle-row", [middleThirdCell.id, middleFourthCell.id], { height: pt(40) })
+  const bottomRow = makeFlowTableRow("ft-rowspan-bottom-row", [bottomThirdCell.id, bottomFourthCell.id], { height: pt(40) })
+  const table: FlowTableNode = {
+    id: "ft-rowspan-render",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(50) }, { width: pt(70) }, { width: pt(60) }, { width: pt(80) }],
+    rowIds: [topRow.id, middleRow.id, bottomRow.id],
+    nodes: {
+      [topRow.id]: topRow,
+      [middleRow.id]: middleRow,
+      [bottomRow.id]: bottomRow,
+      [spanCell.id]: spanCell,
+      [topThirdCell.id]: topThirdCell,
+      [topFourthCell.id]: topFourthCell,
+      [middleThirdCell.id]: middleThirdCell,
+      [middleFourthCell.id]: middleFourthCell,
+      [bottomThirdCell.id]: bottomThirdCell,
+      [bottomFourthCell.id]: bottomFourthCell,
+      [spanText.id]: spanText,
+      [topThird.id]: topThird,
+      [topFourth.id]: topFourth,
+      [middleThird.id]: middleThird,
+      [middleFourth.id]: middleFourth,
+      [bottomThird.id]: bottomThird,
+      [bottomFourth.id]: bottomFourth,
+    },
+  }
+
+  return makeDoc([before.id, table.id], {
+    [before.id]: before,
+    [table.id]: table as unknown as LayoutNode,
+  })
+}
+
 // ─── PDF smoke tests ──────────────────────────────────────────────────────────
 
 describe("PdfRenderer smoke tests", () => {
@@ -164,6 +232,15 @@ describe("PdfRenderer smoke tests", () => {
     } as unknown as LayoutNode
     const result = await pdf.render(paginate(makeDoc(["ft1"], { ft1: table })))
 
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("renders split flow-table rowspan continuations without throwing", async () => {
+    const paginated = paginate(makeFlowTableRowspanContinuationDoc())
+    const result = await pdf.render(paginated)
+
+    expect(paginated.sections[0].pages.length).toBeGreaterThan(1)
     expect(result.buffer.length).toBeGreaterThan(0)
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
   })
@@ -683,6 +760,25 @@ describe("DocxRenderer smoke tests", () => {
     expect(countText(xml, "HDRRIGHT")).toBe(pages.length)
     expect(countText(xml, "SHORTBODY")).toBe(1)
     for (const marker of [bodyLines[0], bodyLines[45], bodyLines[89], bodyLines[129]]) {
+      expect(countText(xml, marker)).toBe(1)
+    }
+  })
+
+  it("renders split flow-table rowspan continuations in DOCX output", async () => {
+    const paginated = paginate(makeFlowTableRowspanContinuationDoc())
+    const pages = paginated.sections[0].pages
+    const spanningCellFragments = pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === "ft-rowspan-span-cell" && fragment.nodeType === "flow-table-cell"),
+    )
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(pages.length).toBeGreaterThan(1)
+    expect(spanningCellFragments.map((fragment) => fragment.pageIndex)).toEqual([0, 1])
+    expect(countText(xml, 'w:tblLayout w:type="fixed"')).toBe(pages.length)
+    expect(countText(xml, 'w:gridSpan w:val="2"')).toBe(2)
+    expect(xml).toContain("<w:vMerge")
+    for (const marker of ["S001", "S004", "S007", "TOP3", "MID3", "BOT4"]) {
       expect(countText(xml, marker)).toBe(1)
     }
   })

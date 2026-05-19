@@ -21,6 +21,8 @@ Implementation status:
   cell `nodeId` and use the visible row fragment as `parentNodeId`.
 - R3A Flow Table spanning-cell paragraph content can split across those
   row-boundary continuation slices using the existing cell split-point helpers.
+- R3B/R3C core pagination covers mixed `rowspan`/`colspan` continuation
+  geometry and forced one-unit overflow warnings inside rowspan slices.
 - Core pagination repeats `headerRowCount` Flow Table header rows on body
   continuation pages.
 - PDF and editor preview draw Flow Table cell `box` fill/border from paginated
@@ -415,6 +417,12 @@ Rowspan:
   split-point helpers across row-boundary continuation slices. Continuation
   paragraph fragments stay parented to the authored spanning cell, while
   continuation cell chrome uses the visible row as render parent.
+- A spanning cell that also has `colspan>1` keeps the summed column width and
+  original grid/span metadata across continuation slices.
+- If a non-final row-boundary slice cannot fit normal spanning-cell content
+  progress, pagination may force one content unit and attach a
+  `forced-flow-table-split-overflow` warning to the visible row and spanning
+  cell fragments for that slice.
 
 Colspan:
 
@@ -541,7 +549,11 @@ Suggested order:
 25. Add C2.8D merge-map maintenance during Flow Table row/column insertion
     and deletion. Current status: implemented for conservative shift/prune
     semantics.
-26. Add C2 span-origin movement and broader span authoring operations.
+26. Add Flow Table rowspan row-boundary pagination. Current status:
+    implemented for breakable groups, including spanning-cell content flow,
+    mixed `rowspan`/`colspan` core pagination coverage, and forced-warning
+    fallback for low-capacity rowspan slices.
+27. Add C2 span-origin movement and broader span authoring operations.
 
 ## Test Plan
 
@@ -557,16 +569,21 @@ Pagination tests:
 
 - one-page Flow Table emits table/row/cell/paragraph fragments
 - column widths and colspan widths match authored columns
-- rowspan-linked rows stay together in v1
+- `allowBreak=false` rowspan-linked Flow Table rows stay atomic
+- breakable rowspan-linked Flow Table rows split at row boundaries with
+  continuation cell chrome, spanning-cell content fragments, and mixed
+  `rowspan`/`colspan` geometry
 - breakable non-rowspan rows split by line ranges
 - repeated headers appear on continuation pages
 - no empty continuation slice without progress
-- forced-progress warnings appear for impossible cases
+- forced-progress warnings appear for impossible non-rowspan and rowspan slice
+  cases
 
 Renderer/editor tests:
 
 - PDF renders Flow Table without throwing
 - PDF raster checks cell fill/border geometry
+- PDF raster checks Flow Table rowspan continuation cell fill/border geometry
 - editor preview draws from the same cell primitives
 - DOCX emits valid ZIP output with useful table structure
 

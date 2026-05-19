@@ -2352,6 +2352,7 @@ function pushFlowTableRowspanGroupSlice(
   const sliceTopY = sliceTopRowBox.y
   const fragments: PageFragment[] = []
   const contentFragments: PageFragment[] = []
+  const sliceWarnings = new Map<string, PageFragmentWarning[]>()
   const spanningCellById = new Map(group.spanningCells.map((cell) => [cell.cellId, cell]))
   const emittedCellIds = new Set<string>()
   const collectSpanningCellContent = (
@@ -2359,11 +2360,29 @@ function pushFlowTableRowspanGroupSlice(
     cellPageY: number,
     cellHeight: number,
     isContinued: boolean,
+    warningRowId: string,
   ): void => {
     const from = rowspanContentSplits.get(cellBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }
-    const to = isContinued
+    let to = isContinued
       ? computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, cellHeight), measurer, wordBreaker, from)
       : null
+
+    if (
+      isContinued &&
+      flowTableCellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, from) &&
+      !splitPointProgressed(from, to, cellBox)
+    ) {
+      const forcedSplit = forceOneFlowTableSplitUnitProgress(cellBox, tableNode, measurer, wordBreaker, from)
+      if (forcedSplit) {
+        to = forcedSplit
+        const warning: PageFragmentWarning = {
+          code: "forced-flow-table-split-overflow",
+          message: "flow-table rowspan split forced one content unit because the row-boundary slice could not fit normal progress",
+        }
+        sliceWarnings.set(warningRowId, [warning])
+        sliceWarnings.set(cellBox.nodeId, [warning])
+      }
+    }
 
     contentFragments.push(...collectFlowTableCellSlice(
       cellBox,
@@ -2437,7 +2456,13 @@ function pushFlowTableRowspanGroupSlice(
       emittedCellIds.add(cellBox.nodeId)
 
       if (spanningCell) {
-        collectSpanningCellContent(cellBox, cellPageY, cellHeight, isContinued)
+        collectSpanningCellContent(
+          cellBox,
+          cellPageY,
+          cellHeight,
+          isContinued,
+          rowBoxes[cellStartRowIndex]?.nodeId ?? rowBox.nodeId,
+        )
       } else if (!continuesFrom) {
         contentFragments.push(...collectFlowTableCellContents(
           cellBox,
@@ -2464,6 +2489,7 @@ function pushFlowTableRowspanGroupSlice(
       : undefined
     const cellStartRowIndex = Math.max(spanningCell.rowIndex, slice.rowStartIndex)
     const cellEndRowIndex = Math.min(spanningCell.rowEndIndex, slice.rowEndIndex)
+    const cellParentRowId = rowBoxes[cellStartRowIndex]?.nodeId ?? sliceTopRowBox.nodeId
     const cellPageY = cursor.cursorY + ((rowBoxes[cellStartRowIndex]?.y ?? sliceTopY) - sliceTopY)
     const cellHeight = flowTableRowspanSliceHeight(group, cellStartRowIndex, cellEndRowIndex)
     const isContinued = spanningCell.rowEndIndex > slice.rowEndIndex
@@ -2471,7 +2497,7 @@ function pushFlowTableRowspanGroupSlice(
     fragments.push({
       nodeId: cellId,
       nodeType: "flow-table-cell",
-      parentNodeId: rowBoxes[cellStartRowIndex]?.nodeId ?? sliceTopRowBox.nodeId,
+      parentNodeId: cellParentRowId,
       pageIndex: cursor.pageIndex,
       x: originCellBox.x,
       y: cellPageY,
@@ -2483,7 +2509,12 @@ function pushFlowTableRowspanGroupSlice(
       isContinued,
     })
     emittedCellIds.add(cellId)
-    collectSpanningCellContent(originCellBox, cellPageY, cellHeight, isContinued)
+    collectSpanningCellContent(originCellBox, cellPageY, cellHeight, isContinued, cellParentRowId)
+  }
+
+  for (const fragment of fragments) {
+    const warnings = sliceWarnings.get(fragment.nodeId)
+    if (warnings) fragment.warnings = warnings
   }
 
   [...fragments, ...contentFragments]

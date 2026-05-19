@@ -339,11 +339,13 @@ Current policy direction:
 - table cell content: splits by the same measured line boundaries as body
   paragraphs, but only within a row that permits splitting; see 4.3
 - flow-table row: non-rowspan single-row groups split by default;
-  `allowBreak=false` keeps a row together when possible; rowspan-linked Flow
-  Table groups are atomic in v1; `headerRowCount` repeats authored header rows
-  on body continuation pages
+  `allowBreak=false` keeps a row together when possible; breakable
+  rowspan-linked Flow Table groups split at row boundaries with continuation
+  cell chrome; `headerRowCount` repeats authored header rows on body
+  continuation pages
 - flow-table cell content: splits by the same measured line boundaries as body
-  paragraphs, but only within a non-rowspan row that permits splitting
+  paragraphs within breakable non-rowspan rows and spanning-cell row-boundary
+  continuation slices
 - TOC placeholder: estimated-height placeholder in pass 1; if generated TOC
   content is taller than the placeholder, pass 2 repaginates with the corrected
   height before rendering TOC lines

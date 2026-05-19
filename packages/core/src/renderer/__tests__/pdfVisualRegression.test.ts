@@ -239,6 +239,68 @@ function makeFlowTableVisualDoc(): DocumentNode {
   return makeDoc(["flow-table"], { "flow-table": table })
 }
 
+function makeFlowTableRowspanContinuationVisualDoc(): DocumentNode {
+  const before = { id: "before", type: "spacer", props: { height: 780 } } as unknown as LayoutNode
+  const spanningCell = {
+    id: "rowspan-cell",
+    type: "flow-table-cell",
+    props: {
+      colspan: 2,
+      rowspan: 3,
+      box: {
+        fill: "FEF3C7",
+        padding: { top: pt(0), right: pt(0), bottom: pt(0), left: pt(0) },
+        border: {
+          top: { style: "solid", width: pt(2), color: "DC2626" },
+          right: { style: "solid", width: pt(2), color: "16A34A" },
+          bottom: { style: "solid", width: pt(2), color: "2563EB" },
+          left: { style: "solid", width: pt(2), color: "111827" },
+        },
+      },
+    },
+    childIds: [],
+  }
+  const topRightCell = { id: "top-right-cell", type: "flow-table-cell", props: {}, childIds: [] }
+  const middleRightCell = { id: "middle-right-cell", type: "flow-table-cell", props: {}, childIds: [] }
+  const bottomRightCell = { id: "bottom-right-cell", type: "flow-table-cell", props: {}, childIds: [] }
+  const topRow = {
+    id: "top-row",
+    type: "flow-table-row",
+    props: { height: pt(30) },
+    cellIds: [spanningCell.id, topRightCell.id],
+  }
+  const middleRow = {
+    id: "middle-row",
+    type: "flow-table-row",
+    props: { height: pt(30) },
+    cellIds: [middleRightCell.id],
+  }
+  const bottomRow = {
+    id: "bottom-row",
+    type: "flow-table-row",
+    props: { height: pt(30) },
+    cellIds: [bottomRightCell.id],
+  }
+  const table = {
+    id: "rowspan-flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(70) }, { width: pt(80) }, { width: pt(90) }],
+    rowIds: [topRow.id, middleRow.id, bottomRow.id],
+    nodes: {
+      [topRow.id]: topRow,
+      [middleRow.id]: middleRow,
+      [bottomRow.id]: bottomRow,
+      [spanningCell.id]: spanningCell,
+      [topRightCell.id]: topRightCell,
+      [middleRightCell.id]: middleRightCell,
+      [bottomRightCell.id]: bottomRightCell,
+    },
+  } as unknown as LayoutNode
+
+  return makeDoc([before.id, "rowspan-flow-table"], { [before.id]: before, "rowspan-flow-table": table })
+}
+
 function readUInt32(buffer: Buffer, offset: number): number {
   return buffer.readUInt32BE(offset)
 }
@@ -642,6 +704,43 @@ describePdfVisual("PDF raster visual regression", () => {
       primitives.fill.y + primitives.fill.height / 2,
     )
     expect(minColorDistanceNear(image, fillPoint.x, fillPoint.y, hexToRgb("E0F2FE"), 1)).toBeLessThanOrEqual(28)
+
+    for (const line of primitives.borders) {
+      const linePoint = pdfPointToImagePoint(page.height, (line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)
+      expect(minColorDistanceNear(image, linePoint.x, linePoint.y, hexToRgb(line.border.color), 4)).toBeLessThanOrEqual(80)
+    }
+  })
+
+  it("draws flow-table rowspan continuation cell fills and borders on continuation pages", async () => {
+    const rasterizer = findRasterizer()
+    expect(rasterizer, "Set up pdftoppm or ImageMagick with Ghostscript before running FLOWDOC_PDF_VISUAL_REGRESSION=1").not.toBeNull()
+
+    const paginated = paginateDocument(makeFlowTableRowspanContinuationVisualDoc(), defaultTextMeasurer, defaultWordBreaker)
+    const page = paginated.sections[0].pages[1]
+    const cell = page.fragments.find((item) =>
+      item.nodeId === "rowspan-cell" &&
+      item.nodeType === "flow-table-cell" &&
+      item.continuesFrom === true,
+    )
+    if (!cell) throw new Error("Expected rowspan continuation flow-table-cell fragment")
+    const primitives = resolveFragmentBoxDrawingPrimitives(cell, page.height)
+    if (!primitives?.fill) throw new Error("Expected rowspan continuation fill primitives")
+
+    const tempDir = mkdtempSync(join(tmpdir(), "flowdoc-pdf-flow-table-rowspan-"))
+    tempDirs.push(tempDir)
+    const pdfPath = join(tempDir, "actual.pdf")
+    const pngPath = join(tempDir, "actual-page-2.png")
+    const result = await new PdfRenderer().render(paginated)
+    writeFileSync(pdfPath, result.buffer)
+    rasterizer!.render(pdfPath, pngPath, 2)
+
+    const image = parsePng(readFileSync(pngPath))
+    const fillPoint = pdfPointToImagePoint(
+      page.height,
+      primitives.fill.x + primitives.fill.width / 2,
+      primitives.fill.y + primitives.fill.height / 2,
+    )
+    expect(minColorDistanceNear(image, fillPoint.x, fillPoint.y, hexToRgb("FEF3C7"), 1)).toBeLessThanOrEqual(28)
 
     for (const line of primitives.borders) {
       const linePoint = pdfPointToImagePoint(page.height, (line.x1 + line.x2) / 2, (line.y1 + line.y2) / 2)

@@ -81,6 +81,40 @@ describe("flow-table rowspan pagination planner", () => {
     expect(plan[1].spanningCells).toEqual([])
   })
 
+  it("keeps covered-slot metadata for cells with both rowspan and colspan", () => {
+    const cA = cell("cA", { colspan: 2, rowspan: 2 })
+    const cB = cell("cB")
+    const cC = cell("cC")
+    const cD = cell("cD")
+    const cE = cell("cE")
+    const cF = cell("cF")
+    const r0 = row("r0", [cA.id, cB.id])
+    const r1 = row("r1", [cC.id])
+    const r2 = row("r2", [cD.id, cE.id, cF.id])
+    const plan = planFlowTableRowspanGroups(
+      table([r0.id, r1.id, r2.id], { r0, r1, r2, cA, cB, cC, cD, cE, cF }, 3),
+      [rowBox(r0.id, 0, 30), rowBox(r1.id, 1, 40), rowBox(r2.id, 2, 50)],
+    )
+
+    expect(plan.map((group) => group.rowIndices)).toEqual([[0, 1], [2]])
+    expect(plan[0].spanningCells).toHaveLength(1)
+    expect(plan[0].spanningCells[0]).toMatchObject({
+      cellId: "cA",
+      rowIndex: 0,
+      rowEndIndex: 1,
+      columnIndex: 0,
+      columnEndIndex: 1,
+      rowspan: 2,
+      colspan: 2,
+    })
+    expect(plan[0].spanningCells[0].coveredSlots).toEqual([
+      { rowIndex: 0, columnIndex: 0 },
+      { rowIndex: 0, columnIndex: 1 },
+      { rowIndex: 1, columnIndex: 0 },
+      { rowIndex: 1, columnIndex: 1 },
+    ])
+  })
+
   it("packs a rowspan group into row-boundary slices and marks carried cells", () => {
     const cA = cell("cA", { rowspan: 3 })
     const cB = cell("cB")

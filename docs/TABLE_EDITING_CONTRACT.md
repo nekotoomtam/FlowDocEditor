@@ -207,7 +207,10 @@ These authored props directly affect cross-page behavior:
   the group is breakable. Continuation cell fragments keep the authored cell
   `nodeId`, but their `parentNodeId` is the visible row fragment for that page.
   Paragraph content inside the spanning cell may split across those continuation
-  slices and remains parented to the authored spanning cell.
+  slices and remains parented to the authored spanning cell. Mixed
+  `rowspan`/`colspan` geometry keeps original grid/span metadata, and a
+  low-capacity rowspan slice may force one content unit with a Flow Table
+  warning.
 - Legacy table rowspan-linked groups stay atomic until a separate design accepts
   the same row-boundary split policy.
 
@@ -236,7 +239,7 @@ behavior:
 - Explicit table or column resize UI.
 - Broader content-mapping controls beyond merge-map-backed shrink/unmerge.
 - True span-origin movement for arbitrary left/up span authoring.
-- Mixed rowspan/colspan continuation edge cases and forced-progress warnings
-  inside Flow Table rowspan slices.
+- More complex Flow Table span interactions beyond the covered mixed
+  `rowspan`/`colspan` core pagination cases.
 - Split-at-row-boundary within legacy table rowspan-linked groups.
 - Visual regression tests for editor/PDF parity on multi-page tables.

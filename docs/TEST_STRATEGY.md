@@ -152,7 +152,10 @@ Protects:
   cell widths, repeated header fragments, styled boxes, and marker text once
 - flow-table DOCX span projection preserves renderer-facing `colspan` and
   `rowspan` metadata as Word `gridSpan` and vertical merge XML
-- opt-in PDF raster checks can verify selected paragraph-box and flow-row pixels
+- split Flow Table rowspan continuation smoke protects PDF/DOCX renderers from
+  obvious fragment projection breakage
+- opt-in PDF raster checks can verify selected paragraph-box, flow-row, and Flow
+  Table cell pixels, including rowspan continuation cell fill/border geometry,
   when a local rasterizer such as `pdftoppm` or ImageMagick plus Ghostscript is
   available
 
@@ -340,8 +343,9 @@ Current strengths:
   preview coverage protects paragraph box fill and border drawing from the
   same paginated primitive metadata used by PDF. Focused PDF raster visual
   regression protects paragraph box fill/border pixels, paragraph dashed/dotted
-  border stroke pixels, split paragraph box edge pixels, plus flow-row/flow-stack
-  fill, border, and gap pixels when `FLOWDOC_PDF_VISUAL_REGRESSION=1` is
+  border stroke pixels, split paragraph box edge pixels, flow-row/flow-stack
+  fill, border, and gap pixels, and Flow Table cell fill/border pixels on normal
+  and rowspan-continuation pages when `FLOWDOC_PDF_VISUAL_REGRESSION=1` is
   enabled on a machine with `pdftoppm` or ImageMagick plus Ghostscript; the
   normal suite keeps this raster assertion skipped because PDF rasterizers are
   environment-specific.

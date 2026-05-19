@@ -24,6 +24,63 @@ Each entry should include:
 
 ## 2026-05-19
 
+### Flow Table Rowspan R3B/R3C Mixed Span And Forced Warning Coverage
+
+Goal: Close the next core pagination risks after R3A by proving mixed
+`rowspan`/`colspan` continuation geometry and adding an explicit warning path
+for low-capacity rowspan slices.
+
+Completed:
+
+- Added planner coverage for a cell with both `rowspan` and `colspan`, including
+  covered-slot metadata.
+- Added pagination coverage for a `rowspan=3` / `colspan=2` Flow Table cell
+  split across pages, checking continued cell geometry, grid/span metadata,
+  sibling column positions, and spanning paragraph line continuity.
+- Added forced one-content-unit fallback for non-final rowspan row-boundary
+  slices that cannot fit normal spanning-cell content progress.
+- Attached `forced-flow-table-split-overflow` warnings to the visible row and
+  spanning cell fragments for the affected slice.
+- Added renderer smoke coverage proving PDF can render split Flow Table rowspan
+  continuations and DOCX can project their paginated fixed-table fragments
+  without duplicating marker text.
+- Added an EditorCanvas static markup guard for rowspan continuation cells whose
+  render parent is the visible continuation row, keeping row chrome
+  pointer-transparent so the cell owns the hit area.
+- Added opt-in PDF raster coverage for Flow Table rowspan continuation cell
+  fill and borders on continuation pages.
+- Updated Flow Table and cross-page contracts to reflect the covered mixed span
+  and forced-warning behavior.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `packages/core/src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `packages/core/src/pagination/__tests__/flowTableRowspanPlan.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/LAYOUT_ENGINE_CHECKLIST.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/TABLE_EDITING_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTableRowspanPlan.test.ts src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test:pdf-visual`
+
+Notes:
+
+- Editor live-preview typing behavior and legacy `table` rowspan splitting
+  remain separate follow-up work.
+
 ### Flow Table Rowspan R3A Spanning-Cell Content Split
 
 Goal: Let content inside a spanning Flow Table cell flow across the row-boundary

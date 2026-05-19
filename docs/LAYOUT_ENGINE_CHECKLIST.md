@@ -273,8 +273,9 @@ fragments they receive.
   paragraph continuation.
   - Basic cell text continuation implemented: `pushCellSlice` splits cell content
     at measured line boundaries across pages when the row has `allowBreak=true`.
-  - Rowspan-linked groups remain conservative (whole-group approach B).
-  - Split-at-row-boundary within rowspan groups still deferred.
+  - Legacy table rowspan-linked groups remain conservative (whole-group approach B).
+  - Breakable Flow Table rowspan-linked groups split at row boundaries with
+    continuation cell chrome and spanning-cell content split-point accounting.
 
 ### Renderer Rules
 
