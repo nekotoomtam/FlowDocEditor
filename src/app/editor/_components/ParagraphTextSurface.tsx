@@ -97,6 +97,7 @@ export interface InlineEditVisualMode {
 const EDIT_CHROME_X = 3
 const EDIT_CHROME_Y = 3
 const INLINE_EDIT_TEXT_COLOR = "#1e40af"
+const WYSIWYG_TEXT_BLUR_SETTLE_MS = 32
 const POINTER_SELECTION_DRAG_THRESHOLD_PX = 3
 
 export function focusElementWithoutScroll(
@@ -108,6 +109,25 @@ export function focusElementWithoutScroll(
   } catch {
     element.focus()
   }
+}
+
+export function isWysiwygTextSessionFocusTarget(
+  element: Element | null | undefined,
+  nodeId: string,
+): boolean {
+  let current: Element | null = element ?? null
+  while (current) {
+    if (current.getAttribute("data-inline-edit-node-id") === nodeId) {
+      if (
+        current.getAttribute("data-wysiwyg-input-bridge") === "true" ||
+        current.getAttribute("data-wysiwyg-text-engine-layer") === "true"
+      ) {
+        return true
+      }
+    }
+    current = current.parentElement
+  }
+  return false
 }
 
 export function shouldUseInlineEditSvgVisual(isEditing: boolean, isVisualFresh: boolean): boolean {
@@ -885,6 +905,7 @@ export function WysiwygTextLayer({
   const pointerDragStartPointRef = useRef<{ x: number; y: number } | null>(null)
   const isComposingTextEngineRef = useRef(false)
   const suppressNextCompositionInputRef = useRef(false)
+  const blurEndEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isPointerSelecting, setIsPointerSelecting] = useState(false)
   const draftStateRef = useRef<{
     text: string
@@ -939,6 +960,30 @@ export function WysiwygTextLayer({
   useEffect(() => {
     focusElementWithoutScroll(inputBridgeRef.current)
   }, [fragment.nodeId])
+
+  useEffect(() => () => {
+    if (blurEndEditTimerRef.current) {
+      clearTimeout(blurEndEditTimerRef.current)
+      blurEndEditTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleBlurEndEdit = useCallback(() => {
+    if (!onEndEdit) return
+    if (blurEndEditTimerRef.current) clearTimeout(blurEndEditTimerRef.current)
+    blurEndEditTimerRef.current = setTimeout(() => {
+      blurEndEditTimerRef.current = null
+      const activeElement = typeof document === "undefined" ? null : document.activeElement
+      if (isWysiwygTextSessionFocusTarget(activeElement, fragment.nodeId)) return
+      onEndEdit(fragment.nodeId, "blur")
+    }, WYSIWYG_TEXT_BLUR_SETTLE_MS)
+  }, [fragment.nodeId, onEndEdit])
+
+  const handleLayerBlur = useCallback((event: React.FocusEvent<SVGGElement>) => {
+    const relatedTarget = event.relatedTarget instanceof Element ? event.relatedTarget : null
+    if (isWysiwygTextSessionFocusTarget(relatedTarget, fragment.nodeId)) return
+    scheduleBlurEndEdit()
+  }, [fragment.nodeId, scheduleBlurEndEdit])
 
   const clearInputBridgeText = useCallback((input: HTMLElement | null = inputBridgeRef.current) => {
     if (input) input.textContent = ""
@@ -1444,7 +1489,7 @@ export function WysiwygTextLayer({
         onPointerCancel={handlePointerCancel}
         onDoubleClick={handleDoubleClick}
         onClick={handleClick}
-        onBlur={() => onEndEdit?.(fragment.nodeId, "blur")}
+        onBlur={handleLayerBlur}
       >
       <foreignObject
         x={fragment.x * scale}

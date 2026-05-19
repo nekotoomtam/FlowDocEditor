@@ -517,6 +517,77 @@ describe("flow-table static pagination", () => {
     expectContiguousLineFragments(spanningParagraphFragments, 7)
   })
 
+  it("continues an oversized rowspan cell line-by-line after the row boundary slice exceeds a page", () => {
+    const lineCount = 130
+    const p1 = makePara("p1", makeLines("Long span", lineCount))
+    const p2 = makePara("p2", "Top sibling")
+    const p3 = makePara("p3", "Bottom sibling")
+    const c1 = makeCell("c1", [p1.id], { rowspan: 2 })
+    const c2 = makeCell("c2", [p2.id])
+    const c3 = makeCell("c3", [p3.id])
+    const r1 = makeRow("r1", [c1.id, c2.id], { height: pt(40) })
+    const r2 = makeRow("r2", [c3.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(120) }, { width: pt(120) }],
+      rowIds: [r1.id, r2.id],
+      nodes: { r1, r2, c1, c2, c3, p1, p2, p3 },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const spanningCells = fragmentsFor(result, "c1", "flow-table-cell")
+    const spanningParagraphFragments = fragmentsFor(result, "p1", "paragraph")
+    const topSiblingFragments = fragmentsFor(result, "p2", "paragraph")
+    const bottomSiblingFragments = fragmentsFor(result, "p3", "paragraph")
+    const bottomRowFragments = fragmentsFor(result, "r2", "flow-table-row")
+    const firstPageSpanLineCount = spanningParagraphFragments
+      .filter((fragment) => fragment.pageIndex === 0)
+      .reduce((sum, fragment) => sum + ((fragment.lineEnd ?? 0) - (fragment.lineStart ?? 0)), 0)
+    const warningSummary = collectPaginatedLayoutWarnings(result)
+    const contentBottomByPage = new Map(
+      result.sections[0].pages.map((page) => [page.index, page.contentBox.y + page.contentBox.height]),
+    )
+
+    expect(new Set(spanningParagraphFragments.map((fragment) => fragment.pageIndex)).size).toBeGreaterThan(2)
+    expect(spanningCells.length).toBeGreaterThan(2)
+    expect(spanningCells.every((fragment) =>
+      fragment.flowTableCellGridProps?.columnIndex === 0 &&
+      fragment.flowTableCellGridProps.colspan === 1 &&
+      fragment.flowTableCellGridProps.rowspan === 2,
+    )).toBe(true)
+    expect(spanningParagraphFragments.every((fragment) =>
+      fragment.y + fragment.height <= (contentBottomByPage.get(fragment.pageIndex) ?? Infinity) + 0.5,
+    )).toBe(true)
+    expect(topSiblingFragments).toHaveLength(1)
+    expect(bottomSiblingFragments).toHaveLength(1)
+    expect(firstPageSpanLineCount).toBeGreaterThan(40)
+    expect(warningSummary.find((warning) => warning.code === "forced-flow-table-split-overflow")).toBeUndefined()
+    expectContiguousLineFragments(spanningParagraphFragments, lineCount)
+
+    const finalParagraphFragment = spanningParagraphFragments.at(-1)
+    expect(finalParagraphFragment).toBeDefined()
+    const finalCellFragment = spanningCells.find((fragment) =>
+      fragment.pageIndex === finalParagraphFragment?.pageIndex &&
+      fragment.parentNodeId === "r2" &&
+      fragment.continuesFrom === true &&
+      fragment.isContinued !== true
+    )
+    const finalRowFragment = bottomRowFragments.find((fragment) =>
+      fragment.pageIndex === finalParagraphFragment?.pageIndex &&
+      fragment.isContinued !== true
+    )
+    expect(finalCellFragment).toBeDefined()
+    expect(finalRowFragment).toBeDefined()
+    expect(finalCellFragment?.height).toBeLessThanOrEqual((finalParagraphFragment?.height ?? 0) + 0.5)
+    expect(finalRowFragment?.height).toBeLessThanOrEqual((finalParagraphFragment?.height ?? 0) + 0.5)
+  })
+
   it("keeps mixed rowspan and colspan geometry while splitting spanning content", () => {
     const before = makeSpacer("before", 650)
     const p1 = makePara("p1", makeLines("Wide span", 7))

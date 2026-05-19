@@ -6,6 +6,8 @@ import { getSmokeBrowserConfig, launchSmokeBrowser, smokeBrowserLabel } from "./
 const DEFAULT_SMOKE_PORT = 4017
 const SCENARIO_ID = "wysiwyg-stage3-boundary"
 const RESPONSIVE_PAGINATION_MAX_DELAY_MS = 300
+const ROWSPAN_FINAL_SLICE_MAX_EXTRA_PX = 8
+const CARET_ALIGNMENT_TOLERANCE_PX = 4
 
 const TABLE_CELL_APPEND_TEXT = [
   "",
@@ -153,6 +155,26 @@ const textareaSelector = "textarea[data-inline-edit-node-id]"
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
+}
+
+function latestLineBox(boxes) {
+  return boxes
+    .filter((box) => Number.isFinite(box.lineEnd))
+    .reduce((latest, box) => (
+      !latest || box.lineEnd > latest.lineEnd ? box : latest
+    ), null)
+}
+
+function findCoveringBox(boxes, target, tolerancePx = 1) {
+  return boxes.find((box) =>
+    box.pageIndex === target.pageIndex &&
+    boxIntersectsVertically(box, target, tolerancePx)
+  ) ?? null
+}
+
+function boxIntersectsVertically(box, target, tolerancePx = CARET_ALIGNMENT_TOLERANCE_PX) {
+  return box.y + box.height >= target.y - tolerancePx &&
+    box.y <= target.y + target.height + tolerancePx
 }
 
 function scenarioUrl() {
@@ -408,6 +430,16 @@ async function assertTableCellBoundaryFlow(page) {
       siblingNodeIds,
       siblingCellId,
     } = input
+    const readDomBox = (element) => {
+      if (!element) return null
+      const box = element.getBoundingClientRect()
+      return {
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+      }
+    }
     const readFragmentBoxes = (nodeId) => {
       if (!nodeId) return []
       return Array.from(document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${nodeId}"]`))
@@ -418,6 +450,10 @@ async function assertTableCellBoundaryFlow(page) {
             nodeType: fragment.getAttribute("data-node-type"),
             pageIndex: fragment.getAttribute("data-page-index"),
             parentNodeId: fragment.getAttribute("data-parent-node-id"),
+            lineStart: Number(fragment.getAttribute("data-line-start") ?? Number.NaN),
+            lineEnd: Number(fragment.getAttribute("data-line-end") ?? Number.NaN),
+            x: box?.x ?? 0,
+            y: box?.y ?? 0,
             width: box?.width ?? 0,
             height: box?.height ?? 0,
           }
@@ -426,6 +462,11 @@ async function assertTableCellBoundaryFlow(page) {
     const fragments = Array.from(document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${targetNodeId}"]`))
     const layer = document.querySelector(`[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${targetNodeId}"]`)
     const inputBridge = document.querySelector(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${targetNodeId}"]`)
+    const caret = layer?.querySelector('[data-wysiwyg-caret="true"], [data-wysiwyg-live-caret="true"]') ?? null
+    const cellBoxes = readFragmentBoxes(targetCellId)
+    const rowIds = cellBoxes
+      .map((box) => box.parentNodeId)
+      .filter((rowId, index, all) => rowId && all.indexOf(rowId) === index)
     return {
       fragmentCount: fragments.length,
       pages: fragments
@@ -436,7 +477,11 @@ async function assertTableCellBoundaryFlow(page) {
       visualChromeCount: document.querySelectorAll('[data-wysiwyg-table-cell-visual-chrome="true"]').length,
       layerCount: document.querySelectorAll(`[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${targetNodeId}"]`).length,
       inputBridgeCaretColor: inputBridge ? getComputedStyle(inputBridge).caretColor : null,
-      cellBoxes: readFragmentBoxes(targetCellId),
+      inputBridgeBox: readDomBox(inputBridge),
+      caretBox: readDomBox(caret),
+      targetBoxes: readFragmentBoxes(targetNodeId),
+      cellBoxes,
+      rowBoxes: rowIds.flatMap((rowId) => readFragmentBoxes(rowId)),
       siblingParagraphCount: siblingNodeId
         ? document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${siblingNodeId}"]`).length
         : null,
@@ -514,6 +559,32 @@ async function assertTableCellBoundaryFlow(page) {
       .map((box) => box.parentNodeId)
       .filter((parentNodeId, index, all) => parentNodeId && all.indexOf(parentNodeId) === index)
     assert(parentRowIds.length >= 2, `expected rowspan continuation across row parents, got ${JSON.stringify(state.cellBoxes)}`)
+
+    const finalTargetBox = latestLineBox(state.targetBoxes)
+    assert(finalTargetBox, `expected line metadata for rowspan target fragments: ${JSON.stringify(state.targetBoxes)}`)
+    const finalCellBox = findCoveringBox(state.cellBoxes, finalTargetBox)
+    const finalRowBox = findCoveringBox(state.rowBoxes, finalTargetBox)
+    assert(finalCellBox, `expected final rowspan cell chrome to cover final target fragment: ${JSON.stringify({ target: finalTargetBox, cells: state.cellBoxes })}`)
+    assert(finalRowBox, `expected final rowspan row chrome to align with final target fragment: ${JSON.stringify({ target: finalTargetBox, rows: state.rowBoxes })}`)
+    assert(
+      finalCellBox.height <= finalTargetBox.height + ROWSPAN_FINAL_SLICE_MAX_EXTRA_PX,
+      `final rowspan cell left a blank continuation slice: ${JSON.stringify({ target: finalTargetBox, cell: finalCellBox })}`,
+    )
+    assert(
+      finalRowBox.height <= finalTargetBox.height + ROWSPAN_FINAL_SLICE_MAX_EXTRA_PX,
+      `final rowspan row left a blank continuation slice: ${JSON.stringify({ target: finalTargetBox, row: finalRowBox })}`,
+    )
+    assert(state.inputBridgeBox, "expected active hidden input bridge box")
+    assert(
+      Math.abs(state.inputBridgeBox.x - finalTargetBox.x) <= CARET_ALIGNMENT_TOLERANCE_PX &&
+        Math.abs(state.inputBridgeBox.y - finalTargetBox.y) <= CARET_ALIGNMENT_TOLERANCE_PX,
+      `input bridge drifted away from final target fragment: ${JSON.stringify({ target: finalTargetBox, inputBridge: state.inputBridgeBox })}`,
+    )
+    assert(state.caretBox, "expected active WYSIWYG caret box")
+    assert(
+      boxIntersectsVertically(state.caretBox, finalTargetBox),
+      `caret drifted away from final target fragment: ${JSON.stringify({ target: finalTargetBox, caret: state.caretBox })}`,
+    )
   }
   const continuationReentry = smokeTarget.expectContinuationSingleClickReentry
     ? await assertContinuationSingleClickReentry(page, state.pages)

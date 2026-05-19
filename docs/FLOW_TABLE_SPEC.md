@@ -23,6 +23,11 @@ Implementation status:
   row-boundary continuation slices using the existing cell split-point helpers.
 - R3B/R3C core pagination covers mixed `rowspan`/`colspan` continuation
   geometry and forced one-unit overflow warnings inside rowspan slices.
+- R3D oversized final rowspan slices can continue spanning-cell paragraph
+  content line-by-line across additional pages instead of placing the remaining
+  text as one overflowing final row slice. Rowspan pagination also keeps
+  filling the current page when a later row-boundary slice can make line-level
+  progress in the remaining page space.
 - Core pagination repeats `headerRowCount` Flow Table header rows on body
   continuation pages.
 - PDF and editor preview draw Flow Table cell `box` fill/border from paginated
@@ -417,6 +422,14 @@ Rowspan:
   split-point helpers across row-boundary continuation slices. Continuation
   paragraph fragments stay parented to the authored spanning cell, while
   continuation cell chrome uses the visible row as render parent.
+- If a single visible row slice inside a rowspan group is taller than the page
+  because of spanning-cell content, Flow Table may subdivide that visible row
+  slice across pages using the same line/spacer split accounting as normal
+  breakable table-cell content. Short sibling cells still render their content
+  once and only their chrome continues.
+- Row-boundary slices do not force an immediate page advance when the current
+  page still has usable height. A following row slice may start on the same page
+  and continue the spanning-cell paragraph there.
 - A spanning cell that also has `colspan>1` keeps the summed column width and
   original grid/span metadata across continuation slices.
 - If a non-final row-boundary slice cannot fit normal spanning-cell content

@@ -24,6 +24,76 @@ Each entry should include:
 
 ## 2026-05-19
 
+### Flow Table Rowspan Tall Slice And WYSIWYG Boundary Polish
+
+Goal: Make Flow Table rowspan continuation feel as close to normal paragraph
+cross-page flow as possible by removing oversized blank final slices, keeping
+the active page filled when later row slices can use the remaining height, and
+keeping WYSIWYG caret/chrome anchored to the real final fragment instead of a
+padded continuation rectangle.
+
+Completed:
+
+- Added `paginateFlowTableRowspanTallRowSlice` so a single visible row slice
+  inside a rowspan group whose spanning-cell content exceeds the remaining page
+  height now subdivides line-by-line across pages, reusing the existing cell
+  split-point helpers and forced-progress warning shape from the non-rowspan
+  path.
+- Removed the unconditional page advance between rowspan row-boundary slices so
+  a following row slice can start on the same page and continue the
+  spanning-cell paragraph there when usable height remains.
+- Clamped the final rowspan slice height to the measured spanning-cell content
+  height when authored row height has already been satisfied, so the final
+  visible row no longer leaves a tall blank rectangle below the last paragraph
+  line.
+- Added focused pagination coverage for the oversized-final-slice case
+  including continuous line ranges, mixed sibling non-duplication, and clean
+  final cell/row height bounds.
+- Hardened the WYSIWYG paragraph layer blur to settle before ending the inline
+  edit so that the same-node input-bridge focus transition does not prematurely
+  close the editing session; covered by a new
+  `isWysiwygTextSessionFocusTarget` unit test.
+- Tightened `scripts/wysiwyg-table-cell-boundary-smoke.mjs` to assert that the
+  final rowspan target paragraph fragment is covered by aligned cell/row chrome
+  and that the input bridge and caret stay anchored to that final fragment
+  during boundary editing.
+- Updated Flow Table, cross-page, and layout specs to record the new R3D
+  oversized-slice and same-page-fill behavior.
+- Bumped the project release marker to `0.5.12` after verification.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-table-cell-boundary-smoke.mjs`
+- `src/app/__tests__/projectVersion.test.ts`
+- `package.json`
+- `package-lock.json`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+
+Notes:
+
+- Split-inside-rowspan still respects the authored row-boundary slices; only a
+  single oversized visible row slice is allowed to subdivide further so short
+  sibling cells remain placed once.
+- Legacy `table` rowspan splitting remains intentionally deferred.
+- The browser smoke script change is assertion-only; running the smoke gate is
+  not required to land the pagination/editor changes but is recommended before
+  the next stage 3 sweep.
+
 ### Flow Table Mixed Span Browser And Boundary Guards
 
 Goal: Cover follow-up items 2-5 after the Flow Table rowspan smoke by adding

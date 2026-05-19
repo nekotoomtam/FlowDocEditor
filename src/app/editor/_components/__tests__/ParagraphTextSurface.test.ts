@@ -16,6 +16,7 @@ import {
   inlineEditTextareaOutline,
   inlineEditTextareaTextColor,
   hasWysiwygTextDraftChange,
+  isWysiwygTextSessionFocusTarget,
   resolveWysiwygLiveTextEcho,
   resolveWysiwygTextPointerOffsetFromFragmentTargets,
   resolveWysiwygWordSelectionRange,
@@ -256,6 +257,16 @@ const fixedMeasurer: TextMeasurer = {
   measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => fontSize * lineHeightRatio,
 }
 
+function makeFocusElement(
+  attrs: Record<string, string>,
+  parentElement: Element | null = null,
+): Element {
+  return {
+    getAttribute: (name: string) => attrs[name] ?? null,
+    parentElement,
+  } as unknown as Element
+}
+
 describe("ParagraphTextSurface focus behavior", () => {
   it("focuses with preventScroll so edit entry does not force the viewport to jump", () => {
     const calls: Array<FocusOptions | undefined> = []
@@ -288,6 +299,30 @@ describe("ParagraphTextSurface focus behavior", () => {
 
   it("ignores a missing focus target", () => {
     expect(() => focusElementWithoutScroll(null)).not.toThrow()
+  })
+
+  it("keeps WYSIWYG focus when a same-node input bridge replaces the active layer", () => {
+    const layer = makeFocusElement({
+      "data-inline-edit-node-id": "p1",
+      "data-wysiwyg-text-engine-layer": "true",
+    })
+    const bridge = makeFocusElement({
+      "data-inline-edit-node-id": "p1",
+      "data-wysiwyg-input-bridge": "true",
+    }, layer)
+    const nextBridge = makeFocusElement({
+      "data-inline-edit-node-id": "p1",
+      "data-wysiwyg-input-bridge": "true",
+    })
+    const outsideBridge = makeFocusElement({
+      "data-inline-edit-node-id": "p2",
+      "data-wysiwyg-input-bridge": "true",
+    })
+
+    expect(isWysiwygTextSessionFocusTarget(bridge, "p1")).toBe(true)
+    expect(isWysiwygTextSessionFocusTarget(nextBridge, "p1")).toBe(true)
+    expect(isWysiwygTextSessionFocusTarget(outsideBridge, "p1")).toBe(false)
+    expect(isWysiwygTextSessionFocusTarget(null, "p1")).toBe(false)
   })
 })
 
