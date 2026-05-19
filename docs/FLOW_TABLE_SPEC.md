@@ -28,6 +28,11 @@ Implementation status:
   text as one overflowing final row slice. Rowspan pagination also keeps
   filling the current page when a later row-boundary slice can make line-level
   progress in the remaining page space.
+- R3E breakable rowspan-linked row slices that do not fit the remaining page
+  space now subdivide at line boundaries inside the current page instead of
+  being pushed whole to the next page, matching normal paragraph and
+  non-rowspan Flow Table row cross-page flow. Short sibling cells in the row
+  still render their content once.
 - Core pagination repeats `headerRowCount` Flow Table header rows on body
   continuation pages.
 - PDF and editor preview draw Flow Table cell `box` fill/border from paginated
@@ -422,11 +427,13 @@ Rowspan:
   split-point helpers across row-boundary continuation slices. Continuation
   paragraph fragments stay parented to the authored spanning cell, while
   continuation cell chrome uses the visible row as render parent.
-- If a single visible row slice inside a rowspan group is taller than the page
-  because of spanning-cell content, Flow Table may subdivide that visible row
-  slice across pages using the same line/spacer split accounting as normal
-  breakable table-cell content. Short sibling cells still render their content
-  once and only their chrome continues.
+- If a single visible row slice inside a rowspan group is taller than the
+  remaining page space, Flow Table subdivides that visible row slice at line
+  boundaries inside the current page using the same line/spacer split
+  accounting as normal breakable table-cell content. This applies whether the
+  row would fit one full clean page or is itself taller than a clean page.
+  Short sibling cells still render their content once and only their chrome
+  continues.
 - Row-boundary slices do not force an immediate page advance when the current
   page still has usable height. A following row slice may start on the same page
   and continue the spanning-cell paragraph there.

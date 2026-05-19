@@ -2447,9 +2447,7 @@ function paginateFlowTableRowspanTallRowSlice(
 
     const availableHeight = contentBottom - current.cursorY
     const remainingRowHeight = Math.max(0, rowBox.height - rowHeightPlaced)
-    let sliceHeight = remainingRowHeight > 0
-      ? Math.min(availableHeight, remainingRowHeight)
-      : availableHeight
+    let sliceHeight = availableHeight
     const toSplits = new Map<string, SplitPoint | null>()
     const sliceWarnings = new Map<string, PageFragmentWarning[]>()
 
@@ -2559,11 +2557,10 @@ function paginateFlowTableRowspanTallRowSlice(
       ))
     }
 
-    if (!contentContinuesAfter && remainingRowHeight <= 0 && contentFragments.length > 0) {
-      sliceHeight = Math.max(1, Math.min(
-        sliceHeight,
-        flowTableRowspanSliceContentHeight(contentFragments, current.cursorY),
-      ))
+    if (!contentContinuesAfter && contentFragments.length > 0) {
+      const contentSliceHeight = flowTableRowspanSliceContentHeight(contentFragments, current.cursorY)
+      const minimumSliceHeight = remainingRowHeight > 0 ? remainingRowHeight : 1
+      sliceHeight = Math.max(minimumSliceHeight, Math.min(sliceHeight, Math.max(minimumSliceHeight, contentSliceHeight)))
     }
     const rowContinuesAfter = rowHeightPlaced + sliceHeight < rowBox.height || contentContinuesAfter
 
@@ -2885,13 +2882,6 @@ function paginateFlowTableRowspanGroupSplit(
     const rowEndIndex = group.rows[endOffset - 1].rowIndex
     const slice = planFlowTableRowspanGroupSlice(group, rowStartIndex, rowEndIndex)
     if (rowStartIndex === rowEndIndex && slice.height > availableHeight) {
-      const fullPageHeight = contentBottom - contentTop
-      if (current.cursorY > contentTop + 1 && slice.height <= fullPageHeight) {
-        current = advancePage(current, contentTop)
-        current = repeatHeaders ? repeatHeaders(current) : current
-        continue
-      }
-
       current = paginateFlowTableRowspanTallRowSlice(
         group,
         rowStartIndex,

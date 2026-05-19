@@ -24,6 +24,67 @@ Each entry should include:
 
 ## 2026-05-19
 
+### Flow Table Rowspan Line Boundary On Remaining Page Space
+
+Goal: Make breakable rowspan-linked Flow Table rows behave like normal
+paragraph cross-page flow when the row slice does not fit the remaining page
+space, instead of pushing the whole row to the next page or producing extra
+near-empty continuation pages when the trailing row absorbs spillover content.
+
+Completed:
+
+- Removed the early-return `advancePage` in
+  `paginateFlowTableRowspanGroupSplit` that pushed a single-row rowspan slice
+  whole to the next page whenever the slice could otherwise fit one full clean
+  page.
+- Removed the `remainingRowHeight` cap on `sliceHeight` inside
+  `paginateFlowTableRowspanTallRowSlice` so a continuation slice on a fresh
+  page can absorb all remaining spanning-cell content even when the authored
+  row height (driven by rowspan spillover) is smaller than the available page
+  height. The final-slice clamp now also fires whenever content stops
+  continuing, shrinking the row slice down to its measured content height
+  instead of trailing a tall blank rectangle.
+- The line-by-line subdivider now runs for every single-row slice that does
+  not fit the remaining page space, so spanning-cell content uses up the
+  usable page space first and finishes inside the next continuation page
+  instead of spilling a single trailing line onto an extra page.
+- Added focused pagination coverage for the "fits one full page but not the
+  remaining page space" case, asserting exactly two pages worth of spanning
+  paragraph fragments, contiguous line ranges, sibling cells rendering once,
+  and fragments staying within the page content box.
+- Updated Flow Table, cross-page, and layout specs to describe the new R3E
+  remaining-page-space behavior.
+- Bumped the project release marker to `0.5.13` after verification.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `src/app/__tests__/projectVersion.test.ts`
+- `package.json`
+- `package-lock.json`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+
+Notes:
+
+- Multi-row rowspan slices that fit the remaining page space still go through
+  the existing `pushFlowTableRowspanGroupSlice` path; only single-row slices
+  that exceed the remaining height now use the line-by-line subdivider.
+- Shorter sibling cells render their content once but their cell chrome still
+  extends through the visible row continuation slices, consistent with the
+  earlier R3D behavior.
+- Legacy `table` rowspan splitting remains intentionally deferred.
+
 ### Flow Table Rowspan Tall Slice And WYSIWYG Boundary Polish
 
 Goal: Make Flow Table rowspan continuation feel as close to normal paragraph
