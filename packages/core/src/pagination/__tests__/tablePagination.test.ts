@@ -297,6 +297,26 @@ describe("tablePagination — rowspan groups stay on same page", () => {
     expect(row0Page).toBeGreaterThan(0)
   })
 
+  it("keeps legacy rowspan groups atomic rather than emitting row-boundary continuation cells", () => {
+    const filler = makeSpacer("filler", 650)
+    const rowText = "A\nB\nC\nD"
+    const tbl = makeTable("legacy-rowspan", [200, 200], [
+      [{ text: rowText, rowspan: 2 }, { text: rowText }],
+      [{ text: rowText }],
+    ])
+    const result = paginate(makeDoc(["filler", "legacy-rowspan"], { filler, "legacy-rowspan": tbl }))
+    const row0Page = getPageOfFragment(result, "legacy-rowspan-row0")
+    const row1Page = getPageOfFragment(result, "legacy-rowspan-row1")
+    const spanningCellFragments = getFragments(result, "legacy-rowspan-c0-0")
+
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+    expect(row0Page).toBe(row1Page)
+    expect(row0Page).toBeGreaterThan(0)
+    expect(spanningCellFragments).toHaveLength(1)
+    expect(spanningCellFragments[0].continuesFrom).not.toBe(true)
+    expect(spanningCellFragments[0].isContinued).not.toBe(true)
+  })
+
   it("3-row rowspan group stays together", () => {
     const tbl = makeTable("tbl", [100, 100], [
       [{ text: "A", rowspan: 3 }, { text: "B" }],

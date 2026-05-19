@@ -68,6 +68,12 @@ export interface WysiwygTableCellDraftVisualPreviewInput {
   draftPaginationActive: boolean
 }
 
+export interface WysiwygTableCellDraftVisualPreviewPaginationInput {
+  hasVisualPreview: boolean
+  draftPaginationActive: boolean
+  existingSplitActive: boolean
+}
+
 export interface WysiwygDraftPaginationSessionSource {
   nodeId: string | null
   draftText: string
@@ -96,6 +102,14 @@ export interface WysiwygDraftPaginationFrameInput {
 }
 
 const HEIGHT_EPSILON = 0.5
+
+export const WYSIWYG_TABLE_CELL_VISUAL_PREVIEW_REFLOW_DECISION: WysiwygTextReflowDecision = {
+  kind: "hard-page-boundary",
+  reason: "page-boundary",
+  shouldPatchActiveLines: true,
+  shouldPatchSamePageHeight: false,
+  shouldQueueSettledPagination: true,
+}
 
 function fragmentLineCount(fragment: PageFragment): number {
   if (fragment.lineStart != null && fragment.lineEnd != null) {
@@ -234,6 +248,14 @@ export function shouldPrepareWysiwygTableCellDraftVisualPreview(
   if (input.draftPaginationActive) return false
   if (input.reflow.kind !== "hard-page-boundary") return false
   return input.reflow.shouldPatchActiveLines && input.reflow.shouldQueueSettledPagination
+}
+
+export function shouldQueueSettledTableCellDraftPaginationFromVisualPreview(
+  input: WysiwygTableCellDraftVisualPreviewPaginationInput,
+): boolean {
+  return input.hasVisualPreview &&
+    !input.draftPaginationActive &&
+    !input.existingSplitActive
 }
 
 export function resolveWysiwygDraftPaginationSource(input: {

@@ -9,8 +9,10 @@ import {
   shouldScheduleResponsiveFlowStackDraftPagination,
   shouldScheduleResponsiveTableCellDraftPagination,
   shouldPrepareWysiwygTableCellDraftVisualPreview,
+  shouldQueueSettledTableCellDraftPaginationFromVisualPreview,
   shouldUseWysiwygLocalDraftLines,
   shouldUseWysiwygDraftPaginationFrame,
+  WYSIWYG_TABLE_CELL_VISUAL_PREVIEW_REFLOW_DECISION,
 } from "../wysiwygReflow"
 
 function line(text: string, y = 20): PaginatedLine {
@@ -508,6 +510,38 @@ describe("shouldPrepareWysiwygTableCellDraftVisualPreview", () => {
       isTableCellParagraph: true,
       isFlowStackParagraph: false,
       draftPaginationActive: true,
+    })).toBe(false)
+  })
+})
+
+describe("shouldQueueSettledTableCellDraftPaginationFromVisualPreview", () => {
+  it("queues settled pagination after the conservative table-cell visual preview appears", () => {
+    expect(shouldQueueSettledTableCellDraftPaginationFromVisualPreview({
+      hasVisualPreview: true,
+      draftPaginationActive: false,
+      existingSplitActive: false,
+    })).toBe(true)
+    expect(WYSIWYG_TABLE_CELL_VISUAL_PREVIEW_REFLOW_DECISION).toMatchObject({
+      kind: "hard-page-boundary",
+      shouldQueueSettledPagination: true,
+    })
+  })
+
+  it("does not requeue once draft pagination or a real split is already active", () => {
+    expect(shouldQueueSettledTableCellDraftPaginationFromVisualPreview({
+      hasVisualPreview: true,
+      draftPaginationActive: true,
+      existingSplitActive: false,
+    })).toBe(false)
+    expect(shouldQueueSettledTableCellDraftPaginationFromVisualPreview({
+      hasVisualPreview: true,
+      draftPaginationActive: false,
+      existingSplitActive: true,
+    })).toBe(false)
+    expect(shouldQueueSettledTableCellDraftPaginationFromVisualPreview({
+      hasVisualPreview: false,
+      draftPaginationActive: false,
+      existingSplitActive: false,
     })).toBe(false)
   })
 })

@@ -23,11 +23,32 @@ const FLOW_TABLE_COLSPAN_APPEND_TEXT = [
   )),
 ].join("\n")
 
+const FLOW_TABLE_COLSPAN_OVERCASE_APPEND_TEXT = [
+  "",
+  "STAGE3_FLOW_TABLE_COLSPAN_OVERCASE_MARKER",
+  ...Array.from({ length: 54 }, (_unused, index) => (
+    [
+      `รายการข้อมูลลูกค้า ${index + 1}`,
+      `เลขที่เอกสาร ${String(index + 1).padStart(3, "0")}`,
+      `รายละเอียดสินค้าและหมายเหตุยาวๆ สำหรับทดสอบการพิมพ์ข้ามหน้า`,
+      `${"flowtableovercase".repeat(7)}`,
+    ].join(" | ")
+  )),
+].join("\n")
+
 const FLOW_TABLE_ROWSPAN_APPEND_TEXT = [
   "",
   "STAGE3_FLOW_TABLE_ROWSPAN_MARKER",
   ...Array.from({ length: 18 }, (_unused, index) => (
     `Flow Table rowspan responsive line ${index + 1} ไทยอังกฤษ ${"flowtablerowspanboundary".repeat(6)}`
+  )),
+].join("\n")
+
+const FLOW_TABLE_MIXED_SPAN_APPEND_TEXT = [
+  "",
+  "STAGE3_FLOW_TABLE_MIXED_SPAN_MARKER",
+  ...Array.from({ length: 30 }, (_unused, index) => (
+    `Flow Table mixed span responsive line ${index + 1} ไทยอังกฤษ ${"flowtablemixedspanboundary".repeat(8)}`
   )),
 ].join("\n")
 
@@ -53,6 +74,24 @@ const SMOKE_TARGETS = {
     expectedCellNodeType: "flow-table-cell",
     expectColspanWidth: true,
   },
+  "flow-table-colspan-overcase": {
+    id: "flow-table-colspan-overcase",
+    label: "flow-table colspan-only over-case cell",
+    nodeId: "stage3-flow-table-colspan-target",
+    cellId: "stage3-flow-table-colspan-target-cell",
+    siblingNodeId: "stage3-flow-table-colspan-sibling",
+    siblingCellId: "stage3-flow-table-colspan-sibling-cell",
+    marker: "STAGE3_FLOW_TABLE_COLSPAN_OVERCASE_MARKER",
+    appendText: FLOW_TABLE_COLSPAN_OVERCASE_APPEND_TEXT,
+    expectedCellNodeType: "flow-table-cell",
+    expectedMinPages: 3,
+    maxFirstPaginationDelayMs: 1200,
+    maxDraftUpdateDurationMs: 800,
+    maxPaginationDurationMs: 1600,
+    expectColspanWidth: true,
+    expectContinuationSingleClickReentry: true,
+    reentryMarker: "STAGE3_FLOW_TABLE_COLSPAN_OVERCASE_REENTRY",
+  },
   "flow-table-rowspan": {
     id: "flow-table-rowspan",
     label: "flow-table rowspan cell",
@@ -66,6 +105,25 @@ const SMOKE_TARGETS = {
     appendText: FLOW_TABLE_ROWSPAN_APPEND_TEXT,
     expectedCellNodeType: "flow-table-cell",
     expectRowspanContinuation: true,
+  },
+  "flow-table-mixed-span": {
+    id: "flow-table-mixed-span",
+    label: "flow-table mixed rowspan/colspan cell",
+    nodeId: "stage3-flow-table-mixed-span-target",
+    cellId: "stage3-flow-table-mixed-span-target-cell",
+    siblingCellId: "stage3-flow-table-mixed-span-top-sibling-cell",
+    siblingNodeIds: [
+      "stage3-flow-table-mixed-span-top-sibling",
+      "stage3-flow-table-mixed-span-middle-sibling",
+      "stage3-flow-table-mixed-span-bottom-sibling",
+    ],
+    marker: "STAGE3_FLOW_TABLE_MIXED_SPAN_MARKER",
+    appendText: FLOW_TABLE_MIXED_SPAN_APPEND_TEXT,
+    expectedCellNodeType: "flow-table-cell",
+    expectColspanWidth: true,
+    expectRowspanContinuation: true,
+    expectContinuationSingleClickReentry: true,
+    reentryMarker: "STAGE3_FLOW_TABLE_MIXED_SPAN_REENTRY",
   },
 }
 
@@ -231,6 +289,8 @@ async function readTableCellPerf(page) {
     const firstPaginationAfterDraft = lastDraftUpdate
       ? paginations.find((event) => event.startedAt >= lastDraftUpdate.startedAt) ?? null
       : paginations[0] ?? null
+    const maxDuration = (items) => items.reduce((max, event) => Math.max(max, event.durationMs ?? 0), 0)
+    const lastPagination = paginations[paginations.length - 1] ?? null
 
     return {
       draftUpdates: draftUpdates.length,
@@ -238,6 +298,10 @@ async function readTableCellPerf(page) {
       firstPaginationDelayMs: lastDraftUpdate && firstPaginationAfterDraft
         ? firstPaginationAfterDraft.startedAt - lastDraftUpdate.startedAt
         : null,
+      maxDraftUpdateDurationMs: maxDuration(draftUpdates),
+      maxPaginationDurationMs: maxDuration(paginations),
+      lastPaginationPageCount: lastPagination?.pageCount ?? null,
+      lastPaginationFragmentCount: lastPagination?.fragmentCount ?? null,
     }
   }, smokeTarget.nodeId)
 }
@@ -262,6 +326,44 @@ async function openTableTarget(page) {
   await expectNoTextarea(page)
 }
 
+async function assertContinuationSingleClickReentry(page, pages) {
+  const continuationPageIndex = pages[pages.length - 1]
+  assert(continuationPageIndex != null, `expected continuation page for ${smokeTarget.nodeId}`)
+
+  await page.keyboard.press("Escape")
+  await page.waitForFunction(
+    ({ selector }) => document.querySelector(selector) == null,
+    { selector: bridgeSelector },
+    { timeout: 10000 },
+  )
+
+  const continuationSelector =
+    `[data-testid="editor-fragment"][data-node-id="${smokeTarget.nodeId}"][data-page-index="${continuationPageIndex}"]`
+  const continuation = page.locator(continuationSelector).first()
+  await continuation.scrollIntoViewIfNeeded()
+  await continuation.click()
+  await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
+  await expectNoTextarea(page)
+
+  const bridge = page.locator(bridgeSelector)
+  await bridge.focus()
+  await page.keyboard.press("End")
+  const reentryMarker = smokeTarget.reentryMarker ?? "STAGE3_TABLE_CELL_REENTRY"
+  await page.keyboard.insertText(` ${reentryMarker}`)
+  await page.waitForFunction(
+    ({ marker }) => document.body.textContent?.includes(marker) === true,
+    { marker: reentryMarker },
+    { timeout: 10000 },
+  )
+  await expectNoTextarea(page)
+  await expectNoLayoutError(page)
+
+  return {
+    pageIndex: continuationPageIndex,
+    marker: reentryMarker,
+  }
+}
+
 async function assertTableCellBoundaryFlow(page) {
   await openTableTarget(page)
   const bridge = page.locator(bridgeSelector)
@@ -270,18 +372,31 @@ async function assertTableCellBoundaryFlow(page) {
   await resetWysiwygPerfEvents(page)
   await page.keyboard.insertText(smokeTarget.appendText)
 
-  await page.waitForFunction(
-    ({ selector, targetNodeId, marker }) => {
-      const fragmentCount = document.querySelectorAll(selector).length
-      const hasMarker = document.body.textContent?.includes(marker) === true
-      const hasPagination = (window.__flowDocWysiwygPerfEvents ?? []).some((event) =>
-        event.kind === "browser-preview-pagination" && event.nodeId === targetNodeId
-      )
-      return fragmentCount >= 2 && hasMarker && hasPagination
-    },
-    { selector: targetFragmentSelector, targetNodeId: smokeTarget.nodeId, marker: smokeTarget.marker },
-    { timeout: 15000 },
-  )
+  try {
+    await page.waitForFunction(
+      ({ selector, targetNodeId, marker }) => {
+        const fragmentCount = document.querySelectorAll(selector).length
+        const hasMarker = document.body.textContent?.includes(marker) === true
+        const hasPagination = (window.__flowDocWysiwygPerfEvents ?? []).some((event) =>
+          event.kind === "browser-preview-pagination" && event.nodeId === targetNodeId
+        )
+        return fragmentCount >= 2 && hasMarker && hasPagination
+      },
+      { selector: targetFragmentSelector, targetNodeId: smokeTarget.nodeId, marker: smokeTarget.marker },
+      { timeout: 15000 },
+    )
+  } catch (error) {
+    const debugState = await page.evaluate(({ selector, targetNodeId, marker }) => ({
+      fragmentCount: document.querySelectorAll(selector).length,
+      hasMarker: document.body.textContent?.includes(marker) === true,
+      perfEvents: (window.__flowDocWysiwygPerfEvents ?? [])
+        .map((event) => ({ kind: event.kind, nodeId: event.nodeId })),
+      visibleTextSample: document.body.textContent?.slice(0, 500) ?? "",
+    }), { selector: targetFragmentSelector, targetNodeId: smokeTarget.nodeId, marker: smokeTarget.marker })
+    throw new Error(`timed out waiting for ${smokeTarget.id} boundary split: ${JSON.stringify(debugState, null, 2)}`, {
+      cause: error,
+    })
+  }
   await expectNoTextarea(page)
   await expectNoLayoutError(page)
 
@@ -342,8 +457,9 @@ async function assertTableCellBoundaryFlow(page) {
   })
   const perf = await readTableCellPerf(page)
 
-  assert(state.fragmentCount >= 2, `expected table-cell target to split, got ${state.fragmentCount}`)
-  assert(state.pages.length >= 2, `expected table-cell target on multiple pages, got ${JSON.stringify(state.pages)}`)
+  const expectedMinPages = smokeTarget.expectedMinPages ?? 2
+  assert(state.fragmentCount >= expectedMinPages, `expected table-cell target to split into at least ${expectedMinPages} fragments, got ${state.fragmentCount}`)
+  assert(state.pages.length >= expectedMinPages, `expected table-cell target on at least ${expectedMinPages} pages, got ${JSON.stringify(state.pages)}`)
   assert(state.layerCount === 1, `expected one active text-engine layer, found ${state.layerCount}`)
   assert(state.pointerFragmentCount >= 2, `expected pointer fragments for split table-cell edit, got ${state.pointerFragmentCount}`)
   assert(state.previewCandidateCount === 0, `temporary preview candidate remained after settled pagination: ${state.previewCandidateCount}`)
@@ -351,10 +467,23 @@ async function assertTableCellBoundaryFlow(page) {
   assert(state.inputBridgeCaretColor === "rgba(0, 0, 0, 0)", `expected hidden input bridge caret, got ${state.inputBridgeCaretColor}`)
   assert(perf.draftUpdates >= 1, "expected table-cell draft update perf event")
   assert(perf.browserPreviewPaginations >= 1, "expected responsive table-cell browser preview pagination")
+  const maxFirstPaginationDelayMs = smokeTarget.maxFirstPaginationDelayMs ?? RESPONSIVE_PAGINATION_MAX_DELAY_MS
   assert(
-    perf.firstPaginationDelayMs !== null && perf.firstPaginationDelayMs <= RESPONSIVE_PAGINATION_MAX_DELAY_MS,
+    perf.firstPaginationDelayMs !== null && perf.firstPaginationDelayMs <= maxFirstPaginationDelayMs,
     `table-cell draft pagination was not responsive enough: ${perf.firstPaginationDelayMs}ms`,
   )
+  if (smokeTarget.maxDraftUpdateDurationMs != null) {
+    assert(
+      perf.maxDraftUpdateDurationMs <= smokeTarget.maxDraftUpdateDurationMs,
+      `draft update duration was too slow: ${perf.maxDraftUpdateDurationMs}ms`,
+    )
+  }
+  if (smokeTarget.maxPaginationDurationMs != null) {
+    assert(
+      perf.maxPaginationDurationMs <= smokeTarget.maxPaginationDurationMs,
+      `browser preview pagination duration was too slow: ${perf.maxPaginationDurationMs}ms`,
+    )
+  }
   if (smokeTarget.cellId) {
     assert(state.cellBoxes.length >= 2, `expected target cell chrome to split, got ${state.cellBoxes.length}`)
     assert(
@@ -386,6 +515,9 @@ async function assertTableCellBoundaryFlow(page) {
       .filter((parentNodeId, index, all) => parentNodeId && all.indexOf(parentNodeId) === index)
     assert(parentRowIds.length >= 2, `expected rowspan continuation across row parents, got ${JSON.stringify(state.cellBoxes)}`)
   }
+  const continuationReentry = smokeTarget.expectContinuationSingleClickReentry
+    ? await assertContinuationSingleClickReentry(page, state.pages)
+    : null
 
   return {
     target: smokeTarget.id,
@@ -396,10 +528,15 @@ async function assertTableCellBoundaryFlow(page) {
     cellFragments: state.cellBoxes.length,
     siblingParagraphs: state.siblingParagraphCount,
     siblingParagraphCounts: state.siblingParagraphCounts,
+    continuationReentry,
     performanceTrace: {
       draftUpdates: perf.draftUpdates,
       browserPreviewPaginations: perf.browserPreviewPaginations,
       firstPaginationDelayMs: Math.round(perf.firstPaginationDelayMs),
+      maxDraftUpdateDurationMs: Math.round(perf.maxDraftUpdateDurationMs),
+      maxPaginationDurationMs: Math.round(perf.maxPaginationDurationMs),
+      lastPaginationPageCount: perf.lastPaginationPageCount,
+      lastPaginationFragmentCount: perf.lastPaginationFragmentCount,
     },
   }
 }

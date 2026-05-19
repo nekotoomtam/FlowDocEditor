@@ -281,6 +281,10 @@ Current strengths:
 - Table row split accounting has focused coverage for uneven cells, empty cells,
   spacer-containing cells, padded cells, tall repeated headers, low-capacity
   no-progress guards, and continuation line ranges.
+- Legacy table rowspan coverage intentionally guards the current atomic
+  rowspan-linked row behavior so it does not accidentally emit Flow
+  Table-style row-boundary continuation cells before a separate legacy-table
+  design decision.
 - Table operation coverage protects row/column structural edits, subtree
   cleanup, total-width preservation, header-row clamping, and last-row/column
   deletion guards.
@@ -373,6 +377,9 @@ Current strengths:
 - App-level tests cover drift and editor helper behavior, including
   continuation-slice text reconstruction and WYSIWYG visual-mode selection
   decisions.
+- Stage 3 WYSIWYG stress tests cover table-cell, Flow Table colspan-only, Flow
+  Table rowspan-only, and mixed Flow Table `rowspan` + `colspan` draft
+  pagination, including shrink-back and sibling non-duplication invariants.
 - FlowDoc-owned text-engine tests cover grapheme-aware keyboard selection
   anchor/focus behavior, SVG selection overlay rendering, and selected-range
   deletion against the heavy Stage 3 page-boundary stress fixture.
@@ -386,6 +393,10 @@ Current strengths:
   stack-paragraph visual parity, Thai/composition fallback, table-cell
   selection, the property-panel title, table-cell visual contract,
   table-cell row/column insert/delete controls, table-cell boundary Backspace,
+  Flow Table colspan/rowspan/mixed-span table-cell boundary live pagination,
+  3-4 page Flow Table colspan over-case pagination with performance-trace
+  budgets, continuation text-engine re-entry for the mixed-span and over-case
+  targets,
   fieldRef paragraph non-editability, and opt-in WYSIWYG
   continuation-fragment editing with three-fragment pagination, slice-bounded
   textarea values, page-tracking textarea relocation after typing settles,

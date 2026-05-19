@@ -26,6 +26,8 @@ import { resolveCaretOffsetFromPointInFragment } from "./wysiwygCaretMapping"
 import {
   classifyWysiwygTextReflow,
   shouldPrepareWysiwygTableCellDraftVisualPreview,
+  shouldQueueSettledTableCellDraftPaginationFromVisualPreview,
+  WYSIWYG_TABLE_CELL_VISUAL_PREVIEW_REFLOW_DECISION,
   type WysiwygTextReflowDecision,
 } from "./wysiwygReflow"
 import {
@@ -1301,6 +1303,22 @@ export function EditorCanvas({
     wysiwygTextDraftText,
     wysiwygTextEngineEnabled,
     wysiwygTextExistingSplitActive,
+  ])
+  const shouldQueueSettledTableCellDraftPagination = shouldQueueSettledTableCellDraftPaginationFromVisualPreview({
+    hasVisualPreview: wysiwygDraftVisualPreview !== null,
+    draftPaginationActive: wysiwygTextDraftPaginationActive,
+    existingSplitActive: wysiwygTextExistingSplitActive,
+  })
+  useEffect(() => {
+    if (!wysiwygTextDraftNodeId || !shouldQueueSettledTableCellDraftPagination) return
+    onWysiwygTextReflowDecision(
+      wysiwygTextDraftNodeId,
+      WYSIWYG_TABLE_CELL_VISUAL_PREVIEW_REFLOW_DECISION,
+    )
+  }, [
+    onWysiwygTextReflowDecision,
+    shouldQueueSettledTableCellDraftPagination,
+    wysiwygTextDraftNodeId,
   ])
   const wysiwygTableCellDraftVisualChromeByPageIndex = useMemo(() =>
     buildWysiwygTableCellDraftVisualChromeFragments({

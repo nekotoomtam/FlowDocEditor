@@ -24,6 +24,86 @@ Each entry should include:
 
 ## 2026-05-19
 
+### Flow Table Mixed Span Browser And Boundary Guards
+
+Goal: Cover follow-up items 2-5 after the Flow Table rowspan smoke by adding
+broader rowspan/colspan browser evidence, checking continuation re-entry UX,
+rerunning PDF/DOCX renderer parity, and locking the legacy-table boundary.
+
+Completed:
+
+- Added a dev/test-only Stage 3 Flow Table target with both `rowspan=3` and
+  `colspan=2`, including top/middle/bottom sibling cells.
+- Added app coverage for mixed-span overflow and shrink-back draft pagination,
+  preserving span metadata, wide cell geometry, sibling paragraph uniqueness,
+  and marker text continuity.
+- Added `npm run smoke:wysiwyg-flow-table-mixed-span-boundary`; the smoke
+  checks settled browser pagination, wide cell chrome, multi-row parent
+  continuation, sibling non-duplication, no textarea fallback, and single-click
+  continuation re-entry on the text-engine path.
+- Added `npm run smoke:wysiwyg-flow-table-colspan-overcase` for a
+  customer-data-like Flow Table payload that crosses 3-4 pages, checking
+  pointer fragments, continuation re-entry, no textarea fallback, and
+  performance trace budgets.
+- Added a small visual-preview-to-settled-pagination handoff so table-cell
+  visual preview can trigger browser preview pagination even when the active
+  rendered preview fragment reports a soft reflow decision.
+- Added a legacy `table` rowspan guard proving current legacy rowspan-linked
+  rows remain atomic and do not emit row-boundary continuation cells.
+- Re-ran PDF/DOCX renderer and opt-in PDF raster checks against the existing
+  mixed Flow Table rowspan/colspan renderer fixtures.
+- Bumped the project release marker to `0.5.11` after verification.
+
+Files changed:
+
+- `src/app/editor/_components/wysiwygStage3StressScenarios.ts`
+- `src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/__tests__/projectVersion.test.ts`
+- `scripts/wysiwyg-table-cell-boundary-smoke.mjs`
+- `package.json`
+- `package-lock.json`
+- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/TEST_STRATEGY.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/tablePagination.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/pdfVisualRegression.test.ts`
+- `npm.cmd run test:pdf-visual`
+- `npm.cmd run smoke:wysiwyg-flow-table-mixed-span-boundary`
+- `npm.cmd run smoke:wysiwyg-flow-table-colspan-overcase`
+- `npm.cmd run smoke:wysiwyg-flow-table-rowspan-boundary`
+- `npm.cmd run smoke:wysiwyg-flow-table-colspan-boundary`
+- `npm.cmd run smoke:wysiwyg-table-cell-boundary`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- The first sandboxed `npm.cmd run test:pdf-visual` run could not execute
+  WinGet Poppler from AppData. The successful run used the same command outside
+  the sandbox so `pdftoppm.exe` could execute.
+- Legacy `table` rowspan splitting is intentionally still not implemented.
+  The new guard documents the current atomic behavior while Flow Table remains
+  the active rowspan-continuation path.
+- An exploratory mixed rowspan/colspan over-case payload still produced only
+  two active target fragments because current Flow Table rowspan continuation
+  follows the authored row-boundary slices. Longer-than-rowspan-group behavior
+  remains a separate design question, not a passing smoke gate.
+- This does not add broad DOCX semantic style assertions or full PDF/editor
+  visual parity. It verifies the focused mixed-span renderer fixtures and the
+  browser live-edit path.
+
 ### Flow Table Rowspan Live Typing Browser Smoke
 
 Goal: Add focused browser evidence that WYSIWYG live typing can drive a Flow

@@ -321,9 +321,16 @@ Automated command:
 - For the colspan-only Flow Table target, use
   `npm.cmd run smoke:wysiwyg-flow-table-colspan-boundary` on Windows
   PowerShell or `npm run smoke:wysiwyg-flow-table-colspan-boundary` elsewhere.
+- For the colspan-only Flow Table 3-4 page over-case target, use
+  `npm.cmd run smoke:wysiwyg-flow-table-colspan-overcase` on Windows
+  PowerShell or `npm run smoke:wysiwyg-flow-table-colspan-overcase` elsewhere.
 - For the rowspan Flow Table target, use
   `npm.cmd run smoke:wysiwyg-flow-table-rowspan-boundary` on Windows
   PowerShell or `npm run smoke:wysiwyg-flow-table-rowspan-boundary` elsewhere.
+- For the mixed `rowspan` + `colspan` Flow Table target, use
+  `npm.cmd run smoke:wysiwyg-flow-table-mixed-span-boundary` on Windows
+  PowerShell or `npm run smoke:wysiwyg-flow-table-mixed-span-boundary`
+  elsewhere.
 - Use `SMOKE_PORT=<port>` to choose a dev-server port.
 - Use `SMOKE_BASE_URL=http://localhost:<port>/editor` only when pointing at an
   already-running server with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1` and
@@ -349,10 +356,17 @@ chrome shape. The base table-cell smoke does not claim full multi-cell live
 table preview. The Flow Table colspan variant uses the same script against
 `stage3-flow-table-colspan-target`, additionally checking that the target cell
 keeps colspan-width chrome and the shorter sibling paragraph is not duplicated
-on continuation slices. The Flow Table rowspan variant uses the same script
-against `stage3-flow-table-rowspan-target`, checking that the active cell
-continues through multiple row parents and the authored sibling paragraphs are
-not duplicated.
+on continuation slices. The colspan over-case variant uses the same target with
+a longer customer-data-like payload and requires at least three active target
+pages, checking 3-4 page live pagination, pointer fragments, continuation
+re-entry, and performance trace duration budgets. The Flow Table rowspan
+variant uses the same script against `stage3-flow-table-rowspan-target`,
+checking that the active cell continues through multiple row parents and the
+authored sibling paragraphs are not duplicated. The mixed-span variant uses
+`stage3-flow-table-mixed-span-target`, checking that a `rowspan>1` and
+`colspan>1` active cell keeps its wide cell chrome, continues through multiple
+row parents, does not duplicate sibling paragraphs, and can be re-entered from a
+continuation fragment with a single click while staying on the text-engine path.
 
 ### Editor State Race And Reconciliation
 
