@@ -16,9 +16,12 @@ Implementation status:
 - Pagination supports breakable row/cell continuation across pages. Short
   sibling cell content is not duplicated on continuation slices.
 - R1 Flow Table rowspan pagination planner metadata exists.
-- R2A Flow Table rowspan-linked groups can split at row boundaries when every
-  row in the group is breakable. Continuation cell fragments keep the authored
-  cell `nodeId` and use the visible row fragment as `parentNodeId`.
+- R2A Flow Table rowspan-linked groups are atomic by default — the whole group
+  stays together when it fits one full clean page, advancing to a fresh page
+  if needed. Groups that exceed one full clean page split at row boundaries
+  when every row in the group is breakable. Continuation cell fragments keep
+  the authored cell `nodeId` and use the visible row fragment as
+  `parentNodeId`.
 - R3A Flow Table spanning-cell paragraph content can split across those
   row-boundary continuation slices using the existing cell split-point helpers.
 - R3B/R3C core pagination covers mixed `rowspan`/`colspan` continuation
@@ -28,11 +31,12 @@ Implementation status:
   text as one overflowing final row slice. Rowspan pagination also keeps
   filling the current page when a later row-boundary slice can make line-level
   progress in the remaining page space.
-- R3E breakable rowspan-linked row slices that do not fit the remaining page
-  space now subdivide at line boundaries inside the current page instead of
-  being pushed whole to the next page, matching normal paragraph and
-  non-rowspan Flow Table row cross-page flow. Short sibling cells in the row
-  still render their content once.
+- R3F (atomic-when-fits) Flow Table rowspan-linked groups stay together as a
+  unit whenever the whole group fits one full clean page, mirroring the legacy
+  `table` rowspan policy. Splitting at row boundaries only happens when the
+  group itself exceeds one full clean page. R3E line-by-line use of remaining
+  page space is intentionally deferred so merged-cell visual integrity wins
+  over packing efficiency.
 - Core pagination repeats `headerRowCount` Flow Table header rows on body
   continuation pages.
 - PDF and editor preview draw Flow Table cell `box` fill/border from paginated
@@ -414,9 +418,13 @@ Headers:
 Rowspan:
 
 - Any row connected by the same rowspan forms a rowspan-linked row group.
-- Breakable rowspan-linked row groups may split at row boundaries. The spanning
-  cell emits one `flow-table-cell` fragment per page slice it covers, keeping
-  its authored `nodeId` and original grid/span metadata.
+- Rowspan-linked row groups are atomic by default: when the whole group fits
+  one full clean page, pagination keeps the group together and advances to a
+  fresh page if it does not fit the remaining page space.
+- Breakable rowspan-linked row groups may split at row boundaries only when the
+  group itself exceeds one full clean page. The spanning cell emits one
+  `flow-table-cell` fragment per page slice it covers, keeping its authored
+  `nodeId` and original grid/span metadata.
 - Continuation spanning-cell fragments use the visible row fragment as
   `parentNodeId`; this is render containment, not authored parentage.
 - If any row in the rowspan-linked group has `allowBreak=false`, the group
@@ -427,13 +435,13 @@ Rowspan:
   split-point helpers across row-boundary continuation slices. Continuation
   paragraph fragments stay parented to the authored spanning cell, while
   continuation cell chrome uses the visible row as render parent.
-- If a single visible row slice inside a rowspan group is taller than the
-  remaining page space, Flow Table subdivides that visible row slice at line
-  boundaries inside the current page using the same line/spacer split
-  accounting as normal breakable table-cell content. This applies whether the
-  row would fit one full clean page or is itself taller than a clean page.
-  Short sibling cells still render their content once and only their chrome
-  continues.
+- If a single visible row slice inside a rowspan group is taller than one
+  full clean page (R3D), Flow Table subdivides that visible row slice across
+  pages using the same line/spacer split accounting as normal breakable
+  table-cell content. This only applies when the row itself cannot fit a
+  clean page; row slices that fit one full clean page advance whole to the
+  next page instead. Short sibling cells still render their content once and
+  only their chrome continues.
 - Row-boundary slices do not force an immediate page advance when the current
   page still has usable height. A following row slice may start on the same page
   and continue the spanning-cell paragraph there.

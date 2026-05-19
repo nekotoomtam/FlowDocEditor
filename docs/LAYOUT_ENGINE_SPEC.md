@@ -339,13 +339,12 @@ Current policy direction:
 - table cell content: splits by the same measured line boundaries as body
   paragraphs, but only within a row that permits splitting; see 4.3
 - flow-table row: non-rowspan single-row groups split by default;
-  `allowBreak=false` keeps a row together when possible; breakable
-  rowspan-linked Flow Table groups split at row boundaries with continuation
-  cell chrome; a single row-boundary slice that does not fit the remaining
-  page space subdivides at line boundaries inside the current page using
-  line-level cell split accounting, whether the slice could otherwise fit one
-  full clean page or is itself taller than a clean page; row-boundary slices
-  keep filling the current page when usable height remains;
+  `allowBreak=false` keeps a row together when possible; rowspan-linked
+  Flow Table groups are atomic by default and advance whole to the next page
+  when they fit one full clean page; rowspan groups that exceed one full clean
+  page split at row boundaries with continuation cell chrome; a single
+  row-boundary slice that itself exceeds one full clean page subdivides at
+  line boundaries using line-level cell split accounting (R3D);
   `headerRowCount` repeats authored header rows on body continuation pages
 - flow-table cell content: splits by the same measured line boundaries as body
   paragraphs within breakable non-rowspan rows and spanning-cell row-boundary

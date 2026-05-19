@@ -2882,6 +2882,13 @@ function paginateFlowTableRowspanGroupSplit(
     const rowEndIndex = group.rows[endOffset - 1].rowIndex
     const slice = planFlowTableRowspanGroupSlice(group, rowStartIndex, rowEndIndex)
     if (rowStartIndex === rowEndIndex && slice.height > availableHeight) {
+      const fullPageHeight = contentBottom - contentTop
+      if (current.cursorY > contentTop + 1 && slice.height <= fullPageHeight) {
+        current = advancePage(current, contentTop)
+        current = repeatHeaders ? repeatHeaders(current) : current
+        continue
+      }
+
       current = paginateFlowTableRowspanTallRowSlice(
         group,
         rowStartIndex,
@@ -2985,8 +2992,11 @@ function paginateFlowTable(
       ? firstRowNode.props.allowBreak ?? true
       : true
     const firstGroupIsHeader = firstGroup.rowIndices.every((rowIndex) => rowIndex < headerRowCount)
+    const fullPageHeight = contentBottom - contentTop
+    const firstGroupAllowsRowBoundarySplit = !firstGroupIsHeader &&
+      flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, firstGroup)
     const firstGroupIsAtomic = firstGroupIsHeader ||
-      (firstGroup.rowIndices.length > 1 && !flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, firstGroup)) ||
+      (firstGroup.rowIndices.length > 1 && (!firstGroupAllowsRowBoundarySplit || firstGroup.totalHeight <= fullPageHeight)) ||
       (firstGroup.rowIndices.length === 1 && !firstRowAllowBreak)
     const firstGroupNeedsCleanSplitStart = !firstGroupIsAtomic &&
       current.cursorY > contentTop &&
@@ -3019,7 +3029,12 @@ function paginateFlowTable(
     }
 
     if (rowIndices.length > 1) {
-      if (!isHeaderGroup && flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, { rowIndices, rowIds, rows, totalHeight, spanningCells })) {
+      const fullPageHeight = contentBottom - contentTop
+      const groupFitsOnePage = totalHeight <= fullPageHeight
+      const allowsRowBoundarySplit = !isHeaderGroup &&
+        flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, { rowIndices, rowIds, rows, totalHeight, spanningCells })
+
+      if (!groupFitsOnePage && allowsRowBoundarySplit) {
         current = paginateFlowTableRowspanGroupSplit(
           { rowIndices, rowIds, rows, totalHeight, spanningCells },
           box.children,

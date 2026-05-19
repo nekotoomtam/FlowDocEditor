@@ -22,6 +22,75 @@ Each entry should include:
 
 ---
 
+## 2026-05-20
+
+### Flow Table Rowspan Atomic-When-Fits Policy
+
+Goal: Restore the legacy `table` rowspan grouping intuition for Flow Table so
+that merged-cell groups stay together as a unit by default, only splitting at
+row boundaries when the group itself exceeds one full clean page. The earlier
+0.5.13 line-by-line approach was breaking the visual merge that authors expect
+when they author a rowspan.
+
+Completed:
+
+- In `paginateFlowTable`, multi-row rowspan-linked groups now check whether the
+  whole group fits one full clean page. If so, the group goes through the
+  atomic `paginateFlowTableRowFull` path (mirroring legacy `table`):
+  `shouldMoveBlockToNextPage` advances the cursor, then every row is placed
+  whole. Groups whose `totalHeight` exceeds one full clean page still enter
+  `paginateFlowTableRowspanGroupSplit` with the existing R2A/R3D guards.
+- Updated the first-group atomic check at the top of `paginateFlowTable` so it
+  recognizes the new atomic-when-fits case for multi-row groups.
+- Restored the early-return `advancePage` in
+  `paginateFlowTableRowspanGroupSplit` for single-row slices that do not fit
+  the remaining page space but fit one full clean page, so each row also tries
+  to stay whole when possible. The line-by-line `paginateFlowTableRowspanTallRowSlice`
+  subdivider stays for genuinely oversized single-row slices.
+- Removed the two 0.5.13 tests that asserted line-by-line subdivision for
+  groups that fit one full page. Updated existing rowspan continuation tests
+  to either expect atomic placement (for small groups) or to use row heights
+  that genuinely exceed one full clean page (for the split-path scenarios).
+  Updated the DOCX renderer rowspan continuation fixture to use 250pt rows so
+  the group still drives split chrome.
+- Updated Flow Table, cross-page, and layout specs to document the
+  atomic-when-fits R3F policy and clarified that R3D applies only to genuinely
+  oversized single-row slices inside a forced split path.
+- Bumped the project release marker to `0.5.14` after verification.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `src/app/__tests__/projectVersion.test.ts`
+- `package.json`
+- `package-lock.json`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+
+Notes:
+
+- This reverses the design pivot introduced in 0.5.13 (and partially in 0.5.12
+  for the row-boundary same-page-fill behavior). Merged-cell visual integrity
+  now wins over packing efficiency by default.
+- Single-row breakable rows (non-rowspan) keep their existing line-by-line
+  split-when-needed behavior; only multi-row rowspan-linked groups are now
+  atomic by default.
+- Legacy `table` rowspan splitting remains intentionally deferred — Flow Table
+  still uses `paginateFlowTableRowspanGroupSplit` for groups that exceed one
+  full clean page.
+
 ## 2026-05-19
 
 ### Flow Table Rowspan Line Boundary On Remaining Page Space
