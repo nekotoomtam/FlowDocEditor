@@ -10,6 +10,7 @@ import {
   shouldScheduleResponsiveTableCellDraftPagination,
   shouldPrepareWysiwygTableCellDraftVisualPreview,
   shouldQueueSettledTableCellDraftPaginationFromVisualPreview,
+  shouldPatchWysiwygSamePageHeight,
   shouldUseWysiwygLocalDraftLines,
   shouldUseWysiwygDraftPaginationFrame,
   WYSIWYG_TABLE_CELL_VISUAL_PREVIEW_REFLOW_DECISION,
@@ -97,6 +98,40 @@ describe("classifyWysiwygTextReflow", () => {
       reason: "line-count-changed",
       shouldPatchActiveLines: true,
       shouldPatchSamePageHeight: true,
+      shouldQueueSettledPagination: true,
+    })
+  })
+
+  it("patches same-page line count changes for normal body paragraphs", () => {
+    expect(classifyWysiwygTextReflow({
+      fragment: fragment(),
+      draftLines: [line("Hello"), line("world", 32)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+      supportsSamePageHeightPatch: shouldPatchWysiwygSamePageHeight({ isTableCellParagraph: false }),
+    })).toMatchObject({
+      kind: "hard-local",
+      reason: "line-count-changed",
+      shouldPatchActiveLines: true,
+      shouldPatchSamePageHeight: true,
+      shouldQueueSettledPagination: true,
+    })
+  })
+
+  it("does not locally height-patch table-cell paragraph reflow", () => {
+    expect(classifyWysiwygTextReflow({
+      fragment: fragment(),
+      draftLines: [line("Hello"), line("world", 32)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+      supportsSamePageHeightPatch: shouldPatchWysiwygSamePageHeight({ isTableCellParagraph: true }),
+    })).toMatchObject({
+      kind: "hard-local",
+      reason: "line-count-changed",
+      shouldPatchActiveLines: true,
+      shouldPatchSamePageHeight: false,
       shouldQueueSettledPagination: true,
     })
   })

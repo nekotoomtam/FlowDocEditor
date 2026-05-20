@@ -28,6 +28,40 @@ Users should be able to:
 - see layout/status problems clearly
 - trust that preview will reconcile to authoritative pagination
 
+## Panel Information Architecture
+
+- The top workflow navigation communicates the current document-authoring
+  phase: `Design`, `Fields`, `Fill`, and `Render`. These phases are user-facing
+  workflow language, not new document-model states.
+- The left rail owns document overview and add-entry tools. `Outline` shows the
+  logical document tree; `Add` hosts block and field palette entry points.
+- The center canvas owns the paged visual editing surface and should not need to
+  carry broad document-structure navigation tools.
+- The right rail owns details for the current task: `Properties` for the
+  selected or active object and `Page` for section/page setup.
+- `Design` should default to outline/layout editing, `Fields` should surface
+  field-related entry points without changing document schema, `Fill` should use
+  the existing fill-mode locking rules, and `Render` should surface export
+  readiness/actions without bypassing the export gate.
+- The `Outline` header may expose a compact add shortcut that switches the left
+  rail into `Add`; item-level contextual add remains deferred until its
+  interaction rules are explicitly designed.
+- Outline reorder is limited to direct children of a section `body`, within the
+  same section body. It mutates only the logical `body.childIds` order through a
+  core document operation.
+- A six-dot grip on a direct body-child outline row is the drag affordance for
+  this reorder. Nested outline nodes, stack children, table/flow-table rows and
+  cells, canvas row handles, and cross-section reorder remain out of scope.
+- During outline reorder, the editor should show a custom drag ghost containing
+  the dragged row icon and label, dim the source row as an in-place placeholder,
+  and highlight the active target row/drop edge. The ghost is editor-only
+  interaction state and must not become document data.
+- Outline rows may use subtle depth lanes: each nested row can show faint
+  vertical guide marks on the left, while its tint begins at that depth lane
+  rather than filling the whole row from the panel edge. The tint and guides
+  must remain subtle and yield to selected, hover, drag source, and drop-target
+  states.
+
 ## Selection Rules
 
 - Single-clicking a normal body paragraph enters or prepares paragraph editing
@@ -83,6 +117,10 @@ Paragraph box styling is defined in
 - During inline paragraph editing, browser pagination may run against
   `previewDoc` with the active draft and update the canvas as optimistic visual
   layout so long paragraphs can show continuation fragments before blur.
+- For same-page body paragraph draft growth/shrink, the active draft visual
+  preview must move downstream fragments by the active paragraph height delta so
+  typing a new wrapped line does not visually overlap the next block while the
+  edit is still active.
 - When entering inline edit and the active edit visual snapshot is fresh for
   the current draft, the active fragment may render the same SVG
   `fragment.lines` used by normal mode and make textarea text transparent. This

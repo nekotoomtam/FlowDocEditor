@@ -278,6 +278,50 @@ function cleanupAfterRemoval(nodes: Nodes, removedFromId: string): Nodes {
 
 // ─── Node Creation ─────────────────────────────────────────────────────────────
 
+function roundWidthShare(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+function normalizePaletteColumnShares(shares: number[] | undefined): number[] | null {
+  if (!shares || shares.length === 0) return null
+  const safeShares = shares
+    .map((share) => Number(share))
+    .filter((share) => Number.isFinite(share) && share > 0)
+  if (safeShares.length === 0) return null
+
+  const total = safeShares.reduce((sum, share) => sum + share, 0)
+  if (total <= 0) return null
+
+  const normalized = safeShares.map((share) => roundWidthShare((share / total) * 100))
+  const allocatedBeforeLast = normalized.slice(0, -1).reduce((sum, share) => sum + share, 0)
+  normalized[normalized.length - 1] = roundWidthShare(100 - allocatedBeforeLast)
+  return normalized
+}
+
+function createPaletteFlowColumnsSubtree(source: DragSource, fallbackColumnCount: number): { insertId: string; newNodes: Nodes } {
+  const shares = source.source === "palette"
+    ? normalizePaletteColumnShares(source.columnShares) ?? getEqualWidthShares(fallbackColumnCount)
+    : getEqualWidthShares(fallbackColumnCount)
+  const { row, stacks, nodes } = createFlowColumnsSubtree(shares.length)
+  let result = nodes
+  stacks.forEach((stack, index) => {
+    result = {
+      ...result,
+      [stack.id]: {
+        ...stack,
+        props: { ...stack.props, widthShare: shares[index] },
+      } as LayoutNode,
+    }
+  })
+  return { insertId: row.id, newNodes: result }
+}
+
+function clampPaletteTableAxis(value: number | undefined): number {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return 3
+  return Math.min(6, Math.max(1, Math.floor(numericValue)))
+}
+
 function createNodesForSource(source: DragSource): { insertId: string; newNodes: Nodes } {
   if (source.source === "palette") {
     if (source.blockType === "paragraph") {
@@ -285,27 +329,29 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
       return { insertId: node.id, newNodes: { [node.id]: node } }
     }
     if (source.blockType === "row") {
-      const { row, nodes } = createFlowColumnsSubtree(1)
-      return { insertId: row.id, newNodes: nodes }
+      return createPaletteFlowColumnsSubtree(source, 1)
     }
     if (source.blockType === "columns") {
-      const { row, nodes } = createFlowColumnsSubtree(2)
-      return { insertId: row.id, newNodes: nodes }
+      return createPaletteFlowColumnsSubtree(source, 2)
     }
     if (source.blockType === "flow-columns") {
-      const { row, nodes } = createFlowColumnsSubtree(2)
-      return { insertId: row.id, newNodes: nodes }
+      return createPaletteFlowColumnsSubtree(source, 2)
     }
     if (source.blockType === "table") {
-      const table = createDefaultTable()
+      const table = createDefaultTable(
+        clampPaletteTableAxis(source.tableSize?.rows),
+        clampPaletteTableAxis(source.tableSize?.columns),
+      )
       return { insertId: table.id, newNodes: { [table.id]: table as unknown as LayoutNode } }
     }
     if (source.blockType === "flow-table") {
-      const table = createDefaultFlowTable()
+      const table = createDefaultFlowTable(
+        clampPaletteTableAxis(source.tableSize?.rows),
+        clampPaletteTableAxis(source.tableSize?.columns),
+      )
       return { insertId: table.id, newNodes: { [table.id]: table as unknown as LayoutNode } }
     }
-    const { row, nodes } = createFlowColumnsSubtree(1)
-    return { insertId: row.id, newNodes: nodes }
+    return createPaletteFlowColumnsSubtree(source, 1)
   }
   if (source.source === "document") return { insertId: source.nodeId, newNodes: {} }
   return { insertId: "", newNodes: {} }
@@ -1072,6 +1118,53 @@ export function updateNodeProps(
     }
   }
   return doc
+}
+
+export type BodyChildReorderPosition = "before" | "after"
+
+export function reorderBodyChild(
+  doc: DocumentNode,
+  sectionId: string,
+  sourceNodeId: string,
+  targetNodeId: string,
+  position: BodyChildReorderPosition,
+): DocumentNode {
+  if (sourceNodeId === targetNodeId) return doc
+
+  const sectionIndex = doc.document.sections.findIndex((section) => section.id === sectionId)
+  if (sectionIndex < 0) return doc
+
+  const section = doc.document.sections[sectionIndex]
+  const body = section.nodes[section.bodyRootId]
+  if (body?.type !== "body") return doc
+
+  const sourceIndex = body.childIds.indexOf(sourceNodeId)
+  const targetIndex = body.childIds.indexOf(targetNodeId)
+  if (sourceIndex < 0 || targetIndex < 0) return doc
+
+  const withoutSource = body.childIds.filter((id) => id !== sourceNodeId)
+  const targetIndexAfterRemoval = withoutSource.indexOf(targetNodeId)
+  if (targetIndexAfterRemoval < 0) return doc
+
+  const insertIndex = position === "before" ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
+  const nextChildIds = [...withoutSource]
+  nextChildIds.splice(insertIndex, 0, sourceNodeId)
+
+  if (nextChildIds.every((id, index) => id === body.childIds[index])) return doc
+
+  const nextSections = doc.document.sections.map((candidate, index) => (
+    index === sectionIndex
+      ? {
+          ...candidate,
+          nodes: {
+            ...candidate.nodes,
+            [body.id]: { ...body, childIds: nextChildIds },
+          },
+        }
+      : candidate
+  ))
+
+  return { ...doc, document: { ...doc.document, sections: nextSections } }
 }
 
 const PARAGRAPH_BOX_EDGES: ParagraphBoxEdge[] = ["top", "right", "bottom", "left"]

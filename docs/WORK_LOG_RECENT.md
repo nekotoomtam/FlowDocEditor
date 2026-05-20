@@ -24,6 +24,190 @@ Each entry should include:
 
 ## 2026-05-20
 
+### Outline Depth Lane UX
+
+Goal: Make nested outline layers easier to scan at a glance without adding
+heavier hierarchy chrome.
+
+Completed:
+
+- Added subtle depth-based row background lanes to the outline tree.
+- Added faint vertical guide marks for nested levels, with each row tint
+  beginning from its own depth lane instead of filling from the panel edge.
+- Kept selected, hover, drag source, and drop-target states visually dominant
+  over the depth lane.
+- Replaced direct hover DOM style mutation with React state-driven row styling
+  so hover enter/leave does not erase the depth color.
+
+Files changed:
+
+- `src/app/editor/_components/OutlinePanel.tsx`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/OutlinePanel.test.ts`
+- `npm.cmd run type-check`
+- Browser smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  confirmed nested outline rows render lane gradients and distinct nested
+  background starts.
+
+Notes:
+
+- This patch does not change outline reorder behavior.
+
+### Outline Drag Ghost UX
+
+Goal: Make outline reorder feel like the user is lifting a real node, not
+dragging an invisible browser drag payload.
+
+Completed:
+
+- Added a custom fixed-position outline drag ghost with the dragged row icon and
+  label.
+- Hid the native browser drag image so the custom ghost is the only visible
+  dragged object.
+- Dimmed the source outline row as an in-place placeholder while dragging.
+- Strengthened target feedback with a row-level highlight plus the existing
+  before/after drop edge.
+- Kept the existing direct-body-child reorder grammar; this patch does not
+  switch outline reorder from insertion to swap.
+
+Files changed:
+
+- `src/app/editor/_components/OutlinePanel.tsx`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/OutlinePanel.test.ts src/app/editor/_components/__tests__/EditorPalette.test.ts`
+- `npm.cmd run type-check`
+- Playwright smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  started an outline drag, confirmed the custom ghost and source placeholder,
+  dropped the first row after the second, observed the outline order update, and
+  reported no layout-error badge or duplicate-key/page error.
+
+Notes:
+
+- Outline swap behavior and nested/inside drop behavior remain intentionally
+  deferred.
+
+### Body Paragraph Live Height Preview Fix
+
+Goal: Restore live same-page reflow while typing in normal body paragraphs, so
+new wrapped lines resize the active block and push following content down
+without waiting for edit exit.
+
+Completed:
+
+- Allowed same-page WYSIWYG height patching for non-table-cell paragraphs while
+  keeping table/flow-table cell paragraphs on their guarded pagination path.
+- Added source-page draft-preview shifting for ordinary body paragraphs in the
+  canvas, so replacing the active paragraph with draft lines also moves later
+  same-page fragments by the paragraph height delta.
+- Kept table-cell draft visual chrome and continuation-fragment insertion paths
+  separate from the body paragraph same-page shift.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygDraftVisualPreview.ts`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/inlineEditHeightPreview.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts src/app/editor/_components/__tests__/layoutReconciliation.test.ts`
+- `npm.cmd run type-check`
+- Playwright smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  edited `stage3-downstream-p1`; the active paragraph grew by about 40 px and
+  `stage3-downstream-p2` shifted down by about 39 px within the live edit, with
+  no layout-error badge or duplicate-key/page error.
+
+Notes:
+
+- Table-cell local row/cell height reflow remains intentionally guarded by the
+  existing draft pagination path.
+
+### Editor Panel IA: Left Outline/Add And Right Details
+
+Goal: Reframe the editor shell so the left side owns document overview/add
+entry points, the center remains the paged canvas, and the right side stays
+focused on page/settings details for the current selection.
+
+Completed:
+
+- Added a top workflow navigation row for `Design`, `Fields`, `Fill`, and
+  `Render`, matching the intended authoring phases while preserving existing
+  editor modes underneath.
+- Split the toolbar into a workflow row and a command row so undo/redo, zoom,
+  debug overlays, and document JSON actions remain available without competing
+  with the workflow tabs.
+- Mapped `Design` to template editing with the left outline visible, `Fields`
+  to template editing with the left add panel visible, `Fill` to the existing
+  fill mode, and `Render` to the export/readiness area without bypassing the
+  existing export gate.
+- Added a left rail mode switch with `Outline` and `Add`.
+- Moved the existing outline panel from the right rail to the left rail.
+- Moved the existing block and field palettes into the left `Add` panel.
+- Added an `Outline` header shortcut that switches directly to the `Add` panel.
+- Added outline drag reorder for direct children of a section `body`, using a
+  six-dot grip and before/after drop line inside the same body.
+- Removed the `Outline` bookmark/content path from the right rail, leaving
+  `Page` and `Properties`.
+- Kept this as editor-shell IA plus outline-only body-child reorder; no document
+  schema, pagination, or export behavior changed.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/OutlinePanel.tsx`
+- `src/app/editor/_components/__tests__/OutlinePanel.test.ts`
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/OutlinePanel.test.ts src/app/editor/_components/__tests__/EditorPalette.test.ts`
+- `npm.cmd run type-check`
+- Playwright smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  confirmed the left rail starts on `outline`, the outline `+` shortcut opens
+  `add`, the `Add` panel renders, the right rail no longer exposes an outline
+  bookmark, and no page errors were reported.
+- Playwright smoke on the same scenario confirmed the top workflow navigation:
+  `Design` starts active with the left outline, `Fields` opens the left add
+  panel, `Fill` enters the existing fill/properties mode without the outline
+  add shortcut, and `Render` opens the page/export context while the right rail
+  still has no outline bookmark.
+- Playwright smoke on the same scenario confirmed 17 reorderable direct
+  body-child outline rows, dragged the first row after the second, observed the
+  outline order update, and reported no layout-error badge or duplicate-key
+  console warning.
+
+Notes:
+
+- Nested outline reorder, canvas row drag handles, stack/table/flow-table
+  row/cell reorder, cross-section reorder, and item-level contextual add remain
+  intentionally deferred.
+
 ### Flow Stack Drag/Drop And Pair Resize UX
 
 Goal: Make `flow-row` / `flow-stack` layout editing feel direct on canvas

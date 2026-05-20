@@ -74,6 +74,10 @@ export interface WysiwygTableCellDraftVisualPreviewPaginationInput {
   existingSplitActive: boolean
 }
 
+export interface WysiwygSamePageHeightPatchInput {
+  isTableCellParagraph: boolean
+}
+
 export interface WysiwygDraftPaginationSessionSource {
   nodeId: string | null
   draftText: string
@@ -185,6 +189,10 @@ export function classifyWysiwygTextReflow(input: {
     shouldPatchSamePageHeight: false,
     shouldQueueSettledPagination: false,
   }
+}
+
+export function shouldPatchWysiwygSamePageHeight(input: WysiwygSamePageHeightPatchInput): boolean {
+  return !input.isTableCellParagraph
 }
 
 export function resolveWysiwygDraftPaginationDelayMs(input: WysiwygDraftPaginationDelayInput): number {

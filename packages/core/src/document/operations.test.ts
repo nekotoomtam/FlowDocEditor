@@ -29,6 +29,7 @@ import {
   removeTableRow,
   removeFlowTableColumn,
   removeFlowTableRow,
+  reorderBodyChild,
   resolveFlowTableCellMergeTarget,
   splitParagraphAtIndex,
   updateFlowTableCellSpan,
@@ -266,6 +267,39 @@ function flowTableCellParagraphTexts(table: FlowTableNode, cellId: string): stri
     return child?.type === "paragraph" ? paragraphText(child) : childId
   })
 }
+
+describe("body child reorder operations", () => {
+  it("moves a direct body child before or after another body child", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Two" }])
+    const p3 = makeParagraph("p3", [{ id: "t3", type: "text", text: "Three" }])
+    const doc = makeDoc({ p1, p2, p3 }, ["p1", "p2", "p3"])
+
+    const movedAfter = reorderBodyChild(doc, "section", "p1", "p3", "after")
+    expect(movedAfter.document.sections[0].nodes.body).toMatchObject({
+      childIds: ["p2", "p3", "p1"],
+    })
+    assertDocument(movedAfter)
+
+    const movedBefore = reorderBodyChild(movedAfter, "section", "p1", "p2", "before")
+    expect(movedBefore.document.sections[0].nodes.body).toMatchObject({
+      childIds: ["p1", "p2", "p3"],
+    })
+    assertDocument(movedBefore)
+  })
+
+  it("refuses to reorder nested children or cross-section targets", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    const nested = makeParagraph("nested", [{ id: "tn", type: "text", text: "Nested" }])
+    const row: LayoutNode = { id: "row", type: "row", props: {}, childIds: ["stack"] }
+    const stack: LayoutNode = { id: "stack", type: "stack", props: { widthShare: 100 }, childIds: ["nested"] }
+    const doc = makeDoc({ p1, row, stack, nested }, ["p1", "row"])
+
+    expect(reorderBodyChild(doc, "section", "nested", "p1", "before")).toBe(doc)
+    expect(reorderBodyChild(doc, "missing-section", "row", "p1", "before")).toBe(doc)
+    expect(reorderBodyChild(doc, "section", "row", "missing-target", "after")).toBe(doc)
+  })
+})
 
 describe("paragraph text operations", () => {
   it("updates plain text paragraph and collapses multiple text runs to one run", () => {
@@ -765,6 +799,30 @@ describe("flow-row / flow-stack operations", () => {
     })).toEqual([50, 50])
   })
 
+  it("uses palette column share presets when inserting flow columns", () => {
+    const updated = applyPlacementOperation(
+      makeDoc({}, []),
+      "section",
+      { kind: "insert-into-container", containerId: "body", containerType: "body", index: 0 },
+      { source: "palette", blockType: "flow-columns", columnShares: [66.67, 33.33] },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+
+    const row = section.nodes[body.childIds[0]]
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(2)
+    expect(row.childIds.map((id) => {
+      const stack = section.nodes[id]
+      return stack.type === "flow-stack" ? stack.props.widthShare : undefined
+    })).toEqual([66.67, 33.33])
+  })
+
   it("inserts a default 3 by 3 flow-table from the palette", () => {
     const updated = applyPlacementOperation(
       makeDoc({}, []),
@@ -801,6 +859,32 @@ describe("flow-row / flow-stack operations", () => {
         if (paragraph.type !== "paragraph") return
         expect(paragraphText(paragraph)).toBe("")
       })
+    })
+  })
+
+  it("uses palette table size when inserting a flow-table", () => {
+    const updated = applyPlacementOperation(
+      makeDoc({}, []),
+      "section",
+      { kind: "insert-into-container", containerId: "body", containerType: "body", index: 0 },
+      { source: "palette", blockType: "flow-table", tableSize: { rows: 4, columns: 2 } },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+
+    const table = section.nodes[body.childIds[0]] as unknown as FlowTableNode
+    expect(table.type).toBe("flow-table")
+    expect(table.rowIds).toHaveLength(4)
+    expect(table.columns).toHaveLength(2)
+    table.rowIds.forEach((rowId) => {
+      const row = table.nodes[rowId]
+      expect(row.type).toBe("flow-table-row")
+      if (row.type !== "flow-table-row") return
+      expect(row.cellIds).toHaveLength(2)
     })
   })
 

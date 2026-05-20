@@ -4,18 +4,23 @@ import { describe, expect, it } from "vitest"
 import { EditorPalette } from "../EditorPalette"
 
 describe("EditorPalette", () => {
-  it("presents flow-backed rows as the standard Row and Columns blocks", () => {
+  it("presents layout presets, the column modifier, and table picker entry", () => {
     const markup = renderToStaticMarkup(createElement(EditorPalette, {
       onDragStart: () => undefined,
       isDragging: false,
     }))
 
+    expect(markup).toContain("Layout")
     expect(markup).toContain("Row")
-    expect(markup).toContain("Single column")
-    expect(markup).toContain("Columns")
-    expect(markup).toContain("Multi-page columns")
-    expect(markup).toContain("Flow table")
-    expect(markup).toContain("3×3 flow table")
+    expect(markup).toContain("Column")
+    expect(markup).toContain("50 | 50")
+    expect(markup).toContain("66 | 33")
+    expect(markup).toContain("33 | 66")
+    expect(markup).toContain("33 | 33 | 33")
+    expect(markup).toContain("25 | 25 | 25 | 25")
+    expect(markup).toContain("Table")
+    expect(markup).toContain("aria-expanded=\"false\"")
+    expect(markup).toContain("Paragraph")
     expect(markup).not.toContain("Flow cols")
   })
 })

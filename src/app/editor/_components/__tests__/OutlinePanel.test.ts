@@ -74,7 +74,7 @@ function flowOutlineDoc(): DocumentNode {
 }
 
 describe("OutlinePanel", () => {
-  it("uses the shared right-rail header and compact outline rows", () => {
+  it("uses the shared panel header and compact outline rows", () => {
     const markup = renderToStaticMarkup(createElement(OutlinePanel, {
       doc: outlineDoc(),
       selectedNodeId: "p1",
@@ -89,6 +89,19 @@ describe("OutlinePanel", () => {
     expect(markup).toContain("First paragraph")
   })
 
+  it("renders an add shortcut when the host panel wires one", () => {
+    const markup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: outlineDoc(),
+      selectedNodeId: null,
+      onSelect: () => undefined,
+      onAddShortcut: () => undefined,
+    }))
+
+    expect(markup).toContain("data-testid=\"outline-add-shortcut\"")
+    expect(markup).toContain("aria-label=\"Open add panel\"")
+    expect(markup).toContain("title=\"Add\"")
+  })
+
   it("shows flow-backed rows and stacks with standard row/column labels", () => {
     const markup = renderToStaticMarkup(createElement(OutlinePanel, {
       doc: flowOutlineDoc(),
@@ -99,5 +112,29 @@ describe("OutlinePanel", () => {
     expect(markup).toContain("1 คอลัมน์")
     expect(markup).toContain("คอลัมน์ 1")
     expect(markup).toContain("First paragraph")
+  })
+
+  it("shows reorder grips for direct body children only when reorder is wired", () => {
+    const bodyMarkup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: outlineDoc(),
+      selectedNodeId: null,
+      onSelect: () => undefined,
+      onReorderBodyChild: () => undefined,
+    }))
+    const nestedMarkup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: flowOutlineDoc(),
+      selectedNodeId: null,
+      onSelect: () => undefined,
+      onReorderBodyChild: () => undefined,
+    }))
+
+    expect(bodyMarkup).toContain("data-testid=\"outline-row-grip\"")
+    expect(bodyMarkup).toContain("aria-label=\"Reorder outline item\"")
+    expect(bodyMarkup).toContain("draggable=\"true\"")
+    expect(bodyMarkup).toContain("data-outline-section-id=\"section\"")
+    expect((bodyMarkup.match(/data-testid=\"outline-row-grip\"/g) ?? [])).toHaveLength(2)
+    expect((bodyMarkup.match(/data-outline-body-child=\"true\"/g) ?? [])).toHaveLength(2)
+    expect((nestedMarkup.match(/data-testid=\"outline-row-grip\"/g) ?? [])).toHaveLength(1)
+    expect((nestedMarkup.match(/data-outline-body-child=\"true\"/g) ?? [])).toHaveLength(1)
   })
 })

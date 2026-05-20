@@ -34,6 +34,7 @@ import {
   createWysiwygDraftVisualPreview,
   shiftPageFragmentY,
   shiftWysiwygDraftPreviewDownstreamFragments,
+  shiftWysiwygDraftPreviewSourcePageFragments,
   splitWysiwygDraftVisualFragments,
   type WysiwygDraftVisualPreview,
 } from "./wysiwygDraftVisualPreview"
@@ -708,6 +709,12 @@ function PageView({
       fragment.nodeType === "paragraph"
     )
     : false
+  const realVisualDraftFragment = visualDraftFragmentForPage
+    ? page.fragments.find((fragment) =>
+      fragment.nodeId === visualDraftFragmentForPage.nodeId &&
+      fragment.nodeType === "paragraph"
+    ) ?? null
+    : null
   const sourceTableCellDraftVisualChromeByKey = hasRealVisualDraftFragment
     ? allTableCellDraftVisualChromeByKey
     : new Map<string, PageFragment>()
@@ -735,6 +742,12 @@ function PageView({
       if (fragment.y < sourceShiftStartY - 0.5) return fragment
       return shiftPageFragmentY(fragment, sourceShiftYWithGap)
     })
+    : visualDraftFragmentForPage && realVisualDraftFragment && !tableCellDraftVisualRowChrome
+      ? shiftWysiwygDraftPreviewSourcePageFragments({
+          fragments: page.fragments,
+          sourceFragment: realVisualDraftFragment,
+          draftFragment: visualDraftFragmentForPage,
+        })
     : page.fragments
   const shiftedPageFragments = visualDraftFragmentForPage && !hasRealVisualDraftFragment
     ? shiftWysiwygDraftPreviewDownstreamFragments({

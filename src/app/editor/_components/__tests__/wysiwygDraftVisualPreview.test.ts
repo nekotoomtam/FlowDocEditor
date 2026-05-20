@@ -4,6 +4,7 @@ import type { PageFragment, PaginatedLine, PaginatedPage } from "@/pagination"
 import {
   resolveWysiwygDraftVisualCaretPageIndex,
   shiftWysiwygDraftPreviewDownstreamFragments,
+  shiftWysiwygDraftPreviewSourcePageFragments,
   splitWysiwygDraftVisualFragments,
 } from "../wysiwygDraftVisualPreview"
 
@@ -242,5 +243,36 @@ describe("wysiwygDraftVisualPreview", () => {
 
     expect(shifted[0].y).toBe(46)
     expect(shifted[0].lines?.[0].y).toBe(46)
+  })
+
+  it("shifts downstream source-page fragments when replacing a same-page draft", () => {
+    const source = fragment({ height: 20, lines: [line("one", 70, 0, 3)] })
+    const draft = fragment({
+      height: 42,
+      lineEnd: 3,
+      lines: [
+        line("one", 70, 0, 3),
+        line("two", 80, 4, 7),
+        line("three", 90, 8, 13),
+      ],
+    })
+    const downstream = fragment({
+      nodeId: "p2",
+      y: 94,
+      height: 10,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [line("downstream", 94, 0, 10)],
+    })
+
+    const shifted = shiftWysiwygDraftPreviewSourcePageFragments({
+      fragments: [source, downstream],
+      sourceFragment: source,
+      draftFragment: draft,
+    })
+
+    expect(shifted[0]).toBe(source)
+    expect(shifted[1].y).toBe(116)
+    expect(shifted[1].lines?.[0].y).toBe(116)
   })
 })

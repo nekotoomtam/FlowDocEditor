@@ -11,6 +11,11 @@ import type { LayoutNode } from "../schema"
 
 export type PaletteBlockType = "paragraph" | "row" | "columns" | "flow-columns" | "table" | "flow-table"
 
+export interface PaletteTableSize {
+  rows: number
+  columns: number
+}
+
 export interface FieldDragData {
   key: string
   label?: string
@@ -19,7 +24,7 @@ export interface FieldDragData {
 }
 
 export type DragSource =
-  | { source: "palette"; blockType: PaletteBlockType }
+  | { source: "palette"; blockType: PaletteBlockType; columnShares?: number[]; tableSize?: PaletteTableSize }
   | { source: "field"; field: FieldDragData }
   | { source: "document"; nodeId: string }
 

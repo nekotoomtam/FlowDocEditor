@@ -4,7 +4,7 @@ import { useReducer, useCallback, useRef, useState, useEffect, useMemo, type Poi
 import { collectPaginatedLayoutWarnings, getPageDimensions, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { defaultTextMeasurer, measureParagraph } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
-import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, updateParagraphBoxStyle, updateFlowStackBoxStyle, updateFlowTableCellSpan, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, addFlowTableRow, removeFlowTableRow, addFlowTableColumn, removeFlowTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious, addFlowStackColumn } from "@/document"
+import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, updateParagraphBoxStyle, updateFlowStackBoxStyle, updateFlowTableCellSpan, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, addFlowTableRow, removeFlowTableRow, addFlowTableColumn, removeFlowTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious, addFlowStackColumn, reorderBodyChild } from "@/document"
 import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges } from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
@@ -198,7 +198,9 @@ interface EditorState {
 }
 
 type ZoomMode = "fit" | "manual"
-type RightRailMode = "page" | "outline" | "properties"
+type LeftRailMode = "outline" | "add"
+type RightRailMode = "page" | "properties"
+type WorkflowMode = "design" | "fields" | "fill" | "render"
 type PageMarginSide = "top" | "right" | "bottom" | "left"
 type PageMarginDraft = Record<PageMarginSide, number>
 type DocumentSection = DocumentNode["document"]["sections"][number]
@@ -267,6 +269,7 @@ type EditorAction =
   | { type: "CLEAR_SPLIT_NODE_ID" }
   | { type: "MERGE_PARAGRAPH"; nodeId: string; history?: HistoryEntry }
   | { type: "CLEAR_MERGE_RESULT" }
+  | { type: "REORDER_BODY_CHILD"; sectionId: string; sourceNodeId: string; targetNodeId: string; position: "before" | "after" }
 
 function fieldRegistryFromDocumentParseResult(result: DocumentParseResult): FieldRegistryV1 {
   return result.ok && result.package?.packageVersion === 2
@@ -434,6 +437,11 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     }
     case "DELETE_NODE":
       return { ...pushDoc(state, deleteNode(state.doc, action.nodeId)), selectedNodeId: null, selectionAnchorNodeId: null }
+    case "REORDER_BODY_CHILD": {
+      const nextDoc = reorderBodyChild(state.doc, action.sectionId, action.sourceNodeId, action.targetNodeId, action.position)
+      if (nextDoc === state.doc) return state
+      return { ...pushDoc(state, nextDoc), selectedNodeId: action.sourceNodeId, selectionAnchorNodeId: action.sourceNodeId }
+    }
     case "SET_PAGINATED":
       return { ...state, paginated: action.paginated }
     case "SET_INLINE_EDIT_HEIGHT":
@@ -546,9 +554,82 @@ function zoneToIntent(zone: PlacementZone): PlacementIntentType {
 }
 
 function describeDragSource(source: DragSource): string {
-  if (source.source === "palette") return source.blockType
+  if (source.source === "palette") {
+    if (source.tableSize) return `Table ${source.tableSize.rows} x ${source.tableSize.columns}`
+    if (source.columnShares && source.columnShares.length > 1) return source.columnShares.map((share) => Math.round(share)).join(" | ")
+    if (source.blockType === "paragraph") return "Paragraph"
+    if (source.blockType === "row") return "Row"
+    if (source.blockType === "flow-columns" || source.blockType === "columns") return "Column"
+    if (source.blockType === "table" || source.blockType === "flow-table") return "Table"
+    return source.blockType
+  }
   if (source.source === "field") return source.field.label ?? source.field.key
   return "node"
+}
+
+function dragFieldTypeLabel(source: DragSource): string {
+  if (source.source !== "field") return ""
+  switch (source.field.fieldType) {
+    case "number": return "#"
+    case "date": return "D"
+    case "boolean": return "?"
+    case "enum": return "E"
+    case "image": return "I"
+    case "collection": return "[]"
+    default: return "T"
+  }
+}
+
+function DragGhostIcon({ source }: { source: DragSource }) {
+  if (source.source === "field") {
+    return <span style={dragGhostFieldIcon}>{dragFieldTypeLabel(source)}</span>
+  }
+  if (source.source === "document") {
+    return <span style={dragGhostDocumentIcon}>N</span>
+  }
+  if (source.blockType === "paragraph") {
+    return <span style={dragGhostDocumentIcon}>¶</span>
+  }
+  if (source.blockType === "table" || source.blockType === "flow-table") {
+    return (
+      <span style={dragGhostTableIcon}>
+        {Array.from({ length: 9 }).map((_, index) => <span key={index} style={dragGhostTableCell} />)}
+      </span>
+    )
+  }
+
+  const shares = source.columnShares ?? (source.blockType === "row" ? [100] : [1])
+  const isRow = source.blockType === "row"
+  return (
+    <span style={isRow ? dragGhostRowIcon : dragGhostColumnIcon}>
+      {shares.map((share, index) => (
+        <span
+          key={`${share}-${index}`}
+          style={{
+            ...(isRow ? dragGhostRowBar : dragGhostColumnBar),
+            flex: Math.max(1, share),
+          }}
+        />
+      ))}
+    </span>
+  )
+}
+
+function EditorDragGhost({ drag }: { drag: DragState | null }) {
+  if (!drag) return null
+  return (
+    <div
+      data-testid="editor-drag-ghost"
+      aria-hidden="true"
+      style={{
+        ...editorDragGhostStyle,
+        transform: `translate3d(${drag.clientX + 14}px, ${drag.clientY + 12}px, 0)`,
+      }}
+    >
+      <DragGhostIcon source={drag.source} />
+      <span style={editorDragGhostLabel}>{describeDragSource(drag.source)}</span>
+    </div>
+  )
 }
 
 function createEmptyDataSnapshot(): DataSnapshotV1 {
@@ -835,6 +916,36 @@ function PagePanel({
   )
 }
 
+function AddPanel({
+  registry,
+  editable,
+  isDragging,
+  onDragStart,
+}: {
+  registry: FieldRegistryV1
+  editable: boolean
+  isDragging: boolean
+  onDragStart: (source: DragSource, event: React.PointerEvent) => void
+}) {
+  return (
+    <div data-testid="add-panel" style={rightRailPanelShell}>
+      <RightRailPanelHeader title="Add" testId="add-panel-title" />
+      <div style={{ ...rightRailPanelBody, padding: 0 }}>
+        {editable ? (
+          <>
+            <EditorPalette onDragStart={onDragStart} isDragging={isDragging} />
+            <FieldPalette registry={registry} onDragStart={onDragStart} isDragging={isDragging} />
+          </>
+        ) : (
+          <div style={{ padding: 14, fontSize: 11, color: "#9ca3af", lineHeight: 1.5 }}>
+            Fill mode locks the template. Switch to Template mode to add blocks or fields.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const pagePanelSection: React.CSSProperties = {
   border: "1px solid #e5e7eb",
   borderRadius: 6,
@@ -907,6 +1018,258 @@ const pageCompassControlLabel: React.CSSProperties = {
   textAlign: "center",
 }
 
+const toolbarShellStyle: React.CSSProperties = {
+  padding: "8px 16px 9px",
+  background: "white",
+  borderBottom: "1px solid #e5e7eb",
+  display: "flex",
+  flexDirection: "column",
+  gap: 7,
+  flexShrink: 0,
+}
+
+const workflowBarStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  minWidth: 0,
+  flexWrap: "wrap",
+}
+
+const commandBarStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  minWidth: 0,
+  flexWrap: "wrap",
+}
+
+const workflowNavStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "stretch",
+  gap: 6,
+  minWidth: 0,
+  flexWrap: "wrap",
+}
+
+const workflowNavButton = (active: boolean): React.CSSProperties => ({
+  width: 118,
+  minHeight: 40,
+  border: `1px solid ${active ? "#bfdbfe" : "#e5e7eb"}`,
+  borderRadius: 6,
+  background: active ? "#eff6ff" : "#f8fafc",
+  color: active ? "#1d4ed8" : "#475569",
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "6px 8px",
+  textAlign: "left",
+  boxSizing: "border-box",
+  boxShadow: active ? "inset 0 -2px 0 #2563eb" : "none",
+})
+
+const workflowNavIcon = (active: boolean): React.CSSProperties => ({
+  width: 24,
+  height: 24,
+  borderRadius: 5,
+  background: active ? "#dbeafe" : "#e2e8f0",
+  color: active ? "#1d4ed8" : "#475569",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 11,
+  fontWeight: 800,
+  flexShrink: 0,
+})
+
+const workflowNavText: React.CSSProperties = {
+  minWidth: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+}
+
+const workflowNavTitle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 5,
+  minWidth: 0,
+  fontSize: 11,
+  fontWeight: 800,
+}
+
+const workflowNavDescription: React.CSSProperties = {
+  fontSize: 9,
+  color: "#94a3b8",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+}
+
+const workflowNavBadge: React.CSSProperties = {
+  minWidth: 16,
+  height: 16,
+  borderRadius: 8,
+  padding: "0 5px",
+  background: "#dbeafe",
+  color: "#1d4ed8",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 9,
+  fontWeight: 800,
+}
+
+const toolbarGroupStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 4,
+  alignItems: "center",
+}
+
+const toolbarSeparatorStyle: React.CSSProperties = {
+  width: 1,
+  height: 16,
+  background: "#e5e7eb",
+  flexShrink: 0,
+}
+
+const editorDragGhostStyle: React.CSSProperties = {
+  position: "fixed",
+  top: -10,
+  left: -45,
+  zIndex: 12000,
+  maxWidth: 220,
+  minHeight: 32,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "5px 9px",
+  border: "1px solid #bfdbfe",
+  borderRadius: 6,
+  backgroundColor: "rgba(255, 255, 255, 0.96)",
+  boxShadow: "0 10px 26px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(37, 99, 235, 0.16)",
+  color: "#1e293b",
+  fontSize: 11,
+  pointerEvents: "none",
+  userSelect: "none",
+  boxSizing: "border-box",
+}
+
+const editorDragGhostLabel: React.CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  fontWeight: 700,
+}
+
+const dragGhostDocumentIcon: React.CSSProperties = {
+  width: 22,
+  height: 22,
+  display: "grid",
+  placeItems: "center",
+  border: "1px solid #93c5fd",
+  borderRadius: 5,
+  backgroundColor: "#dbeafe",
+  color: "#1d4ed8",
+  fontSize: 13,
+  fontWeight: 800,
+  flexShrink: 0,
+}
+
+const dragGhostFieldIcon: React.CSSProperties = {
+  ...dragGhostDocumentIcon,
+  borderColor: "#c7d2fe",
+  backgroundColor: "#eef2ff",
+  color: "#3730a3",
+  fontSize: 10,
+}
+
+const dragGhostRowIcon: React.CSSProperties = {
+  width: 28,
+  height: 22,
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  gap: 3,
+  flexShrink: 0,
+}
+
+const dragGhostRowBar: React.CSSProperties = {
+  minHeight: 5,
+  borderRadius: 2,
+  backgroundColor: "#64748b",
+}
+
+const dragGhostColumnIcon: React.CSSProperties = {
+  width: 28,
+  height: 22,
+  display: "flex",
+  justifyContent: "center",
+  gap: 3,
+  flexShrink: 0,
+}
+
+const dragGhostColumnBar: React.CSSProperties = {
+  minWidth: 5,
+  borderRadius: 2,
+  backgroundColor: "#64748b",
+}
+
+const dragGhostTableIcon: React.CSSProperties = {
+  width: 24,
+  height: 22,
+  display: "grid",
+  gridTemplateColumns: "repeat(3, 1fr)",
+  gap: 2,
+  padding: 3,
+  border: "1px solid #93c5fd",
+  borderRadius: 4,
+  backgroundColor: "#eff6ff",
+  boxSizing: "border-box",
+  flexShrink: 0,
+}
+
+const dragGhostTableCell: React.CSSProperties = {
+  backgroundColor: "#64748b",
+  borderRadius: 1,
+}
+
+const LEFT_RAIL_WIDTH = 260
+
+const leftRailShellStyle: React.CSSProperties = {
+  width: LEFT_RAIL_WIDTH,
+  flexShrink: 0,
+  borderRight: "1px solid #e5e7eb",
+  background: "#fff",
+  display: "flex",
+  overflow: "hidden",
+}
+
+const leftRailSidebarStyle: React.CSSProperties = {
+  width: 36,
+  flexShrink: 0,
+  borderRight: "1px solid #e5e7eb",
+  background: "#f8fafc",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "stretch",
+  gap: 5,
+  padding: "8px 0 8px 3px",
+  position: "relative",
+  zIndex: 2,
+}
+
+const leftRailContentStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  overflow: "hidden",
+  display: "flex",
+  flexDirection: "column",
+}
+
 const rightRailSidebarStyle = (collapsed: boolean): React.CSSProperties => ({
   width: 36,
   flexShrink: 0,
@@ -957,6 +1320,8 @@ export default function EditorShell() {
   const initialTestScenario = useMemo(() => resolveEditorTestScenarioFromLocation(), [])
   const [scale, setScale] = useState(0.6)
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit")
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>("design")
+  const [leftRailMode, setLeftRailMode] = useState<LeftRailMode>("outline")
   const [rightRailMode, setRightRailMode] = useState<RightRailMode>("page")
   const [rightRailCollapsed, setRightRailCollapsed] = useState(false)
   const [rightRailWidth, setRightRailWidth] = useState(RIGHT_RAIL_MIN_WIDTH)
@@ -1247,8 +1612,8 @@ export default function EditorShell() {
       const nextPageIndex = source.caretOffset == null
         ? null
         : findWysiwygPageIndexInFragmentRanges(ranges, source.caretOffset, {
-            preferPreviousPageAtFragmentEnd: isTableCellParagraph,
-          })
+          preferPreviousPageAtFragmentEnd: isTableCellParagraph,
+        })
       paginatedRef.current = paginated
       optimisticLayoutRef.current = { doc: draftDoc, paginated }
       if (shouldRelocateInlineEditPage({
@@ -1482,7 +1847,7 @@ export default function EditorShell() {
       saveToStorage(getPersistableDocumentSnapshot(), packageFieldRegistry, dataSnapshot)
     }, 500)
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     dataSnapshot,
     getPersistableDocumentSnapshot,
@@ -1719,9 +2084,9 @@ export default function EditorShell() {
     const formatLabel = format.toUpperCase()
     const readiness = finalizedActiveEdit
       ? {
-          canExport: false,
-          reasons: ["server layout has not checked the current document"],
-        }
+        canExport: false,
+        reasons: ["server layout has not checked the current document"],
+      }
       : exportReadiness
     const blockedReason = formatExportReadinessMessage(readiness)
     if (blockedReason) {
@@ -1745,7 +2110,7 @@ export default function EditorShell() {
           const body = JSON.parse(responseText) as { code?: unknown; error?: unknown }
           errorCode = typeof body.code === "string" ? body.code : null
           errorMessage = typeof body.error === "string" ? body.error : responseText
-        } catch {}
+        } catch { }
         if (errorCode === "FONT_FALLBACK_BLOCKED") {
           setFontFallback(true)
           setExportError(`${formatLabel} export blocked: runtime font fallback is active`)
@@ -1860,10 +2225,10 @@ export default function EditorShell() {
     // Split paragraphs rely on the debounced browser pagination for live updates.
     const isSplitParagraph = paginatedRef.current
       ? paginatedRef.current.sections
-          .flatMap((s) => s.pages)
-          .flatMap((p) => p.fragments)
-          .filter((f) => f.nodeId === inlineEditNodeId && f.nodeType === "paragraph")
-          .length > 1
+        .flatMap((s) => s.pages)
+        .flatMap((p) => p.fragments)
+        .filter((f) => f.nodeId === inlineEditNodeId && f.nodeType === "paragraph")
+        .length > 1
       : false
     if (isSplitParagraph) return
 
@@ -1881,7 +2246,7 @@ export default function EditorShell() {
       prevEditNodeIdRef.current = inlineEditNodeId
     }
     prevLineCountRef.current = newLineCount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewDoc])
 
   // Full browser pagination — optimistic visual layout. During inline editing
@@ -1922,7 +2287,7 @@ export default function EditorShell() {
     }, debounceMs)
 
     return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorTextMeasurer, editorTextMeasurerStatus, fontReadyVersion, markInlineEditVisualFresh, previewDoc])
 
   // Server pagination — export layout truth. The editor canvas
@@ -2147,6 +2512,36 @@ export default function EditorShell() {
     pendingDragRef.current = { source, clientX: e.clientX, clientY: e.clientY, clickAction }
   }, [finalizeInlineEditBeforeAction])
 
+  const activateWorkflowMode = useCallback((nextMode: WorkflowMode) => {
+    finalizeInlineEditBeforeAction()
+    setWorkflowMode(nextMode)
+    if (nextMode === "fill") {
+      setMode("fill")
+      dispatch({ type: "DRAG_CANCEL" })
+      setResizeDrag(null)
+      setMinHeightDrag(null)
+      setMarginDrag(null)
+      setLeftRailMode("outline")
+      setRightRailMode("properties")
+      return
+    }
+
+    setMode("template")
+    if (nextMode === "fields") {
+      setLeftRailMode("add")
+      setRightRailMode("properties")
+      return
+    }
+    if (nextMode === "render") {
+      setLeftRailMode("outline")
+      setRightRailMode("page")
+      return
+    }
+
+    setLeftRailMode("outline")
+    setRightRailMode(state.selectedNodeId ? "properties" : "page")
+  }, [finalizeInlineEditBeforeAction, state.selectedNodeId])
+
   const computePreview = useCallback(
     (clientX: number, clientY: number, sourceOverride?: DragSource | null): { preview: PlacementPreview | null; sectionId: string | null } => {
       const { doc, paginated } = state
@@ -2321,10 +2716,10 @@ export default function EditorShell() {
         const rawLeftShare = Math.max(0.01, Math.round((leftWidthPt / pairWidth) * totalShare * 100) / 100)
         const nextShares = resizeDrag.stackKind === "flow-stack"
           ? resolveFlowStackResizePairShares({
-              pairTotalShare: totalShare,
-              selectedShare: rawLeftShare,
-              selectedIsLeft: true,
-            })
+            pairTotalShare: totalShare,
+            selectedShare: rawLeftShare,
+            selectedIsLeft: true,
+          })
           : null
         const newLeftShare = nextShares?.leftShare ?? rawLeftShare
         const newRightShare = nextShares?.rightShare ?? Math.max(0.01, Math.round((totalShare - newLeftShare) * 100) / 100)
@@ -2431,6 +2826,21 @@ export default function EditorShell() {
     }
   }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, isTemplateMode, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
 
+  const fieldCount = packageFieldRegistry.fields.length
+  const fillIssueCount = dataReadiness.issues.length
+  const workflowNavItems: Array<{
+    mode: WorkflowMode
+    label: string
+    description: string
+    icon: string
+    badge?: string
+  }> = [
+      { mode: "design", label: "Design", description: "Outline / layout", icon: "D" },
+      { mode: "fields", label: "Fields", description: "Variables", icon: "{}", badge: fieldCount > 0 ? String(fieldCount) : undefined },
+      { mode: "fill", label: "Fill", description: "Data entry", icon: "F", badge: fillIssueCount > 0 ? String(fillIssueCount) : undefined },
+      { mode: "render", label: "Render", description: exportReadiness.canExport ? "Ready to export" : "Check export", icon: "R", badge: exportReadiness.canExport ? undefined : "!" },
+    ]
+
   return (
     <div
       ref={editorRootRef}
@@ -2455,229 +2865,279 @@ export default function EditorShell() {
         {wysiwygTextAccessibilityStatus ?? ""}
       </div>
       {/* Toolbar */}
-      <div data-testid="editor-toolbar" style={{ padding: "10px 20px", background: "white", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: "bold", color: "#111827" }}>FlowDoc Editor</span>
-        {/* Undo / Redo */}
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          {(["Undo", "Redo"] as const).map((label) => {
-            const isUndo = label === "Undo"
-            const disabled = !isTemplateMode || (isUndo ? state.past.length === 0 : state.future.length === 0)
-            return (
-              <button key={label} disabled={disabled}
-                onClick={isUndo ? handleUndo : handleRedo}
-                title={`${label} (${isUndo ? "Ctrl+Z" : "Ctrl+Y"})`}
-                style={{ padding: "4px 8px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: disabled ? "#d1d5db" : "#374151" }}>
-                {label}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Separator */}
-        <div style={{ width: 1, height: 16, background: "#e5e7eb" }} />
-
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <button
-            onClick={zoomOut}
-            title="Zoom out (Ctrl+-)"
-            disabled={scale <= MIN_SCALE + 0.001}
-            style={{ width: 26, height: 24, fontSize: 13, cursor: scale <= MIN_SCALE + 0.001 ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: scale <= MIN_SCALE + 0.001 ? "#d1d5db" : "#374151" }}
-          >
-            -
-          </button>
-          <button
-            onClick={resetZoom}
-            title="Reset zoom to 100% (Ctrl+0)"
-            style={{ minWidth: 46, height: 24, padding: "0 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: zoomMode === "manual" ? "#f3f4f6" : "white", color: "#374151" }}
-          >
-            {Math.round(scale * 100)}%
-          </button>
-          <button
-            onClick={zoomIn}
-            title="Zoom in (Ctrl++)"
-            disabled={scale >= MAX_SCALE - 0.001}
-            style={{ width: 26, height: 24, fontSize: 13, cursor: scale >= MAX_SCALE - 0.001 ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: scale >= MAX_SCALE - 0.001 ? "#d1d5db" : "#374151" }}
-          >
-            +
-          </button>
-          <button
-            onClick={fitZoom}
-            title="Fit page width"
-            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: zoomMode === "fit" ? "#dbeafe" : "white", color: zoomMode === "fit" ? "#1d4ed8" : "#374151", fontWeight: zoomMode === "fit" ? "bold" : "normal" }}
-          >
-            Fit
-          </button>
-        </div>
-
-        {/* Separator */}
-        <div style={{ width: 1, height: 16, background: "#e5e7eb" }} />
-
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          {(["template", "fill"] as const).map((m) => (
-            <button key={m}
-              onClick={() => {
-                finalizeInlineEditBeforeAction()
-                setMode(m)
-                if (m === "fill") {
-                  dispatch({ type: "DRAG_CANCEL" })
-                  setResizeDrag(null)
-                  setMinHeightDrag(null)
-                  setMarginDrag(null)
-                  setRightRailMode("properties")
-                } else if (!state.selectedNodeId) {
-                  setRightRailMode("page")
-                }
-              }}
-              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: mode === m ? "#dbeafe" : "white", color: mode === m ? "#1d4ed8" : "#374151", fontWeight: mode === m ? "bold" : "normal" }}>
-              {m === "template" ? "Template" : "Fill"}
-            </button>
-          ))}
-        </div>
-
-        <button
-          onClick={() => setShowTextSegments((value) => !value)}
-          title="Toggle text segment overlay"
-          style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: showTextSegments ? "#dcfce7" : "white", color: showTextSegments ? "#166534" : "#374151" }}
-        >
-          Segments
-        </button>
-        <button
-          onClick={() => setShowDrift((value) => !value)}
-          title="Toggle layout drift overlay (browser vs server pagination)"
-          style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: showDrift ? "#fff7ed" : "white", color: showDrift ? "#c2410c" : "#374151" }}
-        >
-          {showDrift && driftReport && driftReport.driftCount > 0
-            ? `Drift ${driftReport.driftCount}/${driftReport.totalParagraphs}`
-            : "Drift"}
-        </button>
-
-        {/* Document actions */}
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <button onClick={handleNewDocument}
-            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
-            New
-          </button>
-          <button onClick={() => importRef.current?.click()}
-            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
-            Open…
-          </button>
-          <input ref={importRef} type="file" accept=".flowdoc.json,.json,application/json" style={{ display: "none" }} onChange={handleImportJson} />
-          <button onClick={handleExportJson}
-            style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
-            Save JSON
-          </button>
-        </div>
-
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", minHeight: 24, minWidth: 0 }}>
-          <div
-            data-testid="editor-status-region"
-            style={{
-              width: 520,
-              maxWidth: "42vw",
-              minWidth: 180,
-              minHeight: 20,
-              display: "flex",
-              gap: 6,
-              alignItems: "center",
-              justifyContent: "flex-end",
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {fontFallback && (
-              <span data-testid="font-fallback-status" title="Server is using Helvetica fallback — Thai text layout may be incorrect" style={{ fontSize: 10, color: "#d97706", cursor: "help", flexShrink: 0 }}>
-                ⚠ fallback font
-              </span>
-            )}
-            {layoutError && (
-              <span data-testid="layout-error-badge" title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help", flexShrink: 0 }}>
-                ⚠ layout error
-              </span>
-            )}
-            {authoritativeLayoutWarnings.length > 0 && (
-              <span
-                data-testid="layout-warning-status"
-                title={authoritativeLayoutWarnings.map((warning) => `${layoutWarningSource} ${warning.count} ${warning.message}`).join("; ")}
-                style={{ fontSize: 10, color: "#d97706", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-              >
-                layout warning: {layoutWarningSource} {authoritativeLayoutWarnings[0].message}
-              </span>
-            )}
-            {exportError && (
-              <span data-testid="export-error" title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {exportError}
-              </span>
-            )}
-            {exportReadinessStatusReason && !exportError && (
-              <span
-                data-testid="export-readiness-status"
-                title={exportReadinessMessage ?? undefined}
-                style={{ fontSize: 10, color: "#d97706", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-              >
-                export blocked: {exportReadinessStatusReason}
-              </span>
-            )}
-            {documentIoStatus && (
-              <span
-                data-testid="document-io-status"
-                title={documentIoStatus.message}
-                style={{
-                  fontSize: 10,
-                  color: documentIoStatus.type === "error" ? "#dc2626" : "#2563eb",
-                  maxWidth: 220,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {documentIoStatus.message}
-              </span>
-            )}
-            {state.drag && (
-              <span
-                style={{
-                  fontSize: 11,
-                  color: "#6b7280",
-                  maxWidth: 220,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                dragging {describeDragSource(state.drag.source)} — Esc to cancel
-              </span>
-            )}
+      <div data-testid="editor-toolbar" style={toolbarShellStyle}>
+        <div data-testid="editor-workflow-bar" style={workflowBarStyle}>
+          <span style={{ fontSize: 13, fontWeight: "bold", color: "#111827", flexShrink: 0 }}>FlowDoc Editor</span>
+          <div data-testid="editor-workflow-nav" style={workflowNavStyle}>
+            {workflowNavItems.map((item) => {
+              const active = workflowMode === item.mode
+              return (
+                <button
+                  key={item.mode}
+                  type="button"
+                  data-testid={`editor-workflow-${item.mode}`}
+                  aria-pressed={active}
+                  title={`${item.label}: ${item.description}`}
+                  onClick={() => activateWorkflowMode(item.mode)}
+                  style={workflowNavButton(active)}
+                >
+                  <span style={workflowNavIcon(active)}>{item.icon}</span>
+                  <span style={workflowNavText}>
+                    <span style={workflowNavTitle}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+                      {item.badge && <span style={workflowNavBadge}>{item.badge}</span>}
+                    </span>
+                    <span style={workflowNavDescription}>{item.description}</span>
+                  </span>
+                </button>
+              )
+            })}
           </div>
-          {(["pdf", "docx"] as const).map((fmt) => {
-            const disabled = isExporting || !exportReadiness.canExport
-            return (
-              <button
-                key={fmt}
-                disabled={disabled}
-                onClick={() => handleExport(fmt)}
-                title={!exportReadiness.canExport && exportReadinessMessage ? `Export blocked: ${exportReadinessMessage}` : undefined}
-                style={{ padding: "4px 10px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: disabled ? "#f9fafb" : "white", color: disabled ? "#9ca3af" : "#374151" }}
-              >
-                {isExporting ? "…" : `Export ${fmt.toUpperCase()}`}
-              </button>
-            )
-          })}
+
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", minHeight: 24, minWidth: 0 }}>
+            <div
+              data-testid="editor-status-region"
+              style={{
+                width: 430,
+                maxWidth: "34vw",
+                minWidth: 160,
+                minHeight: 20,
+                display: "flex",
+                gap: 6,
+                alignItems: "center",
+                justifyContent: "flex-end",
+                overflow: "hidden",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {fontFallback && (
+                <span data-testid="font-fallback-status" title="Server is using Helvetica fallback — Thai text layout may be incorrect" style={{ fontSize: 10, color: "#d97706", cursor: "help", flexShrink: 0 }}>
+                  ⚠ fallback font
+                </span>
+              )}
+              {layoutError && (
+                <span data-testid="layout-error-badge" title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help", flexShrink: 0 }}>
+                  ⚠ layout error
+                </span>
+              )}
+              {authoritativeLayoutWarnings.length > 0 && (
+                <span
+                  data-testid="layout-warning-status"
+                  title={authoritativeLayoutWarnings.map((warning) => `${layoutWarningSource} ${warning.count} ${warning.message}`).join("; ")}
+                  style={{ fontSize: 10, color: "#d97706", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  layout warning: {layoutWarningSource} {authoritativeLayoutWarnings[0].message}
+                </span>
+              )}
+              {exportError && (
+                <span data-testid="export-error" title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {exportError}
+                </span>
+              )}
+              {exportReadinessStatusReason && !exportError && (
+                <span
+                  data-testid="export-readiness-status"
+                  title={exportReadinessMessage ?? undefined}
+                  style={{ fontSize: 10, color: "#d97706", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  export blocked: {exportReadinessStatusReason}
+                </span>
+              )}
+              {documentIoStatus && (
+                <span
+                  data-testid="document-io-status"
+                  title={documentIoStatus.message}
+                  style={{
+                    fontSize: 10,
+                    color: documentIoStatus.type === "error" ? "#dc2626" : "#2563eb",
+                    maxWidth: 220,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {documentIoStatus.message}
+                </span>
+              )}
+              {state.drag && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: "#6b7280",
+                    maxWidth: 220,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  dragging {describeDragSource(state.drag.source)} — Esc to cancel
+                </span>
+              )}
+            </div>
+            {(["pdf", "docx"] as const).map((fmt) => {
+              const disabled = isExporting || !exportReadiness.canExport
+              return (
+                <button
+                  key={fmt}
+                  disabled={disabled}
+                  onClick={() => handleExport(fmt)}
+                  title={!exportReadiness.canExport && exportReadinessMessage ? `Export blocked: ${exportReadinessMessage}` : undefined}
+                  style={{ padding: "4px 10px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: disabled ? "#f9fafb" : "white", color: disabled ? "#9ca3af" : "#374151" }}
+                >
+                  {isExporting ? "…" : `Export ${fmt.toUpperCase()}`}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div data-testid="editor-command-bar" style={commandBarStyle}>
+          <div style={toolbarGroupStyle}>
+            {(["Undo", "Redo"] as const).map((label) => {
+              const isUndo = label === "Undo"
+              const disabled = !isTemplateMode || (isUndo ? state.past.length === 0 : state.future.length === 0)
+              return (
+                <button key={label} disabled={disabled}
+                  onClick={isUndo ? handleUndo : handleRedo}
+                  title={`${label} (${isUndo ? "Ctrl+Z" : "Ctrl+Y"})`}
+                  style={{ padding: "4px 8px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: disabled ? "#d1d5db" : "#374151" }}>
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+
+          <div style={toolbarSeparatorStyle} />
+
+          <div style={toolbarGroupStyle}>
+            <button
+              onClick={zoomOut}
+              title="Zoom out (Ctrl+-)"
+              disabled={scale <= MIN_SCALE + 0.001}
+              style={{ width: 26, height: 24, fontSize: 13, cursor: scale <= MIN_SCALE + 0.001 ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: scale <= MIN_SCALE + 0.001 ? "#d1d5db" : "#374151" }}
+            >
+              -
+            </button>
+            <button
+              onClick={resetZoom}
+              title="Reset zoom to 100% (Ctrl+0)"
+              style={{ minWidth: 46, height: 24, padding: "0 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: zoomMode === "manual" ? "#f3f4f6" : "white", color: "#374151" }}
+            >
+              {Math.round(scale * 100)}%
+            </button>
+            <button
+              onClick={zoomIn}
+              title="Zoom in (Ctrl++)"
+              disabled={scale >= MAX_SCALE - 0.001}
+              style={{ width: 26, height: 24, fontSize: 13, cursor: scale >= MAX_SCALE - 0.001 ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: scale >= MAX_SCALE - 0.001 ? "#d1d5db" : "#374151" }}
+            >
+              +
+            </button>
+            <button
+              onClick={fitZoom}
+              title="Fit page width"
+              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: zoomMode === "fit" ? "#dbeafe" : "white", color: zoomMode === "fit" ? "#1d4ed8" : "#374151", fontWeight: zoomMode === "fit" ? "bold" : "normal" }}
+            >
+              Fit
+            </button>
+          </div>
+
+          <div style={toolbarSeparatorStyle} />
+
+          <div style={toolbarGroupStyle}>
+            <button
+              onClick={() => setShowTextSegments((value) => !value)}
+              title="Toggle text segment overlay"
+              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: showTextSegments ? "#dcfce7" : "white", color: showTextSegments ? "#166534" : "#374151" }}
+            >
+              Segments
+            </button>
+            <button
+              onClick={() => setShowDrift((value) => !value)}
+              title="Toggle layout drift overlay (browser vs server pagination)"
+              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: showDrift ? "#fff7ed" : "white", color: showDrift ? "#c2410c" : "#374151" }}
+            >
+              {showDrift && driftReport && driftReport.driftCount > 0
+                ? `Drift ${driftReport.driftCount}/${driftReport.totalParagraphs}`
+                : "Drift"}
+            </button>
+          </div>
+
+          <div style={toolbarSeparatorStyle} />
+
+          <div style={toolbarGroupStyle}>
+            <button onClick={handleNewDocument}
+              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
+              New
+            </button>
+            <button onClick={() => importRef.current?.click()}
+              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
+              Open…
+            </button>
+            <input ref={importRef} type="file" accept=".flowdoc.json,.json,application/json" style={{ display: "none" }} onChange={handleImportJson} />
+            <button onClick={handleExportJson}
+              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
+              Save JSON
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <div style={{ width: 160, flexShrink: 0, borderRight: "1px solid #e5e7eb", background: "white", display: "flex", flexDirection: "column", overflow: "auto" }}>
-          {isTemplateMode ? (
-            <>
-              <EditorPalette onDragStart={startPaletteDrag} isDragging={!!state.drag} />
-              <FieldPalette registry={packageFieldRegistry} onDragStart={startPaletteDrag} isDragging={!!state.drag} />
-            </>
-          ) : (
-            <div style={{ padding: 14, fontSize: 11, color: "#9ca3af", lineHeight: 1.5 }}>
-              Fill mode locks the template. Edit values in the right panel.
+        <div data-testid="editor-left-rail" data-mode={leftRailMode} style={leftRailShellStyle}>
+          <div data-testid="editor-left-rail-sidebar" style={leftRailSidebarStyle}>
+            <div data-testid="editor-left-rail-mode-bookmarks" style={rightRailBookmarkGroup}>
+              <button
+                type="button"
+                data-testid="editor-left-rail-mode-outline"
+                aria-label="Show outline"
+                aria-pressed={leftRailMode === "outline"}
+                title="Outline"
+                onClick={() => setLeftRailMode("outline")}
+                style={rightRailBookmarkButton(leftRailMode === "outline")}
+              >
+                O
+              </button>
+              <button
+                type="button"
+                data-testid="editor-left-rail-mode-add"
+                aria-label="Show add"
+                aria-pressed={leftRailMode === "add"}
+                title="Add"
+                onClick={() => setLeftRailMode("add")}
+                style={rightRailBookmarkButton(leftRailMode === "add", 28, 14)}
+              >
+                +
+              </button>
             </div>
-          )}
+          </div>
+          <div data-testid="editor-left-rail-content" style={leftRailContentStyle}>
+            {leftRailMode === "outline" ? (
+              <OutlinePanel
+                doc={isTemplateMode ? state.doc : previewDoc}
+                selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
+                onAddShortcut={isTemplateMode ? () => setLeftRailMode("add") : undefined}
+                onSelect={(nodeId) => {
+                  if (!isTemplateMode) return
+                  dispatch({ type: "SELECT_NODE", nodeId })
+                  setRightRailMode("properties")
+                }}
+                onReorderBodyChild={isTemplateMode ? (request) => {
+                  finalizeInlineEditBeforeAction()
+                  dispatch({ type: "REORDER_BODY_CHILD", ...request })
+                  setRightRailMode("properties")
+                } : undefined}
+              />
+            ) : (
+              <AddPanel
+                registry={packageFieldRegistry}
+                editable={isTemplateMode}
+                onDragStart={startPaletteDrag}
+                isDragging={!!state.drag}
+              />
+            )}
+          </div>
         </div>
         {isInitialLayoutPreparing ? (
           <div
@@ -2813,17 +3273,6 @@ export default function EditorShell() {
               </button>
               <button
                 type="button"
-                data-testid="editor-right-rail-mode-outline"
-                aria-label="Show outline"
-                aria-pressed={!rightRailCollapsed && rightRailMode === "outline"}
-                title="Outline"
-                onClick={() => openRightRailMode("outline")}
-                style={rightRailBookmarkButton(!rightRailCollapsed && rightRailMode === "outline")}
-              >
-                O
-              </button>
-              <button
-                type="button"
                 data-testid="editor-right-rail-mode-properties"
                 aria-label="Show properties"
                 aria-pressed={!rightRailCollapsed && rightRailMode === "properties"}
@@ -2891,23 +3340,12 @@ export default function EditorShell() {
                     />
                   )}
                 </div>
-              ) : (
-                <div data-testid="editor-right-rail-outline" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-                  <OutlinePanel
-                    doc={isTemplateMode ? state.doc : previewDoc}
-                    selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
-                    onSelect={(nodeId) => {
-                      if (!isTemplateMode) return
-                      dispatch({ type: "SELECT_NODE", nodeId })
-                      setRightRailMode("properties")
-                    }}
-                  />
-                </div>
-              )}
+              ) : null}
             </div>
           )}
         </div>
       </div>
+      <EditorDragGhost drag={state.drag} />
     </div>
   )
 }

@@ -48,6 +48,28 @@ export function shiftWysiwygDraftPreviewDownstreamFragments(input: {
   })
 }
 
+export function shiftWysiwygDraftPreviewSourcePageFragments(input: {
+  fragments: PageFragment[]
+  sourceFragment: PageFragment
+  draftFragment: PageFragment
+  extraShiftY?: number
+}): PageFragment[] {
+  const { fragments, sourceFragment, draftFragment } = input
+  if (draftFragment.continuesFrom) return fragments
+  const shiftY = draftFragment.height - sourceFragment.height + Math.max(0, input.extraShiftY ?? 0)
+  if (Math.abs(shiftY) < HEIGHT_EPSILON) return fragments
+  const sourceBottom = sourceFragment.y + sourceFragment.height
+  return fragments.map((fragment) => {
+    if (
+      fragment.nodeId === sourceFragment.nodeId &&
+      fragment.nodeType === sourceFragment.nodeType &&
+      fragment.pageIndex === sourceFragment.pageIndex
+    ) return fragment
+    if (fragment.y < sourceBottom - HEIGHT_EPSILON) return fragment
+    return shiftPageFragmentY(fragment, shiftY)
+  })
+}
+
 function getFragmentTextRange(fragment: PageFragment): { start: number; end: number } | null {
   return getWysiwygFragmentTextRange(fragment)
 }

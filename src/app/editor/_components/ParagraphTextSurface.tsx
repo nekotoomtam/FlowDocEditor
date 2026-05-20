@@ -30,6 +30,7 @@ import type { WysiwygTextSelection, WysiwygTextSessionDraftChange } from "./useW
 import {
   classifyWysiwygTextReflow,
   shouldPrepareWysiwygTableCellDraftVisualPreview,
+  shouldPatchWysiwygSamePageHeight,
   shouldUseWysiwygLocalDraftLines,
 } from "./wysiwygReflow"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
@@ -1805,11 +1806,11 @@ export function ParagraphTextSurface({
       draftHeight: textEngineDraftLayout?.height ?? (supportsPaginatedDraftLayout ? fragment.height : null),
       pageContentBottom,
       supportsLocalDraftLayout: supportsLocalDraftLayout || supportsPaginatedDraftLayout,
-      supportsSamePageHeightPatch: isFlowStackParagraph,
+      supportsSamePageHeightPatch: shouldPatchWysiwygSamePageHeight({ isTableCellParagraph }),
     })
   ), [
     fragment,
-    isFlowStackParagraph,
+    isTableCellParagraph,
     pageContentBottom,
     supportsLocalDraftLayout,
     supportsPaginatedDraftLayout,
