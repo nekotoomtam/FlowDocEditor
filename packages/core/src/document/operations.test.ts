@@ -934,6 +934,50 @@ describe("flow-row / flow-stack operations", () => {
     expect(rightStack.childIds).toEqual(["p2"])
   })
 
+  it("applies a flow-stack edge column placement as a local empty stack split", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Right" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 60 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 40 }, childIds: ["p2"] },
+      p1,
+      p2,
+    }, ["fr1"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "add-flow-stack-column", rowId: "fr1", targetStackId: "fs1", position: "after" },
+      { source: "palette", blockType: "columns" },
+    )
+    const section = updated.document.sections[0]
+    const row = section.nodes.fr1
+    const leftStack = section.nodes.fs1
+    const rightStack = section.nodes.fs2
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(3)
+    expect(row.childIds[0]).toBe("fs1")
+    expect(row.childIds[2]).toBe("fs2")
+
+    const insertedStack = section.nodes[row.childIds[1]]
+    const flowRows = Object.values(section.nodes).filter((node) => node.type === "flow-row")
+    expect(flowRows).toHaveLength(1)
+    expect(leftStack.type).toBe("flow-stack")
+    expect(insertedStack.type).toBe("flow-stack")
+    expect(rightStack.type).toBe("flow-stack")
+    if (leftStack.type !== "flow-stack" || insertedStack.type !== "flow-stack" || rightStack.type !== "flow-stack") return
+    expect(leftStack.props.widthShare).toBe(30)
+    expect(insertedStack.props.widthShare).toBe(30)
+    expect(rightStack.props.widthShare).toBe(40)
+    expect(leftStack.childIds).toEqual(["p1"])
+    expect(insertedStack.childIds).toEqual([])
+    expect(rightStack.childIds).toEqual(["p2"])
+  })
+
   it("adds a balanced flow-stack column when the flow-row is selected", () => {
     const doc = makeDoc({
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2", "fs3"] },

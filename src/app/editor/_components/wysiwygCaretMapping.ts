@@ -53,11 +53,35 @@ export interface WysiwygParagraphFragmentRange {
   end: number
 }
 
+export type WysiwygVerticalCaretDirection = "up" | "down"
+
+export interface WysiwygVerticalCaretNavigationOptions extends WysiwygCaretMappingOptions {
+  preferredX?: number | null
+  lineAffinity?: WysiwygVerticalCaretLineAffinity | null
+}
+
+export interface WysiwygVerticalCaretNavigationResult extends WysiwygCaretCandidate {
+  preferredX: number
+  lineAffinity: WysiwygVerticalCaretLineAffinity
+}
+
+export interface WysiwygVerticalCaretLineAffinity {
+  pageIndex: number
+  fragmentIndex?: number
+  lineIndex: number
+  start: number
+  end: number
+}
+
 type LineRange = {
   line: PaginatedLine
   lineIndex: number
   start: number
   end: number
+}
+
+type FragmentLineRange = LineRange & {
+  fragment: PageFragment
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -131,17 +155,45 @@ function getLineRange(line: PaginatedLine, lineIndex: number, fallbackStart?: nu
 }
 
 function getLineRanges(fragment: PageFragment): LineRange[] {
-  const ranges: LineRange[] = []
-  let nextEmptyLineOffset = 0
+  const lines = fragment.lines ?? []
+  const rangesByLine = lines.map((line, lineIndex) => getLineRange(line, lineIndex))
 
-  for (const [lineIndex, line] of (fragment.lines ?? []).entries()) {
-    const range = getLineRange(line, lineIndex, nextEmptyLineOffset)
-    if (!range) continue
-    ranges.push(range)
-    nextEmptyLineOffset = range.end + 1
+  for (const [lineIndex, line] of lines.entries()) {
+    if (rangesByLine[lineIndex]) continue
+    if ((line.segments ?? []).length > 0 || line.text.length > 0) continue
+
+    let previousIndex = -1
+    for (let candidateIndex = lineIndex - 1; candidateIndex >= 0; candidateIndex -= 1) {
+      if (rangesByLine[candidateIndex]) {
+        previousIndex = candidateIndex
+        break
+      }
+    }
+    if (previousIndex >= 0) {
+      const previous = rangesByLine[previousIndex]!
+      const offset = previous.end + (lineIndex - previousIndex)
+      rangesByLine[lineIndex] = { line, lineIndex, start: offset, end: offset }
+      continue
+    }
+
+    let nextIndex = -1
+    for (let candidateIndex = lineIndex + 1; candidateIndex < rangesByLine.length; candidateIndex += 1) {
+      if (rangesByLine[candidateIndex]) {
+        nextIndex = candidateIndex
+        break
+      }
+    }
+    if (nextIndex >= 0) {
+      const next = rangesByLine[nextIndex]!
+      const offset = Math.max(0, next.start - (nextIndex - lineIndex))
+      rangesByLine[lineIndex] = { line, lineIndex, start: offset, end: offset }
+      continue
+    }
+
+    rangesByLine[lineIndex] = { line, lineIndex, start: lineIndex, end: lineIndex }
   }
 
-  return ranges
+  return rangesByLine.filter((range): range is LineRange => range !== null)
 }
 
 function findLineRangeForOffset(fragment: PageFragment, offset: number): LineRange | null {
@@ -149,12 +201,12 @@ function findLineRangeForOffset(fragment: PageFragment, offset: number): LineRan
   if (ranges.length === 0) return null
   if (offset <= ranges[0].start) return ranges[0]
 
-  for (const range of ranges) {
-    if (offset >= range.start && offset < range.end) return range
-  }
-
   const exactStart = ranges.find((range) => offset === range.start)
   if (exactStart) return exactStart
+
+  for (const range of ranges) {
+    if (offset >= range.start && offset <= range.end) return range
+  }
 
   return ranges[ranges.length - 1]
 }
@@ -185,6 +237,100 @@ function nearestCandidateByX(
     if (distance === bestDistance && candidate.offset < best.offset) return candidate
     return best
   }, candidates[0])
+}
+
+function fragmentOrderValue(fragment: PageFragment): number {
+  return fragment.fragmentIndex ?? fragment.lineStart ?? fragment.pageIndex
+}
+
+function compareFragmentVisualOrder(a: PageFragment, b: PageFragment): number {
+  return a.pageIndex - b.pageIndex ||
+    fragmentOrderValue(a) - fragmentOrderValue(b) ||
+    a.y - b.y ||
+    a.x - b.x
+}
+
+function orderedFragmentLineRanges(fragments: PageFragment[]): FragmentLineRange[] {
+  return [...fragments]
+    .sort(compareFragmentVisualOrder)
+    .flatMap((fragment) =>
+      getLineRanges(fragment).map((range) => ({ ...range, fragment })),
+    )
+    .sort((a, b) =>
+      compareFragmentVisualOrder(a.fragment, b.fragment) ||
+      a.line.y - b.line.y ||
+      a.lineIndex - b.lineIndex ||
+      a.start - b.start,
+    )
+}
+
+function findFragmentLineRangeForOffset(
+  ranges: FragmentLineRange[],
+  offset: number,
+): FragmentLineRange | null {
+  if (ranges.length === 0) return null
+
+  const exactStart = ranges.find((range) => offset === range.start)
+  if (exactStart) return exactStart
+
+  for (const range of ranges) {
+    if (offset >= range.start && offset <= range.end) return range
+  }
+
+  let fallback = ranges[0]
+  for (const range of ranges) {
+    if (offset < range.start) break
+    fallback = range
+  }
+  return fallback
+}
+
+function lineAffinityForRange(range: FragmentLineRange): WysiwygVerticalCaretLineAffinity {
+  return {
+    pageIndex: range.fragment.pageIndex,
+    fragmentIndex: range.fragment.fragmentIndex,
+    lineIndex: range.lineIndex,
+    start: range.start,
+    end: range.end,
+  }
+}
+
+function findFragmentLineRangeByAffinity(
+  ranges: FragmentLineRange[],
+  affinity: WysiwygVerticalCaretLineAffinity | null | undefined,
+  offset: number,
+): FragmentLineRange | null {
+  if (!affinity) return null
+  return ranges.find((range) =>
+    range.fragment.pageIndex === affinity.pageIndex &&
+    range.fragment.fragmentIndex === affinity.fragmentIndex &&
+    range.lineIndex === affinity.lineIndex &&
+    range.start === affinity.start &&
+    range.end === affinity.end &&
+    offset >= range.start &&
+    offset <= range.end,
+  ) ?? null
+}
+
+function caretCandidateForLineRangeByX(
+  range: FragmentLineRange,
+  x: number,
+  options: WysiwygCaretMappingOptions,
+): WysiwygCaretCandidate {
+  const candidate = nearestCandidateByX(
+    getWysiwygCaretCandidatesForLine(range.fragment, range.line, range.lineIndex, options),
+    x,
+  )
+  return candidate ?? {
+    offset: range.start,
+    pageIndex: range.fragment.pageIndex,
+    fragmentIndex: range.fragment.fragmentIndex,
+    lineIndex: range.lineIndex,
+    x: range.line.x,
+    y: range.line.y,
+    height: range.line.height,
+    source: "segment-ratio",
+  }
 }
 
 export function getWysiwygParagraphFragments(paginated: PaginatedDocument, nodeId: string): PageFragment[] {
@@ -348,6 +494,32 @@ export function resolveCaretOffsetFromPointInFragment(
     height: line.height,
     source: "segment-ratio",
   } : null)
+}
+
+export function resolveVerticalCaretNavigationInFragments(
+  fragments: PageFragment[],
+  offset: number,
+  direction: WysiwygVerticalCaretDirection,
+  options: WysiwygVerticalCaretNavigationOptions = {},
+): WysiwygVerticalCaretNavigationResult | null {
+  const ranges = orderedFragmentLineRanges(fragments)
+  const currentRange = findFragmentLineRangeByAffinity(ranges, options.lineAffinity, offset) ??
+    findFragmentLineRangeForOffset(ranges, offset)
+  if (!currentRange) return null
+
+  const currentIndex = ranges.indexOf(currentRange)
+  const targetIndex = currentIndex + (direction === "up" ? -1 : 1)
+  const targetRange = ranges[targetIndex]
+  if (!targetRange) return null
+
+  const currentCandidate = resolveCaretPositionInFragment(currentRange.fragment, offset, options)
+  const preferredX = options.preferredX ?? currentCandidate?.x ?? currentRange.line.x
+  const targetCandidate = caretCandidateForLineRangeByX(targetRange, preferredX, options)
+  return {
+    ...targetCandidate,
+    preferredX,
+    lineAffinity: lineAffinityForRange(targetRange),
+  }
 }
 
 export function resolveParagraphCaretPosition(

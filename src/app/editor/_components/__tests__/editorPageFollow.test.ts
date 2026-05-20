@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest"
 import type { PaginatedDocument } from "@/pagination"
 import {
   findEditorPageKeyByPageIndex,
+  resolveActiveInlineEditPageIndex,
   scrollElementIntoNearestView,
   shouldFollowInlineEditPageChange,
+  shouldRelocateInlineEditPage,
 } from "../editorPageFollow"
 
 function makePaginated(): PaginatedDocument {
@@ -57,6 +59,30 @@ describe("editor page follow helpers", () => {
     expect(shouldFollowInlineEditPageChange({ previousPageIndex: 1, nextPageIndex: 1 })).toBe(false)
     expect(shouldFollowInlineEditPageChange({ previousPageIndex: null, nextPageIndex: 1 })).toBe(false)
     expect(shouldFollowInlineEditPageChange({ previousPageIndex: 1, nextPageIndex: null })).toBe(false)
+  })
+
+  it("waits to relocate the active edit page while typing visual lock is held", () => {
+    expect(shouldRelocateInlineEditPage({ nextPageIndex: 1, isVisualLocked: false })).toBe(true)
+    expect(shouldRelocateInlineEditPage({ nextPageIndex: 1, isVisualLocked: true })).toBe(false)
+    expect(shouldRelocateInlineEditPage({ nextPageIndex: null, isVisualLocked: false })).toBe(false)
+  })
+
+  it("keeps the active editor on the committed page while typing visual lock is held", () => {
+    expect(resolveActiveInlineEditPageIndex({
+      inlineEditPageIndex: 0,
+      previewCaretPageIndex: 1,
+      isVisualLocked: true,
+    })).toBe(0)
+    expect(resolveActiveInlineEditPageIndex({
+      inlineEditPageIndex: 0,
+      previewCaretPageIndex: 1,
+      isVisualLocked: false,
+    })).toBe(1)
+    expect(resolveActiveInlineEditPageIndex({
+      inlineEditPageIndex: null,
+      previewCaretPageIndex: 1,
+      isVisualLocked: true,
+    })).toBe(1)
   })
 
   it("resolves a rendered page key from a physical page index", () => {

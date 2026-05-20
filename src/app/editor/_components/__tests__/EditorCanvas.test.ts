@@ -5,6 +5,8 @@ import { defaultTextMeasurer } from "@/layout"
 import type { PaginatedDocument, PageFragment, ParagraphRenderProps } from "@/pagination"
 import type { DocumentNode } from "@/schema"
 import {
+  buildEditorFragmentClipPathId,
+  buildEditorFragmentRenderKey,
   buildWysiwygDraftVisualPreview,
   buildWysiwygTableCellDraftVisualChromeFragments,
   EditorCanvas,
@@ -128,6 +130,40 @@ function makeFlowDoc(): DocumentNode {
           fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
           fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: [body.id] },
           [body.id]: body,
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
+function makeTwoStackFlowDoc(): DocumentNode {
+  const left = paragraphNode("left-p", "Left text")
+  const right = paragraphNode("right-p", "Right text")
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 36, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 36, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["fr1"] },
+          fr1: { id: "fr1", type: "flow-row", props: { gap: 8 }, childIds: ["fs1", "fs2"] },
+          fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 60 }, childIds: [left.id] },
+          fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 40 }, childIds: [right.id] },
+          [left.id]: left,
+          [right.id]: right,
         },
       }],
     },
@@ -269,6 +305,30 @@ function makeFlowPaginated(): PaginatedDocument {
   }
 }
 
+function makeTwoStackFlowPaginated(): PaginatedDocument {
+  return {
+    sections: [{
+      sectionId: "section",
+      pages: [{
+        index: 0,
+        width: 300,
+        height: 400,
+        contentBox: { x: 36, y: 72, width: 228, height: 256 },
+        fragments: [
+          { nodeId: "fr1", nodeType: "flow-row", pageIndex: 0, x: 36, y: 72, width: 228, height: 40, fragmentIndex: 0 },
+          { nodeId: "fs1", nodeType: "flow-stack", parentNodeId: "fr1", pageIndex: 0, x: 36, y: 72, width: 132, height: 40, fragmentIndex: 0 },
+          { nodeId: "fs2", nodeType: "flow-stack", parentNodeId: "fr1", pageIndex: 0, x: 176, y: 72, width: 88, height: 40, fragmentIndex: 0 },
+          textFragment("left-p", "Left text", 72, { parentNodeId: "fs1", width: 132 }),
+          textFragment("right-p", "Right text", 72, { parentNodeId: "fs2", x: 176, width: 88 }),
+        ],
+        headerFragments: [],
+        footerFragments: [],
+      }],
+    }],
+    tocEntries: [],
+  }
+}
+
 function makeTableCellPaginated(kind: "table" | "flow-table" = "table"): PaginatedDocument {
   const isFlow = kind === "flow-table"
   const tableId = isFlow ? "ft1" : "tbl1"
@@ -398,6 +458,7 @@ interface RenderCanvasOptions {
   inlineEditNodeId?: string | null
   inlineEditCaretIndex?: number | null
   inlineEditPageIndex?: number | null
+  inlineEditVisualLocked?: boolean
   wysiwygTextEngineEnabled?: boolean
   wysiwygTextDraftNodeId?: string | null
   wysiwygTextDraftText?: string | null
@@ -427,6 +488,7 @@ function renderCanvas(
     inlineEditNodeId: options.inlineEditNodeId ?? null,
     inlineEditCaretIndex: options.inlineEditCaretIndex ?? null,
     inlineEditPageIndex: options.inlineEditPageIndex ?? null,
+    inlineEditVisualLocked: options.inlineEditVisualLocked ?? false,
     onInlineEditStart: noop,
     onInlineEditChange: noop,
     onInlineEditCaretChange: noop,
@@ -458,6 +520,103 @@ function renderCanvas(
   }))
 }
 
+describe("EditorCanvas fragment identity", () => {
+  it("keys same-page inline paragraph slices by slice identity", () => {
+    const firstSlice = textFragment("body-p", "A", 72, {
+      isContinued: true,
+      lineStart: 0,
+      lineEnd: 1,
+    })
+    const secondSlice = textFragment("body-p", "B", 90, {
+      continuesFrom: true,
+      lineStart: 1,
+      lineEnd: 2,
+    })
+
+    expect(buildEditorFragmentRenderKey(firstSlice, 0, true)).not.toBe(
+      buildEditorFragmentRenderKey(secondSlice, 1, true),
+    )
+    expect(buildEditorFragmentRenderKey(firstSlice, 0, true)).toContain("inline-edit-paragraph-body-p-0-0-root")
+    expect(buildEditorFragmentRenderKey(secondSlice, 1, true)).toContain("inline-edit-paragraph-body-p-0-1-root")
+  })
+
+  it("renders unique clip paths for same-page paragraph slices", () => {
+    const paginated = makePaginated()
+    const firstSlice = textFragment("body-p", "A", 72, {
+      isContinued: true,
+      lineStart: 0,
+      lineEnd: 1,
+      lines: [{
+        text: "A",
+        x: 36,
+        y: 72,
+        width: 8,
+        height: 14,
+        segments: [{ kind: "word", text: "A", start: 0, end: 1, x: 0, width: 8, breakableAfter: false }],
+      }],
+    })
+    const secondSlice = textFragment("body-p", "B", 90, {
+      continuesFrom: true,
+      lineStart: 1,
+      lineEnd: 2,
+      lines: [{
+        text: "B",
+        x: 36,
+        y: 90,
+        width: 8,
+        height: 14,
+        segments: [{ kind: "word", text: "B", start: 2, end: 3, x: 0, width: 8, breakableAfter: false }],
+      }],
+    })
+    paginated.sections[0].pages[0].fragments = [firstSlice, secondSlice]
+
+    const markup = renderCanvas(paginated, makeDoc(), null, {
+      inlineEditNodeId: "body-p",
+      inlineEditPageIndex: 0,
+      inlineEditVisualFresh: true,
+      inlineEditCaretIndex: 2,
+    })
+    const clipPathIds = [...markup.matchAll(/<clipPath id="([^"]*body-p[^"]*)"/g)].map((match) => match[1])
+    const activeInlineEditors = markup.match(/data-inline-edit-node-id="body-p"/g) ?? []
+
+    expect(buildEditorFragmentClipPathId("0-0", firstSlice, 0)).not.toBe(
+      buildEditorFragmentClipPathId("0-0", secondSlice, 1),
+    )
+    expect(new Set(clipPathIds).size).toBe(2)
+    expect(activeInlineEditors).toHaveLength(1)
+    expect(markup).toContain("data-inline-edit-slice-start=\"2\"")
+  })
+
+  it("does not label continuation paragraph fragments as separate paragraphs", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      textFragment("body-p", "A", 72, {
+        isContinued: true,
+        lineStart: 0,
+        lineEnd: 1,
+      }),
+      textFragment("body-p", "B", 90, {
+        continuesFrom: true,
+        lineStart: 1,
+        lineEnd: 2,
+      }),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc())
+    const selectedMarkup = renderCanvas(paginated, makeDoc(), "body-p")
+    const editingMarkup = renderCanvas(paginated, makeDoc(), null, {
+      inlineEditNodeId: "body-p",
+      inlineEditPageIndex: 0,
+      inlineEditVisualFresh: true,
+      inlineEditCaretIndex: 0,
+    })
+
+    expect(markup).not.toContain(">paragraph</text>")
+    expect(selectedMarkup).not.toContain(">paragraph</text>")
+    expect(editingMarkup).not.toContain(">paragraph</text>")
+  })
+})
+
 describe("EditorCanvas header/footer zones", () => {
   it("renders header and footer text as read-only preview content", () => {
     const markup = renderCanvas()
@@ -480,6 +639,15 @@ describe("EditorCanvas flow-row / flow-stack static preview", () => {
     expect(markup).toContain("data-flow-stack-box=\"true\"")
     expect(markup).toContain("flow-row")
     expect(markup).toContain("flow-stack")
+  })
+
+  it("renders a pair resize handle between flow-stacks", () => {
+    const markup = renderCanvas(makeTwoStackFlowPaginated(), makeTwoStackFlowDoc())
+
+    expect(markup).toContain("data-testid=\"column-resize-handle\"")
+    expect(markup).toContain("data-row-type=\"flow-row\"")
+    expect(markup).toContain("data-left-stack-id=\"fs1\"")
+    expect(markup).toContain("data-right-stack-id=\"fs2\"")
   })
 
   it("does not synthesize body-style split previews for flow-stack paragraphs", () => {
@@ -678,6 +846,26 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     expect(markup).toContain("data-wysiwyg-reflow-kind=\"soft\"")
     expect(markup).toContain(">C</text>")
     expect(markup).not.toContain("<textarea")
+  })
+
+  it("keeps the active editor on the committed page while preview pagination is visually locked", () => {
+    const markup = renderCanvas(makeTableCellPaginated(), makeTableCellDoc(), null, {
+      inlineEditNodeId: "cell-p",
+      inlineEditVisualFresh: false,
+      inlineEditVisualLocked: true,
+      inlineEditCaretIndex: 5,
+      inlineEditPageIndex: 0,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftNodeId: "cell-p",
+      wysiwygTextDraftText: "A\nB\nC",
+      wysiwygTextCaretOffset: 5,
+    })
+
+    expect(markup.match(/data-inline-edit-node-id="cell-p"/g)).toHaveLength(1)
+    expect(markup).toContain("data-inline-edit-visual-mode=\"textarea\"")
+    expect(markup).toContain("data-inline-edit-slice-start=\"0\"")
+    expect(markup).not.toContain("data-inline-edit-slice-start=\"4\"")
+    expect(markup).toContain(">C</text>")
   })
 
   it("stops rendering the table-cell continuation preview once draft pagination is active", () => {
@@ -1020,5 +1208,93 @@ describe("EditorCanvas paragraph box preview", () => {
     expect(continuationCellGroup).toContain("data-parent-node-id=\"ftr2\"")
     expect(continuationCellGroup).not.toContain("pointer-events:none")
     expect(continuationRowGroup).toContain("pointer-events:none")
+  })
+
+  it("stitches selected flow-table rowspan continuation chrome across page slices", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      { nodeId: "ft1", nodeType: "flow-table", pageIndex: 0, x: 36, y: 72, width: 120, height: 40 },
+      { nodeId: "ftr1", nodeType: "flow-table-row", parentNodeId: "ft1", pageIndex: 0, x: 36, y: 72, width: 120, height: 40 },
+      {
+        nodeId: "ftc-merged",
+        nodeType: "flow-table-cell",
+        parentNodeId: "ftr1",
+        pageIndex: 0,
+        x: 36,
+        y: 72,
+        width: 120,
+        height: 40,
+        isContinued: true,
+      },
+    ]
+    paginated.sections[0].pages.push({
+      index: 1,
+      width: 300,
+      height: 400,
+      contentBox: { x: 36, y: 72, width: 228, height: 256 },
+      headerFragments: [],
+      footerFragments: [],
+      fragments: [
+        { nodeId: "ft1", nodeType: "flow-table", pageIndex: 1, x: 36, y: 72, width: 120, height: 40 },
+        { nodeId: "ftr2", nodeType: "flow-table-row", parentNodeId: "ft1", pageIndex: 1, x: 36, y: 72, width: 120, height: 40 },
+        {
+          nodeId: "ftc-merged",
+          nodeType: "flow-table-cell",
+          parentNodeId: "ftr2",
+          pageIndex: 1,
+          x: 36,
+          y: 72,
+          width: 120,
+          height: 40,
+          continuesFrom: true,
+        },
+      ],
+    })
+    const doc = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [{
+          id: "section",
+          type: "section",
+          bodyRootId: "body",
+          page: {
+            size: "A4",
+            orientation: "portrait",
+            margin: {
+              top: { value: 72, unit: "pt" },
+              right: { value: 36, unit: "pt" },
+              bottom: { value: 72, unit: "pt" },
+              left: { value: 36, unit: "pt" },
+            },
+          },
+          nodes: {
+            body: { id: "body", type: "body", props: {}, childIds: ["ft1"] },
+            ft1: {
+              id: "ft1",
+              type: "flow-table",
+              props: {},
+              columns: [{ width: { value: 120, unit: "pt" } }],
+              rowIds: ["ftr1", "ftr2"],
+              nodes: {
+                ftr1: { id: "ftr1", type: "flow-table-row", props: {}, cellIds: ["ftc-merged"] },
+                ftr2: { id: "ftr2", type: "flow-table-row", props: {}, cellIds: [] },
+                "ftc-merged": { id: "ftc-merged", type: "flow-table-cell", props: { rowspan: 2 }, childIds: ["cell-p"] },
+                "cell-p": paragraphNode("cell-p", "A"),
+              },
+            },
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+
+    const markup = renderCanvas(paginated, doc, "ftc-merged")
+
+    expect(markup).not.toContain(">flow cell</text>")
+    expect(markup.match(/data-flow-table-cell-selection-outline="true"/g)).toHaveLength(2)
+    expect(markup.match(/data-selection-outline-side="top"/g)).toHaveLength(1)
+    expect(markup.match(/data-selection-outline-side="bottom"/g)).toHaveLength(1)
+    expect(markup.match(/data-selection-outline-side="left"/g)).toHaveLength(2)
+    expect(markup.match(/data-selection-outline-side="right"/g)).toHaveLength(2)
   })
 })

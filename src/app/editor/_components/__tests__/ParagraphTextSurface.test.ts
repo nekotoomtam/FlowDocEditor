@@ -361,6 +361,31 @@ describe("ParagraphTextSurface continuation editing", () => {
     expect(state.adjustedInitialCaret).toBe(2)
   })
 
+  it("keeps an Enter-created empty line in the active continuation slice", () => {
+    const fragment = makeFragment({
+      isContinued: true,
+      lines: [
+        {
+          text: "Hello",
+          x: 0,
+          y: 0,
+          width: 50,
+          height: 12,
+          segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+        },
+        { text: "", x: 0, y: 12, width: 0, height: 12 },
+      ],
+    })
+
+    const state = getContinuationEditState("Hello\nworld", fragment, 6)
+
+    expect(state.continuationCharStart).toBe(0)
+    expect(state.continuationCharEnd).toBe(6)
+    expect(state.editText).toBe("Hello\n")
+    expect(state.postText).toBe("world")
+    expect(state.adjustedInitialCaret).toBe(6)
+  })
+
   it("uses only the current first-fragment text when the paragraph continues", () => {
     const fragment = makeFragment({
       isContinued: true,
@@ -746,6 +771,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
     expect(markup).toContain("data-wysiwyg-hit-area=\"true\"")
     expect(markup).toContain("data-wysiwyg-caret=\"true\"")
+    expect(markup).toContain("data-wysiwyg-caret-blink=\"true\"")
     expect(markup).toContain("Hello")
     expect(markup).not.toContain("<textarea")
   })
@@ -1642,6 +1668,71 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("data-wysiwyg-caret=\"true\"")
     expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
     expect(markup).toContain("y1=\"12\"")
+  })
+
+  it("keeps a visible caret at flow-table-cell line ends around an Enter-created line", () => {
+    const doc = makeFlowTableDoc("Hello\n")
+    const fragment = makeFragment({
+      parentNodeId: "c1",
+      width: 50,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 2,
+      lines: [
+        {
+          text: "Hello",
+          x: 10,
+          y: 20,
+          width: 50,
+          height: 12,
+          segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+        },
+        { text: "", x: 10, y: 32, width: 0, height: 12 },
+      ],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const renderCaret = (initialCaretIndex: number) => renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc,
+      pageKey: "0-0",
+      scale: 1,
+      pageContentBottom: 200,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: true,
+      wysiwygTextEngineEnabled: false,
+      showTextSegments: false,
+      initialCaretIndex,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    const lineEndMarkup = renderCaret(5)
+    const emptyLineMarkup = renderCaret(6)
+
+    expect(lineEndMarkup).toContain("data-wysiwyg-caret=\"true\"")
+    expect(lineEndMarkup).toContain("x1=\"60\"")
+    expect(lineEndMarkup).toContain("y1=\"20\"")
+    expect(emptyLineMarkup).toContain("data-wysiwyg-caret=\"true\"")
+    expect(emptyLineMarkup).toContain("x1=\"10\"")
+    expect(emptyLineMarkup).toContain("y1=\"32\"")
   })
 
   it("can render text-engine draft text from local paragraph measurement", () => {

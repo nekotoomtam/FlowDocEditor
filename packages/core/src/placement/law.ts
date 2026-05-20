@@ -212,6 +212,11 @@ function isRowLikeSource(document: DocumentNode, source?: DragSource | null): bo
   return sourceType === "row" || sourceType === "flow-row"
 }
 
+function isFlowStackEdgeColumnSource(source?: DragSource | null): boolean {
+  const paletteBlockType = getPaletteBlockType(source)
+  return paletteBlockType === "columns" || paletteBlockType === "flow-columns"
+}
+
 function isFlowStackContentSource(document: DocumentNode, source?: DragSource | null): boolean {
   const sourceType = getSourceBlockType(document, source)
   return sourceType === "paragraph" || sourceType === "spacer"
@@ -467,7 +472,17 @@ function resolveRowStackLaw(document: DocumentNode, rawIntent: RawPlacementInten
 
   if (zone === "left" || zone === "right") {
     if (rowType === "flow-row") {
-      return err(rawIntent, "invalid-zone", "Flow-row column insertion requires an explicit flow-stack operation.")
+      if (!isFlowStackEdgeColumnSource(source)) {
+        return err(rawIntent, "invalid-zone", "Flow-row edge insertion only accepts a column source.")
+      }
+
+      const intent = makeIntent(rawIntent, target.stackId, target.rowId, "flow-row")
+      return ok(intent, {
+        kind: "add-flow-stack-column",
+        rowId: target.rowId,
+        targetStackId: target.stackId,
+        position: zone === "left" ? "before" : "after",
+      })
     }
 
     const stackInsertCount = getPaletteStackInsertCount(source)

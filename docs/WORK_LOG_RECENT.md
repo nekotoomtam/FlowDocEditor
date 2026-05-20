@@ -24,6 +24,234 @@ Each entry should include:
 
 ## 2026-05-20
 
+### Flow Stack Drag/Drop And Pair Resize UX
+
+Goal: Make `flow-row` / `flow-stack` layout editing feel direct on canvas
+without changing the document model or the existing property-panel commands.
+
+Completed:
+
+- Added a placement operation for dragging `columns` / `flow-columns` onto a
+  `flow-stack` edge so canvas drop uses the existing local stack split
+  behavior instead of rejecting the drop or creating nested flow rows.
+- Kept row-level add-column as the balanced/rebalance action and stack-edge
+  insertion as the local split action.
+- Enabled canvas pair resize handles for `flow-row` / `flow-stack` siblings.
+- Reused the property-panel flow-stack resize minimum-share helper for canvas
+  resize commit, so the 8% preferred minimum and narrow-pair fallback are
+  consistent.
+- Kept resize visual preview sibling-safe and preserved authored column gaps.
+- Removed the mouse-up snap-back by committing the resized document and its
+  optimistic paginated layout together.
+- Updated the editor UX contract and bumped the project release marker to
+  `0.5.15` after verification.
+
+Files changed:
+
+- `packages/core/src/placement/types.ts`
+- `packages/core/src/placement/law.ts`
+- `packages/core/src/placement/law.test.ts`
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/__tests__/projectVersion.test.ts`
+- `package.json`
+- `package-lock.json`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/placement/law.test.ts`
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run test -w packages/core`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/flowStackResize.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+- Playwright smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  loaded the editor, found resize handles, and reported no page errors.
+
+Notes:
+
+- This is editor interaction behavior plus placement plumbing only. It does not
+  change `DocumentNode` schema, persisted package/document versions, export
+  behavior, or row-level balanced add-column semantics.
+- Canvas vertical min-height resize for `flow-row` remains intentionally
+  separate from this pair-resize work.
+
+### WYSIWYG Caret Blink And Vertical Navigation
+
+Goal: Make the active editor caret feel like a normal text editor caret and
+teach the FlowDoc-owned text engine to handle ArrowUp/ArrowDown from rendered
+line geometry.
+
+Completed:
+
+- Added a blinking SVG animation to the custom collapsed caret, including the
+  live text-echo caret used while draft text is waiting for settled layout.
+- Added vertical caret navigation over ordered `PageFragment.lines`, preserving
+  the desired x position across shorter lines and continuation fragments.
+- Routed text-engine ArrowUp/ArrowDown through the FlowDoc caret session instead
+  of letting the hidden input bridge move an invisible browser caret.
+- Kept caret-only movement from scheduling responsive draft pagination, so
+  navigation does not trigger unnecessary layout work.
+- Updated the editor UX contract for blinking custom caret and geometry-owned
+  arrow navigation expectations.
+
+Files changed:
+
+- `docs/EDITOR_UX_CONTRACT.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygCaretMapping.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+- `npm.cmd test -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Browser Playwright smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`:
+  clicked `stage3-boundary-target`, confirmed one SVG caret blink animation,
+  pressed ArrowDown and saw the caret y-position move to the next visual line,
+  with no textarea fallback and no immediate WYSIWYG perf events.
+
+Notes:
+
+- This is editor interaction state only. It does not change `DocumentNode`,
+  pagination semantics, undo/redo history, or export output.
+
+### Inline Edit Enter And Cross-Page Stability Cleanup
+
+Goal: Clean up follow-on WYSIWYG/editing issues seen after making Flow Table
+rowspan content split paragraph-like: Enter-created blank lines losing the
+caret, same paragraph continuations looking like separate paragraphs, and
+cross-page typing feeling jumpy.
+
+Completed:
+
+- Reused the WYSIWYG fragment text-range helper in `EditorCanvas` so active
+  inline edit slice selection honors empty lines created by Enter.
+- Added a page-relocation guard so draft pagination waits while the inline edit
+  typing visual lock is held before moving the active edit page.
+- Hid duplicate paragraph type labels for continued paragraph fragments in the
+  editor chrome, so one logical split paragraph is not presented as two separate
+  paragraphs.
+- Added focused EditorCanvas and page-follow tests for continuation label
+  suppression, single active slice behavior, and visual-lock page relocation.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/editorPageFollow.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/editor/_components/__tests__/editorPageFollow.test.ts`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/editorPageFollow.test.ts src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+
+Notes:
+
+- This is editor lifecycle/rendering behavior only. It does not change
+  `DocumentNode`, Flow Table pagination semantics, undo/redo history, or export
+  output.
+
+### Inline Edit Fragment Identity For Split Paragraphs
+
+Goal: Remove the React duplicate-key warning that appears when inline editing
+paragraph content has multiple same-node fragments, such as Flow Table rowspan
+continuation slices.
+
+Completed:
+
+- Changed editor fragment React keys so active inline-edit fragments use
+  slice identity (`nodeType`, `nodeId`, page, fragment/line start, parent, and
+  render index) instead of only `nodeId`.
+- Limited active inline editing to one same-page paragraph slice by resolving
+  the active render fragment from the caret/text segment range, with first-slice
+  fallback when range metadata is unavailable.
+- Added slice-specific SVG clipPath ids and passed them into
+  `ParagraphTextSurface` so same-node paragraph fragments do not share a text
+  or caret clip target.
+- Added focused EditorCanvas coverage for same-page inline paragraph slices and
+  unique clipPath ids.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This is editor-render identity only. It does not change `DocumentNode`,
+  pagination output, undo/redo semantics, or export behavior.
+
+### Flow Table Rowspan Paragraph-Like Remaining-Page Split
+
+Goal: Restore the product requirement that breakable Flow Table `rowspan`
+content should cross pages like a normal paragraph, using the remaining page
+space before advancing instead of moving the whole merged group when it would
+fit only on a clean page.
+
+Completed:
+
+- Removed the atomic-when-fits gate from `paginateFlowTable` for breakable
+  multi-row Flow Table rowspan groups. `allowBreak=false` rows remain atomic.
+- Removed the early clean-page advance inside
+  `paginateFlowTableRowspanGroupSplit` so a single visible row slice can enter
+  the line-level rowspan slice path when it does not fit the current remaining
+  page space.
+- Restored focused pagination expectations for split rowspan groups,
+  mixed `rowspan`/`colspan` continuation geometry, repeated headers before
+  rowspan continuations, and the "fits clean page but not remaining space"
+  regression.
+- Updated Flow Table, cross-page, and layout specs to describe the paragraph-like
+  remaining-page policy instead of the atomic-when-fits policy.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd test`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This intentionally reverses the 0.5.14 atomic-when-fits pivot for breakable
+  Flow Table rowspan groups because the desired behavior is paragraph-like
+  continuation. Legacy `table` rowspan behavior remains unchanged.
+
 ### Flow Table Rowspan Atomic-When-Fits Policy
 
 Goal: Restore the legacy `table` rowspan grouping intuition for Flow Table so

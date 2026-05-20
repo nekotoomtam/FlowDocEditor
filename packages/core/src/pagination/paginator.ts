@@ -2333,6 +2333,58 @@ interface FlowTableRowspanPagedCell {
   continuesOnRowspan: boolean
 }
 
+interface FlowTableRowspanPageContentStart {
+  pageIndex: number
+  from: SplitPoint
+  cellPageY: number
+}
+
+interface FlowTableRowspanCellMergeState {
+  mergedWithPreviousPageSlice: boolean
+  from: SplitPoint
+  cellPageY: number
+}
+
+function rememberFlowTableRowspanPageContentStart(
+  pageStarts: Map<string, FlowTableRowspanPageContentStart>,
+  cellId: string,
+  pageIndex: number,
+  from: SplitPoint,
+  cellPageY: number,
+): void {
+  const existing = pageStarts.get(cellId)
+  if (existing?.pageIndex === pageIndex) return
+  pageStarts.set(cellId, {
+    pageIndex,
+    from: { ...from },
+    cellPageY,
+  })
+}
+
+function previousFlowTableCellPageFragment(
+  pages: PaginatedPage[],
+  pageIndex: number,
+  cellId: string,
+): PageFragment | null {
+  const page = pages[pageIndex]
+  if (!page) return null
+  for (let index = page.fragments.length - 1; index >= 0; index -= 1) {
+    const fragment = page.fragments[index]
+    if (fragment.nodeId === cellId && fragment.nodeType === "flow-table-cell") return fragment
+  }
+  return null
+}
+
+function removeFlowTableCellContentFragmentsOnPage(
+  pages: PaginatedPage[],
+  pageIndex: number,
+  cellId: string,
+): void {
+  const page = pages[pageIndex]
+  if (!page) return
+  page.fragments = page.fragments.filter((fragment) => fragment.parentNodeId !== cellId)
+}
+
 function flowTableRowspanPagedCellsForRow(
   group: FlowTableRowspanGroupPlan,
   rowBoxes: FlowBox[],
@@ -2391,6 +2443,19 @@ function flowTableRowspanSliceFragmentOrder(fragment: PageFragment): number {
   return 2
 }
 
+function compareFlowTableRowspanFragments(a: PageFragment, b: PageFragment): number {
+  return a.y - b.y ||
+    flowTableRowspanSliceFragmentOrder(a) - flowTableRowspanSliceFragmentOrder(b) ||
+    a.x - b.x ||
+    a.nodeId.localeCompare(b.nodeId)
+}
+
+function sortFlowTableRowspanPageFragments(pages: PaginatedPage[], pageIndex: number): void {
+  const page = pages[pageIndex]
+  if (!page) return
+  page.fragments.sort(compareFlowTableRowspanFragments)
+}
+
 function flowTableRowspanSliceContentHeight(contentFragments: PageFragment[], sliceTop: number): number {
   return contentFragments.reduce((height, fragment) => (
     Math.max(height, fragment.y + fragment.height - sliceTop)
@@ -2413,6 +2478,7 @@ function paginateFlowTableRowspanTallRowSlice(
   flowTableGridProps: FlowTableGridRenderProps,
   flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
   rowspanContentSplits: Map<string, SplitPoint>,
+  rowspanPageContentStarts: Map<string, FlowTableRowspanPageContentStart>,
   repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
 ): PageFlowCursor {
   const rowBox = rowBoxes[rowIndex]
@@ -2541,16 +2607,43 @@ function paginateFlowTableRowspanTallRowSlice(
     )
 
     const contentFragments: PageFragment[] = []
+    const cellMergeStates = new Map<string, FlowTableRowspanCellMergeState>()
     for (const cell of cells) {
       const from = splitByCellId.get(cell.cellId) ?? { childIdx: 0, lineIdx: 0 }
-      const to = toSplits.get(cell.cellId) ?? null
+      const pageStart = cell.continuesFromRowspan
+        ? rowspanPageContentStarts.get(cell.cellId)
+        : undefined
+      const previousCellFragment = pageStart?.pageIndex === current.pageIndex
+        ? previousFlowTableCellPageFragment(pages, current.pageIndex, cell.cellId)
+        : null
+      const mergedWithPreviousPageSlice = Boolean(previousCellFragment)
+      const contentFrom = mergedWithPreviousPageSlice && pageStart ? pageStart.from : from
+      const cellPageY = mergedWithPreviousPageSlice && pageStart ? pageStart.cellPageY : current.cursorY
+      const to = mergedWithPreviousPageSlice
+        ? computeFlowTableSplitPointFrom(
+            cell.cellBox,
+            tableNode,
+            Math.max(0, current.cursorY + sliceHeight - cellPageY),
+            measurer,
+            wordBreaker,
+            contentFrom,
+          )
+        : toSplits.get(cell.cellId) ?? null
+      if (mergedWithPreviousPageSlice) {
+        nextSplits.set(cell.cellId, endSplitPoint(cell.cellBox, to))
+      }
+      cellMergeStates.set(cell.cellId, {
+        mergedWithPreviousPageSlice,
+        from: contentFrom,
+        cellPageY,
+      })
       contentFragments.push(...collectFlowTableCellSlice(
         cell.cellBox,
         tableNode,
         measurer,
         current.pageIndex,
-        current.cursorY,
-        from,
+        cellPageY,
+        contentFrom,
         to,
         wordBreaker,
         current.pageNumberOffset,
@@ -2586,6 +2679,20 @@ function paginateFlowTableRowspanTallRowSlice(
         : undefined
       const cellContinuesFrom = cell.continuesFromRowspan || fragmentIndex > 0
       const cellIsContinued = cell.continuesOnRowspan || rowContinuesAfter
+      const mergeState = cellMergeStates.get(cell.cellId)
+      const previousCellFragment = mergeState?.mergedWithPreviousPageSlice
+        ? previousFlowTableCellPageFragment(pages, current.pageIndex, cell.cellId)
+        : null
+
+      if (previousCellFragment) {
+        previousCellFragment.height = Math.max(
+          previousCellFragment.height,
+          current.cursorY + sliceHeight - previousCellFragment.y,
+        )
+        previousCellFragment.isContinued = cellIsContinued
+        if (sliceWarnings.get(cell.cellId)) previousCellFragment.warnings = sliceWarnings.get(cell.cellId)
+        continue
+      }
 
       fragments.push({
         nodeId: cell.cellId,
@@ -2602,15 +2709,27 @@ function paginateFlowTableRowspanTallRowSlice(
         isContinued: cellIsContinued,
         warnings: sliceWarnings.get(cell.cellId),
       })
+      rememberFlowTableRowspanPageContentStart(
+        rowspanPageContentStarts,
+        cell.cellId,
+        current.pageIndex,
+        splitByCellId.get(cell.cellId) ?? { childIdx: 0, lineIdx: 0 },
+        current.cursorY,
+      )
     }
 
-    for (const fragment of [...fragments, ...contentFragments].sort((a, b) =>
-      a.y - b.y ||
-      flowTableRowspanSliceFragmentOrder(a) - flowTableRowspanSliceFragmentOrder(b) ||
-      a.x - b.x ||
-      a.nodeId.localeCompare(b.nodeId)
-    )) {
+    for (const mergeState of cellMergeStates.entries()) {
+      const [cellId, state] = mergeState
+      if (state.mergedWithPreviousPageSlice) {
+        removeFlowTableCellContentFragmentsOnPage(pages, current.pageIndex, cellId)
+      }
+    }
+
+    for (const fragment of [...fragments, ...contentFragments].sort(compareFlowTableRowspanFragments)) {
       pushFragment(pages, template, fragment)
+    }
+    if (Array.from(cellMergeStates.values()).some((state) => state.mergedWithPreviousPageSlice)) {
+      sortFlowTableRowspanPageFragments(pages, current.pageIndex)
     }
 
     for (const cell of cells) {
@@ -2648,6 +2767,7 @@ function pushFlowTableRowspanGroupSlice(
   flowTableGridProps: FlowTableGridRenderProps,
   flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
   rowspanContentSplits: Map<string, SplitPoint>,
+  rowspanPageContentStarts: Map<string, FlowTableRowspanPageContentStart>,
 ): PageFlowCursor {
   const sliceTopRowBox = rowBoxes[slice.rowStartIndex]
   if (!sliceTopRowBox) return cursor
@@ -2666,6 +2786,13 @@ function pushFlowTableRowspanGroupSlice(
     warningRowId: string,
   ): void => {
     const from = rowspanContentSplits.get(cellBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }
+    rememberFlowTableRowspanPageContentStart(
+      rowspanPageContentStarts,
+      cellBox.nodeId,
+      cursor.pageIndex,
+      from,
+      cellPageY,
+    )
     let to = isContinued
       ? computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, cellHeight), measurer, wordBreaker, from)
       : null
@@ -2821,12 +2948,7 @@ function pushFlowTableRowspanGroupSlice(
   }
 
   [...fragments, ...contentFragments]
-    .sort((a, b) =>
-      a.y - b.y ||
-      flowTableRowspanSliceFragmentOrder(a) - flowTableRowspanSliceFragmentOrder(b) ||
-      a.x - b.x ||
-      a.nodeId.localeCompare(b.nodeId)
-    )
+    .sort(compareFlowTableRowspanFragments)
     .forEach((fragment) => pushFragment(pages, template, fragment))
 
   return { ...cursor, cursorY: cursor.cursorY + slice.height }
@@ -2851,6 +2973,7 @@ function paginateFlowTableRowspanGroupSplit(
   let current = cursor
   let rowOffset = 0
   const rowspanContentSplits = new Map<string, SplitPoint>()
+  const rowspanPageContentStarts = new Map<string, FlowTableRowspanPageContentStart>()
   for (const cell of group.spanningCells) {
     rowspanContentSplits.set(cell.cellId, { childIdx: 0, lineIdx: 0 })
   }
@@ -2882,13 +3005,6 @@ function paginateFlowTableRowspanGroupSplit(
     const rowEndIndex = group.rows[endOffset - 1].rowIndex
     const slice = planFlowTableRowspanGroupSlice(group, rowStartIndex, rowEndIndex)
     if (rowStartIndex === rowEndIndex && slice.height > availableHeight) {
-      const fullPageHeight = contentBottom - contentTop
-      if (current.cursorY > contentTop + 1 && slice.height <= fullPageHeight) {
-        current = advancePage(current, contentTop)
-        current = repeatHeaders ? repeatHeaders(current) : current
-        continue
-      }
-
       current = paginateFlowTableRowspanTallRowSlice(
         group,
         rowStartIndex,
@@ -2905,6 +3021,7 @@ function paginateFlowTableRowspanGroupSplit(
         flowTableGridProps,
         flowTableCellGridPropsById,
         rowspanContentSplits,
+        rowspanPageContentStarts,
         repeatHeaders,
       )
       rowOffset = endOffset
@@ -2925,6 +3042,7 @@ function paginateFlowTableRowspanGroupSplit(
       flowTableGridProps,
       flowTableCellGridPropsById,
       rowspanContentSplits,
+      rowspanPageContentStarts,
     )
     rowOffset = endOffset
   }
@@ -2992,11 +3110,8 @@ function paginateFlowTable(
       ? firstRowNode.props.allowBreak ?? true
       : true
     const firstGroupIsHeader = firstGroup.rowIndices.every((rowIndex) => rowIndex < headerRowCount)
-    const fullPageHeight = contentBottom - contentTop
-    const firstGroupAllowsRowBoundarySplit = !firstGroupIsHeader &&
-      flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, firstGroup)
     const firstGroupIsAtomic = firstGroupIsHeader ||
-      (firstGroup.rowIndices.length > 1 && (!firstGroupAllowsRowBoundarySplit || firstGroup.totalHeight <= fullPageHeight)) ||
+      (firstGroup.rowIndices.length > 1 && !flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, firstGroup)) ||
       (firstGroup.rowIndices.length === 1 && !firstRowAllowBreak)
     const firstGroupNeedsCleanSplitStart = !firstGroupIsAtomic &&
       current.cursorY > contentTop &&
@@ -3029,12 +3144,10 @@ function paginateFlowTable(
     }
 
     if (rowIndices.length > 1) {
-      const fullPageHeight = contentBottom - contentTop
-      const groupFitsOnePage = totalHeight <= fullPageHeight
       const allowsRowBoundarySplit = !isHeaderGroup &&
         flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, { rowIndices, rowIds, rows, totalHeight, spanningCells })
 
-      if (!groupFitsOnePage && allowsRowBoundarySplit) {
+      if (allowsRowBoundarySplit) {
         current = paginateFlowTableRowspanGroupSplit(
           { rowIndices, rowIds, rows, totalHeight, spanningCells },
           box.children,

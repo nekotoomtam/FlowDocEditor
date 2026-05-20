@@ -6,6 +6,7 @@ import {
   findWysiwygPageIndexInFragmentRanges,
   getWysiwygParagraphFragmentRanges,
   getWysiwygCaretCandidatesForLine,
+  getWysiwygFragmentTextRange,
   resolveCaretOffsetFromPointInFragment,
   resolveCaretPositionInFragment,
   resolveCollapsedCaretOverlayInFragment,
@@ -13,6 +14,7 @@ import {
   resolveParagraphCaretPosition,
   resolveParagraphSelectionOverlayRects,
   resolveSelectionOverlayRectsInFragment,
+  resolveVerticalCaretNavigationInFragments,
 } from "../wysiwygCaretMapping"
 
 function makeLine(overrides: Partial<PaginatedLine> = {}): PaginatedLine {
@@ -229,6 +231,110 @@ describe("WYSIWYG caret mapping contract", () => {
     })
   })
 
+  it("moves the caret vertically by rendered line geometry", () => {
+    const fragment = makeFragment({
+      lines: [
+        makeLine({
+          text: "Alpha",
+          x: 0,
+          y: 0,
+          width: 50,
+          segments: [{ kind: "word", text: "Alpha", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+        }),
+        makeLine({
+          text: "BetaBeta",
+          x: 0,
+          y: 12,
+          width: 80,
+          segments: [{ kind: "word", text: "BetaBeta", start: 5, end: 13, x: 0, width: 80, breakableAfter: false }],
+        }),
+      ],
+    })
+
+    const down = resolveVerticalCaretNavigationInFragments([fragment], 3, "down", {
+      textMeasurer: fixedWidthMeasurer,
+    })
+    const up = resolveVerticalCaretNavigationInFragments([fragment], down?.offset ?? 0, "up", {
+      preferredX: down?.preferredX,
+      lineAffinity: down?.lineAffinity,
+      textMeasurer: fixedWidthMeasurer,
+    })
+
+    expect(down).toMatchObject({ offset: 8, lineIndex: 1, preferredX: 30 })
+    expect(up).toMatchObject({ offset: 3, lineIndex: 0, preferredX: 30 })
+  })
+
+  it("preserves the vertical x target across a shorter middle line", () => {
+    const fragment = makeFragment({
+      lines: [
+        makeLine({
+          text: "abcdefghij",
+          x: 0,
+          y: 0,
+          width: 100,
+          segments: [{ kind: "word", text: "abcdefghij", start: 0, end: 10, x: 0, width: 100, breakableAfter: false }],
+        }),
+        makeLine({
+          text: "xy",
+          x: 0,
+          y: 12,
+          width: 20,
+          segments: [{ kind: "word", text: "xy", start: 10, end: 12, x: 0, width: 20, breakableAfter: false }],
+        }),
+        makeLine({
+          text: "klmnopqrst",
+          x: 0,
+          y: 24,
+          width: 100,
+          segments: [{ kind: "word", text: "klmnopqrst", start: 12, end: 22, x: 0, width: 100, breakableAfter: false }],
+        }),
+      ],
+    })
+
+    const firstDown = resolveVerticalCaretNavigationInFragments([fragment], 8, "down", {
+      textMeasurer: fixedWidthMeasurer,
+    })
+    const secondDown = resolveVerticalCaretNavigationInFragments([fragment], firstDown?.offset ?? 0, "down", {
+      preferredX: firstDown?.preferredX,
+      lineAffinity: firstDown?.lineAffinity,
+      textMeasurer: fixedWidthMeasurer,
+    })
+
+    expect(firstDown).toMatchObject({ offset: 12, lineIndex: 1, preferredX: 80 })
+    expect(secondDown).toMatchObject({ offset: 20, lineIndex: 2, preferredX: 80 })
+  })
+
+  it("moves vertically across paragraph continuation fragments", () => {
+    const first = makeFragment({
+      pageIndex: 0,
+      fragmentIndex: 0,
+      lines: [makeLine({
+        text: "First",
+        x: 0,
+        y: 20,
+        width: 50,
+        segments: [{ kind: "word", text: "First", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      })],
+    })
+    const second = makeFragment({
+      pageIndex: 1,
+      fragmentIndex: 1,
+      lines: [makeLine({
+        text: "Second",
+        x: 0,
+        y: 30,
+        width: 60,
+        segments: [{ kind: "word", text: "Second", start: 5, end: 11, x: 0, width: 60, breakableAfter: false }],
+      })],
+    })
+
+    const down = resolveVerticalCaretNavigationInFragments([second, first], 3, "down", {
+      textMeasurer: fixedWidthMeasurer,
+    })
+
+    expect(down).toMatchObject({ offset: 8, pageIndex: 1, fragmentIndex: 1, lineIndex: 0 })
+  })
+
   it("keeps point-to-offset mapping outside emoji ZWJ grapheme internals", () => {
     const emoji = "👩‍💻"
     const text = `A${emoji}B`
@@ -398,6 +504,81 @@ describe("WYSIWYG caret mapping contract", () => {
     expect(resolveCaretOffsetFromPointInFragment(fragment, { x: 4, y: 14 })).toMatchObject({
       offset: 6,
       lineIndex: 1,
+    })
+  })
+
+  it("keeps the caret at the end of text before an Enter-created empty line", () => {
+    const fragment = makeFragment({
+      lines: [
+        makeLine({
+          text: "Hello",
+          x: 0,
+          y: 0,
+          width: 50,
+          height: 12,
+          segments: [{
+            kind: "word",
+            text: "Hello",
+            start: 0,
+            end: 5,
+            x: 0,
+            width: 50,
+            breakableAfter: false,
+          }],
+        }),
+        { text: "", x: 0, y: 12, width: 0, height: 12 },
+      ],
+    })
+
+    expect(resolveCaretPositionInFragment(fragment, 5)).toMatchObject({
+      offset: 5,
+      lineIndex: 0,
+      x: 50,
+      y: 0,
+      source: "segment-candidate",
+    })
+    expect(resolveCaretOffsetFromPointInFragment(fragment, { x: 49, y: 2 })).toMatchObject({
+      offset: 5,
+      lineIndex: 0,
+    })
+  })
+
+  it("maps a leading empty continuation line from the following text offset", () => {
+    const fragment = makeFragment({
+      continuesFrom: true,
+      lineStart: 1,
+      lineEnd: 3,
+      lines: [
+        { text: "", x: 0, y: 0, width: 0, height: 12 },
+        makeLine({
+          text: "Next",
+          x: 0,
+          y: 12,
+          width: 40,
+          height: 12,
+          segments: [{
+            kind: "word",
+            text: "Next",
+            start: 7,
+            end: 11,
+            x: 0,
+            width: 40,
+            breakableAfter: false,
+          }],
+        }),
+      ],
+    })
+
+    expect(getWysiwygFragmentTextRange(fragment)).toEqual({ start: 6, end: 11 })
+    expect(resolveCaretPositionInFragment(fragment, 6)).toMatchObject({
+      offset: 6,
+      lineIndex: 0,
+      y: 0,
+      source: "segment-ratio",
+    })
+    expect(resolveCaretOffsetFromPointInFragment(fragment, { x: 4, y: 2 })).toMatchObject({
+      offset: 6,
+      lineIndex: 0,
     })
   })
 

@@ -1,6 +1,6 @@
 import type { TextMeasurer } from "@/layout"
 import type { PageFragment, PaginatedLine, PaginatedPage } from "@/pagination"
-import { resolveCaretPositionInFragment } from "./wysiwygCaretMapping"
+import { getWysiwygFragmentTextRange, resolveCaretPositionInFragment } from "./wysiwygCaretMapping"
 
 const HEIGHT_EPSILON = 0.5
 
@@ -49,11 +49,7 @@ export function shiftWysiwygDraftPreviewDownstreamFragments(input: {
 }
 
 function getFragmentTextRange(fragment: PageFragment): { start: number; end: number } | null {
-  const segments = (fragment.lines ?? []).flatMap((line) => line.segments ?? [])
-  if (segments.length === 0) return null
-  const start = Math.min(...segments.map((segment) => segment.start))
-  const end = Math.max(...segments.map((segment) => segment.end))
-  return { start, end }
+  return getWysiwygFragmentTextRange(fragment)
 }
 
 function resolveDraftSpacingAfter(

@@ -86,6 +86,7 @@ export type PlacementOperation =
   | { kind: "expand-row-left"; rowId: string; targetStackId: string; index: number }
   | { kind: "expand-row-right"; rowId: string; targetStackId: string; index: number }
   | { kind: "insert-stacks-into-row"; rowId: string; targetStackId: string; index: number; count: number }
+  | { kind: "add-flow-stack-column"; rowId: string; targetStackId: string; position: "before" | "after" }
   | { kind: "wrap-in-row-left"; parentId: string; parentType: "body" | "stack"; index: number; targetNodeId: string }
   | { kind: "wrap-in-row-right"; parentId: string; parentType: "body" | "stack"; index: number; targetNodeId: string }
 

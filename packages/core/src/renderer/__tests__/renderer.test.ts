@@ -89,7 +89,8 @@ function makeLines(prefix: string, count: number): string {
 }
 
 function makeFlowTableRowspanContinuationDoc(): DocumentNode {
-  const tallRowHeight = 250
+  const before = makeSpacer("ft-rowspan-before", 650)
+  const rowHeight = 40
   const spanText = makePara("ft-rowspan-span-p", makeLines("S", 7), { spacingAfter: pt(0) })
   const topThird = makePara("ft-rowspan-top-third-p", "TOP3", { spacingAfter: pt(0) })
   const topFourth = makePara("ft-rowspan-top-fourth-p", "TOP4", { spacingAfter: pt(0) })
@@ -116,9 +117,9 @@ function makeFlowTableRowspanContinuationDoc(): DocumentNode {
   const middleFourthCell = makeFlowTableCell("ft-rowspan-middle-fourth-cell", [middleFourth.id])
   const bottomThirdCell = makeFlowTableCell("ft-rowspan-bottom-third-cell", [bottomThird.id])
   const bottomFourthCell = makeFlowTableCell("ft-rowspan-bottom-fourth-cell", [bottomFourth.id])
-  const topRow = makeFlowTableRow("ft-rowspan-top-row", [spanCell.id, topThirdCell.id, topFourthCell.id], { height: pt(tallRowHeight) })
-  const middleRow = makeFlowTableRow("ft-rowspan-middle-row", [middleThirdCell.id, middleFourthCell.id], { height: pt(tallRowHeight) })
-  const bottomRow = makeFlowTableRow("ft-rowspan-bottom-row", [bottomThirdCell.id, bottomFourthCell.id], { height: pt(tallRowHeight) })
+  const topRow = makeFlowTableRow("ft-rowspan-top-row", [spanCell.id, topThirdCell.id, topFourthCell.id], { height: pt(rowHeight) })
+  const middleRow = makeFlowTableRow("ft-rowspan-middle-row", [middleThirdCell.id, middleFourthCell.id], { height: pt(rowHeight) })
+  const bottomRow = makeFlowTableRow("ft-rowspan-bottom-row", [bottomThirdCell.id, bottomFourthCell.id], { height: pt(rowHeight) })
   const table: FlowTableNode = {
     id: "ft-rowspan-render",
     type: "flow-table",
@@ -146,7 +147,10 @@ function makeFlowTableRowspanContinuationDoc(): DocumentNode {
     },
   }
 
-  return makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+  return makeDoc([before.id, table.id], {
+    [before.id]: before as unknown as LayoutNode,
+    [table.id]: table as unknown as LayoutNode,
+  })
 }
 
 // ─── PDF smoke tests ──────────────────────────────────────────────────────────

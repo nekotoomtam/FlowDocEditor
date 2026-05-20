@@ -2036,6 +2036,9 @@ export function applyPlacementOperation(
     if (source.source !== "field") return doc
     return insertInlineField(doc, op.paragraphId, op.index, source.field)
   }
+  if (op.kind === "add-flow-stack-column") {
+    return addFlowStackColumn(doc, op.rowId, op.targetStackId, op.position)
+  }
 
   const sectionIndex = doc.document.sections.findIndex((s) => s.id === sectionId)
   if (sectionIndex === -1) return doc

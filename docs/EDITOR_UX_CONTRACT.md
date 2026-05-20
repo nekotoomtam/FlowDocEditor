@@ -100,6 +100,14 @@ Paragraph box styling is defined in
 - When the active draft has fresh SVG lines and the textarea selection is
   collapsed, the editor should draw the collapsed caret from paginated line
   geometry and hide the native textarea caret.
+- The active custom caret should blink while the editor focus remains in the
+  inline text session. A caret-only move must keep the SVG caret visible and
+  must not require document or pagination changes.
+- In the FlowDoc-owned text-engine lane, ArrowLeft/ArrowRight/ArrowUp/ArrowDown
+  should update the transient caret/selection state from FlowDoc text and line
+  geometry. Vertical ArrowUp/ArrowDown navigation should use the rendered
+  `fragment.lines` order and preserve the user's visual x target across
+  shorter or longer adjacent lines.
 - When a single active fragment has fresh SVG lines and range-selection geometry
   can be resolved, drag/range selection may stay in document-visual mode and
   draw SVG highlight rectangles from paragraph offsets. If the custom caret or
@@ -191,9 +199,9 @@ Table-specific interaction rules are defined in
 - The current `flow-stack` minimum width is an interaction guard, not a
   content-measured layout minimum. The preferred minimum is `8%` per column,
   with an adaptive lower effective minimum for already narrow sibling pairs.
-- Property-panel pair resize is the current safe path for `flow-stack` width
-  edits. Canvas drag resize for `flow-row` / `flow-stack` remains a separate
-  future interaction design.
+- Property-panel pair resize and canvas pair resize are the safe paths for
+  `flow-stack` width edits. Canvas drag resize must use the same sibling-safe
+  pair rule: only the two stacks around the dragged divider change.
 
 ## Preview And Authoritative Layout
 

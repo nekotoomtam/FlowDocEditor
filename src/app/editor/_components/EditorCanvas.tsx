@@ -22,7 +22,7 @@ import {
   ParagraphTextSurface,
   type WysiwygTextPointerFragmentTarget,
 } from "./ParagraphTextSurface"
-import { resolveCaretOffsetFromPointInFragment } from "./wysiwygCaretMapping"
+import { getWysiwygFragmentTextRange, resolveCaretOffsetFromPointInFragment } from "./wysiwygCaretMapping"
 import {
   classifyWysiwygTextReflow,
   shouldPrepareWysiwygTableCellDraftVisualPreview,
@@ -38,6 +38,7 @@ import {
   type WysiwygDraftVisualPreview,
 } from "./wysiwygDraftVisualPreview"
 import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
+import { resolveActiveInlineEditPageIndex } from "./editorPageFollow"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -83,6 +84,39 @@ const DROP_INSERTION_STROKE = "#0d9488"
 const READ_ONLY_ZONE_FILL: Record<"header" | "footer", string> = {
   header: "#fef9c3",
   footer: "#fce7f3",
+}
+
+function fragmentSliceIdentity(fragment: PageFragment): string {
+  return [
+    fragment.nodeType,
+    fragment.nodeId,
+    fragment.pageIndex,
+    fragment.fragmentIndex ?? fragment.lineStart ?? "x",
+    fragment.parentNodeId ?? "root",
+  ].join("-")
+}
+
+export function buildEditorFragmentRenderKey(
+  fragment: PageFragment,
+  index: number,
+  isInlineEditing: boolean,
+): string {
+  const sliceKey = `${fragmentSliceIdentity(fragment)}-${index}`
+  return isInlineEditing
+    ? `inline-edit-${sliceKey}`
+    : `${sliceKey}-${fragment.lineStart ?? "x"}-${fragment.lineEnd ?? "x"}`
+}
+
+export function buildEditorFragmentClipPathId(pageKey: string, fragment: PageFragment, index?: number): string {
+  return `cp-${pageKey}-${fragmentSliceIdentity(fragment)}${index == null ? "" : `-${index}`}`
+}
+
+function fragmentContainsInlineEditCaret(fragment: PageFragment, caretIndex: number | null): boolean {
+  if (caretIndex == null) return false
+  const range = getWysiwygFragmentTextRange(fragment)
+  if (!range) return false
+  if (caretIndex < range.start || caretIndex > range.end) return false
+  return caretIndex < range.end || fragment.isContinued !== true
 }
 
 function isTableCellFragment(fragment: PageFragment | null | undefined): boolean {
@@ -294,6 +328,47 @@ function renderFragmentBox(fragment: PageFragment, scale: number) {
   )
 }
 
+function isFlowTableCellContinuationFragment(fragment: PageFragment): boolean {
+  return fragment.nodeType === "flow-table-cell" &&
+    (fragment.continuesFrom === true || fragment.isContinued === true)
+}
+
+function renderFlowTableCellSelectionOutline(
+  fragment: PageFragment,
+  scale: number,
+  chromeY: number,
+  chromeHeight: number,
+  selectionPad: number,
+) {
+  const xLeft = fragment.x * scale - selectionPad
+  const xRight = (fragment.x + fragment.width) * scale + selectionPad
+  const yTop = chromeY - selectionPad
+  const yBottom = chromeY + chromeHeight + selectionPad
+  const lines = [
+    fragment.continuesFrom === true ? null : { side: "top", x1: xLeft, y1: yTop, x2: xRight, y2: yTop },
+    fragment.isContinued === true ? null : { side: "bottom", x1: xLeft, y1: yBottom, x2: xRight, y2: yBottom },
+    { side: "left", x1: xLeft, y1: yTop, x2: xLeft, y2: yBottom },
+    { side: "right", x1: xRight, y1: yTop, x2: xRight, y2: yBottom },
+  ].filter((line): line is { side: string; x1: number; y1: number; x2: number; y2: number } => Boolean(line))
+
+  return (
+    <g data-flow-table-cell-selection-outline="true" style={{ pointerEvents: "none" }}>
+      {lines.map((line) => (
+        <line
+          key={line.side}
+          data-selection-outline-side={line.side}
+          x1={line.x1}
+          y1={line.y1}
+          x2={line.x2}
+          y2={line.y2}
+          stroke="#2563eb"
+          strokeWidth={1.5}
+        />
+      ))}
+    </g>
+  )
+}
+
 function caretIndexFromPointer(
   fragment: PageFragment,
   event: React.PointerEvent | React.MouseEvent,
@@ -428,6 +503,7 @@ function ReadOnlyZoneFragments({
   scale,
   textMeasurer,
   showTextSegments,
+  clipPathIndexOffset = 0,
 }: {
   fragments: PageFragment[]
   zone: "header" | "footer"
@@ -436,6 +512,7 @@ function ReadOnlyZoneFragments({
   scale: number
   textMeasurer: TextMeasurer
   showTextSegments: boolean
+  clipPathIndexOffset?: number
 }) {
   return fragments.map((fragment, index) => {
     const canRenderText = fragment.nodeType === "paragraph" || fragment.nodeType === "toc"
@@ -464,6 +541,7 @@ function ReadOnlyZoneFragments({
             fragment={fragment}
             doc={doc}
             pageKey={pageKey}
+            clipPathId={buildEditorFragmentClipPathId(pageKey, fragment, clipPathIndexOffset + index)}
             scale={scale}
             textMeasurer={textMeasurer}
             isEditing={false}
@@ -558,7 +636,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading, inlineEditVisualFresh,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown,
   resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
@@ -584,6 +662,7 @@ function PageView({
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
   inlineEditPageIndex: number | null
+  inlineEditVisualLocked: boolean
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
   onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
@@ -598,7 +677,7 @@ function PageView({
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   resizeDrag: ResizeDrag | null
-  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, startClientX: number, pageKey: string) => void
+  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, gapWidthPt: number, startClientX: number, pageKey: string) => void
   minHeightDrag: MinHeightDrag | null
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   sectionIndex: number
@@ -673,7 +752,11 @@ function PageView({
   const headerFragments = page.headerFragments ?? []
   const footerFragments = page.footerFragments ?? []
   const zoneFragments = [...headerFragments, ...footerFragments]
-  const activeInlineEditPageIndex = wysiwygDraftVisualPreview?.caretPageIndex ?? inlineEditPageIndex
+  const activeInlineEditPageIndex = resolveActiveInlineEditPageIndex({
+    inlineEditPageIndex,
+    previewCaretPageIndex: wysiwygDraftVisualPreview?.caretPageIndex,
+    isVisualLocked: inlineEditVisualLocked,
+  })
 
   const resolveDisplayFragment = (fragment: PageFragment): PageFragment => (
     visualDraftFragmentForPage &&
@@ -682,6 +765,20 @@ function PageView({
       ? visualDraftFragmentForPage
       : sourceTableCellDraftVisualChromeByKey.get(tableCellDraftVisualChromeKey(fragment)) ?? fragment
   )
+  const activeInlineEditRenderIndex = (() => {
+    if (!inlineEditNodeId) return -1
+    const candidates = renderFragments
+      .map((fragment, index) => ({ fragment, index, displayFragment: resolveDisplayFragment(fragment) }))
+      .filter(({ fragment }) =>
+        fragment.nodeId === inlineEditNodeId &&
+        (activeInlineEditPageIndex == null || fragment.pageIndex === activeInlineEditPageIndex)
+      )
+    if (candidates.length === 0) return -1
+    const caretCandidate = candidates.find(({ displayFragment }) =>
+      fragmentContainsInlineEditCaret(displayFragment, inlineEditCaretIndex)
+    )
+    return (caretCandidate ?? candidates[0]).index
+  })()
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
     <svg
@@ -698,8 +795,9 @@ function PageView({
       <defs>
         {[...renderFragments, ...zoneFragments].map((f, i) => {
           const displayFragment = resolveDisplayFragment(f)
+          const clipPathId = buildEditorFragmentClipPathId(pageKey, displayFragment, i)
           return (
-          <clipPath key={`${f.nodeId}-${i}`} id={`cp-${pageKey}-${f.nodeId}`}>
+          <clipPath key={`${clipPathId}-${i}`} id={clipPathId}>
             <rect x={displayFragment.x * scale} y={displayFragment.y * scale} width={displayFragment.width * scale} height={9999} />
           </clipPath>
           )
@@ -792,11 +890,9 @@ function PageView({
         const isTableCellParagraph = f.nodeType === "paragraph" && isTableCellId(doc, f.parentNodeId)
         const canInlineEditThisParagraph = f.nodeType === "paragraph" && canInlineEditParagraph(doc, f.nodeId)
         const visualDisplayFragment = resolveDisplayFragment(f)
-        // For split paragraphs: only the fragment on the clicked page enters edit mode.
-        // Without the pageIndex check, ALL fragments of the paragraph get isInlineEditing=true,
-        // disabling pointer events and rendering textareas on every page the paragraph spans.
-        const isInlineEditing = f.nodeId === inlineEditNodeId &&
-          (activeInlineEditPageIndex == null || f.pageIndex === activeInlineEditPageIndex)
+        // For split paragraphs: only the active fragment slice enters edit mode.
+        // Otherwise same-node continuation fragments can render duplicate editors.
+        const isInlineEditing = i === activeInlineEditRenderIndex
         if (isInlineEditing) {
           if (
             editFragmentRef.current?.nodeId !== f.nodeId ||
@@ -812,16 +908,24 @@ function PageView({
           : visualDisplayFragment
         const isFlowStackParagraph = f.nodeType === "paragraph" &&
           isParagraphInsideFlowStack(doc, f.nodeId, f.parentNodeId)
+        const isContinuationParagraphFragment = f.nodeType === "paragraph" &&
+          (displayFragment.continuesFrom === true || displayFragment.isContinued === true)
+        const isContinuationFlowTableCellFragment = isFlowTableCellContinuationFragment(displayFragment)
+        const shouldShowFragmentTypeLabel = !isFlowTableRowVisualOnly &&
+          !isTableStructureChrome &&
+          !isWysiwygTableCellDraftVisualChrome &&
+          !isContinuationParagraphFragment &&
+          !isContinuationFlowTableCellFragment
         const docNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === f.nodeId)
         const isEmpty = (f.nodeType === "stack" || f.nodeType === "flow-stack") && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
         // visual override ระหว่าง resize
         let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = displayFragment.height
-        if (resizeDrag && f.nodeType === "stack") {
+        if (resizeDrag && (f.nodeType === "stack" || f.nodeType === "flow-stack")) {
           if (f.nodeId === resizeDrag.leftStackId) {
             fragWidth = resizeDrag.currentDocX - f.x
           } else if (f.nodeId === resizeDrag.rightStackId) {
-            fragX = resizeDrag.currentDocX
-            fragWidth = (f.x + f.width) - resizeDrag.currentDocX
+            fragX = resizeDrag.currentDocX + resizeDrag.gapWidthPt
+            fragWidth = (f.x + f.width) - fragX
           }
         }
         if (minHeightDrag && !minHeightDrag.committed) {
@@ -829,6 +933,9 @@ function PageView({
             fragHeight = Math.max(fragHeight, minHeightDrag.currentMinHeight)
           }
         }
+        const resizedDisplayFragment = fragX !== displayFragment.x || fragWidth !== displayFragment.width || fragHeight !== displayFragment.height
+          ? { ...displayFragment, x: fragX, width: fragWidth, height: fragHeight }
+          : displayFragment
         const paragraphChromeY = isFlowStackParagraph ? FLOW_STACK_PARAGRAPH_CHROME_Y : PARAGRAPH_CHROME_Y
         const chromeTop = f.nodeType === "paragraph" ? paragraphChromeY : 0
         const chromeBottom = f.nodeType === "paragraph" ? paragraphChromeY : 0
@@ -855,9 +962,8 @@ function PageView({
           : isWysiwygTableCellDraftVisualChrome ? 0.34
           : hasAuthoredFragmentBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
         const selectionPad = isFlowStackParagraph ? 0 : 1
-        const fragmentKey = isInlineEditing
-          ? `inline-edit-${f.nodeId}`
-          : `${f.nodeType}-${f.nodeId}-${f.pageIndex}-${f.lineStart ?? "x"}-${f.lineEnd ?? "x"}-${f.parentNodeId ?? "root"}-${i}`
+        const fragmentKey = buildEditorFragmentRenderKey(displayFragment, i, isInlineEditing)
+        const clipPathId = buildEditorFragmentClipPathId(pageKey, displayFragment, i)
 
         return (
           <g
@@ -923,14 +1029,18 @@ function PageView({
               strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
               opacity={chromeOpacity}
             />
-            {(f.nodeType === "paragraph" || f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && renderFragmentBox(displayFragment, scale)}
+            {(f.nodeType === "paragraph" || f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && renderFragmentBox(resizedDisplayFragment, scale)}
             {isSelected && !isInlineEditing && !isFlowTableRowVisualOnly && (
-              <rect
-                x={displayFragment.x * scale - selectionPad} y={chromeY - selectionPad}
-                width={displayFragment.width * scale + selectionPad * 2} height={chromeHeight + selectionPad * 2}
-                fill="none" stroke="#2563eb" strokeWidth={1.5}
-                style={{ pointerEvents: "none" }}
-              />
+              isContinuationFlowTableCellFragment
+                ? renderFlowTableCellSelectionOutline(displayFragment, scale, chromeY, chromeHeight, selectionPad)
+                : (
+                  <rect
+                    x={resizedDisplayFragment.x * scale - selectionPad} y={chromeY - selectionPad}
+                    width={resizedDisplayFragment.width * scale + selectionPad * 2} height={chromeHeight + selectionPad * 2}
+                    fill="none" stroke="#2563eb" strokeWidth={1.5}
+                    style={{ pointerEvents: "none" }}
+                  />
+                )
             )}
             {showDrift && f.nodeType === "paragraph" && (() => {
               const drift = driftMap?.get(f.nodeId)
@@ -964,7 +1074,7 @@ function PageView({
                 </g>
               )
             })()}
-            {!isFlowTableRowVisualOnly && !isTableStructureChrome && !isWysiwygTableCellDraftVisualChrome && (
+            {shouldShowFragmentTypeLabel && (
               <text x={displayFragment.x * scale + 3} y={displayFragment.y * scale + 8} fontSize={6} fill="#374151"
                 style={{ pointerEvents: "none", userSelect: "none" }}>
                 {displayFragmentNodeType(f.nodeType)}
@@ -972,7 +1082,7 @@ function PageView({
             )}
             {isEmpty && (
               <text
-                x={(displayFragment.x + displayFragment.width / 2) * scale} y={(displayFragment.y + fragHeight / 2 + 3) * scale}
+                x={(resizedDisplayFragment.x + resizedDisplayFragment.width / 2) * scale} y={(resizedDisplayFragment.y + fragHeight / 2 + 3) * scale}
                 textAnchor="middle" fontSize={8 * scale} fill="#9ca3af"
                 style={{ pointerEvents: "none", userSelect: "none" }}>
                 วางที่นี่
@@ -985,6 +1095,7 @@ function PageView({
                 fragment={displayFragment}
                 doc={doc}
                 pageKey={pageKey}
+                clipPathId={clipPathId}
                 scale={scale}
                 pageContentBottom={page.contentBox.y + page.contentBox.height}
                 textMeasurer={textMeasurer}
@@ -1023,6 +1134,7 @@ function PageView({
         scale={scale}
         textMeasurer={textMeasurer}
         showTextSegments={showTextSegments}
+        clipPathIndexOffset={renderFragments.length}
       />
       <ReadOnlyZoneFragments
         fragments={footerFragments}
@@ -1032,14 +1144,17 @@ function PageView({
         scale={scale}
         textMeasurer={textMeasurer}
         showTextSegments={showTextSegments}
+        clipPathIndexOffset={renderFragments.length + headerFragments.length}
       />
 
       {/* resize handles — แสดงระหว่าง stacks ของแต่ละ row */}
-      {!drag && page.fragments.filter((f) => f.nodeType === "row").map((rowFrag) => {
+      {!drag && page.fragments.filter((f) => f.nodeType === "row" || f.nodeType === "flow-row").map((rowFrag) => {
         const rowNode = doc.document.sections.flatMap((s) => Object.values(s.nodes)).find((n) => n.id === rowFrag.nodeId)
-        if (rowNode?.type !== "row") return null
-        return rowNode.childIds.slice(0, -1).map((leftStackId, i) => {
-          const rightStackId = rowNode.childIds[i + 1]
+        if (rowNode?.type !== "row" && rowNode?.type !== "flow-row") return null
+        if (rowNode.type !== rowFrag.nodeType) return null
+        const rowChildIds = rowNode.childIds
+        return rowChildIds.slice(0, -1).map((leftStackId: string, i: number) => {
+          const rightStackId = rowChildIds[i + 1]
           const leftFrag = page.fragments.find((f) => f.nodeId === leftStackId)
           const rightFrag = page.fragments.find((f) => f.nodeId === rightStackId)
           if (!leftFrag || !rightFrag) return null
@@ -1052,10 +1167,16 @@ function PageView({
             <g key={`rh-${leftStackId}`}>
               {/* hit area */}
               <rect x={hx - 6} y={hy} width={12} height={hh}
+                data-testid="column-resize-handle"
+                data-row-type={rowFrag.nodeType}
+                data-row-id={rowFrag.nodeId}
+                data-left-stack-id={leftStackId}
+                data-right-stack-id={rightStackId}
                 fill="transparent" style={{ cursor: "col-resize" }}
                 onPointerDown={(e) => {
                   e.stopPropagation(); e.preventDefault()
-                  onResizeStart(rowFrag.nodeId, leftStackId, rightStackId, leftFrag.x, leftFrag.width + rightFrag.width, e.clientX, pageKey)
+                  const gapWidthPt = Math.max(0, rightFrag.x - (leftFrag.x + leftFrag.width))
+                  onResizeStart(rowFrag.nodeId, leftStackId, rightStackId, leftFrag.x, leftFrag.width + rightFrag.width, gapWidthPt, e.clientX, pageKey)
                 }}
               />
               {/* visual line */}
@@ -1130,6 +1251,7 @@ interface Props {
   inlineEditNodeId: string | null
   inlineEditCaretIndex: number | null
   inlineEditPageIndex: number | null
+  inlineEditVisualLocked: boolean
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
   onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
@@ -1141,7 +1263,7 @@ interface Props {
   setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
-  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, startClientX: number, pageKey: string) => void
+  onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, gapWidthPt: number, startClientX: number, pageKey: string) => void
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   marginDrag: MarginDrag | null
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
@@ -1246,7 +1368,7 @@ export function buildWysiwygDraftVisualPreview(input: {
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
   textMeasurer,
-  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
@@ -1397,6 +1519,7 @@ export function EditorCanvas({
                   inlineEditNodeId={inlineEditNodeId}
                   inlineEditCaretIndex={inlineEditCaretIndex}
                   inlineEditPageIndex={inlineEditPageIndex}
+                  inlineEditVisualLocked={inlineEditVisualLocked}
                   onInlineEditStart={onInlineEditStart}
                   onInlineEditChange={onInlineEditChange}
                   onInlineEditCaretChange={onInlineEditCaretChange}

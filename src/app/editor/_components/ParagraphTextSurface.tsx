@@ -8,11 +8,14 @@ import type { DocumentNode, FlowTableNode, ParagraphNode, TableNode } from "@/sc
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily } from "@/font-registry"
 import {
+  getWysiwygFragmentTextRange,
   resolveCollapsedCaretOverlayInFragment,
   resolveCaretPositionInFragment,
   resolveCaretOffsetFromPointInFragment,
+  resolveVerticalCaretNavigationInFragments,
   resolveSelectionOverlayRectsInFragment,
 } from "./wysiwygCaretMapping"
+import type { WysiwygVerticalCaretLineAffinity } from "./wysiwygCaretMapping"
 import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
 import type { InlineEditSelectionSnapshot } from "./wysiwygTextInteraction"
 import {
@@ -36,6 +39,7 @@ interface Props {
   fragment: PageFragment
   doc: DocumentNode
   pageKey: string
+  clipPathId?: string
   scale: number
   pageContentBottom?: number | null
   textMeasurer?: TextMeasurer
@@ -97,6 +101,7 @@ export interface InlineEditVisualMode {
 const EDIT_CHROME_X = 3
 const EDIT_CHROME_Y = 3
 const INLINE_EDIT_TEXT_COLOR = "#1e40af"
+const WYSIWYG_CARET_BLINK_DURATION = "1.05s"
 const WYSIWYG_TEXT_BLUR_SETTLE_MS = 32
 const POINTER_SELECTION_DRAG_THRESHOLD_PX = 3
 
@@ -301,11 +306,11 @@ export function shouldUseNativeTableCellBoundaryBackspace(
 }
 
 function getFragmentTextRange(fragment: PageFragment, fullTextLength: number): { start: number; end: number } | null {
-  const segments = (fragment.lines ?? []).flatMap((line) => line.segments ?? [])
-  if (segments.length === 0) return null
+  const range = getWysiwygFragmentTextRange(fragment)
+  if (!range) return null
 
-  const start = Math.max(0, Math.min(fullTextLength, Math.min(...segments.map((segment) => segment.start))))
-  const end = Math.max(start, Math.min(fullTextLength, Math.max(...segments.map((segment) => segment.end))))
+  const start = Math.max(0, Math.min(fullTextLength, range.start))
+  const end = Math.max(start, Math.min(fullTextLength, range.end))
   return { start, end }
 }
 
@@ -430,12 +435,13 @@ function renderLine(
   pageKey: string,
   scale: number,
   opacity?: number,
+  clipPathId?: string,
 ) {
   const align = renderProps?.align
   const fontSize = (line.fontSize ?? renderProps?.fontSize ?? 8) * scale
   const baseY = lineBaselineY(line) * scale
   const fontFamily = resolveFontCssFamily(renderProps?.fontFamilyKey)
-  const clip = `url(#cp-${pageKey}-${fragment.nodeId})`
+  const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
   const style: React.CSSProperties = { pointerEvents: "none", userSelect: "none" }
 
   // Justify: draw each non-space word segment at its adjusted x position
@@ -513,12 +519,26 @@ function renderSegmentDebug(
   }) ?? null
 }
 
+function renderCaretBlinkAnimation() {
+  return (
+    <animate
+      data-wysiwyg-caret-blink="true"
+      attributeName="opacity"
+      values="1;1;0;0"
+      keyTimes="0;0.48;0.5;1"
+      dur={WYSIWYG_CARET_BLINK_DURATION}
+      repeatCount="indefinite"
+    />
+  )
+}
+
 function renderCollapsedCaret(
   fragment: PageFragment,
   pageKey: string,
   scale: number,
   caretIndex: number | null,
   textMeasurer: TextMeasurer | undefined,
+  clipPathId?: string,
 ) {
   if (caretIndex == null) return null
   const overlay = resolveCollapsedCaretOverlayInFragment(fragment, caretIndex, { textMeasurer })
@@ -535,9 +555,11 @@ function renderCollapsedCaret(
       stroke={INLINE_EDIT_TEXT_COLOR}
       strokeWidth={Math.max(1, 1.1 * scale)}
       strokeLinecap="round"
-      clipPath={`url(#cp-${pageKey}-${fragment.nodeId})`}
+      clipPath={`url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`}
       style={{ pointerEvents: "none" }}
-    />
+    >
+      {renderCaretBlinkAnimation()}
+    </line>
   )
 }
 
@@ -546,6 +568,7 @@ function renderSelectionOverlay(
   pageKey: string,
   scale: number,
   rects: ReturnType<typeof resolveSelectionOverlayRectsInFragment>,
+  clipPathId?: string,
 ) {
   return rects.map((rect) => (
     <rect
@@ -557,7 +580,7 @@ function renderSelectionOverlay(
       height={rect.height * scale}
       fill="#93c5fd"
       opacity={0.55}
-      clipPath={`url(#cp-${pageKey}-${fragment.nodeId})`}
+      clipPath={`url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`}
       style={{ pointerEvents: "none" }}
     />
   ))
@@ -773,6 +796,7 @@ interface WysiwygTextLayerProps {
   lines?: PaginatedLine[]
   renderProps: ParagraphRenderProps | undefined
   pageKey: string
+  clipPathId?: string
   scale: number
   textMeasurer?: TextMeasurer
   caretIndex: number | null
@@ -874,7 +898,9 @@ function renderLiveTextEcho(
         strokeWidth={Math.max(1, 1.1 * scale)}
         strokeLinecap="round"
         style={{ pointerEvents: "none" }}
-      />
+      >
+        {renderCaretBlinkAnimation()}
+      </line>
     ),
   }
 }
@@ -884,6 +910,7 @@ export function WysiwygTextLayer({
   lines,
   renderProps,
   pageKey,
+  clipPathId,
   scale,
   textMeasurer,
   caretIndex,
@@ -903,6 +930,8 @@ export function WysiwygTextLayer({
   const pointerSelectionAnchorRef = useRef<number | null>(null)
   const activePointerIdRef = useRef<number | null>(null)
   const pointerDragStartPointRef = useRef<{ x: number; y: number } | null>(null)
+  const verticalCaretXRef = useRef<number | null>(null)
+  const verticalCaretLineAffinityRef = useRef<WysiwygVerticalCaretLineAffinity | null>(null)
   const isComposingTextEngineRef = useRef(false)
   const suppressNextCompositionInputRef = useRef(false)
   const blurEndEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1003,8 +1032,15 @@ export function WysiwygTextLayer({
     return true
   }, [clearInputBridgeText])
 
-  const applyDraftChange = useCallback((change: WysiwygTextSessionDraftChange | null) => {
+  const applyDraftChange = useCallback((
+    change: WysiwygTextSessionDraftChange | null,
+    options: { preserveVerticalCaretX?: boolean } = {},
+  ) => {
     if (!change || !onDraftChange) return false
+    if (!options.preserveVerticalCaretX) {
+      verticalCaretXRef.current = null
+      verticalCaretLineAffinityRef.current = null
+    }
     draftStateRef.current = {
       text: change.text,
       caretOffset: change.caretOffset ?? null,
@@ -1118,6 +1154,47 @@ export function WysiwygTextLayer({
     return applyDraftChange(applyWysiwygTextInputKey(current.text, current.caretOffset, input, current.selection))
   }, [applyDraftChange, onDraftChange])
 
+  const applyVerticalKeyInput = useCallback((input: {
+    key: string
+    shiftKey?: boolean
+    altKey?: boolean
+    ctrlKey?: boolean
+    metaKey?: boolean
+    isComposing?: boolean
+  }) => {
+    if (!onDraftChange) return false
+    if (input.key !== "ArrowUp" && input.key !== "ArrowDown") return false
+    if (input.isComposing || input.altKey || input.ctrlKey || input.metaKey) return false
+
+    const current = draftStateRef.current
+    const caretOffset = clampWysiwygTextOffset(current.text, current.caretOffset) ?? current.text.length
+    const navigation = resolveVerticalCaretNavigationInFragments(
+      pointerFragmentTargets.map((target) => target.fragment),
+      caretOffset,
+      input.key === "ArrowUp" ? "up" : "down",
+      {
+        preferredX: verticalCaretXRef.current,
+        lineAffinity: verticalCaretLineAffinityRef.current,
+        textMeasurer,
+      },
+    )
+    if (!navigation) return false
+
+    verticalCaretXRef.current = navigation.preferredX
+    verticalCaretLineAffinityRef.current = navigation.lineAffinity
+    const selectionAnchor = input.shiftKey
+      ? clampWysiwygTextOffset(current.text, current.selection?.anchorOffset) ?? caretOffset
+      : navigation.offset
+    return applyDraftChange({
+      text: current.text,
+      caretOffset: navigation.offset,
+      selection: {
+        anchorOffset: selectionAnchor,
+        focusOffset: navigation.offset,
+      },
+    }, { preserveVerticalCaretX: true })
+  }, [applyDraftChange, onDraftChange, pointerFragmentTargets, textMeasurer])
+
   const resolveTextEnginePointerOffsetFromClientPoint = useCallback((clientX: number, clientY: number): number | null => {
     const pageElements = typeof document === "undefined"
       ? []
@@ -1147,6 +1224,8 @@ export function WysiwygTextLayer({
 
   const applyPointerSelection = useCallback((anchorOffset: number, focusOffset: number) => {
     if (!onDraftChange) return false
+    verticalCaretXRef.current = null
+    verticalCaretLineAffinityRef.current = null
     const text = draftStateRef.current.text
     const safeAnchor = clampWysiwygTextOffset(text, anchorOffset) ?? 0
     const safeFocus = clampWysiwygTextOffset(text, focusOffset) ?? safeAnchor
@@ -1250,14 +1329,20 @@ export function WysiwygTextLayer({
         return
       }
       if (handleClipboardShortcutKeyDown(event)) return
-      if (!applyKeyInput({
+      const keyInput = {
         key: event.key,
         shiftKey: event.shiftKey,
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         isComposing: event.isComposing,
-      })) return
+      }
+      const isVerticalNavigation = event.key === "ArrowUp" || event.key === "ArrowDown"
+      const handled = applyVerticalKeyInput(keyInput) || applyKeyInput(keyInput)
+      if (!handled) {
+        if (isVerticalNavigation) event.preventDefault()
+        return
+      }
       event.preventDefault()
     }
 
@@ -1348,6 +1433,7 @@ export function WysiwygTextLayer({
   }, [
     applyClipboardCutToDraft,
     applyKeyInput,
+    applyVerticalKeyInput,
     applyTextInput,
     clearInputBridgeText,
     consumeSuppressedCompositionInput,
@@ -1531,13 +1617,13 @@ export function WysiwygTextLayer({
         fill="transparent"
         pointerEvents="all"
       />
-      {renderSelectionOverlay(visualFragment, pageKey, scale, selectionOverlayRects)}
+      {renderSelectionOverlay(visualFragment, pageKey, scale, selectionOverlayRects, clipPathId)}
       {visualFragment.lines?.map((line, index) =>
-        renderLine(line, index, visualFragment, renderProps, pageKey, scale),
+        renderLine(line, index, visualFragment, renderProps, pageKey, scale, undefined, clipPathId),
       )}
       {liveEchoVisual?.content}
       {showTextSegments && renderSegmentDebug(visualFragment.lines, visualFragment, renderProps, scale)}
-      {liveEchoVisual?.caret ?? renderCollapsedCaret(visualFragment, pageKey, scale, caretIndex, textMeasurer)}
+      {liveEchoVisual?.caret ?? renderCollapsedCaret(visualFragment, pageKey, scale, caretIndex, textMeasurer, clipPathId)}
       </g>
     </>
   )
@@ -1547,6 +1633,7 @@ export function ParagraphTextSurface({
   fragment,
   doc,
   pageKey,
+  clipPathId,
   scale,
   pageContentBottom,
   textMeasurer,
@@ -1682,9 +1769,9 @@ export function ParagraphTextSurface({
   )
   const customCaret = useMemo(() => (
     canUseDocumentVisual && isSelectionCollapsed
-      ? renderCollapsedCaret(fragment, pageKey, scale, initialCaretIndex, textMeasurer)
+      ? renderCollapsedCaret(fragment, pageKey, scale, initialCaretIndex, textMeasurer, clipPathId)
       : null
-  ), [canUseDocumentVisual, fragment, initialCaretIndex, isSelectionCollapsed, pageKey, scale, textMeasurer])
+  ), [canUseDocumentVisual, clipPathId, fragment, initialCaretIndex, isSelectionCollapsed, pageKey, scale, textMeasurer])
   const visualMode = getInlineEditVisualMode({
     isEditing,
     isVisualFresh,
@@ -1863,6 +1950,7 @@ export function ParagraphTextSurface({
           lines={textEngineVisualDraftLines ?? undefined}
           renderProps={renderProps}
           pageKey={pageKey}
+          clipPathId={clipPathId}
           scale={scale}
           textMeasurer={textMeasurer}
           caretIndex={textEngineCaretOffset}
@@ -1882,9 +1970,9 @@ export function ParagraphTextSurface({
 
     return (
       <>
-        {visualMode.useDocumentVisual && renderSelectionOverlay(fragment, pageKey, scale, selectionOverlayRects)}
+        {visualMode.useDocumentVisual && renderSelectionOverlay(fragment, pageKey, scale, selectionOverlayRects, clipPathId)}
         {visualMode.useDocumentVisual && fragment.lines?.map((line, index) =>
-          renderLine(line, index, fragment, renderProps, pageKey, scale),
+          renderLine(line, index, fragment, renderProps, pageKey, scale, undefined, clipPathId),
         )}
         {showTextSegments && renderSegmentDebug(fragment.lines, fragment, renderProps, scale)}
         <foreignObject
@@ -2051,9 +2139,9 @@ export function ParagraphTextSurface({
   }
 
   return [
-    ...renderSelectionOverlay(passiveTextEngineSelectionFragment, pageKey, scale, passiveTextEngineSelectionOverlayRects),
+    ...renderSelectionOverlay(passiveTextEngineSelectionFragment, pageKey, scale, passiveTextEngineSelectionOverlayRects, clipPathId),
     ...(fragment.lines?.map((line, index) =>
-      renderLine(line, index, fragment, renderProps, pageKey, scale),
+      renderLine(line, index, fragment, renderProps, pageKey, scale, undefined, clipPathId),
     ) ?? []),
     ...(showTextSegments ? renderSegmentDebug(fragment.lines, fragment, renderProps, scale) ?? [] : []),
   ]

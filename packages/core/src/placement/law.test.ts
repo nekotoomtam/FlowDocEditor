@@ -287,6 +287,60 @@ describe("placement law flow-row / flow-stack sources", () => {
     })
   })
 
+  it("maps a columns drag on a flow-stack edge to a local flow-stack split", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: [] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: [] },
+    }, ["fr1"])
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "right",
+        intent: "insertRight",
+        target: { kind: "row-stack-inner", rowId: "fr1", stackId: "fs1" },
+      },
+      { source: "palette", blockType: "columns" },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.operation).toEqual({
+      kind: "add-flow-stack-column",
+      rowId: "fr1",
+      targetStackId: "fs1",
+      position: "after",
+    })
+  })
+
+  it("maps a flow-columns drag on a flow-stack left edge to a before split", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: [] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: [] },
+    }, ["fr1"])
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "left",
+        intent: "insertLeft",
+        target: { kind: "row-stack-inner", rowId: "fr1", stackId: "fs2" },
+      },
+      { source: "palette", blockType: "flow-columns" },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.operation).toEqual({
+      kind: "add-flow-stack-column",
+      rowId: "fr1",
+      targetStackId: "fs2",
+      position: "before",
+    })
+  })
+
   it("does not expand a flow-row from a paragraph drag on a column edge", () => {
     const doc = makeDoc({
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },

@@ -90,6 +90,7 @@ import {
   findEditorPageKeyByPageIndex,
   scrollElementIntoNearestView,
   shouldFollowInlineEditPageChange,
+  shouldRelocateInlineEditPage,
 } from "./editorPageFollow"
 import {
   resolveWysiwygDraftPaginationSource,
@@ -100,6 +101,10 @@ import {
   type WysiwygDraftPaginationLatestSnapshot,
   type WysiwygTextReflowDecision,
 } from "./wysiwygReflow"
+import {
+  effectiveFlowStackResizeMinShare,
+  resolveFlowStackResizePairShares,
+} from "./flowStackResize"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -148,12 +153,14 @@ export interface ResizeDrag {
   rightStackId: string
   pairX: number          // left stack x in doc coords
   pairWidth: number      // left + right stack width in doc coords
+  gapWidthPt: number     // gap between the left and right stack fragments
   svgLeft: number        // SVG client left at drag start
   currentDocX: number    // current drag position in doc coords
   leftShareOriginal: number
   rightShareOriginal: number
   totalShare: number     // leftShare + rightShare
   minWidthPt: number     // min column width in pt
+  stackKind: "stack" | "flow-stack"
   committed?: boolean
 }
 
@@ -253,7 +260,7 @@ type EditorAction =
   | { type: "TABLE_REMOVE_COL"; tableId: string; colIndex: number }
   | { type: "FLOW_ROW_ADD_COL"; rowId: string; stackId?: string; position?: "before" | "after" }
   | { type: "LOAD_DOCUMENT"; doc: DocumentNode; paginated?: PaginatedDocument }
-  | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number }
+  | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number; paginated?: PaginatedDocument }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
   | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
   | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; history?: HistoryEntry }
@@ -294,6 +301,18 @@ function getRowFragmentHeight(paginated: PaginatedDocument, rowId: string): numb
     }
   }
   return null
+}
+
+function resizeColumnsDocument(
+  doc: DocumentNode,
+  leftStackId: string,
+  leftShare: number,
+  rightStackId: string,
+  rightShare: number,
+): DocumentNode {
+  let nextDoc = updateNodeProps(doc, leftStackId, { widthShare: leftShare })
+  nextDoc = updateNodeProps(nextDoc, rightStackId, { widthShare: rightShare })
+  return nextDoc
 }
 
 const MAX_HISTORY = 50
@@ -478,9 +497,11 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     case "FLOW_ROW_ADD_COL":
       return pushDoc(state, addFlowStackColumn(state.doc, action.rowId, action.stackId, action.position))
     case "RESIZE_COLUMNS": {
-      let doc = updateNodeProps(state.doc, action.leftStackId, { widthShare: action.leftShare })
-      doc = updateNodeProps(doc, action.rightStackId, { widthShare: action.rightShare })
-      return pushDoc(state, doc)
+      const doc = resizeColumnsDocument(state.doc, action.leftStackId, action.leftShare, action.rightStackId, action.rightShare)
+      const nextState = pushDoc(state, doc)
+      return action.paginated != null && nextState.doc !== state.doc
+        ? { ...nextState, paginated: action.paginated }
+        : nextState
     }
     case "RESIZE_ROW_MIN_HEIGHT":
       return pushDoc(state, updateNodeProps(state.doc, action.rowId, { minHeight: action.minHeight }))
@@ -1104,6 +1125,8 @@ export default function EditorShell() {
   })
   const inlineEditPageIndexRef = useRef<number | null>(inlineEditPageIndex)
   useEffect(() => { inlineEditPageIndexRef.current = inlineEditPageIndex }, [inlineEditPageIndex])
+  const inlineEditVisualLockedRef = useRef(inlineEditVisualLocked)
+  useEffect(() => { inlineEditVisualLockedRef.current = inlineEditVisualLocked }, [inlineEditVisualLocked])
   const requestInlineEditPageFollow = useCallback((pageIndex: number) => {
     const pageKey = findEditorPageKeyByPageIndex(paginatedRef.current, pageIndex)
     if (!pageKey) return
@@ -1228,12 +1251,15 @@ export default function EditorShell() {
           })
       paginatedRef.current = paginated
       optimisticLayoutRef.current = { doc: draftDoc, paginated }
-      if (nextPageIndex !== null) {
+      if (shouldRelocateInlineEditPage({
+        nextPageIndex,
+        isVisualLocked: inlineEditVisualLockedRef.current,
+      })) {
         const previousPageIndex = inlineEditPageIndexRef.current
-        inlineEditPageIndexRef.current = nextPageIndex
-        setInlineEditPageIndex(nextPageIndex)
-        if (shouldFollowInlineEditPageChange({ previousPageIndex, nextPageIndex })) {
-          requestInlineEditPageFollow(nextPageIndex)
+        inlineEditPageIndexRef.current = nextPageIndex!
+        setInlineEditPageIndex(nextPageIndex!)
+        if (shouldFollowInlineEditPageChange({ previousPageIndex, nextPageIndex: nextPageIndex! })) {
+          requestInlineEditPageFollow(nextPageIndex!)
         }
       }
       const currentFragmentCount = countWysiwygTextDraftFragments(paginated, nodeId)
@@ -1382,7 +1408,8 @@ export default function EditorShell() {
       caretOffset: caretIndex,
       revision: nextSnapshotRevision,
     }
-    if (text === wysiwygTextSessionState.draftText) {
+    const textChanged = text !== wysiwygTextSessionState.draftText
+    if (!textChanged) {
       moveWysiwygTextCaret(caretIndex, selection)
     } else {
       const startedAt = startWysiwygPerfSpan()
@@ -1394,6 +1421,7 @@ export default function EditorShell() {
       })
     }
     handleInlineEditCaretChange(nodeId, caretIndex)
+    if (!textChanged) return
     const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
     const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
     const draftPaginationActive = wysiwygDraftPaginationNodeId === nodeId
@@ -2020,7 +2048,7 @@ export default function EditorShell() {
 
   const handleResizeStart = useCallback((
     rowId: string, leftStackId: string, rightStackId: string,
-    pairX: number, pairWidth: number,
+    pairX: number, pairWidth: number, gapWidthPt: number,
     startClientX: number, pageKey: string,
   ) => {
     finalizeInlineEditBeforeAction()
@@ -2031,24 +2059,38 @@ export default function EditorShell() {
     const startDocX = (startClientX - svgLeft) / scale
 
     let leftShare = 50, rightShare = 50
+    let stackKind: ResizeDrag["stackKind"] | null = null
     for (const section of state.doc.document.sections) {
       const l = section.nodes[leftStackId], r = section.nodes[rightStackId]
       if (l?.type === "stack" && r?.type === "stack") {
         leftShare = l.props.widthShare ?? 50
         rightShare = r.props.widthShare ?? 50
+        stackKind = "stack"
+        break
+      }
+      if (l?.type === "flow-stack" && r?.type === "flow-stack") {
+        leftShare = l.props.widthShare ?? 50
+        rightShare = r.props.widthShare ?? 50
+        stackKind = "flow-stack"
         break
       }
     }
+    if (stackKind == null) return
 
-    const minWidthPt = Math.max(16, pairWidth * 0.15)
+    const totalShare = leftShare + rightShare
+    const minWidthPt = stackKind === "flow-stack" && totalShare > 0
+      ? Math.max(1, pairWidth * (effectiveFlowStackResizeMinShare(totalShare) / totalShare))
+      : Math.max(16, pairWidth * 0.15)
 
     setResizeDrag({
       rowId, leftStackId, rightStackId,
-      pairX, pairWidth, svgLeft,
+      pairX, pairWidth, gapWidthPt,
+      svgLeft,
       currentDocX: startDocX,
       leftShareOriginal: leftShare, rightShareOriginal: rightShare,
-      totalShare: leftShare + rightShare,
+      totalShare,
       minWidthPt,
+      stackKind,
     })
   }, [finalizeInlineEditBeforeAction, scale, state.doc, state.paginated])
 
@@ -2276,9 +2318,26 @@ export default function EditorShell() {
         // Clamp to minimum 0.01 to ensure widthShare never becomes zero or negative
         // (drag clamping already prevents this in practice, but floating-point rounding
         // near the boundary could theoretically produce 0 after Math.round)
-        const newLeftShare = Math.max(0.01, Math.round((leftWidthPt / pairWidth) * totalShare * 100) / 100)
-        const newRightShare = Math.max(0.01, Math.round((totalShare - newLeftShare) * 100) / 100)
-        dispatch({ type: "RESIZE_COLUMNS", leftStackId, leftShare: newLeftShare, rightStackId, rightShare: newRightShare })
+        const rawLeftShare = Math.max(0.01, Math.round((leftWidthPt / pairWidth) * totalShare * 100) / 100)
+        const nextShares = resizeDrag.stackKind === "flow-stack"
+          ? resolveFlowStackResizePairShares({
+              pairTotalShare: totalShare,
+              selectedShare: rawLeftShare,
+              selectedIsLeft: true,
+            })
+          : null
+        const newLeftShare = nextShares?.leftShare ?? rawLeftShare
+        const newRightShare = nextShares?.rightShare ?? Math.max(0.01, Math.round((totalShare - newLeftShare) * 100) / 100)
+        const nextDoc = resizeColumnsDocument(state.doc, leftStackId, newLeftShare, rightStackId, newRightShare)
+        const nextPaginated = paginatePreviewDoc(nextDoc)
+        dispatch({
+          type: "RESIZE_COLUMNS",
+          leftStackId,
+          leftShare: newLeftShare,
+          rightStackId,
+          rightShare: newRightShare,
+          paginated: nextPaginated,
+        })
         setResizeDrag(null)
         return
       }
@@ -2316,7 +2375,7 @@ export default function EditorShell() {
       }
       dispatch({ type: "DRAG_CANCEL" })
     },
-    [marginDrag, minHeightDrag, resizeDrag, state.drag, state.doc, computePreview, handleInlineEditStart],
+    [marginDrag, minHeightDrag, resizeDrag, state.drag, state.doc, computePreview, handleInlineEditStart, paginatePreviewDoc],
   )
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -2641,6 +2700,7 @@ export default function EditorShell() {
             inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
             inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
             inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
+            inlineEditVisualLocked={isTemplateMode ? inlineEditVisualLocked : false}
             onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
             onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
             onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}

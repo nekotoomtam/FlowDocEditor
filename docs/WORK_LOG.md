@@ -20,6 +20,111 @@ Each entry should include:
 
 ## 2026-05-20
 
+### Flow Stack Drag/Drop And Pair Resize UX
+
+Goal: Make `flow-row` / `flow-stack` layout editing feel direct on canvas
+without changing the document model or the existing property-panel commands.
+
+Completed:
+
+- Added a placement operation for dragging `columns` / `flow-columns` onto a
+  `flow-stack` edge so canvas drop uses the existing local stack split
+  behavior instead of rejecting the drop or creating nested flow rows.
+- Kept row-level add-column as the balanced/rebalance action and stack-edge
+  insertion as the local split action.
+- Enabled canvas pair resize handles for `flow-row` / `flow-stack` siblings.
+- Reused the property-panel flow-stack resize minimum-share helper for canvas
+  resize commit, so the 8% preferred minimum and narrow-pair fallback are
+  consistent.
+- Kept resize visual preview sibling-safe and preserved authored column gaps.
+- Removed the mouse-up snap-back by committing the resized document and its
+  optimistic paginated layout together.
+- Updated the editor UX contract and bumped the project release marker to
+  `0.5.15` after verification.
+
+Files changed:
+
+- `packages/core/src/placement/types.ts`
+- `packages/core/src/placement/law.ts`
+- `packages/core/src/placement/law.test.ts`
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/__tests__/projectVersion.test.ts`
+- `package.json`
+- `package-lock.json`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/placement/law.test.ts`
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run test -w packages/core`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/flowStackResize.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app`
+- `npm.cmd run type-check`
+- Playwright smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  loaded the editor, found resize handles, and reported no page errors.
+
+Notes:
+
+- This is editor interaction behavior plus placement plumbing only. It does not
+  change `DocumentNode` schema, persisted package/document versions, export
+  behavior, or row-level balanced add-column semantics.
+- Canvas vertical min-height resize for `flow-row` remains intentionally
+  separate from this pair-resize work.
+
+### WYSIWYG Caret Blink And Vertical Navigation
+
+Goal: Make the active editor caret feel like a normal text editor caret and
+teach the FlowDoc-owned text engine to handle ArrowUp/ArrowDown from rendered
+line geometry.
+
+Completed:
+
+- Added a blinking SVG animation to the custom collapsed caret, including the
+  live text-echo caret used while draft text is waiting for settled layout.
+- Added vertical caret navigation over ordered `PageFragment.lines`, preserving
+  the desired x position across shorter lines and continuation fragments.
+- Routed text-engine ArrowUp/ArrowDown through the FlowDoc caret session instead
+  of letting the hidden input bridge move an invisible browser caret.
+- Kept caret-only movement from scheduling responsive draft pagination, so
+  navigation does not trigger unnecessary layout work.
+- Updated the editor UX contract for blinking custom caret and geometry-owned
+  arrow navigation expectations.
+
+Files changed:
+
+- `docs/EDITOR_UX_CONTRACT.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygCaretMapping.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/wysiwygCaretMapping.test.ts`
+- `npm.cmd test -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Browser Playwright smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`:
+  clicked `stage3-boundary-target`, confirmed one SVG caret blink animation,
+  pressed ArrowDown and saw the caret y-position move to the next visual line,
+  with no textarea fallback and no immediate WYSIWYG perf events.
+
+Notes:
+
+- This is editor interaction state only. It does not change `DocumentNode`,
+  pagination semantics, undo/redo history, or export output.
+
 ### Flow Table Rowspan Atomic-When-Fits Policy
 
 Goal: Restore the legacy `table` rowspan grouping intuition for Flow Table so
