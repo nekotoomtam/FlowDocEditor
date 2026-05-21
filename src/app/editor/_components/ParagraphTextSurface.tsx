@@ -37,6 +37,7 @@ import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
 import { finishWysiwygPerfSpan, startWysiwygPerfSpan } from "./wysiwygPerformance"
+import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
 
 interface Props {
   fragment: PageFragment
@@ -591,6 +592,7 @@ function renderSelectionOverlay(
 
 interface TextEngineClipboardShortcutEvent {
   key: string
+  code?: string
   altKey: boolean
   ctrlKey: boolean
   metaKey: boolean
@@ -627,6 +629,23 @@ export interface WysiwygLiveTextEcho {
 interface WysiwygImmediateTextEcho {
   baseText: string
   draftText: string
+}
+
+export interface WysiwygImmediateDraftLayoutState {
+  baseText: string
+  draftText: string
+  layout: WysiwygDraftParagraphLayout
+}
+
+export function shouldKeepWysiwygImmediateDraftLayout(
+  immediate: WysiwygImmediateDraftLayoutState | null,
+  currentDraftText: string,
+  hasParentDraftLines: boolean,
+): boolean {
+  if (!immediate) return false
+  if (immediate.draftText === currentDraftText && hasParentDraftLines) return false
+  if (immediate.baseText !== currentDraftText && immediate.draftText !== currentDraftText) return false
+  return true
 }
 
 const WYSIWYG_DRAFT_PARAGRAPH_LAYOUT_CACHE_LIMIT = 64
@@ -925,6 +944,7 @@ interface WysiwygTextLayerProps {
   pointerFragments?: WysiwygTextPointerFragmentTarget[]
   reflowKind?: WysiwygTextReflowDecision["kind"]
   liveTextEcho?: WysiwygLiveTextEcho | null
+  resolveImmediateDraftLayout?: (draftText: string) => WysiwygDraftParagraphLayout | null
   tableCellDraftVisualPreviewCandidate?: boolean
 }
 
@@ -1039,6 +1059,7 @@ export function WysiwygTextLayer({
   pointerFragments = [],
   reflowKind,
   liveTextEcho,
+  resolveImmediateDraftLayout,
   tableCellDraftVisualPreviewCandidate = false,
 }: WysiwygTextLayerProps) {
   const layerRef = useRef<SVGGElement | null>(null)
@@ -1054,6 +1075,7 @@ export function WysiwygTextLayer({
   const [isPointerSelecting, setIsPointerSelecting] = useState(false)
   const [immediateTextEcho, setImmediateTextEcho] = useState<WysiwygImmediateTextEcho | null>(null)
   const immediateTextEchoRef = useRef<WysiwygImmediateTextEcho | null>(null)
+  const [immediateDraftLayout, setImmediateDraftLayout] = useState<WysiwygImmediateDraftLayoutState | null>(null)
   const draftStateRef = useRef<{
     text: string
     caretOffset: number | null
@@ -1063,9 +1085,18 @@ export function WysiwygTextLayer({
     caretOffset: caretIndex,
     selection,
   })
+  const activeImmediateDraftLayout = shouldKeepWysiwygImmediateDraftLayout(
+    immediateDraftLayout,
+    draftText ?? "",
+    lines != null,
+  ) ? immediateDraftLayout?.layout ?? null : null
   const visualFragment = useMemo(() => (
-    lines ? { ...fragment, lines } : fragment
-  ), [fragment, lines])
+    activeImmediateDraftLayout
+      ? { ...fragment, lines: activeImmediateDraftLayout.lines, height: activeImmediateDraftLayout.height }
+      : lines
+        ? { ...fragment, lines }
+        : fragment
+  ), [activeImmediateDraftLayout, fragment, lines])
   const pointerFragmentTargets = useMemo(() => {
     const seen = new Set<string>()
     const targets: WysiwygTextPointerFragmentTarget[] = []
@@ -1096,10 +1127,11 @@ export function WysiwygTextLayer({
     textMeasurer,
   ), [liveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
   const immediateLiveTextEcho = useMemo(() => {
+    if (activeImmediateDraftLayout) return null
     if (!immediateTextEcho) return null
     if (immediateTextEcho.draftText === (draftText ?? "") && (lines != null || liveTextEcho != null)) return null
     return resolveWysiwygLiveTextEcho(immediateTextEcho.baseText, immediateTextEcho.draftText)
-  }, [draftText, immediateTextEcho, lines, liveTextEcho])
+  }, [activeImmediateDraftLayout, draftText, immediateTextEcho, lines, liveTextEcho])
   const immediateLiveEchoVisual = useMemo(() => renderLiveTextEcho(
     visualFragment,
     immediateLiveTextEcho,
@@ -1108,7 +1140,9 @@ export function WysiwygTextLayer({
     scale,
     textMeasurer,
   ), [immediateLiveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
-  const activeLiveEchoVisual = liveEchoVisual ?? immediateLiveEchoVisual
+  const activeLiveEchoVisual = activeImmediateDraftLayout
+    ? null
+    : liveEchoVisual ?? immediateLiveEchoVisual
 
   useEffect(() => {
     draftStateRef.current = {
@@ -1121,6 +1155,12 @@ export function WysiwygTextLayer({
         ? null
         : current
       immediateTextEchoRef.current = next
+      return next
+    })
+    setImmediateDraftLayout((current) => {
+      const next = shouldKeepWysiwygImmediateDraftLayout(current, draftText ?? "", lines != null)
+        ? current
+        : null
       return next
     })
   }, [caretIndex, draftText, lines, liveTextEcho, selection])
@@ -1180,6 +1220,8 @@ export function WysiwygTextLayer({
       verticalCaretXRef.current = null
       verticalCaretLineAffinityRef.current = null
     }
+    const previousText = draftStateRef.current.text
+    const textChanged = change.text !== previousText
     draftStateRef.current = {
       text: change.text,
       caretOffset: change.caretOffset ?? null,
@@ -1189,16 +1231,26 @@ export function WysiwygTextLayer({
     const nextImmediateTextEcho = change.text === immediateEchoBaseText
       ? null
       : { baseText: immediateEchoBaseText, draftText: change.text }
-    if (nextImmediateTextEcho) {
+    const nextImmediateDraftLayout = textChanged
+      ? resolveImmediateDraftLayout?.(change.text) ?? null
+      : null
+    const nextImmediateDraftLayoutState = nextImmediateDraftLayout
+      ? { baseText: previousText, draftText: change.text, layout: nextImmediateDraftLayout }
+      : null
+    const applyImmediateVisualState = () => {
+      setImmediateTextEcho(nextImmediateTextEcho)
+      setImmediateDraftLayout(nextImmediateDraftLayoutState)
+    }
+    if (nextImmediateTextEcho || nextImmediateDraftLayoutState) {
       immediateTextEchoRef.current = nextImmediateTextEcho
-      flushSync(() => setImmediateTextEcho(nextImmediateTextEcho))
+      flushSync(applyImmediateVisualState)
     } else {
       immediateTextEchoRef.current = null
-      setImmediateTextEcho(null)
+      applyImmediateVisualState()
     }
     onDraftChange(fragment.nodeId, change.text, change.caretOffset ?? null, change.selection ?? null)
     return true
-  }, [draftText, fragment.nodeId, onDraftChange])
+  }, [draftText, fragment.nodeId, onDraftChange, resolveImmediateDraftLayout])
 
   const applyTextInput = useCallback((insertedText: string) => {
     if (!insertedText || !onDraftChange) return false
@@ -1237,8 +1289,8 @@ export function WysiwygTextLayer({
   }, [])
 
   const handleClipboardShortcutKeyDown = useCallback((event: TextEngineClipboardShortcutEvent) => {
-    if (event.altKey || (!event.ctrlKey && !event.metaKey)) return false
-    const key = event.key.toLowerCase()
+    if (!hasPlatformShortcutModifier(event)) return false
+    const key = normalizeShortcutKey(event)
     if (key !== "c" && key !== "x" && key !== "v") return false
 
     if (key === "v") {
@@ -1711,6 +1763,8 @@ export function WysiwygTextLayer({
         data-wysiwyg-text-engine-layer="true"
         data-wysiwyg-pointer-fragment-count={pointerFragmentTargets.length}
         data-wysiwyg-reflow-kind={reflowKind}
+        data-wysiwyg-line-count={visualFragment.lines?.length ?? 0}
+        data-wysiwyg-immediate-draft-layout={activeImmediateDraftLayout ? "true" : undefined}
         data-wysiwyg-table-cell-preview-candidate={tableCellDraftVisualPreviewCandidate ? "true" : undefined}
         data-inline-edit-node-id={fragment.nodeId}
         data-inline-edit-visual-mode="text-engine"
@@ -1944,6 +1998,12 @@ export function ParagraphTextSurface({
   const textEngineDraftText = wysiwygTextDraftText ?? fullText
   const textEngineDraftChanged = hasWysiwygTextDraftChange(fullText, textEngineDraftText)
   const textEngineCaretOffset = wysiwygTextCaretOffset ?? initialCaretIndex
+  const resolveTextEngineImmediateDraftLayout = useCallback((draftText: string) => {
+    if (!supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || !textMeasurer) return null
+    return buildCachedWysiwygDraftParagraphLayout(textEngineDraftLayoutCacheRef.current, fragment, paragraphNode, draftText, textMeasurer, {
+      traceMeasure: true,
+    })
+  }, [fragment, paragraphNode, supportsLocalDraftLayout, textMeasurer, useWysiwygTextEngineLayer])
   const textEngineDraftLayout = useMemo(() => {
     if (!textEngineDraftChanged || !supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null
     return buildCachedWysiwygDraftParagraphLayout(textEngineDraftLayoutCacheRef.current, fragment, paragraphNode, textEngineDraftText, textMeasurer, {
@@ -2116,6 +2176,7 @@ export function ParagraphTextSurface({
           pointerFragments={wysiwygTextPointerFragments}
           reflowKind={textEngineReflowDecision.kind}
           liveTextEcho={textEngineLiveTextEcho}
+          resolveImmediateDraftLayout={resolveTextEngineImmediateDraftLayout}
           tableCellDraftVisualPreviewCandidate={tableCellDraftVisualPreviewCandidate}
         />
       )

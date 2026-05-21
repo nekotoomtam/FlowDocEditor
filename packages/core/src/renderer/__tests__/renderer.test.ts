@@ -84,6 +84,27 @@ function countText(xml: string, text: string): number {
   return xml.match(new RegExp(escaped, "g"))?.length ?? 0
 }
 
+function expectedDocxRowCount(rows: PageFragment[]): number {
+  const seenFullRows = new Set<string>()
+  let count = 0
+  for (const row of rows) {
+    if (row.continuesFrom === true || row.isContinued === true) {
+      count += 1
+      continue
+    }
+    if (seenFullRows.has(row.nodeId)) continue
+    seenFullRows.add(row.nodeId)
+    count += 1
+  }
+  return count
+}
+
+function docxParagraphsContaining(xml: string, marker: string): string[] {
+  return [...xml.matchAll(/<w:p[\s\S]*?<\/w:p>/g)]
+    .map((match) => match[0])
+    .filter((paragraphXml) => paragraphXml.includes(marker))
+}
+
 function makeLines(prefix: string, count: number): string {
   return Array.from({ length: count }, (_, i) => `${prefix}${String(i + 1).padStart(3, "0")}`).join("\n")
 }
@@ -529,6 +550,54 @@ describe("renderer input contract — fragment coverage", () => {
     expect(result.buffer[0]).toBe(0x50)
     expect(result.buffer[1]).toBe(0x4b)
   })
+
+  it("DOCX renderer merges split paragraph fragments into one editable paragraph", async () => {
+    const longText = makeLines("DOCX_LOGICAL_", 90)
+    const p = makePara("p-docx-logical", longText)
+    const paginated = paginate(makeDoc(["p-docx-logical"], { "p-docx-logical": p }))
+    const paraFrags = paginated.sections[0].pages.flatMap((pg) =>
+      pg.fragments.filter((f) => f.nodeId === "p-docx-logical")
+    )
+    expect(paraFrags.length).toBeGreaterThanOrEqual(2)
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+    const paragraphs = docxParagraphsContaining(xml, "DOCX_LOGICAL_")
+
+    expect(paragraphs).toHaveLength(1)
+    expect(paragraphs[0]).toContain("DOCX_LOGICAL_001")
+    expect(paragraphs[0]).toContain("DOCX_LOGICAL_090")
+  })
+
+  it("DOCX renderer reconstructs soft-wrapped Thai text without injected line spaces", async () => {
+    const thaiText = "ก".repeat(180)
+    const p = makePara("p-docx-thai", thaiText)
+    const paginated = paginate(makeDoc(["p-docx-thai"], { "p-docx-thai": p }))
+    const paragraphFragment = paginated.sections[0].pages[0].fragments.find((fragment) => fragment.nodeId === "p-docx-thai")!
+    expect(paragraphFragment.lines!.length).toBeGreaterThan(1)
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(xml).toContain(thaiText)
+    expect(xml).not.toContain("ก ก")
+  })
+
+  it("DOCX renderer preserves authored hard newlines when source document is provided", async () => {
+    const sourceText = "DOCX_SOURCE_ALPHA\nDOCX_SOURCE_BETA\nDOCX_SOURCE_GAMMA"
+    const p = makePara("p-docx-source-breaks", sourceText)
+    const doc = makeDoc(["p-docx-source-breaks"], { "p-docx-source-breaks": p })
+    const paginated = paginate(doc)
+
+    const result = await new DocxRenderer({ sourceDocument: doc }).render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+    const paragraphs = docxParagraphsContaining(xml, "DOCX_SOURCE_ALPHA")
+
+    expect(paragraphs).toHaveLength(1)
+    expect(paragraphs[0]).toContain("DOCX_SOURCE_BETA")
+    expect(paragraphs[0]).toContain("DOCX_SOURCE_GAMMA")
+    expect(countText(paragraphs[0], "<w:br")).toBe(2)
+  })
 })
 
 // ─── DOCX smoke tests ─────────────────────────────────────────────────────────
@@ -592,8 +661,8 @@ describe("DocxRenderer smoke tests", () => {
 
     expect(xml).toContain('w:tblLayout w:type="fixed"')
     expect(xml).toContain(`w:tblW w:type="dxa" w:w="${ptToTwips(rowFragment.width)}"`)
-    expect(xml).toContain(`w:trHeight w:val="${ptToTwips(rowFragment.height)}" w:hRule="exact"`)
-    expect(xml).toContain("w:cantSplit")
+    expect(xml).toContain(`w:trHeight w:val="${ptToTwips(rowFragment.height)}" w:hRule="atLeast"`)
+    expect(xml).not.toContain("w:cantSplit")
     for (const stack of stackFragments) {
       const width = ptToTwips(stack.width)
       expect(xml).toContain(`w:gridCol w:w="${width}"`)
@@ -613,9 +682,17 @@ describe("DocxRenderer smoke tests", () => {
     const fs2: LayoutNode = { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] }
     const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] }
     const paginated = paginate(makeDoc(["fr1"], { fr1: row, fs1, fs2, p1, p2 }))
+    const rowFragments = paginated.sections[0].pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === "fr1" && fragment.nodeType === "flow-row"),
+    )
     const result = await docx.render(paginated)
     const xml = await readDocxXml(result.buffer, "word/document.xml")
 
+    expect(rowFragments.length).toBeGreaterThan(1)
+    expect(rowFragments.some((fragment) => fragment.isContinued || fragment.continuesFrom)).toBe(true)
+    expect(countText(xml, "w:cantSplit")).toBe(0)
+    expect(countText(xml, 'w:hRule="exact"')).toBe(0)
+    expect(countText(xml, 'w:hRule="atLeast"')).toBe(rowFragments.length)
     for (const marker of [leftLines[0], leftLines[45], leftLines[89], rightLines[0], rightLines[45], rightLines[89]]) {
       expect(countText(xml, marker)).toBe(1)
     }
@@ -655,8 +732,8 @@ describe("DocxRenderer smoke tests", () => {
 
     expect(xml).toContain('w:tblLayout w:type="fixed"')
     expect(xml).toContain(`w:tblW w:type="dxa" w:w="${ptToTwips(tableFragment.width)}"`)
-    expect(xml).toContain(`w:trHeight w:val="${ptToTwips(rowFragment.height)}" w:hRule="exact"`)
-    expect(xml).toContain("w:cantSplit")
+    expect(xml).toContain(`w:trHeight w:val="${ptToTwips(rowFragment.height)}" w:hRule="atLeast"`)
+    expect(xml).not.toContain("w:cantSplit")
     for (const cell of cellFragments) {
       const width = ptToTwips(cell.width)
       expect(xml).toContain(`w:gridCol w:w="${width}"`)
@@ -707,6 +784,9 @@ describe("DocxRenderer smoke tests", () => {
     expect(xml).toContain('w:gridSpan w:val="2"')
     expect(xml).toContain("<w:vMerge")
     expect(xml).toContain('w:val="restart"')
+    expect(countText(xml, "w:cantSplit")).toBe(0)
+    expect(countText(xml, 'w:hRule="exact"')).toBe(0)
+    expect(countText(xml, 'w:hRule="atLeast"')).toBe(2)
     expect(countText(xml, "SPAN_CELL")).toBe(1)
     expect(countText(xml, "TOP_CELL")).toBe(1)
     expect(countText(xml, "BOTTOM_CELL")).toBe(1)
@@ -748,18 +828,25 @@ describe("DocxRenderer smoke tests", () => {
     const headerParagraphs = pages.flatMap((page) =>
       page.fragments.filter((fragment) => fragment.nodeId === headerLeft.id && fragment.nodeType === "paragraph"),
     )
+    const flowTableRows = pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeType === "flow-table-row"),
+    )
 
     const result = await docx.render(paginated)
     const xml = await readDocxXml(result.buffer, "word/document.xml")
 
     expect(pages.length).toBeGreaterThan(1)
     expect(headerParagraphs).toHaveLength(pages.length)
-    expect(countText(xml, 'w:tblLayout w:type="fixed"')).toBe(pages.length)
-    expect(countText(xml, `w:gridCol w:w="${ptToTwips(90)}"`)).toBe(pages.length)
-    expect(countText(xml, `w:gridCol w:w="${ptToTwips(130)}"`)).toBe(pages.length)
-    expect(countText(xml, "HDRLEFT")).toBe(pages.length)
-    expect(countText(xml, "HDRRIGHT")).toBe(pages.length)
+    expect(countText(xml, 'w:tblLayout w:type="fixed"')).toBe(1)
+    expect(countText(xml, `w:gridCol w:w="${ptToTwips(90)}"`)).toBe(1)
+    expect(countText(xml, `w:gridCol w:w="${ptToTwips(130)}"`)).toBe(1)
+    expect(countText(xml, "HDRLEFT")).toBe(1)
+    expect(countText(xml, "HDRRIGHT")).toBe(1)
+    expect(countText(xml, "w:tblHeader")).toBe(1)
     expect(countText(xml, "SHORTBODY")).toBe(1)
+    expect(countText(xml, "w:cantSplit")).toBe(0)
+    expect(countText(xml, 'w:hRule="exact"')).toBe(0)
+    expect(countText(xml, 'w:hRule="atLeast"')).toBe(expectedDocxRowCount(flowTableRows))
     for (const marker of [bodyLines[0], bodyLines[45], bodyLines[89], bodyLines[129]]) {
       expect(countText(xml, marker)).toBe(1)
     }
@@ -771,14 +858,20 @@ describe("DocxRenderer smoke tests", () => {
     const spanningCellFragments = pages.flatMap((page) =>
       page.fragments.filter((fragment) => fragment.nodeId === "ft-rowspan-span-cell" && fragment.nodeType === "flow-table-cell"),
     )
+    const flowTableRows = pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeType === "flow-table-row"),
+    )
     const result = await docx.render(paginated)
     const xml = await readDocxXml(result.buffer, "word/document.xml")
 
     expect(pages.length).toBeGreaterThan(1)
     expect(spanningCellFragments.map((fragment) => fragment.pageIndex)).toEqual([0, 1])
-    expect(countText(xml, 'w:tblLayout w:type="fixed"')).toBe(pages.length)
+    expect(countText(xml, 'w:tblLayout w:type="fixed"')).toBe(1)
     expect(countText(xml, 'w:gridSpan w:val="2"')).toBeGreaterThanOrEqual(2)
     expect(xml).toContain("<w:vMerge")
+    expect(countText(xml, "w:cantSplit")).toBe(0)
+    expect(countText(xml, 'w:hRule="exact"')).toBe(0)
+    expect(countText(xml, 'w:hRule="atLeast"')).toBe(expectedDocxRowCount(flowTableRows))
     for (const marker of ["S001", "S004", "S007", "TOP3", "MID3", "BOT4"]) {
       expect(countText(xml, marker)).toBe(1)
     }

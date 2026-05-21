@@ -91,6 +91,10 @@ async function readDocxXml(buffer: Uint8Array, xmlPath: string): Promise<string>
   return file.async("string")
 }
 
+function countText(text: string, needle: string): number {
+  return text.split(needle).length - 1
+}
+
 function makeTable(id: string, colWidths: number[], rowDefs: string[][]): TableNode {
   const nodes: TableNode["nodes"] = {}
   const rowIds: string[] = []
@@ -282,5 +286,28 @@ describe("API route contract smoke", () => {
 
     const xml = await readDocxXml(bytes, "word/document.xml")
     expect(xml).toContain("API route should validate")
+  })
+
+  it("/api/export passes source paragraph hard newlines into DOCX output", async () => {
+    const doc = makeDoc()
+    const details = doc.document.sections[0].nodes.details
+    if (details.type !== "paragraph") throw new Error("details fixture must be a paragraph")
+    doc.document.sections[0].nodes.details = {
+      ...details,
+      children: [{ id: "details-hard-break-text", type: "text", text: "API_SOURCE_ALPHA\nAPI_SOURCE_BETA" }],
+    }
+
+    const response = await exportPost(jsonRequest("http://localhost/api/export", {
+      doc,
+      format: "docx",
+    }) as never)
+
+    expect(response.status).toBe(200)
+    const bytes = await responseBytes(response)
+    const xml = await readDocxXml(bytes, "word/document.xml")
+
+    expect(xml).toContain("API_SOURCE_ALPHA")
+    expect(xml).toContain("API_SOURCE_BETA")
+    expect(countText(xml, "<w:br")).toBe(1)
   })
 })

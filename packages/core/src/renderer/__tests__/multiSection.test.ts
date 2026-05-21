@@ -366,7 +366,7 @@ describe("multi-section export smoke tests", () => {
     expect(xml).toContain("Section two")
   })
 
-  it("DOCX: multi-page document emits a Word section per paginated page", async () => {
+  it("DOCX: multi-page document emits one Word section per FlowDoc section", async () => {
     const nodes: Record<string, LayoutNode> = {}
     const ids: string[] = []
     for (let i = 0; i < 80; i++) {
@@ -387,7 +387,8 @@ describe("multi-section export smoke tests", () => {
 
     const result = await docx.render(paginated)
     const xml = await readDocxXml(result.buffer, "word/document.xml")
-    expect(countXmlTag(xml, "w:sectPr")).toBe(pageCount)
+    expect(countXmlTag(xml, "w:sectPr")).toBe(paginated.sections.length)
+    expect(xml).not.toContain('w:type w:val="nextPage"')
   })
 
   it("DOCX: TOC + content section renders without throwing", async () => {
@@ -426,13 +427,12 @@ describe("multi-section export smoke tests", () => {
 
     const paginated = paginate(doc)
     assertPaginatedDocument(paginated)
-    const pageCount = paginated.sections.reduce((sum, section) => sum + section.pages.length, 0)
     const result = await docx.render(paginated)
     const xml = await readDocxXml(result.buffer, "word/document.xml")
 
     expect(result.buffer[0]).toBe(0x50)
     expect(result.buffer[1]).toBe(0x4b)
-    expect(countXmlTag(xml, "w:sectPr")).toBe(pageCount)
+    expect(countXmlTag(xml, "w:sectPr")).toBe(paginated.sections.length)
     expect(xml).toContain("Government Report")
     expect(xml).toContain("Contents")
     expect(xml).toContain("Chapter 1 Introduction")

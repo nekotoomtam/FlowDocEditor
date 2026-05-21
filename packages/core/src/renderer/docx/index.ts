@@ -20,6 +20,7 @@ import {
 } from "docx"
 import type { PaginatedDocument, PageFragment, ResolvedBorderSide, ResolvedCellBorder } from "../../pagination"
 import type { ParagraphRenderProps } from "../../pagination"
+import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode, TableNode } from "../../schema"
 import type { RenderResult, Renderer } from "../shared"
 import { ptToTwips, ptToHalfPoints } from "../shared"
 import { resolveDocxFontName } from "../../font-registry"
@@ -51,6 +52,20 @@ type RenderItem =
   | { kind: "row"; group: RowGroup }
   | { kind: "table"; group: TableGroup }
   | { kind: "toc"; fragment: PageFragment }
+
+type ParagraphBuildItem = Paragraph | Table
+
+interface DocxRendererOptions {
+  sourceDocument?: DocumentNode
+}
+
+interface DocxRenderContext {
+  paragraphTextById: Map<string, string>
+}
+
+type SourceNode = LayoutNode | TableNode["nodes"][string] | FlowTableNode["nodes"][string]
+
+const EMPTY_RENDER_CONTEXT: DocxRenderContext = { paragraphTextById: new Map() }
 
 // ─── Grouping ─────────────────────────────────────────────────────────────────
 
@@ -141,6 +156,45 @@ const INVISIBLE_BORDERS = {
   top: NO_BORDER, bottom: NO_BORDER,
   left: NO_BORDER, right: NO_BORDER,
   insideHorizontal: NO_BORDER, insideVertical: NO_BORDER,
+}
+
+function sourceParagraphText(node: ParagraphNode): string | null {
+  let text = ""
+  for (const child of node.children) {
+    if (child.type === "text") {
+      text += child.text
+    } else if (child.type === "fieldRef") {
+      text += child.label ?? child.fallback ?? `{${child.key}}`
+    } else if (child.type === "pageNumber") {
+      return null
+    }
+  }
+  return text.replace(/\r\n?/g, "\n")
+}
+
+function collectSourceParagraphTextFromNode(node: SourceNode, paragraphTextById: Map<string, string>): void {
+  if (node.type === "paragraph") {
+    const text = sourceParagraphText(node)
+    if (text !== null) paragraphTextById.set(node.id, text)
+    return
+  }
+
+  if (node.type === "table" || node.type === "flow-table") {
+    for (const child of Object.values(node.nodes)) {
+      collectSourceParagraphTextFromNode(child as SourceNode, paragraphTextById)
+    }
+  }
+}
+
+function createRenderContext(sourceDocument: DocumentNode | undefined): DocxRenderContext {
+  if (!sourceDocument) return EMPTY_RENDER_CONTEXT
+  const paragraphTextById = new Map<string, string>()
+  for (const section of sourceDocument.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      collectSourceParagraphTextFromNode(node, paragraphTextById)
+    }
+  }
+  return { paragraphTextById }
 }
 
 function toBorderOpts(side: ResolvedBorderSide | undefined) {
@@ -239,19 +293,84 @@ function buildFlowStackCellMargins(fragment: PageFragment) {
 
 // ─── Builders ─────────────────────────────────────────────────────────────────
 
-function buildParagraph(fragment: PageFragment): Paragraph | null {
-  if (!fragment.lines?.length || !fragment.renderProps) return null
-  const props = fragment.renderProps
-  const text = fragment.lines.map((l) => l.text).join(" ").trim()
+function sortParagraphFragments(fragments: PageFragment[]): PageFragment[] {
+  return [...fragments].sort((a, b) =>
+    (a.fragmentIndex ?? a.pageIndex) - (b.fragmentIndex ?? b.pageIndex) ||
+    (a.lineStart ?? 0) - (b.lineStart ?? 0) ||
+    a.pageIndex - b.pageIndex ||
+    a.y - b.y
+  )
+}
+
+function buildParagraphTextFromSegments(fragments: PageFragment[]): string | null {
+  const segments = sortParagraphFragments(fragments)
+    .flatMap((fragment) => fragment.lines ?? [])
+    .flatMap((line) => line.segments ?? [])
+    .filter((segment) => segment.text.length > 0)
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+
+  if (segments.length === 0) return null
+
+  let text = ""
+  let cursor = segments[0].start
+  for (const segment of segments) {
+    if (segment.end <= cursor) continue
+
+    const sliceStart = Math.max(0, cursor - segment.start)
+    const piece = segment.text.slice(sliceStart)
+    if (piece.length === 0) {
+      cursor = Math.max(cursor, segment.end)
+      continue
+    }
+
+    if (segment.start > cursor && text.length > 0 && !/\s$/.test(text) && !/^\s/.test(piece)) {
+      text += " "
+    }
+    text += piece
+    cursor = Math.max(cursor, segment.end)
+  }
+
+  return text.trim()
+}
+
+function buildParagraphText(fragments: PageFragment[], context: DocxRenderContext): string {
+  const sourceText = context.paragraphTextById.get(fragments[0]?.nodeId ?? "")
+  if (sourceText !== undefined) return sourceText
+  const fromSegments = buildParagraphTextFromSegments(fragments)
+  if (fromSegments !== null) return fromSegments
+  return sortParagraphFragments(fragments)
+    .flatMap((fragment) => fragment.lines ?? [])
+    .map((line) => line.text)
+    .join(" ")
+    .trim()
+}
+
+function buildTextRuns(text: string, props: ParagraphRenderProps): TextRun[] {
+  const lines = text.split("\n")
+  return lines.map((line, index) => new TextRun({
+    text: line,
+    break: index > 0 ? 1 : undefined,
+    size: ptToHalfPoints(props.fontSize),
+    font: resolveDocxFontName(props.fontFamilyKey),
+  }))
+}
+
+function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxRenderContext = EMPTY_RENDER_CONTEXT): Paragraph | null {
+  const paragraphFragments = sortParagraphFragments(Array.isArray(fragments) ? fragments : [fragments])
+  const firstFragment = paragraphFragments[0]
+  if (!firstFragment?.renderProps) return null
+  const props = firstFragment.renderProps
+  const text = buildParagraphText(paragraphFragments, context)
   if (!text && !props.box) return null
+  const boxFragment: PageFragment = {
+    ...firstFragment,
+    continuesFrom: firstFragment.continuesFrom,
+    isContinued: paragraphFragments[paragraphFragments.length - 1]?.isContinued,
+  }
 
   return new Paragraph({
     includeIfEmpty: Boolean(props.box),
-    children: [new TextRun({
-      text,
-      size: ptToHalfPoints(props.fontSize),
-      font: resolveDocxFontName(props.fontFamilyKey),
-    })],
+    children: buildTextRuns(text, props),
     alignment: ALIGNMENT[props.align] as any,
     spacing: {
       before: ptToTwips(props.spacingBefore),
@@ -264,8 +383,8 @@ function buildParagraph(fragment: PageFragment): Paragraph | null {
       right: ptToTwips(props.indentRight),
       firstLine: ptToTwips(props.textIndent),
     },
-    border: buildParagraphBorders(fragment),
-    shading: buildParagraphShading(fragment),
+    border: buildParagraphBorders(boxFragment),
+    shading: buildParagraphShading(boxFragment),
   })
 }
 
@@ -273,20 +392,40 @@ function buildSpacer(fragment: PageFragment): Paragraph {
   return new Paragraph({ children: [], spacing: { after: ptToTwips(fragment.height) } })
 }
 
-function buildCellChildren(children: PageFragment[]): Paragraph[] {
-  return children.flatMap((child) => {
-    if (child.nodeType === "paragraph") { const p = buildParagraph(child); return p ? [p] : [] }
-    if (child.nodeType === "spacer") return [buildSpacer(child)]
-    return []
-  })
+function flushParagraphGroup(output: Paragraph[], group: PageFragment[], context: DocxRenderContext): PageFragment[] {
+  if (group.length === 0) return []
+  const paragraph = buildParagraph(group, context)
+  if (paragraph) output.push(paragraph)
+  return []
 }
 
-function buildTableCellChildren(children: PageFragment[]): Paragraph[] {
-  const built = buildCellChildren(children)
+function buildCellChildren(children: PageFragment[], context: DocxRenderContext): Paragraph[] {
+  const output: Paragraph[] = []
+  let paragraphGroup: PageFragment[] = []
+
+  for (const child of children) {
+    if (child.nodeType === "paragraph") {
+      if (paragraphGroup.length > 0 && paragraphGroup[0].nodeId !== child.nodeId) {
+        paragraphGroup = flushParagraphGroup(output, paragraphGroup, context)
+      }
+      paragraphGroup.push(child)
+      continue
+    }
+
+    paragraphGroup = flushParagraphGroup(output, paragraphGroup, context)
+    if (child.nodeType === "spacer") output.push(buildSpacer(child))
+  }
+
+  flushParagraphGroup(output, paragraphGroup, context)
+  return output
+}
+
+function buildTableCellChildren(children: PageFragment[], context: DocxRenderContext): Paragraph[] {
+  const built = buildCellChildren(children, context)
   return built.length > 0 ? built : [new Paragraph({ children: [] })]
 }
 
-function buildLayoutStackCell(stack: StackGroup, rowWidth: number, isFlowRow: boolean): TableCell {
+function buildLayoutStackCell(stack: StackGroup, rowWidth: number, isFlowRow: boolean, context: DocxRenderContext): TableCell {
   return new TableCell({
     width: isFlowRow
       ? { size: ptToTwips(stack.stackFragment.width), type: WidthType.DXA }
@@ -295,7 +434,7 @@ function buildLayoutStackCell(stack: StackGroup, rowWidth: number, isFlowRow: bo
     shading: buildFragmentBoxCellShading(stack.stackFragment),
     margins: isFlowRow ? buildFlowStackCellMargins(stack.stackFragment) : buildFragmentBoxCellMargins(stack.stackFragment),
     verticalAlign: isFlowRow ? VerticalAlignTable.TOP : undefined,
-    children: buildCellChildren(stack.children),
+    children: buildCellChildren(stack.children, context),
   })
 }
 
@@ -308,17 +447,17 @@ function buildFlowGapCell(width: number): TableCell {
   })
 }
 
-function buildLayoutTableCells(group: RowGroup, rowWidth: number, isFlowRow: boolean): { cells: TableCell[]; columnWidths?: number[] } {
+function buildLayoutTableCells(group: RowGroup, rowWidth: number, isFlowRow: boolean, context: DocxRenderContext): { cells: TableCell[]; columnWidths?: number[] } {
   if (!isFlowRow) {
     return {
-      cells: group.stacks.map((stack) => buildLayoutStackCell(stack, rowWidth, false)),
+      cells: group.stacks.map((stack) => buildLayoutStackCell(stack, rowWidth, false, context)),
     }
   }
 
   const cells: TableCell[] = []
   const columnWidths: number[] = []
   group.stacks.forEach((stack, index) => {
-    cells.push(buildLayoutStackCell(stack, rowWidth, true))
+    cells.push(buildLayoutStackCell(stack, rowWidth, true, context))
     columnWidths.push(ptToTwips(stack.stackFragment.width))
 
     const nextStack = group.stacks[index + 1]
@@ -332,10 +471,26 @@ function buildLayoutTableCells(group: RowGroup, rowWidth: number, isFlowRow: boo
   return { cells, columnWidths }
 }
 
-function buildLayoutTable(group: RowGroup): Table {
+function isContinuedFragment(fragment: PageFragment): boolean {
+  return fragment.continuesFrom === true || fragment.isContinued === true
+}
+
+function collectRepeatedFullRowIds(rows: TableRowGroup[]): Set<string> {
+  const seenFullRows = new Set<string>()
+  const repeatedFullRows = new Set<string>()
+  for (const row of rows) {
+    if (isContinuedFragment(row.rowFragment)) continue
+    const id = row.rowFragment.nodeId
+    if (seenFullRows.has(id)) repeatedFullRows.add(id)
+    else seenFullRows.add(id)
+  }
+  return repeatedFullRows
+}
+
+function buildLayoutTable(group: RowGroup, context: DocxRenderContext): Table {
   const rowWidth = group.rowFragment.width
   const isFlowRow = group.rowFragment.nodeType === "flow-row"
-  const { cells, columnWidths } = buildLayoutTableCells(group, rowWidth, isFlowRow)
+  const { cells, columnWidths } = buildLayoutTableCells(group, rowWidth, isFlowRow, context)
   return new Table({
     width: isFlowRow
       ? { size: ptToTwips(rowWidth), type: WidthType.DXA }
@@ -344,15 +499,17 @@ function buildLayoutTable(group: RowGroup): Table {
     layout: isFlowRow ? TableLayoutType.FIXED : undefined,
     rows: [new TableRow({
       children: cells,
-      cantSplit: isFlowRow ? true : undefined,
       height: isFlowRow
-        ? { value: ptToTwips(group.rowFragment.height), rule: HeightRule.EXACT }
+        ? {
+            value: ptToTwips(group.rowFragment.height),
+            rule: HeightRule.ATLEAST,
+          }
         : undefined,
     })],
   })
 }
 
-function buildFlowTableCell(cellGroup: TableCellGroup): TableCell {
+function buildFlowTableCell(cellGroup: TableCellGroup, context: DocxRenderContext): TableCell {
   const gridProps = cellGroup.cellFragment.flowTableCellGridProps
   return new TableCell({
     width: { size: ptToTwips(cellGroup.cellFragment.width), type: WidthType.DXA },
@@ -364,7 +521,7 @@ function buildFlowTableCell(cellGroup: TableCellGroup): TableCell {
     shading: buildFragmentBoxCellShading(cellGroup.cellFragment),
     margins: buildFragmentBoxCellMargins(cellGroup.cellFragment) ?? { top: 0, right: 0, bottom: 0, left: 0 },
     verticalAlign: VerticalAlignTable.TOP,
-    children: buildTableCellChildren(cellGroup.children),
+    children: buildTableCellChildren(cellGroup.children, context),
   })
 }
 
@@ -395,19 +552,31 @@ function buildFlowTableColumnWidths(group: TableGroup): number[] | undefined {
     .filter((width) => width > 0)
 }
 
-function buildFlowDataTable(group: TableGroup): Table {
-  const rows = [...group.rows]
+function buildFlowDataTable(group: TableGroup, context: DocxRenderContext): Table {
+  const sortedRows = [...group.rows]
     .sort((a, b) => a.rowFragment.y - b.rowFragment.y || a.rowFragment.x - b.rowFragment.x)
-    .map((rowGroup) => {
+  const repeatedFullRowIds = collectRepeatedFullRowIds(sortedRows)
+  const emittedRepeatedRows = new Set<string>()
+  const rows = sortedRows
+    .flatMap((rowGroup) => {
+      const isRepeatedHeaderRow = repeatedFullRowIds.has(rowGroup.rowFragment.nodeId) &&
+        !isContinuedFragment(rowGroup.rowFragment)
+      if (isRepeatedHeaderRow) {
+        if (emittedRepeatedRows.has(rowGroup.rowFragment.nodeId)) return []
+        emittedRepeatedRows.add(rowGroup.rowFragment.nodeId)
+      }
       const cells = [...rowGroup.cells]
         .sort((a, b) => a.cellFragment.x - b.cellFragment.x || a.cellFragment.y - b.cellFragment.y)
-        .map((cellGroup) => buildFlowTableCell(cellGroup))
+        .map((cellGroup) => buildFlowTableCell(cellGroup, context))
 
-      return new TableRow({
+      return [new TableRow({
         children: cells.length > 0 ? cells : [new TableCell({ children: [new Paragraph({ children: [] })] })],
-        cantSplit: true,
-        height: { value: ptToTwips(rowGroup.rowFragment.height), rule: HeightRule.EXACT },
-      })
+        tableHeader: isRepeatedHeaderRow ? true : undefined,
+        height: {
+          value: ptToTwips(rowGroup.rowFragment.height),
+          rule: HeightRule.ATLEAST,
+        },
+      })]
     })
 
   return new Table({
@@ -418,10 +587,18 @@ function buildFlowDataTable(group: TableGroup): Table {
   })
 }
 
-function buildDataTable(group: TableGroup): Table {
-  if (group.tableFragment.nodeType === "flow-table") return buildFlowDataTable(group)
+function buildDataTable(group: TableGroup, context: DocxRenderContext): Table {
+  if (group.tableFragment.nodeType === "flow-table") return buildFlowDataTable(group, context)
 
-  const rows = group.rows.map((rowGroup) => {
+  const repeatedFullRowIds = collectRepeatedFullRowIds(group.rows)
+  const emittedRepeatedRows = new Set<string>()
+  const rows = group.rows.flatMap((rowGroup) => {
+    const isRepeatedHeaderRow = repeatedFullRowIds.has(rowGroup.rowFragment.nodeId) &&
+      !isContinuedFragment(rowGroup.rowFragment)
+    if (isRepeatedHeaderRow) {
+      if (emittedRepeatedRows.has(rowGroup.rowFragment.nodeId)) return []
+      emittedRepeatedRows.add(rowGroup.rowFragment.nodeId)
+    }
     const cells = rowGroup.cells.map((cellGroup) => {
       const crp = cellGroup.cellFragment.cellRenderProps
       const rowWidth = rowGroup.rowFragment.width
@@ -431,10 +608,10 @@ function buildDataTable(group: TableGroup): Table {
         rowSpan: crp?.rowspan,
         columnSpan: crp?.colspan,
         borders: crp ? buildCellBorders(crp.border) : INVISIBLE_BORDERS,
-        children: buildCellChildren(cellGroup.children),
+        children: buildCellChildren(cellGroup.children, context),
       })
     })
-    return new TableRow({ children: cells })
+    return [new TableRow({ children: cells, tableHeader: isRepeatedHeaderRow ? true : undefined })]
   })
   return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows })
 }
@@ -454,39 +631,59 @@ function buildToc(fragment: PageFragment): Paragraph[] {
     })
 }
 
-function buildItems(items: RenderItem[]): (Paragraph | Table)[] {
-  return items.flatMap((item) => {
-    if (item.kind === "paragraph") { const p = buildParagraph(item.fragment); return p ? [p] : [] }
-    if (item.kind === "spacer") return [buildSpacer(item.fragment)]
-    if (item.kind === "row") return [buildLayoutTable(item.group)]
-    if (item.kind === "table") return [buildDataTable(item.group)]
-    if (item.kind === "toc") return buildToc(item.fragment)
-    return []
-  })
+function flushParagraphItems(output: ParagraphBuildItem[], group: PageFragment[], context: DocxRenderContext): PageFragment[] {
+  if (group.length === 0) return []
+  const paragraph = buildParagraph(group, context)
+  if (paragraph) output.push(paragraph)
+  return []
+}
+
+function buildItems(items: RenderItem[], context: DocxRenderContext): ParagraphBuildItem[] {
+  const output: ParagraphBuildItem[] = []
+  let paragraphGroup: PageFragment[] = []
+
+  for (const item of items) {
+    if (item.kind === "paragraph") {
+      if (paragraphGroup.length > 0 && paragraphGroup[0].nodeId !== item.fragment.nodeId) {
+        paragraphGroup = flushParagraphItems(output, paragraphGroup, context)
+      }
+      paragraphGroup.push(item.fragment)
+      continue
+    }
+
+    paragraphGroup = flushParagraphItems(output, paragraphGroup, context)
+    if (item.kind === "spacer") output.push(buildSpacer(item.fragment))
+    else if (item.kind === "row") output.push(buildLayoutTable(item.group, context))
+    else if (item.kind === "table") output.push(buildDataTable(item.group, context))
+    else if (item.kind === "toc") output.push(...buildToc(item.fragment))
+  }
+
+  flushParagraphItems(output, paragraphGroup, context)
+  return output
 }
 
 // ─── Zone Content ─────────────────────────────────────────────────────────────
 
-function buildZoneContent(fragments: PageFragment[]): (Paragraph | Table)[] {
+function buildZoneContent(fragments: PageFragment[], context: DocxRenderContext): (Paragraph | Table)[] {
   if (fragments.length === 0) return []
-  return buildItems(groupPageFragments(fragments))
+  return buildItems(groupPageFragments(fragments), context)
 }
 
 function sameFragmentList(a: PageFragment[], b: PageFragment[]): boolean {
   return a.length === b.length && a.every((f, i) => f.nodeId === b[i].nodeId)
 }
 
-function buildHeaders(fragments: PageFragment[]) {
-  const content = buildZoneContent(fragments)
+function buildHeaders(fragments: PageFragment[], context: DocxRenderContext) {
+  const content = buildZoneContent(fragments, context)
   return content.length > 0 ? { default: new Header({ children: content }) } : undefined
 }
 
-function buildFooters(fragments: PageFragment[]) {
-  const content = buildZoneContent(fragments)
+function buildFooters(fragments: PageFragment[], context: DocxRenderContext) {
+  const content = buildZoneContent(fragments, context)
   return content.length > 0 ? { default: new Footer({ children: content }) } : undefined
 }
 
-function buildPageProperties(page: { width: number; height: number; contentBox: { x: number; y: number; width: number; height: number } }, isFirst: boolean) {
+function buildSectionProperties(page: { width: number; height: number; contentBox: { x: number; y: number; width: number; height: number } }, isFirst: boolean) {
   return {
     ...(isFirst ? {} : { type: SectionType.NEXT_PAGE }),
     page: {
@@ -510,14 +707,23 @@ function buildPageProperties(page: { width: number; height: number; contentBox: 
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 
 export class DocxRenderer implements Renderer {
+  private readonly context: DocxRenderContext
+
+  constructor(options: DocxRendererOptions = {}) {
+    this.context = createRenderContext(options.sourceDocument)
+  }
+
   async render(doc: PaginatedDocument): Promise<RenderResult> {
-    const pages = doc.sections.flatMap((section) => section.pages)
-    const sections = pages.map((page, index) => {
-      const children = buildItems(groupPageFragments(page.fragments))
+    const sections = doc.sections.flatMap((section, index) => {
+      const firstPage = section.pages[0]
+      if (!firstPage) return []
+
+      const fragments = section.pages.flatMap((page) => page.fragments)
+      const children = buildItems(groupPageFragments(fragments), this.context)
       return {
-        headers: buildHeaders(page.headerFragments),
-        footers: buildFooters(page.footerFragments),
-        properties: buildPageProperties(page, index === 0),
+        headers: buildHeaders(firstPage.headerFragments, this.context),
+        footers: buildFooters(firstPage.footerFragments, this.context),
+        properties: buildSectionProperties(firstPage, index === 0),
         children: children.length > 0 ? children : [new Paragraph({ children: [] })],
       }
     })

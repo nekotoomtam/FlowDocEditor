@@ -8,7 +8,7 @@ import { assertDocument } from "../../document"
 import { DEFAULT_FONT_KEY, resolveFontFileName } from "../../font-registry"
 import { createFontkitMeasurer } from "../../layout/font-measurer"
 import { thaiWordBreaker } from "../../layout/word-breaker"
-import { assertPaginatedDocument, paginateDocument } from "../../pagination"
+import { assertPaginatedDocument, paginateDocument, type PageFragment } from "../../pagination"
 import { pt } from "../../schema"
 import { DocxRenderer, PdfRenderer } from "../index"
 import type { DocumentNode, DocumentSection, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../../schema"
@@ -219,6 +219,21 @@ function countText(xml: string, text: string): number {
   return xml.match(new RegExp(escaped, "g"))?.length ?? 0
 }
 
+function expectedDocxRowCount(rows: PageFragment[]): number {
+  const seenFullRows = new Set<string>()
+  let count = 0
+  for (const row of rows) {
+    if (row.continuesFrom === true || row.isContinued === true) {
+      count += 1
+      continue
+    }
+    if (seenFullRows.has(row.nodeId)) continue
+    seenFullRows.add(row.nodeId)
+    count += 1
+  }
+  return count
+}
+
 function makeFlowRowDoc(): DocumentNode {
   const intro = makePara("flow-row-intro", "Flow row export layout smoke", {
     fontSize: pt(14),
@@ -373,12 +388,13 @@ describe("product export golden smoke", () => {
   it("product fixture - customs DOCX preserves paginated table rows", async () => {
     const fontBuffer = readRuntimeFont()
     const paginated = paginateForExport(makeCustomsDoc(), fontBuffer)
-    const expectedRows = paginated.sections[0].pages.flatMap((page) =>
+    const paginatedRows = paginated.sections[0].pages.flatMap((page) =>
       page.fragments.filter((fragment) =>
         fragment.parentNodeId === "customs-golden-table" &&
         fragment.nodeType === "row",
       ),
-    ).length
+    )
+    const expectedRows = expectedDocxRowCount(paginatedRows)
 
     const result = await new DocxRenderer().render(paginated)
     const xml = await readDocxXml(result.buffer, "word/document.xml")
@@ -386,6 +402,7 @@ describe("product export golden smoke", () => {
     expect(result.buffer[0]).toBe(0x50)
     expect(result.buffer[1]).toBe(0x4b)
     expect(countXmlTag(xml, "w:tr")).toBe(expectedRows)
+    expect(countText(xml, "w:tblHeader")).toBe(1)
   })
 
   it("product fixture - flow-row export preserves PDF page count and DOCX layout projection", async () => {

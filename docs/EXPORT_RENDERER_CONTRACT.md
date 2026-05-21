@@ -59,6 +59,9 @@ instead of stale or optimistic browser-preview warnings.
 ## Renderer Rules
 
 Renderers must consume `PaginatedDocument` as the layout source of truth.
+DOCX may additionally receive the already-validated authored `DocumentNode`
+from the export API for source text serialization only; it must not use that
+document input to recompute layout, page breaks, or row splits.
 
 Renderers must not decide:
 
@@ -76,15 +79,15 @@ Renderers may:
 - adapt unsupported target features with documented limitations
 - surface target-specific errors clearly
 
-If a renderer needs information that is missing from `PaginatedDocument`, the
-fix should usually be to enrich pagination output or shared renderer metadata,
-not to recompute layout inside the renderer.
+If a renderer needs layout information that is missing from
+`PaginatedDocument`, the fix should usually be to enrich pagination output or
+shared renderer metadata, not to recompute layout inside the renderer.
 
-Renderer implementation modules should not import document schema, document
-operations, `paginateDocument`, text measurers, or word breakers. Those
-dependencies are a sign that layout policy is leaking into the renderer. Tests
-may build authored fixtures and paginate them before rendering, but renderer
-production code should remain `PaginatedDocument`-only.
+Renderer implementation modules should not import document operations,
+`paginateDocument`, text measurers, or word breakers. A renderer may import
+document schema types only for explicitly documented source-serialization paths
+such as DOCX source paragraph text. Tests may build authored fixtures and
+paginate them before rendering.
 
 ## PDF Contract
 
@@ -115,6 +118,16 @@ DOCX is an exchange format, not a pixel-perfect layout target.
 DOCX should:
 
 - preserve document order and section boundaries
+- build Word sections from authored FlowDoc sections, not from computed
+  paginated pages; computed page boundaries are for preview/PDF and should not
+  become DOCX page or section breaks
+- merge computed paragraph fragments back toward one editable Word paragraph
+  per logical paragraph where renderer metadata is sufficient, and avoid
+  serializing FlowDoc soft-wrap boundaries as DOCX line breaks or extra spaces
+- prefer authored paragraph text from the validated source document when the
+  export API provides it, preserving hard newlines as Word line breaks while
+  keeping page-number paragraphs on the paginated fallback path until Word
+  fields are implemented
 - preserve editable paragraphs, headings, simple tables, headers, footers, and
   TOC text where possible
 - preserve paragraph box fill and border where possible, and approximate
@@ -122,16 +135,22 @@ DOCX should:
 - preserve the overall layout of `flow-row` / `flow-stack` slices where
   possible by projecting them to fixed-layout Word tables from paginated
   geometry, including stack widths and inter-stack gaps
+- `flow-row` and `flow-table` rows may relax Word row pagination controls,
+  avoiding `cantSplit` and using at-least row heights instead of exact row
+  heights, so Word/LibreOffice can use remaining page space after its own text
+  reflow instead of moving a large editable row wholesale to the next page
 - preserve the overall layout of `flow-table` slices where possible by
   projecting paginated row/cell fragments to fixed-layout Word tables, including
-  repeated header fragments, exact row heights, cell widths, fills, borders, and
-  padding metadata
+  repeated header fragments, minimum row heights, cell widths, fills, borders,
+  and padding metadata
 - preserve Flow Table span semantics where possible from renderer-facing
   pagination metadata, mapping `colspan` to Word `gridSpan` and `rowspan` to
   Word vertical merge metadata
 - emit valid DOCX ZIP output
 - keep page/section structure useful for review workflows
 - document where Word/LibreOffice may reflow content after opening
+- preserve explicit authored page-break nodes if the document model adds them
+  in the future, while continuing to ignore computed pagination breaks
 
 DOCX may differ from PDF/editor preview because the reader application owns
 final text reflow, font metrics, and page layout after the file is opened.

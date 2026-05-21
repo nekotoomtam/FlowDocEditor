@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const renderer = format === "pdf" ? new PdfRenderer(fontProvider) : new DocxRenderer()
+  const renderer = format === "pdf" ? new PdfRenderer(fontProvider) : new DocxRenderer({ sourceDocument: doc })
   const result = await renderer.render(paginated)
 
   return new NextResponse(Buffer.from(result.buffer), {

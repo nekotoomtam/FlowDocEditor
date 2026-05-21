@@ -105,6 +105,7 @@ import {
   effectiveFlowStackResizeMinShare,
   resolveFlowStackResizePairShares,
 } from "./flowStackResize"
+import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -2959,19 +2960,19 @@ export default function EditorShell() {
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     const tag = (e.target as HTMLElement).tagName
     const isTextInput = tag === "INPUT" || tag === "TEXTAREA"
-    const key = e.key.toLowerCase()
-    if ((e.ctrlKey || e.metaKey) && !isTextInput) {
-      if (key === "=" || key === "+") {
+    const shortcutKey = normalizeShortcutKey(e)
+    if (hasPlatformShortcutModifier(e) && !isTextInput) {
+      if (shortcutKey === "+") {
         e.preventDefault()
         zoomIn()
         return
       }
-      if (key === "-") {
+      if (shortcutKey === "-") {
         e.preventDefault()
         zoomOut()
         return
       }
-      if (key === "0") {
+      if (shortcutKey === "0") {
         e.preventDefault()
         resetZoom()
         return
@@ -2995,13 +2996,13 @@ export default function EditorShell() {
       dispatch({ type: "DELETE_NODE", nodeId: state.selectedNodeId })
       setRightRailMode("page")
     }
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === "z") {
+    if (hasPlatformShortcutModifier(e) && !e.shiftKey && shortcutKey === "z") {
       if (isTextInput) return
       e.preventDefault()
       if (!isTemplateMode) return
       handleUndo()
     }
-    if ((e.ctrlKey || e.metaKey) && (key === "y" || (e.shiftKey && key === "z"))) {
+    if (hasPlatformShortcutModifier(e) && (shortcutKey === "y" || (e.shiftKey && shortcutKey === "z"))) {
       if (isTextInput) return
       e.preventDefault()
       if (!isTemplateMode) return

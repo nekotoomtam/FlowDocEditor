@@ -15,9 +15,11 @@ const DEFAULT_TARGET_NODE_ID = "stage3-boundary-target"
 const SCENARIO_ID = "wysiwyg-stage3-boundary"
 const TYPE_BURST_LENGTH = Number(process.env.PROBE_BURST_LENGTH ?? 400)
 const TYPE_INTERVAL_MS = Number(process.env.PROBE_INTERVAL_MS ?? 30)
+const TYPE_TEXT_SEQUENCE = Array.from(process.env.PROBE_TYPE_TEXT ?? "")
 const PROBE_MODE = process.env.PROBE_MODE?.trim() || "typing"
 const RESIZE_MOVE_COUNT = Number(process.env.PROBE_RESIZE_MOVE_COUNT ?? 70)
 const RESIZE_MOVE_DISTANCE_PX = Number(process.env.PROBE_RESIZE_DISTANCE_PX ?? 180)
+const CAPTURE_TYPING_LAYER_STATE = process.env.PROBE_CAPTURE_LINE_WRAP === "1"
 const FRAME_BUDGET_MS = 16
 const JANK_BUDGET_MS = 100
 
@@ -62,6 +64,10 @@ function fragmentSelectorForNode(nodeId) {
 
 function bridgeSelectorForNode(nodeId) {
   return `[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${nodeId}"]`
+}
+
+function textEngineLayerSelectorForNode(nodeId) {
+  return `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${nodeId}"]`
 }
 
 async function resolveTargetNodeId(page) {
@@ -119,6 +125,45 @@ function summarizePerfEvents(perfEvents) {
       kind: longestEvent.kind,
       durationMs: longestEvent.durationMs,
     } : null,
+  }
+}
+
+async function readTextEngineLayerState(page, layerSelector) {
+  return await page.evaluate((selector) => {
+    const layer = document.querySelector(selector)
+    if (!(layer instanceof SVGElement)) return null
+    return {
+      lineCount: Number(layer.getAttribute("data-wysiwyg-line-count") ?? "0"),
+      immediateDraftLayout: layer.getAttribute("data-wysiwyg-immediate-draft-layout") === "true",
+      reflowKind: layer.getAttribute("data-wysiwyg-reflow-kind") || null,
+    }
+  }, layerSelector)
+}
+
+function summarizeTypingLayerSamples(samples) {
+  if (!samples.length) return null
+  const afterPressCounts = samples
+    .map((sample) => sample.afterPress?.lineCount)
+    .filter((value) => typeof value === "number")
+  const afterPaintCounts = samples
+    .map((sample) => sample.afterPaint?.lineCount)
+    .filter((value) => typeof value === "number")
+  const startLineCount = afterPaintCounts[0] ?? afterPressCounts[0] ?? null
+  const firstLineIncrease = samples.find((sample) => (
+    startLineCount !== null &&
+    ((sample.afterPress?.lineCount ?? 0) > startLineCount ||
+      (sample.afterPaint?.lineCount ?? 0) > startLineCount)
+  ))
+  return {
+    captured: samples.length,
+    startLineCount,
+    maxAfterPressLineCount: afterPressCounts.length ? Math.max(...afterPressCounts) : null,
+    maxAfterPaintLineCount: afterPaintCounts.length ? Math.max(...afterPaintCounts) : null,
+    immediateDraftLayoutAfterPressCount: samples.filter((sample) => sample.afterPress?.immediateDraftLayout).length,
+    immediateDraftLayoutAfterPaintCount: samples.filter((sample) => sample.afterPaint?.immediateDraftLayout).length,
+    firstLineIncreaseIndex: firstLineIncrease?.index ?? null,
+    firstLineIncreaseAfterPress: firstLineIncrease?.afterPress ?? null,
+    firstLineIncreaseAfterPaint: firstLineIncrease?.afterPaint ?? null,
   }
 }
 
@@ -187,6 +232,7 @@ async function runTypingProbe(page) {
   const targetNodeId = await resolveTargetNodeId(page)
   const fragmentSelector = fragmentSelectorForNode(targetNodeId)
   const bridgeSelector = bridgeSelectorForNode(targetNodeId)
+  const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
   await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: 15000 })
 
   // Click into target paragraph to enter the text-engine bridge.
@@ -202,13 +248,29 @@ async function runTypingProbe(page) {
   // settles. The diff is a paint-budget proxy that includes React render +
   // FlowDoc draft preview + layout.
   const keystrokes = []
+  const layerSamples = []
   for (let i = 0; i < TYPE_BURST_LENGTH; i += 1) {
-    const ch = i % 13 === 12 ? " " : String.fromCharCode(97 + (i % 26))
+    const ch = TYPE_TEXT_SEQUENCE.length
+      ? TYPE_TEXT_SEQUENCE[i % TYPE_TEXT_SEQUENCE.length]
+      : i % 13 === 12 ? " " : String.fromCharCode(97 + (i % 26))
     const tBefore = await page.evaluate(() => performance.now())
-    await page.keyboard.press(ch === " " ? "Space" : ch.toUpperCase())
+    if (TYPE_TEXT_SEQUENCE.length) {
+      await page.keyboard.type(ch)
+    } else {
+      await page.keyboard.press(ch === " " ? "Space" : ch.toUpperCase())
+    }
+    const afterPressState = CAPTURE_TYPING_LAYER_STATE
+      ? await readTextEngineLayerState(page, layerSelector)
+      : null
     const paintLatency = await waitForDoubleAnimationFrame(page)
+    const afterPaintState = CAPTURE_TYPING_LAYER_STATE
+      ? await readTextEngineLayerState(page, layerSelector)
+      : null
     const tAfter = await page.evaluate(() => performance.now())
     keystrokes.push({ index: i, paintLatencyMs: paintLatency, totalMs: tAfter - tBefore })
+    if (CAPTURE_TYPING_LAYER_STATE) {
+      layerSamples.push({ index: i, afterPress: afterPressState, afterPaint: afterPaintState })
+    }
     await page.waitForTimeout(TYPE_INTERVAL_MS)
   }
 
@@ -223,6 +285,7 @@ async function runTypingProbe(page) {
       mode: "typing",
       burstLength: TYPE_BURST_LENGTH,
       intervalMs: TYPE_INTERVAL_MS,
+      textPattern: TYPE_TEXT_SEQUENCE.length ? TYPE_TEXT_SEQUENCE.join("") : null,
     },
     paintLatencyMs: {
       p50: percentile(paintLatencies, 0.5),
@@ -237,6 +300,7 @@ async function runTypingProbe(page) {
       max: totalLatencies[totalLatencies.length - 1] ?? null,
     },
     perfEvents: summarizePerfEvents(perfEvents),
+    typingLayer: summarizeTypingLayerSamples(layerSamples),
     pageBoundary: {
       startFragmentCount,
       endFragmentCount,
@@ -361,6 +425,7 @@ async function runProbe() {
       ...(probeResult.keystrokeTotalMs ? { keystrokeTotalMs: probeResult.keystrokeTotalMs } : {}),
       ...(probeResult.pointerMoveDispatchMs ? { pointerMoveDispatchMs: probeResult.pointerMoveDispatchMs } : {}),
       ...(probeResult.pointerMoveTotalMs ? { pointerMoveTotalMs: probeResult.pointerMoveTotalMs } : {}),
+      ...(probeResult.typingLayer ? { typingLayer: probeResult.typingLayer } : {}),
       perfEvents: probeResult.perfEvents,
       pageBoundary: probeResult.pageBoundary,
       console: {

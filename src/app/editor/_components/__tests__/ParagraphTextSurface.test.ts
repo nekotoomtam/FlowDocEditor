@@ -27,6 +27,7 @@ import {
   shouldUseNativeInlineEditEnter,
   shouldUseNativeTableCellBoundaryBackspace,
   shouldUseInlineEditSvgVisual,
+  shouldKeepWysiwygImmediateDraftLayout,
   shouldUseWysiwygTextEngineLayer,
 } from "../ParagraphTextSurface"
 import type { PageFragment } from "@/pagination"
@@ -730,6 +731,19 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       text: "ide w",
     })
     expect(resolveWysiwygLiveTextEcho("Hello", "Hell")).toBeNull()
+  })
+
+  it("keeps immediate draft layout only until parent draft lines catch up", () => {
+    const immediate = {
+      baseText: "Hello",
+      draftText: "Hello wrapped",
+      layout: { lines: [], height: 24 },
+    }
+
+    expect(shouldKeepWysiwygImmediateDraftLayout(immediate, "Hello", false)).toBe(true)
+    expect(shouldKeepWysiwygImmediateDraftLayout(immediate, "Hello wrapped", false)).toBe(true)
+    expect(shouldKeepWysiwygImmediateDraftLayout(immediate, "Hello wrapped", true)).toBe(false)
+    expect(shouldKeepWysiwygImmediateDraftLayout(immediate, "Other", false)).toBe(false)
   })
 
   it("resolves a double-click word selection range from draft text", () => {
