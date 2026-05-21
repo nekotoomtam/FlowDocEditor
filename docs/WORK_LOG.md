@@ -20,6 +20,122 @@ Each entry should include:
 
 ## 2026-05-20
 
+### Resize Preview Performance P1-P5
+
+Goal: Make canvas resize feel steadier by removing the post-resize white
+reconcile flash, reducing pointer-move render pressure, and avoiding avoidable
+post-release layout work.
+
+Completed:
+
+- Suppressed the canvas loading wash for server reconciliation that immediately
+  follows resize-style commits, while keeping layout status/export readiness on
+  the normal server-pagination path.
+- Added animation-frame-backed transient state for column, row-min-height, and
+  margin resize previews so pointer movement coalesces to the display frame.
+- Kept the latest resize draft in refs so pointerup commits the newest drag
+  position even when the visual state update is waiting for the next animation
+  frame.
+- Memoized page rendering so pages unaffected by the active resize draft do not
+  rerender only because the transient drag object changed.
+- Precomputed page-local document lookup sets used by fragment rendering instead
+  of repeatedly scanning the whole document inside the fragment loop.
+- Reused the just-computed column-resize browser pagination result for the next
+  preview reconciliation pass, avoiding a duplicate browser pagination run after
+  release.
+- Moved live column-resize feedback to a fixed editor-only preview line that is
+  updated imperatively during pointer movement; the document model and page
+  fragments now update on pointerup instead of on every move.
+- Added a WYSIWYG text-engine immediate echo path that flushes the local typed
+  glyph preview before the heavier parent draft/reflow update runs.
+- Kept the immediate text echo alive until visual draft lines or parent live
+  echo can take over, preventing the typed glyph preview from disappearing just
+  because the parent draft state caught up first.
+- Changed WYSIWYG draft pagination scheduling to latest-only trailing behavior:
+  responsive requests now keep only one latest request, wait for a short quiet
+  window, and force a run within a max-lag budget so rapid typing does not kick
+  off near-per-key draft pagination work.
+- Added P3-A instrumentation for active WYSIWYG draft paragraph measurement via
+  `text-engine-draft-measure` perf events, including only scalar metadata such
+  as text length, line count, available width, and measured height.
+- Added source/delay metadata to browser preview pagination perf events so
+  future probes can distinguish WYSIWYG draft pagination from ordinary preview
+  pagination.
+- Added P3-B fallback canvas text measurement width caching, keyed by text,
+  font family key, and font size, matching the existing browser fontkit
+  measurer cache shape.
+- Added bounded grapheme-boundary caching in the core layout measurer while
+  preserving the previous "fresh array per call" behavior to avoid caller
+  mutation corrupting cached layout data.
+- Bumped the project release marker to `0.5.17` after resize, drag, and WYSIWYG
+  typing smoothness verification, while keeping persisted document/package
+  versions unchanged.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/browserTextMeasurer.ts`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/wysiwygReflow.ts`
+- `src/app/editor/_components/__tests__/browserTextMeasurer.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygReflow.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/layout/__tests__/measure.test.ts`
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorPalette.test.ts src/app/editor/_components/__tests__/OutlinePanel.test.ts`
+- `npm.cmd run test -w packages/core -- document/operations.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/browserTextMeasurer.test.ts src/app/editor/_components/__tests__/editorTextMeasurerState.test.ts src/app/editor/_components/__tests__/fontMeasurerParity.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run test -w packages/core -- src/layout/__tests__/measure.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `SMOKE_BASE_URL=http://localhost:4000/editor PROBE_BURST_LENGTH=80 npm.cmd run smoke:wysiwyg-smoothness`
+- `SMOKE_BASE_URL=http://localhost:4000/editor PROBE_BURST_LENGTH=120 PROBE_INTERVAL_MS=20 npm.cmd run smoke:wysiwyg-smoothness`
+- Custom Playwright typing echo probe on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  observed `0/12` missed visual-change samples, p95 visual-change latency around
+  `0.2ms`, and no console/page errors.
+- After latest-only scheduling, the 120-key/20ms smoothness probe passed with
+  no console/page errors, p95 paint latency around `31.9ms`, and p95 key total
+  latency around `145.3ms`.
+- After P3-A instrumentation, the 80-key smoothness probe passed with no
+  console/page errors, p95 paint latency around `30.9ms`, and p95 key total
+  latency around `122.5ms`. Perf events were `0` on the already-running local
+  server because that server was not launched with
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_PERF_TRACE=1`.
+- After P3-B cache work, the 80-key smoothness probe passed with no
+  console/page errors, p95 paint latency around `31.4ms`, and p95 key total
+  latency around `165.4ms`.
+- Browser smoke on
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`
+  confirmed typing has no console/page errors with p95 paint latency around
+  `29ms` for an 80-key burst.
+- Browser resize probe using `C:/Users/nekot/Downloads/Untitled.flowdoc (1).json`
+  confirmed `9` column handles, preview line visible for all `70` sampled drag
+  moves, preview hidden after pointerup, no console/page errors, average move
+  command time around `18.4ms`, p95 move command time around `26.4ms`, and p95
+  frame interval around `16.8ms`.
+- `npm.cmd run smoke:editor` with `SMOKE_BASE_URL=http://localhost:4000/editor`
+  is currently blocked by the smoke script expecting the older textarea inline
+  edit fallback while the app is running the WYSIWYG text-engine bridge.
+
+Notes:
+
+- This patch does not change document schema, core pagination semantics,
+  undo/redo ownership, or export readiness rules.
+
 ### Outline Depth Lane UX
 
 Goal: Make nested outline layers easier to scan at a glance without adding

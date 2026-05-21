@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   appendWysiwygPerfEvent,
   finishWysiwygPerfSpan,
+  isWysiwygPerfTraceRuntimeEnabled,
   summarizePaginatedForWysiwygPerf,
   type WysiwygPerfEvent,
 } from "../wysiwygPerformance"
@@ -76,6 +77,35 @@ describe("finishWysiwygPerfSpan", () => {
     expect(window.__flowDocWysiwygPerfEvents).toBeUndefined()
   })
 
+  it("can enable tracing at runtime from the editor URL", () => {
+    vi.stubGlobal("window", {
+      location: { search: "?flowdocWysiwygPerfTrace=1" },
+    })
+
+    expect(isWysiwygPerfTraceRuntimeEnabled(false)).toBe(true)
+
+    finishWysiwygPerfSpan(false, "inline-edit-draft-update", 10, {
+      nodeId: "p1",
+      textLength: 5,
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents).toHaveLength(1)
+  })
+
+  it("can enable tracing at runtime from a browser global override", () => {
+    vi.stubGlobal("window", {
+      __flowDocWysiwygPerfTraceEnabled: true,
+      location: { search: "" },
+    })
+
+    finishWysiwygPerfSpan(false, "inline-edit-draft-update", 10, {
+      nodeId: "p1",
+      textLength: 5,
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents).toHaveLength(1)
+  })
+
   it("appends scalar metadata without storing paragraph text", () => {
     vi.stubGlobal("window", {})
 
@@ -91,5 +121,31 @@ describe("finishWysiwygPerfSpan", () => {
       textLength: 5,
     })
     expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("Alpha")
+  })
+
+  it("records draft measure metadata without paragraph content", () => {
+    vi.stubGlobal("window", {})
+
+    finishWysiwygPerfSpan(true, "text-engine-draft-measure", 10, {
+      nodeId: "p1",
+      pageIndex: 2,
+      textLength: 42,
+      lineCount: 3,
+      availableWidth: 120,
+      paragraphHeight: 54,
+      source: "test-source",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "text-engine-draft-measure",
+      nodeId: "p1",
+      pageIndex: 2,
+      textLength: 42,
+      lineCount: 3,
+      availableWidth: 120,
+      paragraphHeight: 54,
+      source: "test-source",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
   })
 })

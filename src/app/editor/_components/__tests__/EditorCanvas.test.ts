@@ -2,7 +2,7 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { defaultTextMeasurer } from "@/layout"
-import type { PaginatedDocument, PageFragment, ParagraphRenderProps } from "@/pagination"
+import type { PaginatedDocument, PaginatedPage, PageFragment, ParagraphRenderProps } from "@/pagination"
 import type { DocumentNode } from "@/schema"
 import {
   buildEditorFragmentClipPathId,
@@ -10,6 +10,7 @@ import {
   buildWysiwygDraftVisualPreview,
   buildWysiwygTableCellDraftVisualChromeFragments,
   EditorCanvas,
+  pageViewScopedEditPropsAffectPage,
   shouldStartInlineEditOnSingleClick,
 } from "../EditorCanvas"
 
@@ -62,6 +63,18 @@ function textFragment(id: string, text: string, y: number, overrides: Partial<Pa
     }],
     renderProps,
     ...overrides,
+  }
+}
+
+function pageWithFragments(index: number, fragments: PageFragment[]): PaginatedPage {
+  return {
+    index,
+    width: 300,
+    height: 400,
+    contentBox: { x: 36, y: 72, width: 228, height: 256 },
+    fragments,
+    headerFragments: [],
+    footerFragments: [],
   }
 }
 
@@ -519,6 +532,46 @@ function renderCanvas(
     onWysiwygTextReflowDecision: noop,
   }))
 }
+
+describe("EditorCanvas page memoization", () => {
+  it("scopes WYSIWYG draft prop changes to pages that render the edited paragraph", () => {
+    const activePage = pageWithFragments(0, [textFragment("active-p", "Active", 72)])
+    const otherPage = pageWithFragments(1, [textFragment("other-p", "Other", 72, { pageIndex: 1 })])
+    const props = {
+      inlineEditNodeId: "active-p",
+      inlineEditPageIndex: 0,
+      wysiwygTextDraftNodeId: "active-p",
+      wysiwygDraftVisualPreview: null,
+      wysiwygTableCellDraftVisualChromeByPageIndex: new Map<number, PageFragment[]>(),
+      wysiwygTextPointerFragments: [],
+    }
+
+    expect(pageViewScopedEditPropsAffectPage(activePage, props)).toBe(true)
+    expect(pageViewScopedEditPropsAffectPage(otherPage, props)).toBe(false)
+  })
+
+  it("keeps visual draft preview pages in the WYSIWYG draft render scope", () => {
+    const sourcePage = pageWithFragments(0, [textFragment("other-p", "Other", 72)])
+    const previewFragment = textFragment("active-p", "Draft", 72, { pageIndex: 1, continuesFrom: true })
+    const previewPage = pageWithFragments(1, [textFragment("other-page-p", "Other", 72, { pageIndex: 1 })])
+    const props = {
+      inlineEditNodeId: "active-p",
+      inlineEditPageIndex: 0,
+      wysiwygTextDraftNodeId: "active-p",
+      wysiwygDraftVisualPreview: {
+        nodeId: "active-p",
+        fragments: [previewFragment],
+        fragmentsByPageIndex: new Map([[1, previewFragment]]),
+        caretPageIndex: 1,
+      },
+      wysiwygTableCellDraftVisualChromeByPageIndex: new Map<number, PageFragment[]>(),
+      wysiwygTextPointerFragments: [],
+    }
+
+    expect(pageViewScopedEditPropsAffectPage(sourcePage, props)).toBe(true)
+    expect(pageViewScopedEditPropsAffectPage(previewPage, props)).toBe(true)
+  })
+})
 
 describe("EditorCanvas fragment identity", () => {
   it("keys same-page inline paragraph slices by slice identity", () => {

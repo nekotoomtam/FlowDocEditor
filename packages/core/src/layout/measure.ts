@@ -120,6 +120,8 @@ function getSegmentKind(
 }
 
 const THAI_SARA_AM = "\u0E33"
+const GRAPHEME_BOUNDARY_CACHE_LIMIT = 2048
+const graphemeBoundaryCache = new Map<string, number[]>()
 
 function tailorThaiSaraAmGrapheme(segment: string): string[] {
   const firstSaraAm = segment.indexOf(THAI_SARA_AM)
@@ -150,13 +152,19 @@ export function splitTextGraphemes(text: string): string[] {
 }
 
 export function textGraphemeBoundaries(text: string): number[] {
+  const cached = graphemeBoundaryCache.get(text)
+  if (cached) return cached.slice()
+
   const boundaries = [0]
   let cursor = 0
   for (const grapheme of splitTextGraphemes(text)) {
     cursor += grapheme.length
     boundaries.push(cursor)
   }
-  return boundaries
+  if (graphemeBoundaryCache.size < GRAPHEME_BOUNDARY_CACHE_LIMIT) {
+    graphemeBoundaryCache.set(text, boundaries)
+  }
+  return boundaries.slice()
 }
 
 export function previousTextGraphemeBoundary(

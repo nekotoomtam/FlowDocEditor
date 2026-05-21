@@ -4,6 +4,7 @@ export type WysiwygPerfEventKind =
   | "inline-edit-draft-update"
   | "inline-edit-exit-pagination"
   | "active-paragraph-measure"
+  | "text-engine-draft-measure"
   | "browser-preview-pagination"
 
 export interface WysiwygPerfEvent {
@@ -15,6 +16,11 @@ export interface WysiwygPerfEvent {
   draftVersion?: number | null
   textLength?: number
   lineCount?: number
+  availableWidth?: number
+  paragraphHeight?: number
+  requestedDelayMs?: number
+  scheduledDelayMs?: number
+  source?: string
   pageCount?: number
   fragmentCount?: number
 }
@@ -22,10 +28,19 @@ export interface WysiwygPerfEvent {
 declare global {
   interface Window {
     __flowDocWysiwygPerfEvents?: WysiwygPerfEvent[]
+    __flowDocWysiwygPerfTraceEnabled?: boolean
   }
 }
 
 const MAX_WYSIWYG_PERF_EVENTS = 200
+const WYSIWYG_PERF_TRACE_QUERY_PARAM = "flowdocWysiwygPerfTrace"
+const WYSIWYG_PERF_TRACE_STORAGE_KEY = "flowdoc.wysiwygPerfTrace"
+const ENABLED_RUNTIME_VALUES = new Set(["", "1", "true", "on", "enabled"])
+
+function runtimeFlagEnabled(rawValue: string | null | undefined): boolean {
+  if (rawValue == null) return false
+  return ENABLED_RUNTIME_VALUES.has(rawValue.trim().toLowerCase())
+}
 
 export function startWysiwygPerfSpan(): number {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -61,13 +76,34 @@ export function summarizePaginatedForWysiwygPerf(
   return { pageCount, fragmentCount }
 }
 
+export function isWysiwygPerfTraceRuntimeEnabled(
+  compileTimeEnabled: boolean,
+): boolean {
+  if (compileTimeEnabled) return true
+  if (typeof window === "undefined") return false
+  if (typeof window.__flowDocWysiwygPerfTraceEnabled === "boolean") {
+    return window.__flowDocWysiwygPerfTraceEnabled
+  }
+
+  const search = window.location?.search ?? ""
+  if (runtimeFlagEnabled(new URLSearchParams(search).get(WYSIWYG_PERF_TRACE_QUERY_PARAM))) {
+    return true
+  }
+
+  try {
+    return runtimeFlagEnabled(window.localStorage?.getItem(WYSIWYG_PERF_TRACE_STORAGE_KEY))
+  } catch {
+    return false
+  }
+}
+
 export function finishWysiwygPerfSpan(
   enabled: boolean,
   kind: WysiwygPerfEventKind,
   startedAt: number,
   metadata: Omit<WysiwygPerfEvent, "kind" | "startedAt" | "durationMs"> = {},
 ): void {
-  if (!enabled || typeof window === "undefined") return
+  if (!isWysiwygPerfTraceRuntimeEnabled(enabled)) return
   const endedAt = startWysiwygPerfSpan()
   const event: WysiwygPerfEvent = {
     kind,
@@ -80,4 +116,3 @@ export function finishWysiwygPerfSpan(
     event,
   )
 }
-

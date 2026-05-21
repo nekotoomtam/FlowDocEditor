@@ -4,6 +4,7 @@ import {
   classifyWysiwygTextReflow,
   resolveWysiwygDraftPaginationSource,
   resolveWysiwygDraftPaginationDelayMs,
+  resolveWysiwygLatestOnlyDraftPaginationDelayMs,
   shouldCoalesceWysiwygDraftPaginationRequest,
   shouldScheduleResponsiveContainerDraftPagination,
   shouldScheduleResponsiveFlowStackDraftPagination,
@@ -317,6 +318,41 @@ describe("shouldUseWysiwygDraftPaginationFrame", () => {
       responsiveDelayMs: 16,
       canUseAnimationFrame: false,
     })).toBe(false)
+  })
+})
+
+describe("resolveWysiwygLatestOnlyDraftPaginationDelayMs", () => {
+  it("keeps responsive draft pagination trailing during a typing burst", () => {
+    expect(resolveWysiwygLatestOnlyDraftPaginationDelayMs({
+      requestedDelayMs: 16,
+      responsiveDelayMs: 16,
+      quietWindowMs: 48,
+      maxLagMs: 160,
+      firstRequestedAtMs: 1000,
+      nowMs: 1030,
+    })).toBe(48)
+  })
+
+  it("forces responsive draft pagination once the max lag budget is reached", () => {
+    expect(resolveWysiwygLatestOnlyDraftPaginationDelayMs({
+      requestedDelayMs: 16,
+      responsiveDelayMs: 16,
+      quietWindowMs: 48,
+      maxLagMs: 160,
+      firstRequestedAtMs: 1000,
+      nowMs: 1160,
+    })).toBe(16)
+  })
+
+  it("leaves normal settled pagination on the requested debounce", () => {
+    expect(resolveWysiwygLatestOnlyDraftPaginationDelayMs({
+      requestedDelayMs: 450,
+      responsiveDelayMs: 16,
+      quietWindowMs: 48,
+      maxLagMs: 160,
+      firstRequestedAtMs: 1000,
+      nowMs: 1030,
+    })).toBe(450)
   })
 })
 

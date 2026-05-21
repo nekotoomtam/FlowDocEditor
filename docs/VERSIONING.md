@@ -3,10 +3,11 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.5.15`: suitable for self-use with accepted
+The current baseline is `0.5.17`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
-hardening, WYSIWYG caret/edit stability work, and flow-stack drag/resize UX
-polish, but not yet a general-user `v1`.
+hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
+and WYSIWYG resize/typing smoothness hardening, but not yet a general-user
+`v1`.
 
 ## Version Meaning
 
@@ -18,6 +19,7 @@ polish, but not yet a general-user `v1`.
 | `0.5.2` | Patch baseline for flow-backed Row/Columns authoring, right-rail layout polish, and PDF/DOCX border-style hardening. |
 | `0.5.3` | Patch baseline for flow-stack Box styling, flow-row DOCX projection, focused PDF raster visual smoke, and local visual/WYSIWYG convenience scripts. |
 | `0.5.15` | Patch baseline for paragraph-like Flow Table rowspan continuation, WYSIWYG caret/split-fragment stability, and flow-stack drag/drop plus pair-resize UX polish. |
+| `0.5.17` | Patch baseline for editor resize/drag smoothness, WYSIWYG typing echo hardening, and focused performance probes without changing document or package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |
 | `1.0.0` | First version acceptable for real user workflows without expected workarounds in the main path. |

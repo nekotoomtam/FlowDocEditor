@@ -6,10 +6,12 @@ import {
   buildContinuationBackspaceInput,
   buildInlineEditSliceKey,
   buildSplitEditInput,
+  buildCachedWysiwygDraftParagraphLayout,
   focusElementWithoutScroll,
   ParagraphTextSurface,
   buildWysiwygDraftParagraphLayout,
   buildWysiwygDraftParagraphLines,
+  createWysiwygDraftParagraphLayoutCache,
   getContinuationEditState,
   getInlineEditVisualMode,
   inlineEditTextareaCaretColor,
@@ -255,6 +257,27 @@ function makeStackDoc(text = "Stack text"): DocumentNode {
 const fixedMeasurer: TextMeasurer = {
   measureText: (text) => ({ width: text.length * 10 }),
   measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => fontSize * lineHeightRatio,
+}
+
+function makeCountingMeasurer(): {
+  measurer: TextMeasurer
+  totalCalls: () => number
+} {
+  let textCalls = 0
+  let lineHeightCalls = 0
+  return {
+    measurer: {
+      measureText: (text) => {
+        textCalls += 1
+        return { width: text.length * 10 }
+      },
+      measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => {
+        lineHeightCalls += 1
+        return fontSize * lineHeightRatio
+      },
+    },
+    totalCalls: () => textCalls + lineHeightCalls,
+  }
 }
 
 function makeFocusElement(
@@ -1808,6 +1831,58 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(layout?.lines.map((line) => line.text)).toEqual(["A", "BC"])
     expect(layout?.lines.map((line) => line.y)).toEqual([22, 34])
     expect(layout?.lines.map((line) => line.x)).toEqual([45, 40])
+  })
+
+  it("reuses cached draft layout measurements for identical text-engine inputs", () => {
+    const doc = makeDoc("Hello")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({ x: 10, y: 20, width: 80 })
+    const cache = createWysiwygDraftParagraphLayoutCache()
+    const counting = makeCountingMeasurer()
+
+    const first = buildCachedWysiwygDraftParagraphLayout(cache, fragment, paragraph, "Hello!", counting.measurer)
+    const callsAfterFirst = counting.totalCalls()
+    if (first?.lines[0]) first.lines[0].text = "mutated"
+    const second = buildCachedWysiwygDraftParagraphLayout(cache, fragment, paragraph, "Hello!", counting.measurer)
+
+    expect(counting.totalCalls()).toBe(callsAfterFirst)
+    expect(second?.lines[0]?.text).toBe("Hello!")
+    expect(second).not.toBe(first)
+    expect(second?.lines).not.toBe(first?.lines)
+  })
+
+  it("invalidates cached draft measurements when text, width, style, or measurer changes", () => {
+    const doc = makeDoc("Hello")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({ width: 80 })
+    const cache = createWysiwygDraftParagraphLayoutCache()
+    const firstCounting = makeCountingMeasurer()
+
+    buildCachedWysiwygDraftParagraphLayout(cache, fragment, paragraph, "Hello!", firstCounting.measurer)
+    const callsAfterFirst = firstCounting.totalCalls()
+
+    buildCachedWysiwygDraftParagraphLayout(cache, { ...fragment, width: 70 }, paragraph, "Hello!", firstCounting.measurer)
+    const callsAfterWidthChange = firstCounting.totalCalls()
+    expect(callsAfterWidthChange).toBeGreaterThan(callsAfterFirst)
+
+    buildCachedWysiwygDraftParagraphLayout(cache, { ...fragment, width: 70 }, paragraph, "Hello!!", firstCounting.measurer)
+    const callsAfterTextChange = firstCounting.totalCalls()
+    expect(callsAfterTextChange).toBeGreaterThan(callsAfterWidthChange)
+
+    const styledParagraph = {
+      ...paragraph,
+      props: {
+        ...paragraph.props,
+        fontSize: { value: 14, unit: "pt" as const },
+      },
+    }
+    buildCachedWysiwygDraftParagraphLayout(cache, { ...fragment, width: 70 }, styledParagraph, "Hello!!", firstCounting.measurer)
+    const callsAfterStyleChange = firstCounting.totalCalls()
+    expect(callsAfterStyleChange).toBeGreaterThan(callsAfterTextChange)
+
+    const secondCounting = makeCountingMeasurer()
+    buildCachedWysiwygDraftParagraphLayout(cache, { ...fragment, width: 70 }, styledParagraph, "Hello!!", secondCounting.measurer)
+    expect(secondCounting.totalCalls()).toBeGreaterThan(0)
   })
 
   it("does not collapse continuation fragments into one local draft layout", () => {

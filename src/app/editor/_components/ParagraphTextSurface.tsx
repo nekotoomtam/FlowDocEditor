@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { createPortal } from "react-dom"
+import { createPortal, flushSync } from "react-dom"
 import { isPlainTextParagraph } from "@/document"
 import { measureParagraph, nextTextGraphemeBoundary, previousTextGraphemeBoundary, snapToGraphemeBoundary } from "@/layout"
 import type { TextMeasurer } from "@/layout"
@@ -35,6 +35,8 @@ import {
 } from "./wysiwygReflow"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
+import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
+import { finishWysiwygPerfSpan, startWysiwygPerfSpan } from "./wysiwygPerformance"
 
 interface Props {
   fragment: PageFragment
@@ -611,9 +613,111 @@ export interface WysiwygDraftParagraphLayout {
   height: number
 }
 
+export interface WysiwygDraftParagraphLayoutCache {
+  nodeId: string | null
+  textMeasurer: TextMeasurer | null
+  entries: Map<string, WysiwygDraftParagraphLayout>
+}
+
 export interface WysiwygLiveTextEcho {
   anchorOffset: number
   text: string
+}
+
+interface WysiwygImmediateTextEcho {
+  baseText: string
+  draftText: string
+}
+
+const WYSIWYG_DRAFT_PARAGRAPH_LAYOUT_CACHE_LIMIT = 64
+
+export function createWysiwygDraftParagraphLayoutCache(): WysiwygDraftParagraphLayoutCache {
+  return {
+    nodeId: null,
+    textMeasurer: null,
+    entries: new Map(),
+  }
+}
+
+function cloneWysiwygDraftParagraphLayout(layout: WysiwygDraftParagraphLayout): WysiwygDraftParagraphLayout {
+  return {
+    height: layout.height,
+    lines: layout.lines.map((line) => ({
+      ...line,
+      segments: line.segments?.map((segment) => ({ ...segment })),
+    })),
+  }
+}
+
+export function createWysiwygDraftParagraphLayoutCacheKey(
+  fragment: PageFragment,
+  node: ParagraphNode,
+  draftText: string,
+  options: { allowContinuedFirstFragment?: boolean } = {},
+): string {
+  const firstRun = node.children[0]
+  return JSON.stringify({
+    draftText,
+    fragment: {
+      nodeId: fragment.nodeId,
+      pageIndex: fragment.pageIndex,
+      x: fragment.x,
+      y: fragment.y,
+      width: fragment.width,
+      continuesFrom: fragment.continuesFrom ?? false,
+      isContinued: fragment.isContinued ?? false,
+      lineStart: fragment.lineStart ?? null,
+      lineEnd: fragment.lineEnd ?? null,
+    },
+    node: {
+      id: node.id,
+      props: node.props,
+      firstRun: firstRun
+        ? {
+            id: firstRun.id,
+            type: firstRun.type,
+            props: "props" in firstRun ? firstRun.props : undefined,
+          }
+        : null,
+      childCount: node.children.length,
+    },
+    options: {
+      allowContinuedFirstFragment: options.allowContinuedFirstFragment ?? false,
+    },
+  })
+}
+
+export function buildCachedWysiwygDraftParagraphLayout(
+  cache: WysiwygDraftParagraphLayoutCache,
+  fragment: PageFragment,
+  node: ParagraphNode,
+  draftText: string,
+  textMeasurer: TextMeasurer,
+  options: { allowContinuedFirstFragment?: boolean; traceMeasure?: boolean } = {},
+): WysiwygDraftParagraphLayout | null {
+  if (cache.nodeId !== fragment.nodeId || cache.textMeasurer !== textMeasurer) {
+    cache.nodeId = fragment.nodeId
+    cache.textMeasurer = textMeasurer
+    cache.entries.clear()
+  }
+
+  const key = createWysiwygDraftParagraphLayoutCacheKey(fragment, node, draftText, options)
+  const cached = cache.entries.get(key)
+  if (cached) {
+    cache.entries.delete(key)
+    cache.entries.set(key, cached)
+    return cloneWysiwygDraftParagraphLayout(cached)
+  }
+
+  const layout = buildWysiwygDraftParagraphLayout(fragment, node, draftText, textMeasurer, options)
+  if (!layout) return null
+
+  if (cache.entries.size >= WYSIWYG_DRAFT_PARAGRAPH_LAYOUT_CACHE_LIMIT) {
+    const oldestKey = cache.entries.keys().next().value
+    if (oldestKey) cache.entries.delete(oldestKey)
+  }
+  cache.entries.set(key, cloneWysiwygDraftParagraphLayout(layout))
+  return layout
 }
 
 export function buildWysiwygDraftParagraphLayout(
@@ -621,12 +725,23 @@ export function buildWysiwygDraftParagraphLayout(
   node: ParagraphNode,
   draftText: string,
   textMeasurer: TextMeasurer,
-  options: { allowContinuedFirstFragment?: boolean } = {},
+  options: { allowContinuedFirstFragment?: boolean; traceMeasure?: boolean } = {},
 ): WysiwygDraftParagraphLayout | null {
   if (fragment.continuesFrom || (fragment.isContinued && !options.allowContinuedFirstFragment)) return null
   const draftNode = paragraphWithDraftText(node, draftText)
   if (!draftNode) return null
+  const startedAt = options.traceMeasure ? startWysiwygPerfSpan() : null
   const measured = measureParagraph(draftNode, fragment.width, textMeasurer)
+  if (startedAt !== null) {
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "text-engine-draft-measure", startedAt, {
+      nodeId: fragment.nodeId,
+      pageIndex: fragment.pageIndex,
+      textLength: draftText.length,
+      lineCount: measured.lines.length,
+      availableWidth: fragment.width,
+      paragraphHeight: measured.totalHeight,
+    })
+  }
   return {
     lines: buildPaginatedLines(
       measured.lines,
@@ -937,6 +1052,8 @@ export function WysiwygTextLayer({
   const suppressNextCompositionInputRef = useRef(false)
   const blurEndEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isPointerSelecting, setIsPointerSelecting] = useState(false)
+  const [immediateTextEcho, setImmediateTextEcho] = useState<WysiwygImmediateTextEcho | null>(null)
+  const immediateTextEchoRef = useRef<WysiwygImmediateTextEcho | null>(null)
   const draftStateRef = useRef<{
     text: string
     caretOffset: number | null
@@ -978,6 +1095,20 @@ export function WysiwygTextLayer({
     scale,
     textMeasurer,
   ), [liveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
+  const immediateLiveTextEcho = useMemo(() => {
+    if (!immediateTextEcho) return null
+    if (immediateTextEcho.draftText === (draftText ?? "") && (lines != null || liveTextEcho != null)) return null
+    return resolveWysiwygLiveTextEcho(immediateTextEcho.baseText, immediateTextEcho.draftText)
+  }, [draftText, immediateTextEcho, lines, liveTextEcho])
+  const immediateLiveEchoVisual = useMemo(() => renderLiveTextEcho(
+    visualFragment,
+    immediateLiveTextEcho,
+    renderProps,
+    pageKey,
+    scale,
+    textMeasurer,
+  ), [immediateLiveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
+  const activeLiveEchoVisual = liveEchoVisual ?? immediateLiveEchoVisual
 
   useEffect(() => {
     draftStateRef.current = {
@@ -985,7 +1116,14 @@ export function WysiwygTextLayer({
       caretOffset: caretIndex,
       selection,
     }
-  }, [caretIndex, draftText, selection])
+    setImmediateTextEcho((current) => {
+      const next = current?.draftText === (draftText ?? "") && (lines != null || liveTextEcho != null)
+        ? null
+        : current
+      immediateTextEchoRef.current = next
+      return next
+    })
+  }, [caretIndex, draftText, lines, liveTextEcho, selection])
 
   useEffect(() => {
     focusElementWithoutScroll(inputBridgeRef.current)
@@ -1047,9 +1185,20 @@ export function WysiwygTextLayer({
       caretOffset: change.caretOffset ?? null,
       selection: change.selection ?? null,
     }
+    const immediateEchoBaseText = immediateTextEchoRef.current?.baseText ?? draftText ?? ""
+    const nextImmediateTextEcho = change.text === immediateEchoBaseText
+      ? null
+      : { baseText: immediateEchoBaseText, draftText: change.text }
+    if (nextImmediateTextEcho) {
+      immediateTextEchoRef.current = nextImmediateTextEcho
+      flushSync(() => setImmediateTextEcho(nextImmediateTextEcho))
+    } else {
+      immediateTextEchoRef.current = null
+      setImmediateTextEcho(null)
+    }
     onDraftChange(fragment.nodeId, change.text, change.caretOffset ?? null, change.selection ?? null)
     return true
-  }, [fragment.nodeId, onDraftChange])
+  }, [draftText, fragment.nodeId, onDraftChange])
 
   const applyTextInput = useCallback((insertedText: string) => {
     if (!insertedText || !onDraftChange) return false
@@ -1622,9 +1771,9 @@ export function WysiwygTextLayer({
       {visualFragment.lines?.map((line, index) =>
         renderLine(line, index, visualFragment, renderProps, pageKey, scale, undefined, clipPathId),
       )}
-      {liveEchoVisual?.content}
+      {activeLiveEchoVisual?.content}
       {showTextSegments && renderSegmentDebug(visualFragment.lines, visualFragment, renderProps, scale)}
-      {liveEchoVisual?.caret ?? renderCollapsedCaret(visualFragment, pageKey, scale, caretIndex, textMeasurer, clipPathId)}
+      {activeLiveEchoVisual?.caret ?? renderCollapsedCaret(visualFragment, pageKey, scale, caretIndex, textMeasurer, clipPathId)}
       </g>
     </>
   )
@@ -1665,6 +1814,7 @@ export function ParagraphTextSurface({
   const sliceContextRef = useRef<(ContinuationEditState & { editSliceKey: string }) | null>(null)
   const textEngineHeightRequestRef = useRef<string | null>(null)
   const textEngineReflowRequestRef = useRef<string | null>(null)
+  const textEngineDraftLayoutCacheRef = useRef<WysiwygDraftParagraphLayoutCache>(createWysiwygDraftParagraphLayoutCache())
   const [isSelectionCollapsed, setIsSelectionCollapsed] = useState(true)
   const [selectionSnapshot, setSelectionSnapshot] = useState<InlineEditSelectionSnapshot | null>(null)
   const [isComposing, setIsComposing] = useState(false)
@@ -1796,7 +1946,9 @@ export function ParagraphTextSurface({
   const textEngineCaretOffset = wysiwygTextCaretOffset ?? initialCaretIndex
   const textEngineDraftLayout = useMemo(() => {
     if (!textEngineDraftChanged || !supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null
-    return buildWysiwygDraftParagraphLayout(fragment, paragraphNode, textEngineDraftText, textMeasurer)
+    return buildCachedWysiwygDraftParagraphLayout(textEngineDraftLayoutCacheRef.current, fragment, paragraphNode, textEngineDraftText, textMeasurer, {
+      traceMeasure: true,
+    })
   }, [fragment, paragraphNode, supportsLocalDraftLayout, textEngineDraftChanged, textEngineDraftText, textMeasurer, useWysiwygTextEngineLayer])
   const textEngineDraftLines = textEngineDraftLayout?.lines ?? null
   const textEngineReflowDecision = useMemo(() => (

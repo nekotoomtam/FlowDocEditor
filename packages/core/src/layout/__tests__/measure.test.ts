@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { measureParagraph, measureParagraphFrom, snapToGraphemeBoundary, splitTextGraphemes } from "../measure"
+import { measureParagraph, measureParagraphFrom, snapToGraphemeBoundary, splitTextGraphemes, textGraphemeBoundaries } from "../measure"
 import { defaultTextMeasurer, defaultWordBreaker } from "../types"
 import type { ParagraphNode } from "../../schema"
 import type { WordBreaker } from "../types"
@@ -478,6 +478,15 @@ describe("defaultWordBreaker integration", () => {
 })
 
 // ─── snapToGraphemeBoundary ───────────────────────────────────────────────────
+
+describe("textGraphemeBoundaries", () => {
+  it("returns an isolated copy when serving repeated text from cache", () => {
+    const first = textGraphemeBoundaries("Hello")
+    first.push(999)
+
+    expect(textGraphemeBoundaries("Hello")).toEqual([0, 1, 2, 3, 4, 5])
+  })
+})
 
 describe("snapToGraphemeBoundary", () => {
   it("returns 0 for index 0", () => {

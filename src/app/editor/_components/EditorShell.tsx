@@ -2,7 +2,7 @@
 
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent } from "react"
 import { collectPaginatedLayoutWarnings, getPageDimensions, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
-import { defaultTextMeasurer, measureParagraph } from "@/layout"
+import { defaultTextMeasurer } from "@/layout"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
 import { applyPlacementOperation, updateNodeProps, updateParagraphText, updateFieldRefInline, updateParagraphBoxStyle, updateFlowStackBoxStyle, updateFlowTableCellSpan, deleteNode, addTableRow, removeTableRow, addTableColumn, removeTableColumn, addFlowTableRow, removeFlowTableRow, addFlowTableColumn, removeFlowTableColumn, updateSectionMargin, splitParagraphAtIndex, mergeParagraphWithPrevious, addFlowStackColumn, reorderBodyChild } from "@/document"
 import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges } from "@/document"
@@ -95,7 +95,7 @@ import {
 import {
   resolveWysiwygDraftPaginationSource,
   resolveWysiwygDraftPaginationDelayMs,
-  shouldCoalesceWysiwygDraftPaginationRequest,
+  resolveWysiwygLatestOnlyDraftPaginationDelayMs,
   shouldScheduleResponsiveContainerDraftPagination,
   shouldUseWysiwygDraftPaginationFrame,
   type WysiwygDraftPaginationLatestSnapshot,
@@ -130,6 +130,18 @@ interface PendingDrag {
   clickAction?: PendingClickAction
 }
 
+interface WysiwygDraftPaginationRequest {
+  nodeId: string
+  requestedDelayMs: number
+  firstRequestedAtMs: number
+}
+
+interface PendingDragMove {
+  clientX: number
+  clientY: number
+  sourceOverride?: DragSource | null
+}
+
 const SCREEN_READER_ONLY_STYLE = {
   position: "absolute",
   width: 1,
@@ -155,6 +167,10 @@ export interface ResizeDrag {
   pairWidth: number      // left + right stack width in doc coords
   gapWidthPt: number     // gap between the left and right stack fragments
   svgLeft: number        // SVG client left at drag start
+  svgTop: number         // SVG client top at drag start
+  pageKey: string
+  rowFragY: number       // row top in doc coords
+  rowFragHeight: number  // row height in doc coords
   currentDocX: number    // current drag position in doc coords
   leftShareOriginal: number
   rightShareOriginal: number
@@ -221,6 +237,8 @@ const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 450
 // Flow-stack page-boundary edits do not have a safe same-page local preview.
 // Keep the authoritative draft pagination close to the input frame instead.
 const FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS = 16
+const WYSIWYG_RESPONSIVE_DRAFT_PAGINATION_QUIET_MS = 48
+const WYSIWYG_RESPONSIVE_DRAFT_PAGINATION_MAX_LAG_MS = 160
 const FLOWDOC_FONT_HEADER = "X-FlowDoc-Font"
 const FLOWDOC_FONT_FALLBACK_VALUE = "fallback"
 const TRANSIENT_EXPORT_READINESS_REASONS = new Set([
@@ -234,6 +252,48 @@ function clampScale(value: number): number {
 
 function firstVisibleExportReadinessReason(reasons: string[]): string | null {
   return reasons.find((reason) => !TRANSIENT_EXPORT_READINESS_REASONS.has(reason)) ?? null
+}
+
+function useAnimationFrameState<T>(initialValue: T) {
+  const [value, setValue] = useState<T>(initialValue)
+  const valueRef = useRef<T>(initialValue)
+  const pendingValueRef = useRef<T>(initialValue)
+  const frameRef = useRef<number | null>(null)
+
+  const cancelPendingFrame = useCallback(() => {
+    if (frameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(frameRef.current)
+    }
+    frameRef.current = null
+  }, [])
+
+  const setImmediate = useCallback((nextValue: T) => {
+    cancelPendingFrame()
+    pendingValueRef.current = nextValue
+    valueRef.current = nextValue
+    setValue(nextValue)
+  }, [cancelPendingFrame])
+
+  const setOnAnimationFrame = useCallback((nextValue: T) => {
+    pendingValueRef.current = nextValue
+    valueRef.current = nextValue
+
+    if (typeof requestAnimationFrame === "undefined") {
+      setValue(nextValue)
+      return
+    }
+
+    if (frameRef.current !== null) return
+
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null
+      setValue(pendingValueRef.current)
+    })
+  }, [])
+
+  useEffect(() => () => cancelPendingFrame(), [cancelPendingFrame])
+
+  return { value, valueRef, setImmediate, setOnAnimationFrame }
 }
 
 type EditorAction =
@@ -647,36 +707,8 @@ function setDataSnapshotValue(snapshot: DataSnapshotV1, key: string, value: Fiel
   }
 }
 
-// ─── Local Reflow Helpers ─────────────────────────────────────────────────────
-
-function findParagraphNode(doc: DocumentNode, nodeId: string) {
-  for (const section of doc.document.sections) {
-    const node = section.nodes[nodeId]
-    if (node?.type === "paragraph") return node
-    for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
-      const inner = (candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]
-      if (inner?.type === "paragraph") return inner
-    }
-  }
-  return null
-}
-
 function getParagraphTextFromDoc(doc: DocumentNode, nodeId: string): string | null {
   return getPlainParagraphTextFromDocument(doc, nodeId)
-}
-
-function findParagraphFragment(paginated: PaginatedDocument, nodeId: string, pageIndex?: number | null): PageFragment | null {
-  for (const section of paginated.sections) {
-    for (const page of section.pages) {
-      const f = page.fragments.find((f) => f.nodeId === nodeId && f.nodeType === "paragraph")
-      if (!f) continue
-      // If pageIndex is specified, match only the fragment on that page
-      if (pageIndex != null && f.pageIndex !== pageIndex) continue
-      return f
-    }
-  }
-  return null
 }
 
 function findSectionIndexForNode(doc: DocumentNode, nodeId: string | null): number {
@@ -1377,12 +1409,31 @@ export default function EditorShell() {
   const editorRootRef = useRef<HTMLDivElement | null>(null)
   const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
   const pendingDragRef = useRef<PendingDrag | null>(null)
-  const [resizeDrag, setResizeDrag] = useState<ResizeDrag | null>(null)
-  const [minHeightDrag, setMinHeightDrag] = useState<MinHeightDrag | null>(null)
-  const [marginDrag, setMarginDrag] = useState<MarginDrag | null>(null)
+  const pendingDragMoveRef = useRef<PendingDragMove | null>(null)
+  const dragMoveFrameRef = useRef<number | null>(null)
+  const {
+    value: resizeDrag,
+    valueRef: resizeDragRef,
+    setImmediate: setResizeDrag,
+  } = useAnimationFrameState<ResizeDrag | null>(null)
+  const {
+    value: minHeightDrag,
+    valueRef: minHeightDragRef,
+    setImmediate: setMinHeightDrag,
+    setOnAnimationFrame: scheduleMinHeightDrag,
+  } = useAnimationFrameState<MinHeightDrag | null>(null)
+  const {
+    value: marginDrag,
+    valueRef: marginDragRef,
+    setImmediate: setMarginDrag,
+    setOnAnimationFrame: scheduleMarginDrag,
+  } = useAnimationFrameState<MarginDrag | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [documentIoStatus, setDocumentIoStatus] = useState<{ type: "info" | "error"; message: string } | null>(null)
+  const resizePreviewRef = useRef<HTMLDivElement | null>(null)
+  const resizePreviewFrameRef = useRef<number | null>(null)
+  const pendingResizePreviewRef = useRef<ResizeDrag | null>(null)
   const [showTextSegments, setShowTextSegments] = useState(false)
   const [showDrift, setShowDrift] = useState(false)
   const [driftReport, setDriftReport] = useState<DriftReport | null>(null)
@@ -1437,6 +1488,7 @@ export default function EditorShell() {
   const wysiwygDraftPaginationGenerationRef = useRef(0)
   const wysiwygDraftPaginationSnapshotRevisionRef = useRef(0)
   const wysiwygLatestDraftPaginationSnapshotRef = useRef<WysiwygDraftPaginationLatestSnapshot | null>(null)
+  const wysiwygDraftPaginationRequestRef = useRef<WysiwygDraftPaginationRequest | null>(null)
 
   useEffect(() => { docRef.current = state.doc }, [state.doc])
   useEffect(() => { packageFieldRegistryRef.current = packageFieldRegistry }, [packageFieldRegistry])
@@ -1549,6 +1601,7 @@ export default function EditorShell() {
     wysiwygDraftPaginationDebounceRef.current = null
     wysiwygDraftPaginationFrameRef.current = null
     wysiwygDraftPaginationDelayRef.current = null
+    wysiwygDraftPaginationRequestRef.current = null
     wysiwygLatestDraftPaginationSnapshotRef.current = null
     wysiwygDraftPaginationGenerationRef.current += 1
     setWysiwygDraftPaginationNodeId(null)
@@ -1560,27 +1613,59 @@ export default function EditorShell() {
     }
     wysiwygDraftPaginationFrameRef.current = null
     wysiwygDraftPaginationDelayRef.current = null
+    wysiwygDraftPaginationRequestRef.current = null
     wysiwygLatestDraftPaginationSnapshotRef.current = null
   }, [])
 
   const scheduleWysiwygDraftPagination = useCallback((nodeId: string, debounceMs = WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS) => {
     if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
-    const paginationDelayMs = Math.max(0, debounceMs)
+    const requestedDelayMs = Math.max(0, debounceMs)
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now()
+    const pendingRequest = wysiwygDraftPaginationRequestRef.current
+    const isResponsiveRequest = requestedDelayMs <= FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS
+    const canReuseResponsiveWindow = isResponsiveRequest &&
+      pendingRequest?.nodeId === nodeId &&
+      pendingRequest.requestedDelayMs <= FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS
+    const firstRequestedAtMs = canReuseResponsiveWindow
+      ? pendingRequest.firstRequestedAtMs
+      : nowMs
+    const scheduledDelayMs = resolveWysiwygLatestOnlyDraftPaginationDelayMs({
+      requestedDelayMs,
+      responsiveDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+      quietWindowMs: WYSIWYG_RESPONSIVE_DRAFT_PAGINATION_QUIET_MS,
+      maxLagMs: WYSIWYG_RESPONSIVE_DRAFT_PAGINATION_MAX_LAG_MS,
+      firstRequestedAtMs,
+      nowMs,
+    })
+
+    const request: WysiwygDraftPaginationRequest = {
+      nodeId,
+      requestedDelayMs,
+      firstRequestedAtMs,
+    }
+    wysiwygDraftPaginationRequestRef.current = request
+    wysiwygDraftPaginationDelayRef.current = scheduledDelayMs
+
     const runDraftPagination = (generation: number) => {
       if (generation !== wysiwygDraftPaginationGenerationRef.current) return
+      const activeRequest = wysiwygDraftPaginationRequestRef.current
+      if (!activeRequest) return
+      const activeScheduledDelayMs = wysiwygDraftPaginationDelayRef.current
       wysiwygDraftPaginationDebounceRef.current = null
       wysiwygDraftPaginationFrameRef.current = null
       wysiwygDraftPaginationDelayRef.current = null
+      wysiwygDraftPaginationRequestRef.current = null
+      const activeNodeId = activeRequest.nodeId
       const session = wysiwygTextSessionStateRef.current
       const source = resolveWysiwygDraftPaginationSource({
-        nodeId,
+        nodeId: activeNodeId,
         session,
         latestSnapshot: wysiwygLatestDraftPaginationSnapshotRef.current,
       })
       if (!source) return
       const draftDoc = buildWysiwygTextDraftPreviewDocument({
         doc: docRef.current,
-        nodeId,
+        nodeId: activeNodeId,
         draftText: source.draftText,
       })
       try {
@@ -1592,23 +1677,26 @@ export default function EditorShell() {
       const startedAt = startWysiwygPerfSpan()
       const paginated = paginatePreviewDoc(draftDoc)
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
-        nodeId,
+        nodeId: activeNodeId,
         draftVersion: source.revision,
+        requestedDelayMs: activeRequest.requestedDelayMs,
+        scheduledDelayMs: activeScheduledDelayMs ?? undefined,
+        source: "wysiwyg-draft",
         ...summarizePaginatedForWysiwygPerf(paginated),
       })
       if (generation !== wysiwygDraftPaginationGenerationRef.current) return
       const nextSource = resolveWysiwygDraftPaginationSource({
-        nodeId,
+        nodeId: activeNodeId,
         session: wysiwygTextSessionStateRef.current,
         latestSnapshot: wysiwygLatestDraftPaginationSnapshotRef.current,
       })
       if (!nextSource) return
       if (nextSource.revision !== source.revision) {
-        scheduleWysiwygDraftPagination(nodeId, paginationDelayMs)
+        scheduleWysiwygDraftPagination(activeNodeId, activeRequest.requestedDelayMs)
         return
       }
-      const ranges = getWysiwygParagraphFragmentRanges(paginated, nodeId)
-      const isTableCellParagraph = isParagraphInsideTableCell(draftDoc, nodeId)
+      const ranges = getWysiwygParagraphFragmentRanges(paginated, activeNodeId)
+      const isTableCellParagraph = isParagraphInsideTableCell(draftDoc, activeNodeId)
       const nextPageIndex = source.caretOffset == null
         ? null
         : findWysiwygPageIndexInFragmentRanges(ranges, source.caretOffset, {
@@ -1627,48 +1715,38 @@ export default function EditorShell() {
           requestInlineEditPageFollow(nextPageIndex!)
         }
       }
-      const currentFragmentCount = countWysiwygTextDraftFragments(paginated, nodeId)
+      const currentFragmentCount = countWysiwygTextDraftFragments(paginated, activeNodeId)
       setWysiwygDraftPaginationNodeId(shouldScheduleResponsiveContainerDraftPagination({
-        isFlowStackParagraph: isParagraphInsideFlowStack(draftDoc, nodeId),
+        isFlowStackParagraph: isParagraphInsideFlowStack(draftDoc, activeNodeId),
         isTableCellParagraph,
-        draftPaginationActive: wysiwygDraftPaginationNodeIdRef.current === nodeId,
+        draftPaginationActive: wysiwygDraftPaginationNodeIdRef.current === activeNodeId,
         currentFragmentCount,
-      }) ? nodeId : null)
+      }) ? activeNodeId : null)
       dispatch({ type: "SET_PAGINATED", paginated })
       markInlineEditVisualFresh(inlineEditDraftVersionRef.current)
     }
 
+    if (wysiwygDraftPaginationDebounceRef.current) {
+      clearTimeout(wysiwygDraftPaginationDebounceRef.current)
+      wysiwygDraftPaginationDebounceRef.current = null
+    }
+    if (wysiwygDraftPaginationFrameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(wysiwygDraftPaginationFrameRef.current)
+      wysiwygDraftPaginationFrameRef.current = null
+    }
+
+    const generation = ++wysiwygDraftPaginationGenerationRef.current
     const useAnimationFrame = shouldUseWysiwygDraftPaginationFrame({
-      nextDelayMs: paginationDelayMs,
+      nextDelayMs: scheduledDelayMs,
       responsiveDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
       canUseAnimationFrame: typeof requestAnimationFrame !== "undefined",
     })
     if (useAnimationFrame) {
-      if (wysiwygDraftPaginationDebounceRef.current) {
-        clearTimeout(wysiwygDraftPaginationDebounceRef.current)
-        wysiwygDraftPaginationDebounceRef.current = null
-      }
-      wysiwygDraftPaginationDelayRef.current = paginationDelayMs
-      if (wysiwygDraftPaginationFrameRef.current !== null) return
-      const generation = ++wysiwygDraftPaginationGenerationRef.current
       wysiwygDraftPaginationFrameRef.current = requestAnimationFrame(() => runDraftPagination(generation))
       return
     }
 
-    if (wysiwygDraftPaginationFrameRef.current !== null) return
-    if (wysiwygDraftPaginationDebounceRef.current) {
-      if (shouldCoalesceWysiwygDraftPaginationRequest({
-        pendingDelayMs: wysiwygDraftPaginationDelayRef.current,
-        nextDelayMs: paginationDelayMs,
-        responsiveDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
-      })) {
-        return
-      }
-      clearTimeout(wysiwygDraftPaginationDebounceRef.current)
-    }
-    const generation = ++wysiwygDraftPaginationGenerationRef.current
-    wysiwygDraftPaginationDelayRef.current = paginationDelayMs
-    wysiwygDraftPaginationDebounceRef.current = setTimeout(() => runDraftPagination(generation), paginationDelayMs)
+    wysiwygDraftPaginationDebounceRef.current = setTimeout(() => runDraftPagination(generation), scheduledDelayMs)
   }, [
     inlineEditDraftVersionRef,
     markInlineEditVisualFresh,
@@ -2036,13 +2114,14 @@ export default function EditorShell() {
   const [serverLayoutWarnings, setServerLayoutWarnings] = useState<ReturnType<typeof collectPaginatedLayoutWarnings>>([])
   const [fontFallback, setFontFallback] = useState(false)
   const [layoutError, setLayoutError] = useState(false)
+  const [suppressLayoutLoadingOverlay, setSuppressLayoutLoadingOverlay] = useState(false)
   const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const serverPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutVersionRef = useRef(0)
   const browserPaginationGenerationRef = useRef(0)
+  const suppressNextLayoutLoadingOverlayRef = useRef(false)
+  const precomputedBrowserPaginationRef = useRef<OptimisticLayoutSnapshot | null>(null)
   const optimisticLayoutRef = useRef<OptimisticLayoutSnapshot | null>(null)
-  const prevLineCountRef = useRef<number | null>(null)
-  const prevEditNodeIdRef = useRef<string | null>(null)
   const optimisticLayoutWarnings = useMemo(() => collectPaginatedLayoutWarnings(state.paginated), [state.paginated])
   const serverLayoutCheckedForCurrentPreview = layoutStatus === "server-checked" && serverCheckedPreviewDoc === previewDoc
   const authoritativeLayoutWarnings = selectAuthoritativeLayoutWarnings({
@@ -2077,6 +2156,48 @@ export default function EditorShell() {
   useEffect(() => {
     browserPaginationGenerationRef.current += 1
   }, [inlineEditNodeId])
+  const suppressNextLayoutLoadingOverlay = useCallback(() => {
+    suppressNextLayoutLoadingOverlayRef.current = true
+  }, [])
+
+  const renderResizePreview = useCallback((drag: ResizeDrag | null) => {
+    const element = resizePreviewRef.current
+    if (!element) return
+    if (!drag || drag.committed) {
+      element.style.display = "none"
+      return
+    }
+
+    const leftPx = drag.svgLeft + drag.currentDocX * scale
+    const topPx = drag.svgTop + drag.rowFragY * scale
+    element.style.display = "block"
+    element.style.height = `${Math.max(drag.rowFragHeight * scale, 8)}px`
+    element.style.transform = `translate3d(${leftPx - 1}px, ${topPx}px, 0)`
+  }, [scale])
+
+  const scheduleResizePreview = useCallback((drag: ResizeDrag | null) => {
+    pendingResizePreviewRef.current = drag
+    if (typeof requestAnimationFrame === "undefined") {
+      renderResizePreview(drag)
+      return
+    }
+    if (resizePreviewFrameRef.current !== null) return
+    resizePreviewFrameRef.current = requestAnimationFrame(() => {
+      resizePreviewFrameRef.current = null
+      renderResizePreview(pendingResizePreviewRef.current)
+    })
+  }, [renderResizePreview])
+
+  const hideResizePreview = useCallback(() => {
+    pendingResizePreviewRef.current = null
+    if (resizePreviewFrameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(resizePreviewFrameRef.current)
+      resizePreviewFrameRef.current = null
+    }
+    renderResizePreview(null)
+  }, [renderResizePreview])
+
+  useEffect(() => () => hideResizePreview(), [hideResizePreview])
 
   const handleExport = useCallback(async (format: "pdf" | "docx") => {
     const finalizedActiveEdit = finalizeInlineEditBeforeAction()
@@ -2188,66 +2309,12 @@ export default function EditorShell() {
     const startedAt = startWysiwygPerfSpan()
     const paginated = paginateDocument(previewDoc, editorTextMeasurer)
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-exit-pagination", startedAt, {
+      source: "inline-edit-exit",
       ...summarizePaginatedForWysiwygPerf(paginated),
     })
     optimisticLayoutRef.current = { doc: previewDoc, paginated }
     dispatch({ type: "SET_PAGINATED", paginated })
   }, [editorTextMeasurer, inlineEditNodeId, previewDoc])
-
-  // Track the current line count when edit mode starts. This avoids reflowing on
-  // edit enter, but still lets the first typed/deleted character fire a hard
-  // event when it changes the paragraph's line count.
-  useEffect(() => {
-    if (inlineEditNodeId === null) {
-      prevLineCountRef.current = null
-      prevEditNodeIdRef.current = null
-      return
-    }
-    const fragment = findParagraphFragment(paginatedRef.current, inlineEditNodeId, inlineEditPageIndex)
-    prevLineCountRef.current = fragment?.lines?.length ?? null
-    prevEditNodeIdRef.current = inlineEditNodeId
-  }, [inlineEditNodeId, inlineEditPageIndex])
-
-  // While inline editing, the textarea is the interaction truth for the active
-  // paragraph, but browser pagination remains the visual truth. Do not patch
-  // fragments through the older same-page local reflow path; that can fight the
-  // full paginated preview when text starts crossing page boundaries.
-  useEffect(() => {
-    if (!inlineEditNodeId) return
-    const paraNode = findParagraphNode(previewDoc, inlineEditNodeId)
-    if (!paraNode) return
-    const fragment = findParagraphFragment(paginatedRef.current, inlineEditNodeId, inlineEditPageIndex)
-    if (!fragment) return
-
-    // Skip local reflow for split paragraphs — local reflow builds lines from a
-    // full measureParagraph call and positions them all within one fragment's Y
-    // range, causing visual corruption when the paragraph spans multiple pages.
-    // Split paragraphs rely on the debounced browser pagination for live updates.
-    const isSplitParagraph = paginatedRef.current
-      ? paginatedRef.current.sections
-        .flatMap((s) => s.pages)
-        .flatMap((p) => p.fragments)
-        .filter((f) => f.nodeId === inlineEditNodeId && f.nodeType === "paragraph")
-        .length > 1
-      : false
-    if (isSplitParagraph) return
-
-    const startedAt = startWysiwygPerfSpan()
-    const measured = measureParagraph(paraNode, fragment.width, editorTextMeasurer)
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "active-paragraph-measure", startedAt, {
-      nodeId: inlineEditNodeId,
-      pageIndex: inlineEditPageIndex,
-      lineCount: measured.lines.length,
-    })
-    const newLineCount = measured.lines.length
-
-    if (prevEditNodeIdRef.current !== inlineEditNodeId) {
-      prevLineCountRef.current = null
-      prevEditNodeIdRef.current = inlineEditNodeId
-    }
-    prevLineCountRef.current = newLineCount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewDoc])
 
   // Full browser pagination — optimistic visual layout. During inline editing
   // this runs against previewDoc so draft text can split across pages before
@@ -2264,6 +2331,17 @@ export default function EditorShell() {
       ? inlineEditDraftVersionRef.current
       : null
     const debounceMs = inlineEditNodeIdAtSchedule ? INLINE_EDIT_PREVIEW_DEBOUNCE_MS : 16
+    const precomputedPagination = precomputedBrowserPaginationRef.current
+    if (precomputedPagination) {
+      precomputedBrowserPaginationRef.current = null
+      if (precomputedPagination.doc === previewDoc) {
+        optimisticLayoutRef.current = precomputedPagination
+        if (isEditorTextMeasurerReady(editorTextMeasurerStatus)) {
+          setInitialLayoutReady(true)
+        }
+        return () => undefined
+      }
+    }
     interactiveDebounceRef.current = setTimeout(() => {
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
@@ -2272,6 +2350,8 @@ export default function EditorShell() {
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
         nodeId: inlineEditNodeIdAtSchedule ?? undefined,
         draftVersion: inlineEditDraftVersionAtSchedule,
+        scheduledDelayMs: debounceMs,
+        source: inlineEditNodeIdAtSchedule ? "inline-edit-preview" : "document-preview",
         ...summarizePaginatedForWysiwygPerf(paginated),
       })
       if (generation !== browserPaginationGenerationRef.current) return
@@ -2304,6 +2384,9 @@ export default function EditorShell() {
     setServerCheckedPreviewDoc(null)
     setServerLayoutWarnings([])
     setLayoutStatus("optimistic")
+    const suppressLoadingOverlay = suppressNextLayoutLoadingOverlayRef.current
+    suppressNextLayoutLoadingOverlayRef.current = false
+    setSuppressLayoutLoadingOverlay(suppressLoadingOverlay)
 
     window.addEventListener("pagehide", cancelForPageTransition, { once: true })
 
@@ -2375,7 +2458,10 @@ export default function EditorShell() {
           setLayoutError(true)
         })
         .finally(() => {
-          if (layoutVersion === layoutVersionRef.current) setIsLayoutLoading(false)
+          if (layoutVersion === layoutVersionRef.current) {
+            setIsLayoutLoading(false)
+            setSuppressLayoutLoadingOverlay(false)
+          }
         })
     }, inlineEditNodeId ? 500 : 120)
 
@@ -2389,11 +2475,11 @@ export default function EditorShell() {
 
   useEffect(() => {
     if (!isLayoutLoading) {
-      setResizeDrag((prev) => prev?.committed ? null : prev)
-      setMinHeightDrag((prev) => prev?.committed ? null : prev)
-      setMarginDrag((prev) => prev?.committed ? null : prev)
+      if (resizeDragRef.current?.committed) setResizeDrag(null)
+      if (minHeightDragRef.current?.committed) setMinHeightDrag(null)
+      if (marginDragRef.current?.committed) setMarginDrag(null)
     }
-  }, [isLayoutLoading])
+  }, [isLayoutLoading, marginDragRef, minHeightDragRef, resizeDragRef, setMarginDrag, setMinHeightDrag, setResizeDrag])
 
   const setPageRef = useCallback((key: string, el: SVGSVGElement | null) => {
     if (el) pageRefs.current.set(key, el)
@@ -2414,13 +2500,15 @@ export default function EditorShell() {
   const handleResizeStart = useCallback((
     rowId: string, leftStackId: string, rightStackId: string,
     pairX: number, pairWidth: number, gapWidthPt: number,
-    startClientX: number, pageKey: string,
+    startClientX: number, pageKey: string, rowFragY: number, rowFragHeight: number,
   ) => {
     finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
     const svgEl = pageRefs.current.get(pageKey)
     if (!svgEl) return
-    const svgLeft = svgEl.getBoundingClientRect().left
+    const svgRect = svgEl.getBoundingClientRect()
+    const svgLeft = svgRect.left
+    const svgTop = svgRect.top
     const startDocX = (startClientX - svgLeft) / scale
 
     let leftShare = 50, rightShare = 50
@@ -2447,17 +2535,23 @@ export default function EditorShell() {
       ? Math.max(1, pairWidth * (effectiveFlowStackResizeMinShare(totalShare) / totalShare))
       : Math.max(16, pairWidth * 0.15)
 
-    setResizeDrag({
+    const nextResizeDrag: ResizeDrag = {
       rowId, leftStackId, rightStackId,
       pairX, pairWidth, gapWidthPt,
       svgLeft,
+      svgTop,
+      pageKey,
+      rowFragY,
+      rowFragHeight,
       currentDocX: startDocX,
       leftShareOriginal: leftShare, rightShareOriginal: rightShare,
       totalShare,
       minWidthPt,
       stackKind,
-    })
-  }, [finalizeInlineEditBeforeAction, scale, state.doc, state.paginated])
+    }
+    setResizeDrag(nextResizeDrag)
+    scheduleResizePreview(nextResizeDrag)
+  }, [finalizeInlineEditBeforeAction, scale, scheduleResizePreview, state.doc])
 
   const handleMinHeightResizeStart = useCallback((
     rowId: string, rowFragY: number, pageKey: string,
@@ -2518,6 +2612,7 @@ export default function EditorShell() {
     if (nextMode === "fill") {
       setMode("fill")
       dispatch({ type: "DRAG_CANCEL" })
+      hideResizePreview()
       setResizeDrag(null)
       setMinHeightDrag(null)
       setMarginDrag(null)
@@ -2540,7 +2635,7 @@ export default function EditorShell() {
 
     setLeftRailMode("outline")
     setRightRailMode(state.selectedNodeId ? "properties" : "page")
-  }, [finalizeInlineEditBeforeAction, state.selectedNodeId])
+  }, [finalizeInlineEditBeforeAction, hideResizePreview, state.selectedNodeId])
 
   const computePreview = useCallback(
     (clientX: number, clientY: number, sourceOverride?: DragSource | null): { preview: PlacementPreview | null; sectionId: string | null } => {
@@ -2632,14 +2727,43 @@ export default function EditorShell() {
     [state, scale],
   )
 
+  const cancelScheduledDragMove = useCallback(() => {
+    pendingDragMoveRef.current = null
+    if (dragMoveFrameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(dragMoveFrameRef.current)
+    }
+    dragMoveFrameRef.current = null
+  }, [])
+
+  const scheduleDragMove = useCallback((move: PendingDragMove) => {
+    pendingDragMoveRef.current = move
+    if (typeof requestAnimationFrame === "undefined") {
+      const { preview } = computePreview(move.clientX, move.clientY, move.sourceOverride)
+      dispatch({ type: "DRAG_MOVE", clientX: move.clientX, clientY: move.clientY, preview })
+      return
+    }
+    if (dragMoveFrameRef.current !== null) return
+    dragMoveFrameRef.current = requestAnimationFrame(() => {
+      dragMoveFrameRef.current = null
+      const pendingMove = pendingDragMoveRef.current
+      pendingDragMoveRef.current = null
+      if (!pendingMove) return
+      const { preview } = computePreview(pendingMove.clientX, pendingMove.clientY, pendingMove.sourceOverride)
+      dispatch({ type: "DRAG_MOVE", clientX: pendingMove.clientX, clientY: pendingMove.clientY, preview })
+    })
+  }, [computePreview])
+
+  useEffect(() => () => cancelScheduledDragMove(), [cancelScheduledDragMove])
+
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       // Margin resize drag
-      if (marginDrag && !marginDrag.committed) {
-        const svgEl = pageRefs.current.get(marginDrag.pageKey)
+      const activeMarginDrag = marginDragRef.current
+      if (activeMarginDrag && !activeMarginDrag.committed) {
+        const svgEl = pageRefs.current.get(activeMarginDrag.pageKey)
         if (!svgEl) return
         const rect = svgEl.getBoundingClientRect()
-        const { side, pageWidthPt, pageHeightPt } = marginDrag
+        const { side, pageWidthPt, pageHeightPt } = activeMarginDrag
         let rawValue: number
         if (side === "left") rawValue = (e.clientX - rect.left) / scale
         else if (side === "right") rawValue = pageWidthPt - (e.clientX - rect.left) / scale
@@ -2648,28 +2772,32 @@ export default function EditorShell() {
         const isHoriz = side === "left" || side === "right"
         const max = (isHoriz ? pageWidthPt : pageHeightPt) / 2 - 36
         const newValue = Math.max(0, Math.min(max, rawValue))
-        const newMargins = { ...marginDrag.currentMargins, [side]: newValue }
-        if (!marginDrag.altKey) {
+        const newMargins = { ...activeMarginDrag.currentMargins, [side]: newValue }
+        if (!activeMarginDrag.altKey) {
           const opposite = side === "top" ? "bottom" : side === "bottom" ? "top" : side === "left" ? "right" : "left"
           newMargins[opposite] = newValue
         }
-        setMarginDrag((prev) => prev ? { ...prev, currentMargins: newMargins } : null)
+        scheduleMarginDrag({ ...activeMarginDrag, currentMargins: newMargins })
         return
       }
       // Resize row minHeight drag
-      if (minHeightDrag && !minHeightDrag.committed) {
-        const rawHeight = (e.clientY - minHeightDrag.svgTop) / scale - minHeightDrag.rowFragY
-        const currentMinHeight = Math.max(minHeightDrag.minPt, rawHeight)
-        setMinHeightDrag((prev) => prev ? { ...prev, currentMinHeight } : null)
+      const activeMinHeightDrag = minHeightDragRef.current
+      if (activeMinHeightDrag && !activeMinHeightDrag.committed) {
+        const rawHeight = (e.clientY - activeMinHeightDrag.svgTop) / scale - activeMinHeightDrag.rowFragY
+        const currentMinHeight = Math.max(activeMinHeightDrag.minPt, rawHeight)
+        scheduleMinHeightDrag({ ...activeMinHeightDrag, currentMinHeight })
         return
       }
       // Resize column drag
-      if (resizeDrag && !resizeDrag.committed) {
-        const rawDocX = (e.clientX - resizeDrag.svgLeft) / scale
-        const minX = resizeDrag.pairX + resizeDrag.minWidthPt
-        const maxX = resizeDrag.pairX + resizeDrag.pairWidth - resizeDrag.minWidthPt
+      const activeResizeDrag = resizeDragRef.current
+      if (activeResizeDrag && !activeResizeDrag.committed) {
+        const rawDocX = (e.clientX - activeResizeDrag.svgLeft) / scale
+        const minX = activeResizeDrag.pairX + activeResizeDrag.minWidthPt
+        const maxX = activeResizeDrag.pairX + activeResizeDrag.pairWidth - activeResizeDrag.minWidthPt
         const currentDocX = Math.max(minX, Math.min(maxX, rawDocX))
-        setResizeDrag((prev) => prev ? { ...prev, currentDocX } : null)
+        const nextResizeDrag = { ...activeResizeDrag, currentDocX }
+        resizeDragRef.current = nextResizeDrag
+        scheduleResizePreview(nextResizeDrag)
         return
       }
       // Convert pendingDrag to real drag after 5px movement
@@ -2679,42 +2807,55 @@ export default function EditorShell() {
         if (Math.hypot(dx, dy) > 5) {
           const { source } = pendingDragRef.current
           pendingDragRef.current = null
-          const { preview } = computePreview(e.clientX, e.clientY, source)
           dispatch({ type: "DRAG_START", source, clientX: e.clientX, clientY: e.clientY })
-          dispatch({ type: "DRAG_MOVE", clientX: e.clientX, clientY: e.clientY, preview })
+          scheduleDragMove({ clientX: e.clientX, clientY: e.clientY, sourceOverride: source })
         }
         return
       }
       if (!state.drag) return
-      const { preview } = computePreview(e.clientX, e.clientY)
-      dispatch({ type: "DRAG_MOVE", clientX: e.clientX, clientY: e.clientY, preview })
+      scheduleDragMove({ clientX: e.clientX, clientY: e.clientY })
     },
-    [marginDrag, minHeightDrag, resizeDrag, state.drag, computePreview, scale],
+    [
+      marginDragRef,
+      minHeightDragRef,
+      resizeDragRef,
+      scale,
+      scheduleDragMove,
+      scheduleMarginDrag,
+      scheduleMinHeightDrag,
+      scheduleResizePreview,
+      state.drag,
+    ],
   )
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
       // Commit margin resize
-      if (marginDrag && !marginDrag.committed) {
-        dispatch({ type: "UPDATE_MARGIN", sectionIndex: marginDrag.sectionIndex, margin: marginDrag.currentMargins })
+      const activeMarginDrag = marginDragRef.current
+      if (activeMarginDrag && !activeMarginDrag.committed) {
+        suppressNextLayoutLoadingOverlay()
+        dispatch({ type: "UPDATE_MARGIN", sectionIndex: activeMarginDrag.sectionIndex, margin: activeMarginDrag.currentMargins })
         setMarginDrag(null)
         return
       }
       // Commit minHeight resize
-      if (minHeightDrag && !minHeightDrag.committed) {
-        dispatch({ type: "RESIZE_ROW_MIN_HEIGHT", rowId: minHeightDrag.rowId, minHeight: minHeightDrag.currentMinHeight })
+      const activeMinHeightDrag = minHeightDragRef.current
+      if (activeMinHeightDrag && !activeMinHeightDrag.committed) {
+        suppressNextLayoutLoadingOverlay()
+        dispatch({ type: "RESIZE_ROW_MIN_HEIGHT", rowId: activeMinHeightDrag.rowId, minHeight: activeMinHeightDrag.currentMinHeight })
         setMinHeightDrag(null)
         return
       }
       // Commit resize
-      if (resizeDrag && !resizeDrag.committed) {
-        const { leftStackId, rightStackId, pairX, pairWidth, currentDocX, totalShare } = resizeDrag
+      const activeResizeDrag = resizeDragRef.current
+      if (activeResizeDrag && !activeResizeDrag.committed) {
+        const { leftStackId, rightStackId, pairX, pairWidth, currentDocX, totalShare } = activeResizeDrag
         const leftWidthPt = currentDocX - pairX
         // Clamp to minimum 0.01 to ensure widthShare never becomes zero or negative
         // (drag clamping already prevents this in practice, but floating-point rounding
         // near the boundary could theoretically produce 0 after Math.round)
         const rawLeftShare = Math.max(0.01, Math.round((leftWidthPt / pairWidth) * totalShare * 100) / 100)
-        const nextShares = resizeDrag.stackKind === "flow-stack"
+        const nextShares = activeResizeDrag.stackKind === "flow-stack"
           ? resolveFlowStackResizePairShares({
             pairTotalShare: totalShare,
             selectedShare: rawLeftShare,
@@ -2724,7 +2865,10 @@ export default function EditorShell() {
         const newLeftShare = nextShares?.leftShare ?? rawLeftShare
         const newRightShare = nextShares?.rightShare ?? Math.max(0.01, Math.round((totalShare - newLeftShare) * 100) / 100)
         const nextDoc = resizeColumnsDocument(state.doc, leftStackId, newLeftShare, rightStackId, newRightShare)
-        const nextPaginated = paginatePreviewDoc(nextDoc)
+        const nextPreviewDoc = resolvePreviewDoc(nextDoc)
+        const nextPaginated = paginateDocument(nextPreviewDoc, editorTextMeasurer)
+        precomputedBrowserPaginationRef.current = { doc: nextPreviewDoc, paginated: nextPaginated }
+        suppressNextLayoutLoadingOverlay()
         dispatch({
           type: "RESIZE_COLUMNS",
           leftStackId,
@@ -2733,11 +2877,13 @@ export default function EditorShell() {
           rightShare: newRightShare,
           paginated: nextPaginated,
         })
+        hideResizePreview()
         setResizeDrag(null)
         return
       }
       // PendingDrag released without moving → treat as click.
       if (pendingDragRef.current) {
+        cancelScheduledDragMove()
         const { source, clickAction } = pendingDragRef.current
         pendingDragRef.current = null
         if (clickAction?.type === "inline-edit") {
@@ -2754,6 +2900,7 @@ export default function EditorShell() {
       }
 
       if (!state.drag) return
+      cancelScheduledDragMove()
       const { preview, sectionId } = computePreview(e.clientX, e.clientY)
 
       if (preview?.isValid && preview.placement && sectionId) {
@@ -2770,8 +2917,44 @@ export default function EditorShell() {
       }
       dispatch({ type: "DRAG_CANCEL" })
     },
-    [marginDrag, minHeightDrag, resizeDrag, state.drag, state.doc, computePreview, handleInlineEditStart, paginatePreviewDoc],
+    [
+      computePreview,
+      cancelScheduledDragMove,
+      handleInlineEditStart,
+      marginDragRef,
+      minHeightDragRef,
+      resizeDragRef,
+      editorTextMeasurer,
+      resolvePreviewDoc,
+      setMarginDrag,
+      setMinHeightDrag,
+      setResizeDrag,
+      state.doc,
+      state.drag,
+      suppressNextLayoutLoadingOverlay,
+      hideResizePreview,
+    ],
   )
+
+  const handlePointerCancel = useCallback(() => {
+    pendingDragRef.current = null
+    cancelScheduledDragMove()
+    hideResizePreview()
+    if (resizeDragRef.current && !resizeDragRef.current.committed) setResizeDrag(null)
+    if (minHeightDragRef.current && !minHeightDragRef.current.committed) setMinHeightDrag(null)
+    if (marginDragRef.current && !marginDragRef.current.committed) setMarginDrag(null)
+    if (state.drag) dispatch({ type: "DRAG_CANCEL" })
+  }, [
+    cancelScheduledDragMove,
+    hideResizePreview,
+    marginDragRef,
+    minHeightDragRef,
+    resizeDragRef,
+    setMarginDrag,
+    setMinHeightDrag,
+    setResizeDrag,
+    state.drag,
+  ])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     const tag = (e.target as HTMLElement).tagName
@@ -2840,6 +3023,7 @@ export default function EditorShell() {
       { mode: "fill", label: "Fill", description: "Data entry", icon: "F", badge: fillIssueCount > 0 ? String(fillIssueCount) : undefined },
       { mode: "render", label: "Render", description: exportReadiness.canExport ? "Ready to export" : "Check export", icon: "R", badge: exportReadiness.canExport ? undefined : "!" },
     ]
+  const showLayoutLoadingOverlay = isLayoutLoading && !suppressLayoutLoadingOverlay
 
   return (
     <div
@@ -2851,10 +3035,29 @@ export default function EditorShell() {
       style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       onKeyDown={handleKeyDown}
       onWheelCapture={handleWheelCapture}
       tabIndex={-1}
     >
+      <div
+        ref={resizePreviewRef}
+        data-testid="column-resize-preview"
+        aria-hidden="true"
+        style={{
+          position: "fixed",
+          left: 0,
+          top: 0,
+          width: 2,
+          height: 8,
+          display: "none",
+          backgroundColor: "#2563eb",
+          boxShadow: "0 0 0 1px rgba(37, 99, 235, 0.18)",
+          pointerEvents: "none",
+          zIndex: 80,
+          willChange: "transform",
+        }}
+      />
       <div
         id={WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID}
         data-wysiwyg-accessibility-status="true"
@@ -3154,7 +3357,7 @@ export default function EditorShell() {
             drag={isTemplateMode ? state.drag : null}
             scale={scale}
             selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
-            isLayoutLoading={isLayoutLoading}
+            isLayoutLoading={showLayoutLoadingOverlay}
             textMeasurer={editorTextMeasurer}
             inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
             inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}

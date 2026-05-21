@@ -105,6 +105,15 @@ export interface WysiwygDraftPaginationFrameInput {
   canUseAnimationFrame: boolean
 }
 
+export interface WysiwygLatestOnlyDraftPaginationDelayInput {
+  requestedDelayMs: number
+  responsiveDelayMs: number
+  quietWindowMs: number
+  maxLagMs: number
+  firstRequestedAtMs: number
+  nowMs: number
+}
+
 const HEIGHT_EPSILON = 0.5
 
 export const WYSIWYG_TABLE_CELL_VISUAL_PREVIEW_REFLOW_DECISION: WysiwygTextReflowDecision = {
@@ -219,6 +228,21 @@ export function shouldCoalesceWysiwygDraftPaginationRequest(input: WysiwygDraftP
 
 export function shouldUseWysiwygDraftPaginationFrame(input: WysiwygDraftPaginationFrameInput): boolean {
   return input.canUseAnimationFrame && input.nextDelayMs <= input.responsiveDelayMs
+}
+
+export function resolveWysiwygLatestOnlyDraftPaginationDelayMs(
+  input: WysiwygLatestOnlyDraftPaginationDelayInput,
+): number {
+  if (input.requestedDelayMs > input.responsiveDelayMs) return input.requestedDelayMs
+
+  const elapsedMs = Math.max(0, input.nowMs - input.firstRequestedAtMs)
+  if (elapsedMs >= input.maxLagMs) return input.responsiveDelayMs
+
+  const remainingUntilMaxLag = input.maxLagMs - elapsedMs
+  return Math.max(
+    input.responsiveDelayMs,
+    Math.min(input.quietWindowMs, remainingUntilMaxLag),
+  )
 }
 
 export function shouldScheduleResponsiveFlowStackDraftPagination(
