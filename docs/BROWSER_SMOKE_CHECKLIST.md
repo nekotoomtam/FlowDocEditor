@@ -64,15 +64,15 @@ documents into `localStorage`, explicitly enables
   browser reflow without duplicate/garbled visible text, stay focused, undo/redo
   as one edit session, and Backspace across the continuation boundary
 - fieldRef paragraphs do not enter plain textarea inline edit
-- table-cell paragraph Backspace at the true start does not call body-paragraph
+- flow-table-cell paragraph Backspace at the true start does not call body-paragraph
   merge or corrupt the table
 - autosave writes `FlowDocPackage v2` to localStorage
 - undo and redo restore the expected paragraph text
-- clicking inside a table cell selects the parent `table-cell` and opens that
+- clicking inside a table cell selects the parent `flow-table-cell` and opens that
   property panel
-- table-cell property-panel column insert/delete updates authored column count
+- flow-table-cell property-panel column insert/delete updates authored column count
   without a layout error
-- table-cell property-panel row insert/delete updates authored row count
+- flow-table-cell property-panel row insert/delete updates authored row count
   without a layout error
 - Fill mode shows a required-field readiness warning for an empty used field
   and clears the warning after the value is filled
@@ -425,7 +425,7 @@ change.
 Use for table selection, cell editing, or property panel changes.
 
 - Click text inside a table cell from the canvas.
-- Confirm the selected structure is `table-cell`, not only the inner paragraph.
+- Confirm the selected structure is `flow-table-cell`, not only the inner paragraph.
 - Confirm the `TABLE-CELL` property panel appears.
 - Edit the cell text from the panel and confirm the canvas updates.
 - Confirm no invalid document/layout error appears.

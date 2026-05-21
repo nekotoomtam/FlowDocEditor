@@ -3,14 +3,18 @@
 import { useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent } from "react"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
-import { updateNodeProps, updateParagraphText } from "@/document"
+import {
+  resizeFlowTableColumnPair as resizeFlowTableColumnPairForPreview,
+  updateNodeProps,
+  updateParagraphText,
+} from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import { assessDocumentDataReadiness } from "@/readiness"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
-import type { DocumentNode, FlowTableNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableNode } from "@/schema"
 import type { PaginatedDocument, PageFragment } from "@/pagination"
 import type {
   DragSource,
@@ -148,7 +152,8 @@ const SCREEN_READER_ONLY_STYLE = {
   border: 0,
 } as const
 
-export interface ResizeDrag {
+export interface StackResizeDrag {
+  type: "stack"
   rowId: string
   leftStackId: string
   rightStackId: string
@@ -168,6 +173,28 @@ export interface ResizeDrag {
   stackKind: "stack" | "flow-stack"
   committed?: boolean
 }
+
+export interface TableColumnResizeDrag {
+  type: "table-column"
+  tableId: string
+  leftColIndex: number
+  pairX: number          // left column x in rendered doc coords
+  pairWidth: number      // left + right column rendered width in doc coords
+  svgLeft: number        // SVG client left at drag start
+  svgTop: number         // SVG client top at drag start
+  pageKey: string
+  tableFragY: number     // table fragment top in doc coords
+  tableFragHeight: number // table fragment height in doc coords
+  currentDocX: number    // current drag position in rendered doc coords
+  pointerOffsetDocX: number
+  leftWidthOriginal: number
+  rightWidthOriginal: number
+  pairWidthAuthored: number
+  minWidthPt: number     // rendered min column width in pt
+  committed?: boolean
+}
+
+export type ResizeDrag = StackResizeDrag | TableColumnResizeDrag
 
 export interface MinHeightDrag {
   rowId: string
@@ -279,7 +306,7 @@ function describeDragSource(source: DragSource): string {
     if (source.blockType === "paragraph") return "Paragraph"
     if (source.blockType === "row") return "Row"
     if (source.blockType === "flow-columns" || source.blockType === "columns") return "Column"
-    if (source.blockType === "table" || source.blockType === "flow-table") return "Table"
+    if (source.blockType === "flow-table") return "Table"
     return source.blockType
   }
   if (source.source === "field") return source.field.label ?? source.field.key
@@ -309,7 +336,7 @@ function DragGhostIcon({ source }: { source: DragSource }) {
   if (source.blockType === "paragraph") {
     return <span style={dragGhostDocumentIcon}>¶</span>
   }
-  if (source.blockType === "table" || source.blockType === "flow-table") {
+  if (source.blockType === "flow-table") {
     return (
       <span style={dragGhostTableIcon}>
         {Array.from({ length: 9 }).map((_, index) => <span key={index} style={dragGhostTableCell} />)}
@@ -376,8 +403,8 @@ function findSectionIndexForNode(doc: DocumentNode, nodeId: string | null): numb
     const section = doc.document.sections[sectionIndex]
     if (section.nodes[nodeId]) return sectionIndex
     for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
-      if ((candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]) return sectionIndex
+      if (candidate.type !== "flow-table") continue
+      if ((candidate as unknown as FlowTableNode).nodes[nodeId]) return sectionIndex
     }
   }
   return 0
@@ -1501,10 +1528,12 @@ export default function EditorShell() {
       return
     }
 
+    const previewY = drag.type === "table-column" ? drag.tableFragY : drag.rowFragY
+    const previewHeight = drag.type === "table-column" ? drag.tableFragHeight : drag.rowFragHeight
     const leftPx = drag.svgLeft + drag.currentDocX * scale
-    const topPx = drag.svgTop + drag.rowFragY * scale
+    const topPx = drag.svgTop + previewY * scale
     element.style.display = "block"
-    element.style.height = `${Math.max(drag.rowFragHeight * scale, 8)}px`
+    element.style.height = `${Math.max(previewHeight * scale, 8)}px`
     element.style.transform = `translate3d(${leftPx - 1}px, ${topPx}px, 0)`
   }, [scale])
 
@@ -1845,7 +1874,7 @@ export default function EditorShell() {
     const startDocX = (startClientX - svgLeft) / scale
 
     let leftShare = 50, rightShare = 50
-    let stackKind: ResizeDrag["stackKind"] | null = null
+    let stackKind: StackResizeDrag["stackKind"] | null = null
     for (const section of state.doc.document.sections) {
       const l = section.nodes[leftStackId], r = section.nodes[rightStackId]
       if (l?.type === "stack" && r?.type === "stack") {
@@ -1869,6 +1898,7 @@ export default function EditorShell() {
       : Math.max(16, pairWidth * 0.15)
 
     const nextResizeDrag: ResizeDrag = {
+      type: "stack",
       rowId, leftStackId, rightStackId,
       pairX, pairWidth, gapWidthPt,
       svgLeft,
@@ -1885,6 +1915,53 @@ export default function EditorShell() {
     setResizeDrag(nextResizeDrag)
     scheduleResizePreview(nextResizeDrag)
   }, [finalizeInlineEditBeforeAction, scale, scheduleResizePreview, state.doc])
+
+  const handleTableColumnResizeStart = useCallback((
+    tableId: string,
+    leftColIndex: number,
+    pairX: number,
+    pairWidth: number,
+    leftWidthOriginal: number,
+    rightWidthOriginal: number,
+    startClientX: number,
+    pageKey: string,
+    tableFragY: number,
+    tableFragHeight: number,
+  ) => {
+    finalizeInlineEditBeforeAction()
+    const svgEl = pageRefs.current.get(pageKey)
+    if (!svgEl) return
+    const svgRect = svgEl.getBoundingClientRect()
+    const svgLeft = svgRect.left
+    const svgTop = svgRect.top
+    const pairWidthAuthored = leftWidthOriginal + rightWidthOriginal
+    if (!Number.isFinite(pairWidthAuthored) || pairWidthAuthored <= 0 || pairWidth <= 0) return
+    const renderedScale = pairWidth / pairWidthAuthored
+    const minWidthPt = Math.min(Math.max(1, 24 * renderedScale), pairWidth / 2)
+    const boundaryDocX = pairX + pairWidth * (leftWidthOriginal / pairWidthAuthored)
+    const startDocX = (startClientX - svgLeft) / scale
+
+    const nextResizeDrag: ResizeDrag = {
+      type: "table-column",
+      tableId,
+      leftColIndex,
+      pairX,
+      pairWidth,
+      svgLeft,
+      svgTop,
+      pageKey,
+      tableFragY,
+      tableFragHeight,
+      currentDocX: boundaryDocX,
+      pointerOffsetDocX: startDocX - boundaryDocX,
+      leftWidthOriginal,
+      rightWidthOriginal,
+      pairWidthAuthored,
+      minWidthPt,
+    }
+    setResizeDrag(nextResizeDrag)
+    scheduleResizePreview(nextResizeDrag)
+  }, [finalizeInlineEditBeforeAction, scale, scheduleResizePreview, setResizeDrag])
 
   const handleMinHeightResizeStart = useCallback((
     rowId: string, rowFragY: number, pageKey: string,
@@ -2125,9 +2202,12 @@ export default function EditorShell() {
       const activeResizeDrag = resizeDragRef.current
       if (activeResizeDrag && !activeResizeDrag.committed) {
         const rawDocX = (e.clientX - activeResizeDrag.svgLeft) / scale
+        const adjustedDocX = activeResizeDrag.type === "table-column"
+          ? rawDocX - activeResizeDrag.pointerOffsetDocX
+          : rawDocX
         const minX = activeResizeDrag.pairX + activeResizeDrag.minWidthPt
         const maxX = activeResizeDrag.pairX + activeResizeDrag.pairWidth - activeResizeDrag.minWidthPt
-        const currentDocX = Math.max(minX, Math.min(maxX, rawDocX))
+        const currentDocX = Math.max(minX, Math.min(maxX, adjustedDocX))
         const nextResizeDrag = { ...activeResizeDrag, currentDocX }
         resizeDragRef.current = nextResizeDrag
         scheduleResizePreview(nextResizeDrag)
@@ -2182,6 +2262,39 @@ export default function EditorShell() {
       // Commit resize
       const activeResizeDrag = resizeDragRef.current
       if (activeResizeDrag && !activeResizeDrag.committed) {
+        if (activeResizeDrag.type === "table-column") {
+          const renderedLeftWidth = activeResizeDrag.currentDocX - activeResizeDrag.pairX
+          const rawLeftWidth = activeResizeDrag.pairWidth > 0
+            ? (renderedLeftWidth / activeResizeDrag.pairWidth) * activeResizeDrag.pairWidthAuthored
+            : activeResizeDrag.leftWidthOriginal
+          const newLeftWidth = Math.round(rawLeftWidth * 100) / 100
+          const newRightWidth = Math.round((activeResizeDrag.pairWidthAuthored - newLeftWidth) * 100) / 100
+          const nextDoc = (() => {
+            let doc = state.doc
+            for (const section of doc.document.sections) {
+              const table = section.nodes[activeResizeDrag.tableId]
+              if (table?.type === "flow-table") {
+                return resizeFlowTableColumnPairForPreview(doc, activeResizeDrag.tableId, activeResizeDrag.leftColIndex, newLeftWidth, newRightWidth)
+              }
+            }
+            return doc
+          })()
+          const nextPreviewDoc = resolvePreviewDoc(nextDoc)
+          const nextPaginated = paginateDocument(nextPreviewDoc, editorTextMeasurer)
+          precomputedBrowserPaginationRef.current = { doc: nextPreviewDoc, paginated: nextPaginated }
+          suppressNextLayoutLoadingOverlay()
+          dispatch({
+            type: "RESIZE_TABLE_COLUMN_PAIR",
+            tableId: activeResizeDrag.tableId,
+            leftColIndex: activeResizeDrag.leftColIndex,
+            leftWidth: newLeftWidth,
+            rightWidth: newRightWidth,
+            paginated: nextPaginated,
+          })
+          hideResizePreview()
+          setResizeDrag(null)
+          return
+        }
         const { leftStackId, rightStackId, pairX, pairWidth, currentDocX, totalShare } = activeResizeDrag
         const leftWidthPt = currentDocX - pairX
         // Clamp to minimum 0.01 to ensure widthShare never becomes zero or negative
@@ -2719,6 +2832,7 @@ export default function EditorShell() {
             onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
             onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
             onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
+            onTableColumnResizeStart={isTemplateMode ? handleTableColumnResizeStart : () => undefined}
             resizeDrag={isTemplateMode ? resizeDrag : null}
             minHeightDrag={isTemplateMode ? minHeightDrag : null}
             onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}

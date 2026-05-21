@@ -1,6 +1,6 @@
 import { measureParagraph } from "../../layout"
 import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
-import type { FlowTableNode, TableNode } from "../../schema"
+import type { FlowTableNode } from "../../schema"
 import {
   paragraphFragmentHeight,
   paragraphLineTopOffset,
@@ -8,7 +8,7 @@ import {
 } from "./paragraph"
 import type { SplitPoint } from "./cellSplit"
 
-type CellSplitOwner = Pick<TableNode | FlowTableNode, "nodes">
+type CellSplitOwner = Pick<FlowTableNode, "nodes">
 
 export function cellHasRemainingSplitContent(
   cellBox: FlowBox,

@@ -18,9 +18,9 @@ import {
   ShadingType,
   VerticalAlignTable,
 } from "docx"
-import type { PaginatedDocument, PageFragment, ResolvedBorderSide, ResolvedCellBorder } from "../../pagination"
+import type { PaginatedDocument, PageFragment, ResolvedBorderSide } from "../../pagination"
 import type { ParagraphRenderProps } from "../../pagination"
-import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode, TableNode } from "../../schema"
+import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode } from "../../schema"
 import type { RenderResult, Renderer } from "../shared"
 import { ptToTwips, ptToHalfPoints } from "../shared"
 import { resolveDocxFontName } from "../../font-registry"
@@ -33,7 +33,6 @@ import { resolveDocxFontName } from "../../font-registry"
  * - paragraph       → Paragraph
  * - spacer          → empty Paragraph + spacingAfter
  * - row+stack       → layout Table (invisible borders)
- * - table+row+stack → data Table (มี border จาก cellRenderProps)
  * - flow-table      → fixed data Table projected from paginated geometry
  */
 
@@ -63,7 +62,7 @@ interface DocxRenderContext {
   paragraphTextById: Map<string, string>
 }
 
-type SourceNode = LayoutNode | TableNode["nodes"][string] | FlowTableNode["nodes"][string]
+type SourceNode = LayoutNode | FlowTableNode["nodes"][string]
 
 const EMPTY_RENDER_CONTEXT: DocxRenderContext = { paragraphTextById: new Map() }
 
@@ -79,23 +78,22 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
   const tableRowIds = new Set(
     fragments
       .filter((fragment) =>
-        (fragment.nodeType === "table-cell" || fragment.nodeType === "flow-table-cell") &&
+        fragment.nodeType === "flow-table-cell" &&
         fragment.parentNodeId,
       )
       .map((fragment) => fragment.parentNodeId!),
   )
 
   for (const fragment of fragments) {
-    if (fragment.nodeType === "table" || fragment.nodeType === "flow-table") {
+    if (fragment.nodeType === "flow-table") {
       const group: TableGroup = { tableFragment: fragment, rows: [] }
       tableMap.set(fragment.nodeId, group)
       items.push({ kind: "table", group })
     } else if (fragment.nodeType === "row" || fragment.nodeType === "flow-row" || fragment.nodeType === "flow-table-row") {
       if (fragment.parentNodeId && tableRowIds.has(fragment.nodeId)) {
         if (!tableMap.has(fragment.parentNodeId)) {
-          const tableNodeType = fragment.nodeType === "flow-table-row" ? "flow-table" : "table"
           const group: TableGroup = {
-            tableFragment: { ...fragment, nodeId: fragment.parentNodeId, nodeType: tableNodeType, parentNodeId: undefined },
+            tableFragment: { ...fragment, nodeId: fragment.parentNodeId, nodeType: "flow-table", parentNodeId: undefined },
             rows: [],
           }
           tableMap.set(fragment.parentNodeId, group)
@@ -109,7 +107,7 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
         rowMap.set(fragment.nodeId, group)
         items.push({ kind: "row", group })
       }
-    } else if (fragment.nodeType === "table-cell" || fragment.nodeType === "flow-table-cell") {
+    } else if (fragment.nodeType === "flow-table-cell") {
       if (fragment.parentNodeId && tableRowMap.has(fragment.parentNodeId)) {
         const cellGroup: TableCellGroup = { cellFragment: fragment, children: [] }
         tableCellMap.set(fragment.nodeId, cellGroup)
@@ -179,7 +177,7 @@ function collectSourceParagraphTextFromNode(node: SourceNode, paragraphTextById:
     return
   }
 
-  if (node.type === "table" || node.type === "flow-table") {
+  if (node.type === "flow-table") {
     for (const child of Object.values(node.nodes)) {
       collectSourceParagraphTextFromNode(child as SourceNode, paragraphTextById)
     }
@@ -208,17 +206,6 @@ function toBorderOpts(side: ResolvedBorderSide | undefined) {
     style: (styleMap[side.style] ?? BorderStyle.SINGLE) as typeof BorderStyle.SINGLE,
     size: Math.max(1, Math.round(side.width * 8)),
     color: side.color,
-  }
-}
-
-function buildCellBorders(border: ResolvedCellBorder) {
-  return {
-    top: toBorderOpts(border.top),
-    right: toBorderOpts(border.right),
-    bottom: toBorderOpts(border.bottom),
-    left: toBorderOpts(border.left),
-    insideHorizontal: NO_BORDER,
-    insideVertical: NO_BORDER,
   }
 }
 
@@ -588,32 +575,7 @@ function buildFlowDataTable(group: TableGroup, context: DocxRenderContext): Tabl
 }
 
 function buildDataTable(group: TableGroup, context: DocxRenderContext): Table {
-  if (group.tableFragment.nodeType === "flow-table") return buildFlowDataTable(group, context)
-
-  const repeatedFullRowIds = collectRepeatedFullRowIds(group.rows)
-  const emittedRepeatedRows = new Set<string>()
-  const rows = group.rows.flatMap((rowGroup) => {
-    const isRepeatedHeaderRow = repeatedFullRowIds.has(rowGroup.rowFragment.nodeId) &&
-      !isContinuedFragment(rowGroup.rowFragment)
-    if (isRepeatedHeaderRow) {
-      if (emittedRepeatedRows.has(rowGroup.rowFragment.nodeId)) return []
-      emittedRepeatedRows.add(rowGroup.rowFragment.nodeId)
-    }
-    const cells = rowGroup.cells.map((cellGroup) => {
-      const crp = cellGroup.cellFragment.cellRenderProps
-      const rowWidth = rowGroup.rowFragment.width
-      const widthPct = Math.round((cellGroup.cellFragment.width / rowWidth) * 100)
-      return new TableCell({
-        width: { size: widthPct, type: WidthType.PERCENTAGE },
-        rowSpan: crp?.rowspan,
-        columnSpan: crp?.colspan,
-        borders: crp ? buildCellBorders(crp.border) : INVISIBLE_BORDERS,
-        children: buildCellChildren(cellGroup.children, context),
-      })
-    })
-    return [new TableRow({ children: cells, tableHeader: isRepeatedHeaderRow ? true : undefined })]
-  })
-  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows })
+  return buildFlowDataTable(group, context)
 }
 
 function buildToc(fragment: PageFragment): Paragraph[] {

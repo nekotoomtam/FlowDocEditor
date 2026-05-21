@@ -27,7 +27,7 @@ export interface GeometryDrift {
 
 export interface DriftReport {
   driftMap: Map<string, FragmentDrift>        // paragraph line-count + page drift
-  geometryDriftMap: Map<string, GeometryDrift> // row / stack / table-row page + height drift
+  geometryDriftMap: Map<string, GeometryDrift> // row / stack / flow-table row page + height drift
   driftCount: number
   totalParagraphs: number
   maxLineDelta: number
@@ -65,9 +65,6 @@ const TRACKED_LAYOUT_TYPES = new Set([
   "stack",
   "flow-row",
   "flow-stack",
-  "table",
-  "table-cell",
-  "table-row",
   "flow-table",
   "flow-table-row",
   "flow-table-cell",
@@ -206,7 +203,7 @@ export function comparePagination(browser: PaginatedDocument, server: PaginatedD
     })
   }
 
-  // Geometry drift for row / stack / table-row
+  // Geometry drift for row / stack / flow-table rows and cells.
   const browserLayoutMap = buildLayoutSnapshotMap(browser)
   const serverLayoutMap = buildLayoutSnapshotMap(server)
   const geometryDriftMap = new Map<string, GeometryDrift>()

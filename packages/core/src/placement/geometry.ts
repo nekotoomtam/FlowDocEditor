@@ -233,7 +233,7 @@ export function detectRowTarget(
 export interface DetectTargetInput {
   document: DocumentNode
   hoveredNodeId: string
-  hoveredNodeType?: LayoutNode["type"] | "table-cell" | "table-row" | "flow-table-cell" | "flow-table-row" | "table" | null
+  hoveredNodeType?: LayoutNode["type"] | "flow-table-cell" | "flow-table-row" | null
   localX: number
   localY: number
   width: number

@@ -146,7 +146,7 @@ Current automated coverage:
 
 - Pagination and structural behavior are covered by the product fixtures in the
   roadmap below.
-- Table operation width preservation is covered in `tablePagination.test.ts`.
+- Table operation width preservation is covered in `flowTablePagination.test.ts`.
 - Current editor table-cell selection and property-panel flow is browser-checked;
   it does not yet have an automated UI regression test.
 - PDF export is currently covered by renderer smoke tests, not by customs-specific
@@ -314,18 +314,18 @@ gaps.
 
 - [x] `customs-basic-table`: 2-page table, repeated header, page footer.
   - Covered by `product fixture — customs-basic-table` in
-    `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
+    `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`.
 - [x] `customs-page-count-golden`: exact customs table page count, repeated
   header count, footer page numbers, and fixed column geometry.
   - Covered by `product fixture — customs-page-count-golden` in
     `packages/core/src/pagination/__tests__/productGolden.test.ts`.
 - [x] `customs-rowspan-boundary`: rowspan group near page bottom.
   - Covered by `product fixture — customs-rowspan-boundary` in
-    `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
+    `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`.
 - [x] `customs-breakable-row-uneven-cells`: long description cell plus short numeric
   cells.
   - Covered by `product fixture — customs-breakable-row-uneven-cells` in
-    `packages/core/src/pagination/__tests__/tablePagination.test.ts`.
+    `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`.
 - [x] `report-cover-toc-body`: cover, TOC, body restart at page 1.
   - Covered by `product fixture — report-cover-toc-body` in
     `packages/core/src/renderer/__tests__/multiSection.test.ts`.
@@ -365,11 +365,11 @@ gaps.
 
 | Requirement | Fixture/Test | Coverage Level |
 |---|---|---|
-| Customs multi-page table, repeated header, footer page number | `customs-basic-table` / `tablePagination.test.ts` | Structural pagination |
+| Customs multi-page table, repeated header, footer page number | `customs-basic-table` / `flowTablePagination.test.ts` | Structural pagination |
 | Customs exact page count, repeated header count, footer page numbers, fixed column geometry | `customs-page-count-golden` / `productGolden.test.ts` | Product pagination golden |
-| Customs rowspan group near page boundary | `customs-rowspan-boundary` / `tablePagination.test.ts` | Structural pagination |
-| Customs breakable uneven row without duplicated short cells and with line-slice metadata | `customs-breakable-row-uneven-cells` + table-cell metadata tests / `tablePagination.test.ts` | Structural pagination |
-| Customs table column insert/delete preserves total table width | table operation width tests / `tablePagination.test.ts` | Structural operation |
+| Customs rowspan group near page boundary | `customs-rowspan-boundary` / `flowTablePagination.test.ts` | Structural pagination |
+| Customs breakable uneven row without duplicated short cells and with line-slice metadata | `customs-breakable-row-uneven-cells` + flow-table-cell metadata tests / `flowTablePagination.test.ts` | Structural pagination |
+| Customs table column insert/delete preserves total table width | table operation width tests / `flowTablePagination.test.ts` | Structural operation |
 | Customs table cell can be selected and edited from the canvas | browser table-cell property-panel check | Manual editor UX |
 | Report cover + TOC + body restart numbering | `report-cover-toc-body` / `multiSection.test.ts` | Structural pagination |
 | Report exact cover/TOC/body page counts, restarted footer page numbers, long paragraph continuation ranges | `report-page-count-golden` / `productGolden.test.ts` | Product pagination golden |

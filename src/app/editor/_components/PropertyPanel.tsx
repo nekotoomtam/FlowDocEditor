@@ -9,9 +9,6 @@ import type {
   ParagraphBoxBorderSide,
   ParagraphBoxStyle,
   ParagraphNode,
-  TableCellNode,
-  TableNode,
-  TableRowNode,
   TocNode,
 } from "@/schema"
 import { pt } from "@/schema"
@@ -24,7 +21,7 @@ import { InfoHint } from "./InfoHint"
 import { buildSelectionContext } from "./selectionContext"
 import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
 
-type DocNode = LayoutNode | TableRowNode | TableCellNode | FlowTableRowNode | FlowTableCellNode
+type DocNode = LayoutNode | FlowTableRowNode | FlowTableCellNode
 type ParagraphPanelTab = "text" | "box"
 type FlowContainerPanelTab = "layout" | "box"
 
@@ -65,8 +62,8 @@ function findNode(doc: DocumentNode, nodeId: string): DocNode | null {
     const node = section.nodes[nodeId]
     if (node) return node
     for (const n of Object.values(section.nodes)) {
-      if (n.type !== "table" && n.type !== "flow-table") continue
-      const inner = (n as unknown as TableNode | FlowTableNode).nodes[nodeId]
+      if (n.type !== "flow-table") continue
+      const inner = (n as unknown as FlowTableNode).nodes[nodeId]
       if (inner) return inner as DocNode
     }
   }
@@ -86,28 +83,8 @@ function isTopLevel(doc: DocumentNode, nodeId: string): boolean {
   return doc.document.sections.some((s) => s.nodes[nodeId] != null)
 }
 
-function findTableOf(doc: DocumentNode, nodeId: string): { table: TableNode; tableId: string } | null {
-  for (const section of doc.document.sections) {
-    for (const [tableId, n] of Object.entries(section.nodes)) {
-      if (n.type !== "table") continue
-      const table = n as unknown as TableNode
-      if (table.nodes[nodeId]) return { table, tableId }
-    }
-  }
-  return null
-}
-
-function rowIndexOf(table: TableNode, rowId: string): number {
-  return table.rowIds.indexOf(rowId)
-}
-
-function rowOfCell(table: TableNode, cellId: string): { rowId: string; rowIndex: number; colIndex: number } | null {
-  for (let ri = 0; ri < table.rowIds.length; ri++) {
-    const row = table.nodes[table.rowIds[ri]] as TableRowNode
-    const ci = row?.cellIds.indexOf(cellId) ?? -1
-    if (ci !== -1) return { rowId: table.rowIds[ri], rowIndex: ri, colIndex: ci }
-  }
-  return null
+function deleteButtonLabel(nodeType: DocNode["type"]): string {
+  return nodeType === "flow-table" ? "Delete table" : "Delete block"
 }
 
 function findFlowTableOf(doc: DocumentNode, nodeId: string): { table: FlowTableNode; tableId: string } | null {
@@ -1070,6 +1047,78 @@ const borderStyleIconLine: React.CSSProperties = {
   height: 0,
 }
 
+function normalizeHeaderRowCount(rowCount: number, value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.min(rowCount, Math.max(0, Math.trunc(value)))
+}
+
+function headerRowCountChanges(value: number): Record<string, unknown> {
+  return { headerRowCount: value > 0 ? value : undefined }
+}
+
+function TableHeaderRowsControl({
+  tableId,
+  rowCount,
+  headerRowCount,
+  selectedRowIndex,
+  testId,
+  onUpdateProps,
+}: {
+  tableId: string
+  rowCount: number
+  headerRowCount: number
+  selectedRowIndex?: number
+  testId: string
+  onUpdateProps: (nodeId: string, changes: Record<string, unknown>) => void
+}) {
+  const safeHeaderRowCount = normalizeHeaderRowCount(rowCount, headerRowCount)
+  const selectedThroughRowCount = selectedRowIndex == null
+    ? null
+    : normalizeHeaderRowCount(rowCount, selectedRowIndex + 1)
+  const updateHeaderRows = (value: number) => {
+    const next = normalizeHeaderRowCount(rowCount, value)
+    onUpdateProps(tableId, headerRowCountChanges(next))
+  }
+
+  return (
+    <div data-testid={testId} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={labelWithInfo}>
+        <label style={inlineLabel}>Header rows</label>
+        <InfoHint text="The first N authored rows repeat on continuation pages." />
+      </div>
+      <input
+        data-testid={`${testId}-input`}
+        type="number"
+        min={0}
+        max={rowCount}
+        value={safeHeaderRowCount}
+        onChange={(e) => updateHeaderRows(Number(e.target.value) || 0)}
+        style={input}
+      />
+      {selectedThroughRowCount != null && (
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            data-testid={`${testId}-through-row`}
+            style={{ ...btn, opacity: safeHeaderRowCount === selectedThroughRowCount ? 0.55 : 1 }}
+            disabled={safeHeaderRowCount === selectedThroughRowCount}
+            onClick={() => updateHeaderRows(selectedThroughRowCount)}
+          >
+            Header through row {selectedThroughRowCount}
+          </button>
+          <button
+            data-testid={`${testId}-clear`}
+            style={{ ...btn, opacity: safeHeaderRowCount > 0 ? 1 : 0.4 }}
+            disabled={safeHeaderRowCount <= 0}
+            onClick={() => updateHeaderRows(0)}
+          >
+            Clear
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
 export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectNode, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
@@ -1770,44 +1819,6 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           </>
         )}
 
-        {/* ── Table ── */}
-        {node.type === "table" && (() => {
-          const rows = node.rowIds.length
-          const cols = node.columns.length
-          const headerRowCount = node.props.headerRowCount ?? 0
-          return (
-            <>
-              <div style={{ fontSize: 11, color: "#6b7280" }}>{rows} rows × {cols} cols</div>
-              <div>
-                <label style={label}>Header rows</label>
-                <input type="number" min={0} max={rows}
-                  value={headerRowCount}
-                  onChange={(e) => {
-                    const value = Math.min(rows, Math.max(0, Number(e.target.value) || 0))
-                    onUpdateProps(selectedNodeId, { headerRowCount: value > 0 ? value : undefined })
-                  }}
-                  style={input} />
-              </div>
-              <div>
-                <label style={label}>Rows</label>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button style={btn} onClick={() => tableOps.addRow(selectedNodeId)}>+ Row</button>
-                  <button style={{ ...btn, opacity: rows <= 1 ? 0.4 : 1 }} disabled={rows <= 1}
-                    onClick={() => tableOps.removeRow(selectedNodeId, rows - 1)}>− Last</button>
-                </div>
-              </div>
-              <div>
-                <label style={label}>Columns</label>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button style={btn} onClick={() => tableOps.addCol(selectedNodeId)}>+ Col</button>
-                  <button style={{ ...btn, opacity: cols <= 1 ? 0.4 : 1 }} disabled={cols <= 1}
-                    onClick={() => tableOps.removeCol(selectedNodeId, cols - 1)}>− Last</button>
-                </div>
-              </div>
-            </>
-          )
-        })()}
-
         {/* ── Flow Table ── */}
         {node.type === "flow-table" && (() => {
           const table = node as unknown as FlowTableNode
@@ -1820,16 +1831,13 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           return (
             <>
               <div style={{ fontSize: 11, color: "#6b7280" }}>{rows} rows × {cols} cols</div>
-              <div>
-                <label style={label}>Header rows</label>
-                <input type="number" min={0} max={rows}
-                  value={headerRowCount}
-                  onChange={(e) => {
-                    const value = Math.min(rows, Math.max(0, Number(e.target.value) || 0))
-                    onUpdateProps(selectedNodeId, { headerRowCount: value > 0 ? value : undefined })
-                  }}
-                  style={input} />
-              </div>
+              <TableHeaderRowsControl
+                tableId={selectedNodeId}
+                rowCount={rows}
+                headerRowCount={headerRowCount}
+                testId="flow-table-header-rows-control"
+                onUpdateProps={onUpdateProps}
+              />
               <div>
                 <label style={label}>Rows</label>
                 <div style={{ display: "flex", gap: 4 }}>
@@ -1881,11 +1889,20 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           if (!info) return null
           const { table, tableId } = info
           const ri = rowIndexOfFlowTable(table, selectedNodeId)
+          const headerRowCount = table.props.headerRowCount ?? 0
           const canAddGrid = canAddFlowTableGrid(table)
           const canRemoveRow = canRemoveFlowTableRow(table, ri)
           return (
             <>
               <div style={{ fontSize: 11, color: "#6b7280" }}>Row {ri + 1} of {table.rowIds.length}</div>
+              <TableHeaderRowsControl
+                tableId={tableId}
+                rowCount={table.rowIds.length}
+                headerRowCount={headerRowCount}
+                selectedRowIndex={ri}
+                testId="flow-table-row-header-rows-control"
+                onUpdateProps={onUpdateProps}
+              />
               <label style={{ ...label, display: "flex", alignItems: "center", gap: 6, marginBottom: 0 }}>
                 <input type="checkbox"
                   checked={node.props.allowBreak ?? true}
@@ -1921,6 +1938,12 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
               >
                 Delete row
               </button>
+              <button
+                style={btnDanger}
+                onClick={() => onDelete(tableId)}
+              >
+                Delete table
+              </button>
             </>
           )
         })()}
@@ -1940,6 +1963,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           const info = findFlowTableOf(doc, selectedNodeId)
           const table = info?.table ?? null
           const pos = table ? rowOfFlowTableCell(table, selectedNodeId) : null
+          const headerRowCount = table?.props.headerRowCount ?? 0
           const canAddGrid = table ? canAddFlowTableGrid(table) : false
           const canRemoveCol = table && pos ? canRemoveFlowTableColumn(table, pos.colIndex) : false
           const canRemoveRow = table && pos ? canRemoveFlowTableRow(table, pos.rowIndex) : false
@@ -1961,6 +1985,16 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
             <>
               {pos && table && (
                 <div style={{ fontSize: 11, color: "#6b7280" }}>Row {pos.rowIndex + 1}, Col {pos.colIndex + 1}</div>
+              )}
+              {info && pos && table && (
+                <TableHeaderRowsControl
+                  tableId={info.tableId}
+                  rowCount={table.rowIds.length}
+                  headerRowCount={headerRowCount}
+                  selectedRowIndex={pos.rowIndex}
+                  testId="flow-table-cell-header-rows-control"
+                  onUpdateProps={onUpdateProps}
+                />
               )}
               {paragraphs.length > 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -2149,6 +2183,12 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   >
                     Delete row
                   </button>
+                  <button
+                    style={btnDanger}
+                    onClick={() => onDelete(info.tableId)}
+                  >
+                    Delete table
+                  </button>
                 </>
               )}
             </>
@@ -2184,135 +2224,6 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           )
         })()}
 
-        {/* ── Table Row ── */}
-        {node.type === "table-row" && (() => {
-          const info = findTableOf(doc, selectedNodeId)
-          if (!info) return null
-          const { table, tableId } = info
-          const ri = rowIndexOf(table, selectedNodeId)
-          return (
-            <>
-              <div style={{ fontSize: 11, color: "#6b7280" }}>Row {ri + 1} of {table.rowIds.length}</div>
-              <label style={{ ...label, display: "flex", alignItems: "center", gap: 6, marginBottom: 0 }}>
-                <input type="checkbox"
-                  checked={node.props.allowBreak ?? true}
-                  onChange={(e) => onUpdateProps(selectedNodeId, { allowBreak: e.target.checked })} />
-                Allow page break
-              </label>
-              <div>
-                <label style={label}>Insert</label>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button style={btn} onClick={() => tableOps.addRow(tableId, ri - 1)}>↑ Above</button>
-                  <button style={btn} onClick={() => tableOps.addRow(tableId, ri)}>↓ Below</button>
-                </div>
-              </div>
-              <button style={{ ...btnDanger, opacity: table.rowIds.length <= 1 ? 0.4 : 1 }}
-                disabled={table.rowIds.length <= 1}
-                onClick={() => tableOps.removeRow(tableId, ri)}>
-                Delete row
-              </button>
-            </>
-          )
-        })()}
-
-        {/* ── Table Cell ── */}
-        {node.type === "table-cell" && (() => {
-          const cell = node as TableCellNode
-          const info = findTableOf(doc, selectedNodeId)
-          if (!info) return null
-          const { table, tableId } = info
-          const pos = rowOfCell(table, selectedNodeId)
-          if (!pos) return null
-          const paragraphId = cell.childIds[0]
-          const paraNode = paragraphId ? findNode(doc, paragraphId) : null
-          const text = paraNode?.type === "paragraph" ? getParagraphText(paraNode) : ""
-          const canEditText = paraNode?.type === "paragraph" ? isPlainTextParagraph(paraNode) : false
-          const fieldRefs = paraNode?.type === "paragraph" ? getParagraphFieldRefs(paraNode) : []
-          const cols = table.columns.length
-          return (
-            <>
-              <div style={{ fontSize: 11, color: "#6b7280" }}>Row {pos.rowIndex + 1}, Col {pos.colIndex + 1}</div>
-              {paragraphId && (
-                <div>
-                  <label style={label}>Text</label>
-                  <textarea
-                    value={text}
-                    rows={3}
-                    readOnly={!canEditText}
-                    onChange={(e) => {
-                      if (canEditText) onUpdateText(paragraphId, e.target.value)
-                    }}
-                    style={{
-                      ...input,
-                      resize: "vertical",
-                      background: canEditText ? input.background : "#f9fafb",
-                      color: canEditText ? input.color : "#9ca3af",
-                    }}
-                  />
-                </div>
-              )}
-              <FieldReferenceList refs={fieldRefs} registry={registry} onUpdateFieldRef={onUpdateFieldRef} />
-              <div style={{ display: "flex", gap: 6 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Padding</label>
-                  <input type="number" min={0}
-                    value={cell.props.padding?.value ?? 0}
-                    onChange={(e) => onUpdateProps(selectedNodeId, { padding: pt(Math.max(0, Number(e.target.value) || 0)) })}
-                    style={input} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Background</label>
-                  <input
-                    value={cell.props.background ?? ""}
-                    placeholder="FFFFFF"
-                    maxLength={6}
-                    onChange={(e) => {
-                      const value = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6)
-                      onUpdateProps(selectedNodeId, { background: value.length === 6 ? value : undefined })
-                    }}
-                    style={input} />
-                </div>
-              </div>
-              <div>
-                <label style={label}>Vertical align</label>
-                <div style={{ display: "flex", gap: 4 }}>
-                  {(["top", "middle", "bottom"] as const).map((value) => (
-                    <button key={value}
-                      onClick={() => onUpdateProps(selectedNodeId, { verticalAlign: value })}
-                      style={{ ...btn, background: (cell.props.verticalAlign ?? "top") === value ? "#dbeafe" : "#fafafa", color: (cell.props.verticalAlign ?? "top") === value ? "#1d4ed8" : "#6b7280", fontWeight: (cell.props.verticalAlign ?? "top") === value ? "bold" : "normal" }}>
-                      {value}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label style={label}>Insert row</label>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button style={btn} onClick={() => tableOps.addRow(tableId, pos.rowIndex - 1)}>↑ Above</button>
-                  <button style={btn} onClick={() => tableOps.addRow(tableId, pos.rowIndex)}>↓ Below</button>
-                </div>
-              </div>
-              <div>
-                <label style={label}>Insert column</label>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button style={btn} onClick={() => tableOps.addCol(tableId, pos.colIndex - 1)}>← Left</button>
-                  <button style={btn} onClick={() => tableOps.addCol(tableId, pos.colIndex)}>Right →</button>
-                </div>
-              </div>
-              <button style={{ ...btnDanger, opacity: cols <= 1 ? 0.4 : 1 }}
-                disabled={cols <= 1}
-                onClick={() => tableOps.removeCol(tableId, pos.colIndex)}>
-                Delete column
-              </button>
-              <button style={{ ...btnDanger, opacity: table.rowIds.length <= 1 ? 0.4 : 1 }}
-                disabled={table.rowIds.length <= 1}
-                onClick={() => tableOps.removeRow(tableId, pos.rowIndex)}>
-                Delete row
-              </button>
-            </>
-          )
-        })()}
-
       </div>
 
       {/* Delete (top-level nodes only) */}
@@ -2322,7 +2233,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
             onClick={() => onDelete(selectedNodeId)}
             style={{ width: "100%", padding: "6px 0", fontSize: 11, cursor: "pointer", border: "1px solid #fca5a5", borderRadius: 4, background: "#fff5f5", color: "#ef4444" }}
           >
-            Delete block
+            {deleteButtonLabel(node.type)}
           </button>
         </div>
       )}

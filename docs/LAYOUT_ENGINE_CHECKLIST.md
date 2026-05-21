@@ -105,7 +105,7 @@ for exact counts.
     `removeTableColumn` all pass `assertDocument` and `assertPaginatedDocument`.
   - Column operations preserve total table width: insertion splits the target
     column; deletion transfers removed width to a neighbor.
-  - Covered by `packages/core/src/pagination/__tests__/tablePagination.test.ts`:
+  - Covered by `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`:
     no-rowspan baseline, 2/3-row groups staying on same page, group
     moving to next page as unit, mixed groups, operations+grid invariants, and
     multi-page breakable row split (3-page, line count preserved, fragment order),
@@ -310,7 +310,7 @@ fragments they receive.
   - 3+ page paragraph: covered in `paginator.test.ts` ("paragraph spanning 3 pages").
   - paragraph after a split paragraph: covered in `paginator.test.ts`.
   - split paragraph with page number inline: covered in `pageNumbers.test.ts` (page 9→10).
-  - split paragraph inside a table cell: covered in `tablePagination.test.ts` (multi-page row split).
+  - split paragraph inside a table cell: covered in `flowTablePagination.test.ts` (multi-page row split).
 
 ## Recheck Addendum — App/Core Boundary
 
@@ -332,7 +332,7 @@ They are mostly boundary guards and regression targets, not new feature work.
 - [x] Expand drift comparison beyond paragraph fragments.
   - Added `GeometryDrift` type and `geometryDriftMap: Map<string, GeometryDrift>` to
     `DriftReport`. Tracks page movement and height delta for `row`, `stack`, and
-    `table-row` fragments.
+    `flow-table-row` fragments.
   - `pageBreakChanged` now covers all tracked fragment types, not just paragraphs.
   - `driftCount` and `driftMap` remain paragraph-only — existing editor overlay and
     toolbar badge are unaffected.
@@ -384,7 +384,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     rows taller than one content page even when starting at contentTop.
   - Fixed `pushTableCellContents`: table cell paragraphs now call `resolvePageNumbers` (same bug
     as `pushStackContents` fixed earlier).
-  - Covered in `tablePagination.test.ts`: 3-page split produces 3+ page fragments, total
+  - Covered in `flowTablePagination.test.ts`: 3-page split produces 3+ page fragments, total
     line count preserved, ascending page order, full and continuation line
     metadata, assertPaginatedDocument passes, 2-page regression.
   - Rowspan-linked groups remain conservative (whole-group approach B, no intra-group split).
@@ -457,7 +457,7 @@ They are mostly boundary guards and regression targets, not new feature work.
     page advance for non-header content groups.
   - Header fragments appear in ascending page order, passing `assertPaginatedDocument`.
   - Content rows on continuation pages start below the repeated header.
-  - Covered in `tablePagination.test.ts`: baseline no-header, header repeats on
+  - Covered in `flowTablePagination.test.ts`: baseline no-header, header repeats on
     every page, header starts at contentTop, content below header, fragment order,
     and product fixtures exercise repeated headers in customs-style tables.
 - [x] Keep-with-next paragraph option.
@@ -537,7 +537,7 @@ They are mostly boundary guards and regression targets, not new feature work.
 - [x] How should advanced table spans behave at page boundaries beyond the
   current rowspan approach B?
   - Rowspan-linked rows stay together as a unit (approach B). Covered by
-    `tablePagination.test.ts`.
+    `flowTablePagination.test.ts`.
   - Deferred: split-at-row-boundary within a rowspan group, colspan-specific
     split behavior, and interactions with `allowBreak=true` — deferred until
     a concrete use case requires them.
@@ -599,7 +599,7 @@ These items address UX issues discovered during real document editing.
     same trade-off as body paragraph local reflow.
 
 - [x] Make table cells directly editable from the canvas before cross-page table work.
-  - Single-clicking text inside a table cell selects the parent `table-cell`
+  - Single-clicking text inside a table cell selects the parent `flow-table-cell`
     instead of the inner paragraph, so the cell property panel is reachable from
     the document canvas.
   - Double-clicking a table cell opens inline editing for the first paragraph in

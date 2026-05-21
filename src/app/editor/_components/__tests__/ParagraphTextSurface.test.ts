@@ -29,6 +29,7 @@ import {
   shouldUseInlineEditSvgVisual,
   shouldKeepWysiwygImmediateDraftLayout,
   shouldUseWysiwygTextEngineLayer,
+  WysiwygTextLayer,
 } from "../ParagraphTextSurface"
 import type { PageFragment } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
@@ -131,12 +132,13 @@ function makeTableDoc(text = "Cell text"): DocumentNode {
           body: { id: "body", type: "body", props: {}, childIds: ["tbl"] },
           tbl: {
             id: "tbl",
-            type: "table",
+            type: "flow-table",
             props: {},
             rowIds: ["r1"],
+            columns: [{ width: { value: 100, unit: "percent" } }],
             nodes: {
-              r1: { id: "r1", type: "table-row", props: {}, cellIds: ["c1"] },
-              c1: { id: "c1", type: "table-cell", props: {}, childIds: ["p1"] },
+              r1: { id: "r1", type: "flow-table-row", props: {}, cellIds: ["c1"] },
+              c1: { id: "c1", type: "flow-table-cell", props: {}, childIds: ["p1"] },
               p1: paragraph,
             },
           },
@@ -744,6 +746,59 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(shouldKeepWysiwygImmediateDraftLayout(immediate, "Hello wrapped", false)).toBe(true)
     expect(shouldKeepWysiwygImmediateDraftLayout(immediate, "Hello wrapped", true)).toBe(false)
     expect(shouldKeepWysiwygImmediateDraftLayout(immediate, "Other", false)).toBe(false)
+  })
+
+  it("clips text-engine live echo to the active fragment", () => {
+    const fragment = makeFragment({
+      width: 40,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null,
+      createElement("defs", null,
+        createElement("clipPath", { id: "cell-clip" },
+          createElement("rect", { x: 0, y: 0, width: 40, height: 9999 }),
+        ),
+      ),
+      createElement(WysiwygTextLayer, {
+        fragment,
+        renderProps: fragment.renderProps,
+        pageKey: "0-0",
+        clipPathId: "cell-clip",
+        scale: 1,
+        textMeasurer: fixedMeasurer,
+        caretIndex: 5,
+        draftText: "Hello overwide immediate text",
+        liveTextEcho: { anchorOffset: 5, text: " overwide immediate text" },
+        showTextSegments: false,
+        reflowKind: "hard-page-boundary",
+        onDraftChange: () => undefined,
+        onEndEdit: () => undefined,
+      }),
+    ))
+
+    expect(markup).toContain("data-wysiwyg-live-echo=\"true\"")
+    expect(markup).toContain("data-wysiwyg-live-caret=\"true\"")
+    expect(markup).toMatch(/data-wysiwyg-live-echo="true"[^>]*clip-path="url\(#cell-clip\)"/)
+    expect(markup).toMatch(/data-wysiwyg-live-caret="true"[^>]*clip-path="url\(#cell-clip\)"/)
   })
 
   it("resolves a double-click word selection range from draft text", () => {

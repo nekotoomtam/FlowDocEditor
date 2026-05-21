@@ -6,9 +6,6 @@ import type {
   FlowTableRowNode,
   LayoutNode,
   ParagraphNode,
-  TableCellNode,
-  TableNode,
-  TableRowNode,
 } from "../schema"
 import { pt } from "../schema"
 import {
@@ -61,24 +58,6 @@ function makeDoc(nodes: Record<string, LayoutNode>, childIds: string[]): Documen
   }
 }
 
-function makeTableDoc(paragraph: ParagraphNode): DocumentNode {
-  const cell: TableCellNode = { id: "cell", type: "table-cell", props: {}, childIds: [paragraph.id] }
-  const row: TableRowNode = { id: "row", type: "table-row", props: {}, cellIds: [cell.id] }
-  const table: TableNode = {
-    id: "table",
-    type: "table",
-    props: {},
-    columns: [{ width: pt(200) }],
-    rowIds: [row.id],
-    nodes: {
-      [row.id]: row,
-      [cell.id]: cell,
-      [paragraph.id]: paragraph,
-    },
-  }
-  return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
-}
-
 function makeFlowTableDoc(paragraph: ParagraphNode): DocumentNode {
   const cell: FlowTableCellNode = { id: "flow-cell", type: "flow-table-cell", props: {}, childIds: [paragraph.id] }
   const row: FlowTableRowNode = { id: "flow-row", type: "flow-table-row", props: {}, cellIds: [cell.id] }
@@ -106,7 +85,7 @@ const registry: FieldRegistryV1 = {
 }
 
 describe("field registry references", () => {
-  it("collects fieldRef usages from body paragraphs and table-cell paragraphs", () => {
+  it("collects fieldRef usages from body paragraphs and flow-table-cell paragraphs", () => {
     const bodyParagraph = makeParagraph("body-p", [
       { id: "body-t", type: "text", text: "Customer " },
       { id: "body-field", type: "fieldRef", key: "customer.name", label: "Customer", fallback: "-" },
@@ -114,9 +93,9 @@ describe("field registry references", () => {
     const tableParagraph = makeParagraph("table-p", [
       { id: "table-field", type: "fieldRef", key: "invoice.total", label: "Total" },
     ])
-    const tableDoc = makeTableDoc(tableParagraph)
-    const table = tableDoc.document.sections[0].nodes.table
-    const doc = makeDoc({ "body-p": bodyParagraph, table }, ["body-p", "table"])
+    const tableDoc = makeFlowTableDoc(tableParagraph)
+    const table = tableDoc.document.sections[0].nodes["flow-table"]
+    const doc = makeDoc({ "body-p": bodyParagraph, "flow-table": table }, ["body-p", "flow-table"])
 
     expect(collectDocumentFieldRefs(doc)).toEqual([
       {
@@ -132,7 +111,7 @@ describe("field registry references", () => {
         fieldRefId: "table-field",
         paragraphId: "table-p",
         sectionId: "section",
-        tableId: "table",
+        tableId: "flow-table",
         label: "Total",
         fallback: undefined,
       },

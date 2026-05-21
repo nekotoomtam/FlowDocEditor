@@ -17,7 +17,7 @@ import {
   LAYOUT_WARNINGS_BLOCKED_CODE,
   type PaginatedDocument,
 } from "@/pagination"
-import { pt, type DocumentNode, type LayoutNode, type ParagraphNode, type TableCellNode, type TableNode, type TableRowNode } from "@/schema"
+import { pt, type DocumentNode, type FlowTableCellNode, type FlowTableNode, type FlowTableRowNode, type LayoutNode, type ParagraphNode } from "@/schema"
 
 function makePara(id: string, text: string): ParagraphNode {
   return {
@@ -95,8 +95,8 @@ function countText(text: string, needle: string): number {
   return text.split(needle).length - 1
 }
 
-function makeTable(id: string, colWidths: number[], rowDefs: string[][]): TableNode {
-  const nodes: TableNode["nodes"] = {}
+function makeTable(id: string, colWidths: number[], rowDefs: string[][]): FlowTableNode {
+  const nodes: FlowTableNode["nodes"] = {}
   const rowIds: string[] = []
 
   rowDefs.forEach((cells, rowIndex) => {
@@ -105,17 +105,17 @@ function makeTable(id: string, colWidths: number[], rowDefs: string[][]): TableN
       const paragraphId = `${id}-p${rowIndex}-${colIndex}`
       const cellId = `${id}-c${rowIndex}-${colIndex}`
       nodes[paragraphId] = makePara(paragraphId, text)
-      nodes[cellId] = { id: cellId, type: "table-cell", props: {}, childIds: [paragraphId] } as TableCellNode
+      nodes[cellId] = { id: cellId, type: "flow-table-cell", props: {}, childIds: [paragraphId] } as FlowTableCellNode
       cellIds.push(cellId)
     })
     const rowId = `${id}-row${rowIndex}`
-    nodes[rowId] = { id: rowId, type: "table-row", props: {}, cellIds } as TableRowNode
+    nodes[rowId] = { id: rowId, type: "flow-table-row", props: {}, cellIds } as FlowTableRowNode
     rowIds.push(rowId)
   })
 
   return {
     id,
-    type: "table",
+    type: "flow-table",
     props: { headerRowCount: 1 },
     columns: colWidths.map((width) => ({ width: pt(width) })),
     rowIds,
@@ -132,8 +132,13 @@ function makeForcedOverflowWarningDoc(): DocumentNode {
   ])
   const bodyRow = table.nodes["warning-table-row1"]
   const bodyCell = table.nodes["warning-table-c1-0"]
-  if (bodyRow?.type === "table-row") bodyRow.props = { ...bodyRow.props, allowBreak: true }
-  if (bodyCell?.type === "table-cell") bodyCell.props = { ...bodyCell.props, padding: pt(24) }
+  if (bodyRow?.type === "flow-table-row") bodyRow.props = { ...bodyRow.props, allowBreak: true }
+  if (bodyCell?.type === "flow-table-cell") {
+    bodyCell.props = {
+      ...bodyCell.props,
+      box: { ...bodyCell.props.box, padding: { top: pt(24), right: pt(24), bottom: pt(24), left: pt(24) } },
+    }
+  }
 
   return {
     version: 1,
@@ -242,8 +247,8 @@ describe("API route contract smoke", () => {
 
     expect(warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        code: "forced-table-split-overflow",
-        message: "table split used forced overflow",
+        code: "forced-flow-table-split-overflow",
+        message: "flow-table split used forced overflow",
       }),
     ]))
   })
@@ -261,8 +266,8 @@ describe("API route contract smoke", () => {
       code: LAYOUT_WARNINGS_BLOCKED_CODE,
       warnings: [
         expect.objectContaining({
-          code: "forced-table-split-overflow",
-          message: "table split used forced overflow",
+          code: "forced-flow-table-split-overflow",
+          message: "flow-table split used forced overflow",
         }),
       ],
     })

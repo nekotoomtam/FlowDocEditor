@@ -445,7 +445,6 @@ function normalizeNode(node: LayoutNode): LayoutNode {
     case "flow-row": return normalizeFlowRowNode(node)
     case "paragraph": return normalizeParagraphNode(node)
     case "spacer": return normalizeSpacerNode(node)
-    case "table": return node
     case "flow-table": return normalizeFlowTableNode(node as unknown as FlowTableNode) as unknown as LayoutNode
     case "toc": return node
   }

@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { UnitValueSchema } from "./units"
 import { InlineNodeSchema } from "./inline"
-import { BorderStyleSchema, FlowTableNodeSchema, TableNodeSchema } from "./table"
+import { BorderStyleSchema, FlowTableNodeSchema } from "./table"
 
 // ─── Alignment ───────────────────────────────────────────────────────────────
 
@@ -166,7 +166,6 @@ export const LayoutNodeSchema = z.discriminatedUnion("type", [
   FlowRowNodeSchema,
   ParagraphNodeSchema,
   SpacerNodeSchema,
-  TableNodeSchema,
   FlowTableNodeSchema,
   TocNodeSchema,
 ])

@@ -1,5 +1,5 @@
 import { isPlainTextParagraph } from "@/document"
-import type { DocumentNode, FlowTableNode, ParagraphNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, ParagraphNode } from "@/schema"
 import type { PaginatedDocument, PageFragment } from "@/pagination"
 
 function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
@@ -7,8 +7,8 @@ function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | n
     const node = section.nodes[nodeId]
     if (node?.type === "paragraph") return node
     for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
-      const inner = (candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]
+      if (candidate.type !== "flow-table") continue
+      const inner = (candidate as unknown as FlowTableNode).nodes[nodeId]
       if (inner?.type === "paragraph") return inner as ParagraphNode
     }
   }
@@ -19,10 +19,10 @@ function isTableCellNodeId(doc: DocumentNode, nodeId: string | null | undefined)
   if (!nodeId) return false
   for (const section of doc.document.sections) {
     for (const node of Object.values(section.nodes)) {
-      if (node.type !== "table" && node.type !== "flow-table") continue
-      const table = node as unknown as TableNode | FlowTableNode
+      if (node.type !== "flow-table") continue
+      const table = node as unknown as FlowTableNode
       const inner = table.nodes[nodeId]
-      if (inner?.type === "table-cell" || inner?.type === "flow-table-cell") return true
+      if (inner?.type === "flow-table-cell") return true
     }
   }
   return false
@@ -36,10 +36,10 @@ export function isParagraphInsideTableCell(
   if (isTableCellNodeId(doc, parentNodeId)) return true
   for (const section of doc.document.sections) {
     for (const node of Object.values(section.nodes)) {
-      if (node.type !== "table" && node.type !== "flow-table") continue
-      const table = node as unknown as TableNode | FlowTableNode
+      if (node.type !== "flow-table") continue
+      const table = node as unknown as FlowTableNode
       for (const candidate of Object.values(table.nodes)) {
-        if ((candidate.type === "table-cell" || candidate.type === "flow-table-cell") && candidate.childIds.includes(nodeId)) return true
+        if (candidate.type === "flow-table-cell" && candidate.childIds.includes(nodeId)) return true
       }
     }
   }

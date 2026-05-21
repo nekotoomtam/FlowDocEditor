@@ -1,4 +1,4 @@
-import type { DocumentNode, FlowTableNode, TableNode } from "../schema"
+import type { DocumentNode, FlowTableNode } from "../schema"
 
 export type FieldValueType = "text" | "number" | "date" | "boolean" | "enum" | "image" | "collection"
 export type InlineFieldValueType = Exclude<FieldValueType, "image" | "collection">
@@ -89,9 +89,9 @@ export function collectDocumentFieldRefs(doc: DocumentNode): FieldRefUsage[] {
         collectParagraphFieldRefs(usages, section.id, node)
         return
       }
-      if (node.type !== "table" && node.type !== "flow-table") return
+      if (node.type !== "flow-table") return
 
-      const table = node as unknown as TableNode | FlowTableNode
+      const table = node as unknown as FlowTableNode
       Object.values(table.nodes).forEach((inner) => {
         if (inner.type === "paragraph") collectParagraphFieldRefs(usages, section.id, inner, table.id)
       })

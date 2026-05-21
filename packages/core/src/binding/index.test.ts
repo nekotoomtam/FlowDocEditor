@@ -8,9 +8,6 @@ import type {
   FlowTableRowNode,
   LayoutNode,
   ParagraphNode,
-  TableCellNode,
-  TableNode,
-  TableRowNode,
 } from "../schema"
 import { pt } from "../schema"
 import { bindDocument, bindDocumentWithSnapshot, type BindingContext } from "./index"
@@ -58,24 +55,6 @@ function makeDoc(nodes: Record<string, LayoutNode>, childIds: string[]): Documen
   }
 }
 
-function makeTableDoc(paragraph: ParagraphNode): DocumentNode {
-  const cell: TableCellNode = { id: "cell", type: "table-cell", props: {}, childIds: [paragraph.id] }
-  const row: TableRowNode = { id: "row", type: "table-row", props: {}, cellIds: [cell.id] }
-  const table: TableNode = {
-    id: "table",
-    type: "table",
-    props: {},
-    columns: [{ width: pt(200) }],
-    rowIds: [row.id],
-    nodes: {
-      [row.id]: row,
-      [cell.id]: cell,
-      [paragraph.id]: paragraph,
-    },
-  }
-  return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
-}
-
 function makeFlowTableDoc(paragraph: ParagraphNode): DocumentNode {
   const cell: FlowTableCellNode = { id: "flow-cell", type: "flow-table-cell", props: {}, childIds: [paragraph.id] }
   const row: FlowTableRowNode = { id: "flow-row", type: "flow-table-row", props: {}, cellIds: [cell.id] }
@@ -103,16 +82,6 @@ function textOfParagraph(doc: DocumentNode, paragraphId: string): string {
   expect(node.type).toBe("paragraph")
   if (node.type !== "paragraph") return ""
   return node.children.map((child) => child.type === "text" ? child.text : `[${child.type}]`).join("")
-}
-
-function textOfTableParagraph(doc: DocumentNode, tableId: string, paragraphId: string): string {
-  const table = doc.document.sections[0].nodes[tableId]
-  expect(table.type).toBe("table")
-  if (table.type !== "table") return ""
-  const paragraph = (table as unknown as TableNode).nodes[paragraphId]
-  expect(paragraph.type).toBe("paragraph")
-  if (paragraph.type !== "paragraph") return ""
-  return paragraph.children.map((child) => child.type === "text" ? child.text : `[${child.type}]`).join("")
 }
 
 function textOfFlowTableParagraph(doc: DocumentNode, tableId: string, paragraphId: string): string {
@@ -173,16 +142,6 @@ describe("binding scalar fieldRef contract", () => {
       { id: "t1", type: "text", text: "Reference:" },
       { id: "f1", type: "text", text: "" },
     ])
-  })
-
-  it("binds scalar fieldRefs inside table-cell paragraphs", () => {
-    const paragraph = makeParagraph("cell_p", [
-      { id: "t1", type: "text", text: "SKU " },
-      fieldRef("f1", "item.sku"),
-    ])
-    const result = bind(makeTableDoc(paragraph), { item: { sku: "A-001" } })
-
-    expect(textOfTableParagraph(result, "table", "cell_p")).toBe("SKU A-001")
   })
 
   it("binds scalar fieldRefs inside flow-table-cell paragraphs", () => {

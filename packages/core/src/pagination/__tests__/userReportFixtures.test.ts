@@ -52,7 +52,7 @@ function expectCompanyReport(paginated: ReturnType<typeof paginateFixture>, fixt
   const tableRows = bodyPages.flatMap((page) =>
     page.fragments.filter((fragment) =>
       fragment.parentNodeId === "company-kpi-table" &&
-      fragment.nodeType === "row" &&
+      fragment.nodeType === "flow-table-row" &&
       fragment.nodeId !== "company-kpi-table-row0",
     ),
   )

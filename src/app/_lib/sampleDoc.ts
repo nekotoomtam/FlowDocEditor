@@ -12,6 +12,7 @@ function buildSampleTable() {
   const BORDER_SIDE = { style: "solid" as const, width: { value: 1, unit: "pt" as const }, color: "000000" }
   const ALL_BORDERS = { top: BORDER_SIDE, right: BORDER_SIDE, bottom: BORDER_SIDE, left: BORDER_SIDE }
   const PADDING = { value: 6, unit: "pt" as const }
+  const BOX = { border: ALL_BORDERS, padding: { top: PADDING, right: PADDING, bottom: PADDING, left: PADDING } }
 
   const p = (text: string) => createParagraphNode(text)
 
@@ -21,8 +22,8 @@ function buildSampleTable() {
   const [totalLabel, totalValue] = ["รวมทั้งสิ้น", "1,700 บาท"].map(p)
 
   const cell = (childIds: string[], colspan?: number) => ({
-    id: createId("cell"), type: "table-cell" as const,
-    props: { border: ALL_BORDERS, padding: PADDING, ...(colspan ? { colspan } : {}) },
+    id: createId("ftcell"), type: "flow-table-cell" as const,
+    props: { box: BOX, ...(colspan ? { colspan } : {}) },
     childIds,
   })
 
@@ -32,7 +33,7 @@ function buildSampleTable() {
   const totalCells  = [cell([totalLabel.id], 2), cell([totalValue.id])]
 
   const row = (cells: ReturnType<typeof cell>[]) => ({
-    id: createId("row"), type: "table-row" as const,
+    id: createId("ftrow"), type: "flow-table-row" as const,
     props: {}, cellIds: cells.map((c) => c.id),
   })
 
@@ -40,7 +41,7 @@ function buildSampleTable() {
     row(headerCells),
     row(row1Cells),
     row(row2Cells),
-    { id: createId("row"), type: "table-row" as const, props: {}, cellIds: totalCells.map((c) => c.id) },
+    { id: createId("ftrow"), type: "flow-table-row" as const, props: {}, cellIds: totalCells.map((c) => c.id) },
   ]
 
   const allParas = [h1, h2, h3, r1a, r1b, r1c, r2a, r2b, r2c, totalLabel, totalValue]
@@ -49,7 +50,7 @@ function buildSampleTable() {
   ;[...allParas, ...allCells, ...rows].forEach((n) => { tableNodes[n.id] = n })
 
   return {
-    id: createId("table"), type: "table" as const,
+    id: createId("flow-table"), type: "flow-table" as const,
     props: {},
     columns: [
       { width: { value: 270, unit: "pt" as const } },

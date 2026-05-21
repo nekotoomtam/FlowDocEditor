@@ -104,13 +104,13 @@ describe("isWysiwygTextEngineFragmentEligible", () => {
     const tableParagraph = { ...paragraph, id: "p1" }
     const table = {
       id: "tbl",
-      type: "table",
+      type: "flow-table",
       props: {},
       columns: [{ width: { value: 100, unit: "percent" } }],
       rowIds: ["r1"],
       nodes: {
-        r1: { id: "r1", type: "table-row", props: {}, cellIds: ["c1"] },
-        c1: { id: "c1", type: "table-cell", props: {}, childIds: ["p1"] },
+        r1: { id: "r1", type: "flow-table-row", props: {}, cellIds: ["c1"] },
+        c1: { id: "c1", type: "flow-table-cell", props: {}, childIds: ["p1"] },
         p1: tableParagraph,
       },
     }
@@ -163,16 +163,16 @@ describe("isParagraphInsideFlowStack", () => {
 })
 
 describe("isParagraphInsideTableCell", () => {
-  it("detects paragraph ownership from a legacy table-cell parent id or authored children", () => {
+  it("detects paragraph ownership from a table-cell parent id or authored children", () => {
     const table = {
       id: "tbl",
-      type: "table",
+      type: "flow-table",
       props: {},
       columns: [{ width: { value: 100, unit: "percent" } }],
       rowIds: ["r1"],
       nodes: {
-        r1: { id: "r1", type: "table-row", props: {}, cellIds: ["c1"] },
-        c1: { id: "c1", type: "table-cell", props: {}, childIds: ["p1"] },
+        r1: { id: "r1", type: "flow-table-row", props: {}, cellIds: ["c1"] },
+        c1: { id: "c1", type: "flow-table-cell", props: {}, childIds: ["p1"] },
         p1: paragraph,
       },
     }

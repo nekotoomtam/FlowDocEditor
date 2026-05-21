@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, TableCellNode, TableNode, TableRowNode } from "@/schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode } from "@/schema"
 import { buildSelectionContext } from "../selectionContext"
 
 function flowDoc(): DocumentNode {
@@ -47,18 +47,18 @@ function flowDoc(): DocumentNode {
   } as DocumentNode
 }
 
-function tableDoc(): DocumentNode {
-  const table: TableNode = {
+function shortIdFlowTableDoc(): DocumentNode {
+  const table: FlowTableNode = {
     id: "tbl1",
-    type: "table",
+    type: "flow-table",
     props: {},
     columns: [
       { width: { value: 100, unit: "pt" } },
     ],
     rowIds: ["tr1"],
     nodes: {
-      tr1: { id: "tr1", type: "table-row", props: {}, cellIds: ["tc1"] } as TableRowNode,
-      tc1: { id: "tc1", type: "table-cell", props: {}, childIds: ["p1"] } as TableCellNode,
+      tr1: { id: "tr1", type: "flow-table-row", props: {}, cellIds: ["tc1"] } as FlowTableRowNode,
+      tc1: { id: "tc1", type: "flow-table-cell", props: {}, childIds: ["p1"] } as FlowTableCellNode,
       p1: {
         id: "p1",
         type: "paragraph",
@@ -181,11 +181,11 @@ describe("buildSelectionContext", () => {
     expect(context.map((item) => item.nodeId)).toEqual(["p1"])
   })
 
-  it("can describe existing table parents without using the outline", () => {
-    const context = buildSelectionContext(tableDoc(), "p1")
+  it("can describe table parents without using the outline", () => {
+    const context = buildSelectionContext(shortIdFlowTableDoc(), "p1")
 
     expect(context.map((item) => item.nodeId)).toEqual(["tbl1", "tr1", "tc1", "p1"])
-    expect(context.map((item) => item.label)).toEqual(["Table", "Table row", "Table cell", "Paragraph"])
+    expect(context.map((item) => item.label)).toEqual(["Flow table", "Flow table row", "Flow table cell", "Paragraph"])
   })
 
   it("can describe flow-table parents without using the outline", () => {

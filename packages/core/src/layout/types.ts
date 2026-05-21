@@ -93,7 +93,6 @@ export interface FlowBox {
     | "flow-stack"
     | "paragraph"
     | "spacer"
-    | "table"
     | "flow-table"
     | "flow-table-row"
     | "flow-table-cell"

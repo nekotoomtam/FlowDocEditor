@@ -1,6 +1,6 @@
 import type { DataSnapshotV1 } from "../dataSnapshot"
 import type { FieldRegistryV1 } from "../fieldRegistry"
-import { pt, type DocumentNode, type DocumentSection, type LayoutNode, type ParagraphNode, type TableCellNode, type TableNode, type TableRowNode } from "../schema"
+import { pt, type DocumentNode, type DocumentSection, type FlowTableCellNode, type FlowTableNode, type FlowTableRowNode, type LayoutNode, type ParagraphNode } from "../schema"
 
 export interface FlowDocUserReportPackageV2 {
   packageVersion: 2
@@ -145,9 +145,13 @@ function makeTocSection(id: string, title: string): DocumentSection {
   })
 }
 
-function makeTable(id: string, colWidths: number[], rowDefs: string[][]): TableNode {
-  const nodes: TableNode["nodes"] = {}
+function makeTable(id: string, colWidths: number[], rowDefs: string[][]): FlowTableNode {
+  const nodes: FlowTableNode["nodes"] = {}
   const rowIds: string[] = []
+  const borderSide = { style: "solid" as const, width: pt(0.5), color: "000000" }
+  const box = {
+    border: { top: borderSide, right: borderSide, bottom: borderSide, left: borderSide },
+  }
 
   rowDefs.forEach((cells, rowIndex) => {
     const cellIds: string[] = []
@@ -155,26 +159,18 @@ function makeTable(id: string, colWidths: number[], rowDefs: string[][]): TableN
       const paragraphId = `${id}-p${rowIndex}-${colIndex}`
       const cellId = `${id}-c${rowIndex}-${colIndex}`
       nodes[paragraphId] = makePara(paragraphId, text, { spacingAfter: pt(0) })
-      nodes[cellId] = { id: cellId, type: "table-cell", props: {}, childIds: [paragraphId] } as TableCellNode
+      nodes[cellId] = { id: cellId, type: "flow-table-cell", props: { box }, childIds: [paragraphId] } as FlowTableCellNode
       cellIds.push(cellId)
     })
     const rowId = `${id}-row${rowIndex}`
-    nodes[rowId] = { id: rowId, type: "table-row", props: { allowBreak: true }, cellIds } as TableRowNode
+    nodes[rowId] = { id: rowId, type: "flow-table-row", props: { allowBreak: true }, cellIds } as FlowTableRowNode
     rowIds.push(rowId)
   })
 
   return {
     id,
-    type: "table",
-    props: {
-      headerRowCount: 1,
-      border: {
-        top: { style: "solid", width: pt(0.5), color: "000000" },
-        right: { style: "solid", width: pt(0.5), color: "000000" },
-        bottom: { style: "solid", width: pt(0.5), color: "000000" },
-        left: { style: "solid", width: pt(0.5), color: "000000" },
-      },
-    },
+    type: "flow-table",
+    props: { headerRowCount: 1 },
     columns: colWidths.map((width) => ({ width: pt(width) })),
     rowIds,
     nodes,

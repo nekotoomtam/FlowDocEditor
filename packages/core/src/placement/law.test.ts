@@ -230,7 +230,7 @@ describe("placement law flow-row / flow-stack sources", () => {
         intent: "insertInside",
         target: { kind: "node", nodeId: "fs1", nodeType: "flow-stack" },
       },
-      { source: "palette", blockType: "table" },
+      { source: "palette", blockType: "row" },
     )
 
     expect(result.ok).toBe(false)

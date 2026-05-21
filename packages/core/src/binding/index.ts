@@ -9,7 +9,7 @@
 import type { DataSnapshotIssue, DataSnapshotV1, FieldScalarValue } from "../dataSnapshot"
 import { validateDataSnapshot } from "../dataSnapshot"
 import type { FieldRegistryV1 } from "../fieldRegistry"
-import type { DocumentNode, FieldRefInline, FlowTableNode, LayoutNode, ParagraphNode, TableNode } from "../schema"
+import type { DocumentNode, FieldRefInline, FlowTableNode, LayoutNode, ParagraphNode } from "../schema"
 
 // ─── Field Registry ───────────────────────────────────────────────────────────
 
@@ -130,28 +130,22 @@ function bindParagraphWithResolver(
   }
 }
 
-type TableLikeNode = TableNode | FlowTableNode
-type PreciseLayoutTableNode = Extract<LayoutNode, { type: "table" }> & TableNode
 type PreciseLayoutFlowTableNode = Extract<LayoutNode, { type: "flow-table" }> & FlowTableNode
-
-function isTableLayoutNode(node: LayoutNode): node is PreciseLayoutTableNode {
-  return node.type === "table"
-}
 
 function isFlowTableLayoutNode(node: LayoutNode): node is PreciseLayoutFlowTableNode {
   return node.type === "flow-table"
 }
 
-function bindTableWithResolver<T extends TableLikeNode>(
-  table: T,
+function bindFlowTableWithResolver(
+  table: FlowTableNode,
   resolveValue: FieldRefValueResolver,
   resolveFallback: FieldRefFallbackResolver,
-): T {
-  const nodes: T["nodes"] = {} as T["nodes"]
+): FlowTableNode {
+  const nodes: FlowTableNode["nodes"] = {}
   Object.entries(table.nodes).forEach(([nodeId, node]) => {
-    nodes[nodeId] = (node.type === "paragraph"
+    nodes[nodeId] = node.type === "paragraph"
       ? bindParagraphWithResolver(node, resolveValue, resolveFallback)
-      : node) as T["nodes"][string]
+      : node
   })
   return { ...table, nodes }
 }
@@ -162,8 +156,7 @@ function bindLayoutNodeWithResolver(
   resolveFallback: FieldRefFallbackResolver,
 ): LayoutNode {
   if (node.type === "paragraph") return bindParagraphWithResolver(node, resolveValue, resolveFallback)
-  if (isTableLayoutNode(node)) return bindTableWithResolver(node, resolveValue, resolveFallback)
-  if (isFlowTableLayoutNode(node)) return bindTableWithResolver(node, resolveValue, resolveFallback)
+  if (isFlowTableLayoutNode(node)) return bindFlowTableWithResolver(node, resolveValue, resolveFallback)
   return node
 }
 

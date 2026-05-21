@@ -4,8 +4,6 @@ import {
   addFlowStackColumn,
   addFlowTableColumn,
   addFlowTableRow,
-  addTableColumn,
-  addTableRow,
   applyPlacementOperation,
   assertDocument,
   createDefaultDocument,
@@ -14,9 +12,8 @@ import {
   normalizeDocument,
   removeFlowTableColumn,
   removeFlowTableRow,
-  removeTableColumn,
-  removeTableRow,
   reorderBodyChild,
+  resizeFlowTableColumnPair,
   splitParagraphAtIndex,
   updateFieldRefInline,
   updateFlowStackBoxStyle,
@@ -85,6 +82,7 @@ type EditorAction =
   | { type: "FLOW_ROW_ADD_COL"; rowId: string; stackId?: string; position?: "before" | "after" }
   | { type: "LOAD_DOCUMENT"; doc: DocumentNode; paginated?: PaginatedDocument }
   | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number; paginated?: PaginatedDocument }
+  | { type: "RESIZE_TABLE_COLUMN_PAIR"; tableId: string; leftColIndex: number; leftWidth: number; rightWidth: number; paginated?: PaginatedDocument }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
   | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
   | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; history?: HistoryEntry }
@@ -143,24 +141,12 @@ function setDocWithoutHistory(state: EditorState, newDoc: DocumentNode): EditorS
   return { ...state, doc: normalizedDoc }
 }
 
-function findTopLevelNode(doc: DocumentNode, nodeId: string) {
-  for (const section of doc.document.sections) {
-    const node = section.nodes[nodeId]
-    if (node) return node
-  }
-  return null
-}
-
 function updateTableStructure(
   state: EditorState,
   tableId: string,
-  legacyOperation: (doc: DocumentNode, tableId: string) => DocumentNode,
-  flowOperation: (doc: DocumentNode, tableId: string) => DocumentNode,
+  operation: (doc: DocumentNode, tableId: string) => DocumentNode,
 ): EditorState {
-  const table = findTopLevelNode(state.doc, tableId)
-  const nextDoc = table?.type === "flow-table"
-    ? flowOperation(state.doc, tableId)
-    : legacyOperation(state.doc, tableId)
+  const nextDoc = operation(state.doc, tableId)
   return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
 }
 
@@ -275,34 +261,38 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       return updateTableStructure(
         state,
         action.tableId,
-        (doc, tableId) => addTableRow(doc, tableId, action.afterIndex),
         (doc, tableId) => addFlowTableRow(doc, tableId, action.afterIndex),
       )
     case "TABLE_REMOVE_ROW":
       return updateTableStructure(
         state,
         action.tableId,
-        (doc, tableId) => removeTableRow(doc, tableId, action.rowIndex),
         (doc, tableId) => removeFlowTableRow(doc, tableId, action.rowIndex),
       )
     case "TABLE_ADD_COL":
       return updateTableStructure(
         state,
         action.tableId,
-        (doc, tableId) => addTableColumn(doc, tableId, action.afterIndex),
         (doc, tableId) => addFlowTableColumn(doc, tableId, action.afterIndex),
       )
     case "TABLE_REMOVE_COL":
       return updateTableStructure(
         state,
         action.tableId,
-        (doc, tableId) => removeTableColumn(doc, tableId, action.colIndex),
         (doc, tableId) => removeFlowTableColumn(doc, tableId, action.colIndex),
       )
     case "FLOW_ROW_ADD_COL":
       return pushDoc(state, addFlowStackColumn(state.doc, action.rowId, action.stackId, action.position))
     case "RESIZE_COLUMNS": {
       const doc = resizeColumnsDocument(state.doc, action.leftStackId, action.leftShare, action.rightStackId, action.rightShare)
+      const nextState = pushDoc(state, doc)
+      return action.paginated != null && nextState.doc !== state.doc
+        ? { ...nextState, paginated: action.paginated }
+        : nextState
+    }
+    case "RESIZE_TABLE_COLUMN_PAIR": {
+      const doc = resizeFlowTableColumnPair(state.doc, action.tableId, action.leftColIndex, action.leftWidth, action.rightWidth)
+      if (doc === state.doc) return state
       const nextState = pushDoc(state, doc)
       return action.paginated != null && nextState.doc !== state.doc
         ? { ...nextState, paginated: action.paginated }

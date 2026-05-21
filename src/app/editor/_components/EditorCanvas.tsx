@@ -12,7 +12,7 @@ import {
   type ResolvedBorderSide,
 } from "@/pagination"
 import { isPlainTextParagraph } from "@/document"
-import type { DocumentNode, FlowTableCellNode, FlowTableNode, LayoutNode, ParagraphNode, TableCellNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, LayoutNode, ParagraphNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
@@ -54,8 +54,6 @@ const NODE_COLORS: Record<string, string> = {
   "flow-table-row": "#e0e7ff",
   "flow-table-cell": "#fef9c3",
   body:      "#bbf7d0",
-  table:     "#fde68a",
-  "table-cell": "#fef3c7",
   toc:       "#d1fae5",
 }
 
@@ -75,8 +73,8 @@ export function shouldStartInlineEditOnSingleClick(input: {
   return input.canInlineEditParagraph
 }
 
-const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "table", "flow-table", "toc"])
-const SELECTABLE_NODE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "table", "table-cell", "flow-table", "flow-table-row", "flow-table-cell", "toc"])
+const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "flow-table", "toc"])
+const SELECTABLE_NODE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "flow-table", "flow-table-row", "flow-table-cell", "toc"])
 const PARAGRAPH_CHROME_Y = 3
 const FLOW_STACK_PARAGRAPH_CHROME_Y = 0
 const PARAGRAPH_LIVE_PREVIEW_GAP_Y = 2
@@ -122,15 +120,15 @@ function fragmentContainsInlineEditCaret(fragment: PageFragment, caretIndex: num
 }
 
 function isTableCellFragment(fragment: PageFragment | null | undefined): boolean {
-  return fragment?.nodeType === "table-cell" || fragment?.nodeType === "flow-table-cell"
+  return fragment?.nodeType === "flow-table-cell"
 }
 
 function isTableRowFragment(fragment: PageFragment | null | undefined): boolean {
-  return fragment?.nodeType === "row" || fragment?.nodeType === "flow-table-row"
+  return fragment?.nodeType === "flow-table-row"
 }
 
 function isTableRootFragment(fragment: PageFragment | null | undefined): boolean {
-  return fragment?.nodeType === "table" || fragment?.nodeType === "flow-table"
+  return fragment?.nodeType === "flow-table"
 }
 
 function isTableStructureFragment(fragment: PageFragment, siblings: PageFragment[]): boolean {
@@ -264,15 +262,121 @@ function lineVisualLeft(line: PaginatedLine): number {
   return line.x
 }
 
-type TableLikeNode = TableNode | FlowTableNode
-type TableCellLikeNode = TableCellNode | FlowTableCellNode
+type TableLikeNode = FlowTableNode
+type TableCellLikeNode = FlowTableCellNode
+
+interface TableColumnResizeHandle {
+  tableId: string
+  leftColIndex: number
+  handleDocX: number
+  pairX: number
+  pairWidth: number
+  leftWidthOriginal: number
+  rightWidthOriginal: number
+  tableFragY: number
+  tableFragHeight: number
+}
 
 function isTableLikeNode(node: LayoutNode): node is LayoutNode & TableLikeNode {
-  return node.type === "table" || node.type === "flow-table"
+  return node.type === "flow-table"
 }
 
 function isTableCellLikeNode(node: TableLikeNode["nodes"][string] | undefined): node is TableCellLikeNode {
-  return node?.type === "table-cell" || node?.type === "flow-table-cell"
+  return node?.type === "flow-table-cell"
+}
+
+function unitValueToPt(width: { value: number; unit: "pt" | "mm" } | undefined): number {
+  if (!width) return 0
+  return width.unit === "mm" ? width.value * 72 / 25.4 : width.value
+}
+
+function findTableNode(doc: DocumentNode, tableId: string): TableLikeNode | null {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[tableId]
+    if (node?.type === "flow-table") return node as unknown as TableLikeNode
+  }
+  return null
+}
+
+function resolveSelectedTableId(doc: DocumentNode, selectedNodeId: string | null): string | null {
+  if (!selectedNodeId) return null
+  for (const section of doc.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      if (!isTableLikeNode(node)) continue
+      const table = node as unknown as TableLikeNode
+      if (table.id === selectedNodeId || table.nodes[selectedNodeId] != null) return table.id
+    }
+  }
+  return null
+}
+
+function resolveRenderedTableColumnWidths(table: TableLikeNode, availableWidth: number): number[] {
+  const rawWidths = table.columns.map((column) => unitValueToPt(column.width))
+  const totalWidth = rawWidths.reduce((sum, width) => sum + width, 0)
+  const safeAvailableWidth = Math.max(0, availableWidth)
+
+  if (rawWidths.length === 0) return []
+  if (totalWidth <= 0) {
+    const equalWidth = safeAvailableWidth / rawWidths.length
+    return rawWidths.map(() => equalWidth)
+  }
+  if (totalWidth <= safeAvailableWidth + 0.01) return rawWidths
+
+  let assigned = 0
+  return rawWidths.map((rawWidth, index) => {
+    if (index === rawWidths.length - 1) return Math.max(0, safeAvailableWidth - assigned)
+    const width = safeAvailableWidth * (rawWidth / totalWidth)
+    assigned += width
+    return width
+  })
+}
+
+function resolveTableColumnResizeHandles(input: {
+  doc: DocumentNode
+  selectedNodeId: string | null
+  fragments: PageFragment[]
+}): TableColumnResizeHandle[] {
+  const tableId = resolveSelectedTableId(input.doc, input.selectedNodeId)
+  if (!tableId) return []
+  const table = findTableNode(input.doc, tableId)
+  if (!table || table.columns.length < 2) return []
+  const tableFragment = input.fragments.find((fragment) =>
+    fragment.nodeId === tableId &&
+    isTableRootFragment(fragment)
+  )
+  if (!tableFragment) return []
+
+  const renderedWidths = resolveRenderedTableColumnWidths(table, tableFragment.width)
+  const authoredWidths = table.columns.map((column, index) => {
+    const authoredWidth = unitValueToPt(column.width)
+    return authoredWidth > 0 ? authoredWidth : renderedWidths[index] ?? 0
+  })
+  if (renderedWidths.length !== table.columns.length) return []
+
+  let cursorX = tableFragment.x
+  const handles: TableColumnResizeHandle[] = []
+  for (let leftColIndex = 0; leftColIndex < renderedWidths.length - 1; leftColIndex++) {
+    const leftRenderedWidth = renderedWidths[leftColIndex] ?? 0
+    const rightRenderedWidth = renderedWidths[leftColIndex + 1] ?? 0
+    const pairWidth = leftRenderedWidth + rightRenderedWidth
+    if (pairWidth <= 0) {
+      cursorX += leftRenderedWidth
+      continue
+    }
+    handles.push({
+      tableId,
+      leftColIndex,
+      handleDocX: cursorX + leftRenderedWidth,
+      pairX: cursorX,
+      pairWidth,
+      leftWidthOriginal: authoredWidths[leftColIndex] ?? leftRenderedWidth,
+      rightWidthOriginal: authoredWidths[leftColIndex + 1] ?? rightRenderedWidth,
+      tableFragY: tableFragment.y,
+      tableFragHeight: tableFragment.height,
+    })
+    cursorX += leftRenderedWidth
+  }
+  return handles
 }
 
 interface PageViewDocLookup {
@@ -501,7 +605,7 @@ function isTableCellId(doc: DocumentNode, nodeId: string | null | undefined): bo
       if (!isTableLikeNode(node)) continue
       const table = node as unknown as TableLikeNode
       const inner = table.nodes[nodeId]
-      if (inner?.type === "table-cell" || inner?.type === "flow-table-cell") return true
+      if (inner?.type === "flow-table-cell") return true
     }
   }
   return false
@@ -675,7 +779,7 @@ function PageView({
   page, doc, drag, scale, selectedNodeId, isLayoutLoading, inlineEditVisualFresh,
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown,
-  resizeDrag, onResizeStart, minHeightDrag, onMinHeightResizeStart,
+  resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygTextReflowDecision,
 }: {
@@ -715,6 +819,7 @@ function PageView({
   onBackgroundPointerDown: () => void
   resizeDrag: ResizeDrag | null
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, gapWidthPt: number, startClientX: number, pageKey: string, rowFragY: number, rowFragHeight: number) => void
+  onTableColumnResizeStart: (tableId: string, leftColIndex: number, pairX: number, pairWidth: number, leftWidthOriginal: number, rightWidthOriginal: number, startClientX: number, pageKey: string, tableFragY: number, tableFragHeight: number) => void
   minHeightDrag: MinHeightDrag | null
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   sectionIndex: number
@@ -829,6 +934,11 @@ function PageView({
     )
     return (caretCandidate ?? candidates[0]).index
   })()
+  const tableColumnResizeHandles = resolveTableColumnResizeHandles({
+    doc,
+    selectedNodeId,
+    fragments: renderFragments,
+  })
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
     <svg
@@ -973,7 +1083,7 @@ function PageView({
         const isEmpty = (f.nodeType === "stack" || f.nodeType === "flow-stack") && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
         // visual override ระหว่าง resize
         let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = displayFragment.height
-        if (resizeDrag && (f.nodeType === "stack" || f.nodeType === "flow-stack")) {
+        if (resizeDrag?.type === "stack" && (f.nodeType === "stack" || f.nodeType === "flow-stack")) {
           if (f.nodeId === resizeDrag.leftStackId) {
             fragWidth = resizeDrag.currentDocX - f.x
           } else if (f.nodeId === resizeDrag.rightStackId) {
@@ -1053,10 +1163,10 @@ function PageView({
                 onNodePointerDown({ source: "document", nodeId }, e, clickAction)
               }
               : undefined}
-            onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "table-cell" || f.nodeType === "flow-table-cell") && !drag
+            onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "flow-table-cell") && !drag
               ? (e) => {
                 e.stopPropagation()
-                const paragraphId = f.nodeType === "table-cell" || f.nodeType === "flow-table-cell"
+                const paragraphId = f.nodeType === "flow-table-cell"
                   ? findFirstParagraphInCell(doc, f.nodeId)
                   : f.nodeId
                 if (!paragraphId || !canInlineEditParagraph(doc, paragraphId)) return
@@ -1211,7 +1321,7 @@ function PageView({
           const leftFrag = page.fragments.find((f) => f.nodeId === leftStackId)
           const rightFrag = page.fragments.find((f) => f.nodeId === rightStackId)
           if (!leftFrag || !rightFrag) return null
-          const isActive = resizeDrag?.leftStackId === leftStackId
+          const isActive = resizeDrag?.type === "stack" && resizeDrag.leftStackId === leftStackId
           const handleDocX = leftFrag.x + leftFrag.width
           const hx = handleDocX * scale
           const hy = rowFrag.y * scale
@@ -1240,6 +1350,56 @@ function PageView({
             </g>
           )
         })
+      })}
+
+      {/* table column resize handles — internal column boundaries only */}
+      {!drag && tableColumnResizeHandles.map((handle) => {
+        const isActive = resizeDrag?.type === "table-column" &&
+          resizeDrag.tableId === handle.tableId &&
+          resizeDrag.leftColIndex === handle.leftColIndex
+        const hx = handle.handleDocX * scale
+        const hy = handle.tableFragY * scale
+        const hh = Math.max(handle.tableFragHeight * scale, 8)
+        return (
+          <g key={`table-rh-${handle.tableId}-${handle.leftColIndex}`}>
+            <rect
+              x={hx - 6}
+              y={hy}
+              width={12}
+              height={hh}
+              data-testid="table-column-resize-handle"
+              data-table-id={handle.tableId}
+              data-left-col-index={handle.leftColIndex}
+              fill="transparent"
+              style={{ cursor: "col-resize", touchAction: "none" }}
+              onPointerDown={(e) => {
+                e.stopPropagation(); e.preventDefault()
+                e.currentTarget.setPointerCapture(e.pointerId)
+                onTableColumnResizeStart(
+                  handle.tableId,
+                  handle.leftColIndex,
+                  handle.pairX,
+                  handle.pairWidth,
+                  handle.leftWidthOriginal,
+                  handle.rightWidthOriginal,
+                  e.clientX,
+                  pageKey,
+                  handle.tableFragY,
+                  handle.tableFragHeight,
+                )
+              }}
+            />
+            <rect
+              x={hx - 0.5}
+              y={hy}
+              width={1}
+              height={hh}
+              fill="#2563eb"
+              opacity={isActive ? 0 : 0.55}
+              style={{ pointerEvents: "none" }}
+            />
+          </g>
+        )
       })}
 
       {/* minHeight resize handles — แสดงด้านล่างของ row */}
@@ -1321,6 +1481,12 @@ interface PageViewScopedEditProps {
 
 function resizeDragAffectsPage(page: PaginatedPage, drag: ResizeDrag | null): boolean {
   if (!drag) return false
+  if (drag.type === "table-column") {
+    return page.fragments.some((fragment) =>
+      fragment.nodeId === drag.tableId ||
+      fragment.parentNodeId === drag.tableId
+    )
+  }
   return page.fragments.some((fragment) =>
     fragment.nodeId === drag.rowId ||
     fragment.nodeId === drag.leftStackId ||
@@ -1423,6 +1589,7 @@ interface Props {
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, gapWidthPt: number, startClientX: number, pageKey: string, rowFragY: number, rowFragHeight: number) => void
+  onTableColumnResizeStart: (tableId: string, leftColIndex: number, pairX: number, pairWidth: number, leftWidthOriginal: number, rightWidthOriginal: number, startClientX: number, pageKey: string, tableFragY: number, tableFragHeight: number) => void
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   marginDrag: MarginDrag | null
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
@@ -1528,7 +1695,7 @@ export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
   textMeasurer,
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
-  setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
+  setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled,
@@ -1693,6 +1860,7 @@ export function EditorCanvas({
                   onBackgroundPointerDown={onBackgroundPointerDown}
                   resizeDrag={resizeDrag}
                   onResizeStart={onResizeStart}
+                  onTableColumnResizeStart={onTableColumnResizeStart}
                   minHeightDrag={minHeightDrag}
                   onMinHeightResizeStart={onMinHeightResizeStart}
                   sectionIndex={si}

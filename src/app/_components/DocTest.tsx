@@ -16,7 +16,7 @@ function findNodeById(doc: DocumentNode, nodeId: string): LayoutNode | null {
     const node = section.nodes[nodeId]
     if (node) return node
     for (const n of Object.values(section.nodes)) {
-      if (n.type === "table") {
+      if (n.type === "flow-table") {
         const child = (n as any).nodes?.[nodeId]
         if (child) return child as LayoutNode
       }

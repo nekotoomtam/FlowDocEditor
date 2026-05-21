@@ -1,4 +1,4 @@
-import type { DocumentNode, FlowTableNode, LayoutNode, TableNode } from "../schema"
+import type { DocumentNode, FlowTableNode, LayoutNode } from "../schema"
 import type {
   DragSource,
   PaletteBlockType,
@@ -35,8 +35,8 @@ function findLocation(document: DocumentNode, nodeId: string): NodeLocation | nu
     const node = section.nodes[nodeId]
     if (node == null) {
       for (const candidate of Object.values(section.nodes)) {
-        if (candidate.type !== "table" && candidate.type !== "flow-table") continue
-        const inner = (candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]
+        if (candidate.type !== "flow-table") continue
+        const inner = (candidate as unknown as FlowTableNode).nodes[nodeId]
         if (inner?.type === "paragraph") {
           return { section, node: inner, parent: null, index: 0 }
         }
@@ -202,8 +202,7 @@ function isInlineFieldSource(source?: DragSource | null): boolean {
 
 function getPaletteStackInsertCount(source?: DragSource | null): number | null {
   if (source?.source !== "palette") return null
-  // Row/Columns palette entries are flow-backed now. Legacy row stack insertion
-  // remains available only through explicit legacy operations, not palette law.
+  // Row/Columns palette entries are flow-backed now.
   return null
 }
 

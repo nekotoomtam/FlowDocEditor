@@ -4,7 +4,7 @@ import { isPlainTextParagraph } from "@/document"
 import { measureParagraph, nextTextGraphemeBoundary, previousTextGraphemeBoundary, snapToGraphemeBoundary } from "@/layout"
 import type { TextMeasurer } from "@/layout"
 import { buildPaginatedLines } from "@/pagination"
-import type { DocumentNode, FlowTableNode, ParagraphNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, ParagraphNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily } from "@/font-registry"
 import {
@@ -243,8 +243,8 @@ function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | n
       return node
     }
     for (const candidate of Object.values(section.nodes)) {
-      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
-      const inner = (candidate as unknown as TableNode | FlowTableNode).nodes[nodeId]
+      if (candidate.type !== "flow-table") continue
+      const inner = (candidate as unknown as FlowTableNode).nodes[nodeId]
       if (inner?.type === "paragraph") return inner as ParagraphNode
     }
   }
@@ -264,9 +264,9 @@ function isTableCellNodeId(doc: DocumentNode, nodeId: string | null | undefined)
   if (!nodeId) return false
   for (const section of doc.document.sections) {
     for (const node of Object.values(section.nodes)) {
-      if (node.type !== "table" && node.type !== "flow-table") continue
-      const inner = (node as unknown as TableNode | FlowTableNode).nodes[nodeId]
-      if (inner?.type === "table-cell" || inner?.type === "flow-table-cell") return true
+      if (node.type !== "flow-table") continue
+      const inner = (node as unknown as FlowTableNode).nodes[nodeId]
+      if (inner?.type === "flow-table-cell") return true
     }
   }
   return false
@@ -280,10 +280,10 @@ function isParagraphInsideTableCell(
   if (isTableCellNodeId(doc, parentNodeId)) return true
   for (const section of doc.document.sections) {
     for (const node of Object.values(section.nodes)) {
-      if (node.type !== "table" && node.type !== "flow-table") continue
-      const table = node as unknown as TableNode | FlowTableNode
+      if (node.type !== "flow-table") continue
+      const table = node as unknown as FlowTableNode
       for (const candidate of Object.values(table.nodes)) {
-        if ((candidate.type === "table-cell" || candidate.type === "flow-table-cell") && candidate.childIds.includes(nodeId)) return true
+        if (candidate.type === "flow-table-cell" && candidate.childIds.includes(nodeId)) return true
       }
     }
   }
@@ -970,6 +970,7 @@ function renderLiveTextEcho(
   pageKey: string,
   scale: number,
   textMeasurer: TextMeasurer | undefined,
+  clipPathId?: string,
 ): { content: React.ReactNode; caret: React.ReactNode } | null {
   if (!echo || echo.text.length === 0) return null
 
@@ -982,6 +983,7 @@ function renderLiveTextEcho(
   const fontFamily = resolveFontCssFamily(renderProps?.fontFamilyKey)
   const parts = echo.text.split("\n")
   const continuationX = anchorLine ? lineVisualLeft(anchorLine) : fragment.x
+  const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
   const renderedLines: React.ReactNode[] = []
 
   let caretX = anchor.x
@@ -1016,6 +1018,7 @@ function renderLiveTextEcho(
         <g
           data-wysiwyg-live-echo="true"
           data-wysiwyg-live-echo-anchor={echo.anchorOffset}
+          clipPath={clip}
           style={{ pointerEvents: "none" }}
         >
           {renderedLines}
@@ -1033,6 +1036,7 @@ function renderLiveTextEcho(
         stroke={INLINE_EDIT_TEXT_COLOR}
         strokeWidth={Math.max(1, 1.1 * scale)}
         strokeLinecap="round"
+        clipPath={clip}
         style={{ pointerEvents: "none" }}
       >
         {renderCaretBlinkAnimation()}
@@ -1125,7 +1129,8 @@ export function WysiwygTextLayer({
     pageKey,
     scale,
     textMeasurer,
-  ), [liveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
+    clipPathId,
+  ), [clipPathId, liveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
   const immediateLiveTextEcho = useMemo(() => {
     if (activeImmediateDraftLayout) return null
     if (!immediateTextEcho) return null
@@ -1139,7 +1144,8 @@ export function WysiwygTextLayer({
     pageKey,
     scale,
     textMeasurer,
-  ), [immediateLiveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
+    clipPathId,
+  ), [clipPathId, immediateLiveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
   const activeLiveEchoVisual = activeImmediateDraftLayout
     ? null
     : liveEchoVisual ?? immediateLiveEchoVisual

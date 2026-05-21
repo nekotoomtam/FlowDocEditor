@@ -11,7 +11,7 @@ import { thaiWordBreaker } from "../../layout/word-breaker"
 import { assertPaginatedDocument, paginateDocument, type PageFragment } from "../../pagination"
 import { pt } from "../../schema"
 import { DocxRenderer, PdfRenderer } from "../index"
-import type { DocumentNode, DocumentSection, LayoutNode, ParagraphNode, TableCellNode, TableNode, TableRowNode } from "../../schema"
+import type { DocumentNode, DocumentSection, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode } from "../../schema"
 import type { FontProvider } from "../shared"
 
 const testDir = path.dirname(fileURLToPath(import.meta.url))
@@ -90,8 +90,8 @@ function makeTocSection(title: string): DocumentSection {
   })
 }
 
-function makeTable(id: string, colWidths: number[], rowDefs: string[][]): TableNode {
-  const nodes: TableNode["nodes"] = {}
+function makeTable(id: string, colWidths: number[], rowDefs: string[][]): FlowTableNode {
+  const nodes: FlowTableNode["nodes"] = {}
   const rowIds: string[] = []
 
   rowDefs.forEach((cells, rowIndex) => {
@@ -100,18 +100,18 @@ function makeTable(id: string, colWidths: number[], rowDefs: string[][]): TableN
       const paragraphId = `${id}-p${rowIndex}-${colIndex}`
       const cellId = `${id}-c${rowIndex}-${colIndex}`
       nodes[paragraphId] = makePara(paragraphId, text)
-      nodes[cellId] = { id: cellId, type: "table-cell", props: {}, childIds: [paragraphId] } as TableCellNode
+      nodes[cellId] = { id: cellId, type: "flow-table-cell", props: {}, childIds: [paragraphId] } as FlowTableCellNode
       cellIds.push(cellId)
     })
 
     const rowId = `${id}-row${rowIndex}`
-    nodes[rowId] = { id: rowId, type: "table-row", props: {}, cellIds } as TableRowNode
+    nodes[rowId] = { id: rowId, type: "flow-table-row", props: {}, cellIds } as FlowTableRowNode
     rowIds.push(rowId)
   })
 
   return {
     id,
-    type: "table",
+    type: "flow-table",
     props: { headerRowCount: 1 },
     columns: colWidths.map((width) => ({ width: pt(width) })),
     rowIds,
@@ -349,12 +349,12 @@ describe("product export golden smoke", () => {
     const bodyRows = pages.flatMap((page) =>
       page.fragments.filter((fragment) =>
         fragment.parentNodeId === "customs-golden-table" &&
-        fragment.nodeType === "row" &&
+        fragment.nodeType === "flow-table-row" &&
         fragment.nodeId !== "customs-golden-table-row0",
       ),
     )
     const firstPageHeaderCells = pages[0].fragments
-      .filter((fragment) => fragment.parentNodeId === "customs-golden-table-row0" && fragment.nodeType === "table-cell")
+      .filter((fragment) => fragment.parentNodeId === "customs-golden-table-row0" && fragment.nodeType === "flow-table-cell")
       .sort((a, b) => a.x - b.x)
 
     expect(pages).toHaveLength(3)
@@ -391,7 +391,7 @@ describe("product export golden smoke", () => {
     const paginatedRows = paginated.sections[0].pages.flatMap((page) =>
       page.fragments.filter((fragment) =>
         fragment.parentNodeId === "customs-golden-table" &&
-        fragment.nodeType === "row",
+        fragment.nodeType === "flow-table-row",
       ),
     )
     const expectedRows = expectedDocxRowCount(paginatedRows)

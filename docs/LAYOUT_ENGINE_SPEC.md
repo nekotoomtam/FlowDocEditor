@@ -302,7 +302,7 @@ Rules:
 - table column deletion should preserve total table width by transferring the
   removed width to a neighboring column
 - adding or deleting a column is not an implicit resize of the whole table
-- editor selection may target a `table-cell` even when the pointer lands on an
+- editor selection may target a `flow-table-cell` even when the pointer lands on an
   inner paragraph fragment, but this must remain editor interaction state and
   must not change the authored model
 - pagination-related authored props such as `headerRowCount` and `allowBreak`

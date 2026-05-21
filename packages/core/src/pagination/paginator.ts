@@ -33,7 +33,6 @@ import { buildZoneFragments, cloneZoneFragmentsForPage } from "./paginator/zone"
 import { paginateSpacer } from "./paginator/spacer"
 import { paginateRow } from "./paginator/row"
 import { paginateFlowRow } from "./paginator/flowRow"
-import { paginateTable } from "./paginator/table"
 import { paginateFlowTable } from "./paginator/flowTable"
 
 /**
@@ -268,8 +267,6 @@ function paginateFlowBox(
     case "body":
     case "stack":
       return paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision)
-    case "table":
-      return paginateTable(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
     case "flow-table":
       return paginateFlowTable(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
     case "flow-table-row":

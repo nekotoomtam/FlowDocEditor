@@ -11,11 +11,11 @@ import { pt } from "@/schema"
 import type {
   DocumentNode,
   DocumentSection,
+  FlowTableCellNode,
+  FlowTableRowNode,
+  FlowTableNode,
   LayoutNode,
   ParagraphProps,
-  TableCellNode,
-  TableRowNode,
-  TableNode,
 } from "@/schema"
 
 // ─── DSL Input Types ──────────────────────────────────────────────────────────
@@ -153,19 +153,25 @@ function compileTable(item: DslTable): { id: string; nodes: Record<string, Layou
       const para = createParagraphNode(text, paraProps)
       tableNodes[para.id] = para
 
-      const cellNode: TableCellNode = {
-        id: createId("cell"),
-        type: "table-cell",
-        props: { border: cellBorder, padding: pt(6) },
+      const padding = pt(6)
+      const cellNode: FlowTableCellNode = {
+        id: createId("ftcell"),
+        type: "flow-table-cell",
+        props: {
+          box: {
+            border: cellBorder,
+            padding: { top: padding, right: padding, bottom: padding, left: padding },
+          },
+        },
         childIds: [para.id],
       }
       tableNodes[cellNode.id] = cellNode
       return cellNode
     })
 
-    const rowNode: TableRowNode = {
-      id: createId("row"),
-      type: "table-row",
+    const rowNode: FlowTableRowNode = {
+      id: createId("ftrow"),
+      type: "flow-table-row",
       props: {},
       cellIds: cells.map((c) => c.id),
     }
@@ -173,9 +179,9 @@ function compileTable(item: DslTable): { id: string; nodes: Record<string, Layou
     return rowNode
   })
 
-  const tableNode: TableNode = {
-    id: createId("table"),
-    type: "table",
+  const tableNode: FlowTableNode = {
+    id: createId("flow-table"),
+    type: "flow-table",
     props: {},
     columns: cols.map((w) => ({ width: pt(w) })),
     rowIds:  compiledRows.map((r) => r.id),

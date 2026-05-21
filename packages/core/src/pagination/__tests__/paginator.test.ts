@@ -3,7 +3,7 @@ import { paginateDocument } from "../index"
 import { assertPaginatedDocument } from "../assertPaginated"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { pt } from "../../schema"
-import type { DocumentNode, ParagraphNode, SpacerNode, LayoutNode, TableNode } from "../../schema"
+import type { DocumentNode, FlowTableNode, ParagraphNode, SpacerNode, LayoutNode } from "../../schema"
 import type { PageFragment } from "../types"
 
 // ─── Page Metrics ────────────────────────────────────────────────────────────
@@ -421,8 +421,8 @@ describe("product fixture — report-long-thai-paragraph", () => {
 
 // ─── Table Fragment Relationships ────────────────────────────────────────────
 
-function makeTable(id: string, rowCount: number, colCount: number, cellText = ""): TableNode {
-  const internalNodes: TableNode["nodes"] = {}
+function makeTable(id: string, rowCount: number, colCount: number, cellText = ""): FlowTableNode {
+  const internalNodes: FlowTableNode["nodes"] = {}
   const rowIds: string[] = []
   const colWidthPt = 100
 
@@ -432,17 +432,17 @@ function makeTable(id: string, rowCount: number, colCount: number, cellText = ""
       const paraId = `${id}-p${r}-${c}`
       const cellId = `${id}-cell${r}-${c}`
       internalNodes[paraId] = makePara(paraId, cellText)
-      internalNodes[cellId] = { id: cellId, type: "table-cell", props: {}, childIds: [paraId] }
+      internalNodes[cellId] = { id: cellId, type: "flow-table-cell", props: {}, childIds: [paraId] }
       cellIds.push(cellId)
     }
     const rowId = `${id}-row${r}`
-    internalNodes[rowId] = { id: rowId, type: "table-row", props: {}, cellIds }
+    internalNodes[rowId] = { id: rowId, type: "flow-table-row", props: {}, cellIds }
     rowIds.push(rowId)
   }
 
   return {
     id,
-    type: "table",
+    type: "flow-table",
     props: {
       border: {
         top: { style: "solid", width: pt(0.5), color: "000000" },
@@ -458,26 +458,26 @@ function makeTable(id: string, rowCount: number, colCount: number, cellText = ""
 }
 
 describe("paginator — table fragment relationships", () => {
-  it("table fragment has bodyId as parentNodeId", () => {
+  it("flow-table fragment has bodyId as parentNodeId", () => {
     const table = makeTable("tbl", 2, 2)
     const frags = getFragments(makeDoc(["tbl"], { tbl: table }))
-    const tFrag = frags.find((f) => f.nodeId === "tbl" && f.nodeType === "table")!
+    const tFrag = frags.find((f) => f.nodeId === "tbl" && f.nodeType === "flow-table")!
     expect(tFrag).toBeDefined()
     expect(tFrag.parentNodeId).toBe("body")
   })
 
-  it("table row fragments have tableId as parentNodeId", () => {
+  it("flow-table row fragments have tableId as parentNodeId", () => {
     const table = makeTable("tbl", 2, 2)
     const frags = getFragments(makeDoc(["tbl"], { tbl: table }))
-    const rowFrags = frags.filter((f) => f.nodeType === "row" && f.nodeId.startsWith("tbl-row"))
+    const rowFrags = frags.filter((f) => f.nodeType === "flow-table-row" && f.nodeId.startsWith("tbl-row"))
     expect(rowFrags.length).toBe(2)
     rowFrags.forEach((f) => expect(f.parentNodeId).toBe("tbl"))
   })
 
-  it("table cell fragments (nodeType=table-cell) have rowId as parentNodeId", () => {
+  it("flow-table cell fragments have rowId as parentNodeId", () => {
     const table = makeTable("tbl", 2, 2)
     const frags = getFragments(makeDoc(["tbl"], { tbl: table }))
-    const cellFrags = frags.filter((f) => f.nodeType === "table-cell" && f.nodeId.startsWith("tbl-cell"))
+    const cellFrags = frags.filter((f) => f.nodeType === "flow-table-cell" && f.nodeId.startsWith("tbl-cell"))
     expect(cellFrags.length).toBe(4)  // 2 rows × 2 cols
     cellFrags.forEach((f) => {
       expect(f.parentNodeId).toMatch(/^tbl-row/)

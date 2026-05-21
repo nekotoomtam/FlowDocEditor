@@ -11,8 +11,8 @@ Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 
 Last verified full-suite size:
 
-- 33 core test files / 414 core tests
-- 35 app test files / 311 app tests
+- 36 core test files / 469 passed core tests / 6 skipped
+- 41 app test files / 420 app tests
 
 Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 `docs/TEST_STRATEGY.md` as the current coverage snapshot until the suite changes.
@@ -21,11 +21,11 @@ Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 
 | Fixture | Test file | Protects |
 |---|---|---|
-| `customs-basic-table` | `packages/core/src/pagination/__tests__/tablePagination.test.ts` | multi-page customs table, repeated headers, footer page number |
+| `customs-basic-table` | `packages/core/src/pagination/__tests__/flowTablePagination.test.ts` | multi-page customs table, repeated headers, footer page number |
 | `customs-page-count-golden` | `packages/core/src/pagination/__tests__/productGolden.test.ts` | exact customs page count baseline, repeated header count, footer page numbers, table column geometry |
 | `customs-export-golden` | `packages/core/src/renderer/__tests__/productExportGolden.test.ts` | PDF page count parity with pagination, repeated table row/header geometry before render, DOCX table row structure |
-| `customs-rowspan-boundary` | `packages/core/src/pagination/__tests__/tablePagination.test.ts` | rowspan-linked rows near a page boundary |
-| `customs-breakable-row-uneven-cells` | `packages/core/src/pagination/__tests__/tablePagination.test.ts` | breakable row with long and short cells, no duplicated short-cell content |
+| `customs-rowspan-boundary` | `packages/core/src/pagination/__tests__/flowTablePagination.test.ts` | rowspan-linked rows near a page boundary |
+| `customs-breakable-row-uneven-cells` | `packages/core/src/pagination/__tests__/flowTablePagination.test.ts` | breakable row with long and short cells, no duplicated short-cell content |
 | `report-cover-toc-body` | `packages/core/src/renderer/__tests__/multiSection.test.ts` | cover, TOC, body section restart, display page numbers |
 | `report-page-count-golden` | `packages/core/src/pagination/__tests__/productGolden.test.ts` | exact cover/TOC/body page counts, body footer restart numbers, long paragraph continuation ranges |
 | `report-export-golden` | `packages/core/src/renderer/__tests__/productExportGolden.test.ts` | PDF page count parity for cover/TOC/body output with embedded Thai runtime font |
@@ -55,7 +55,7 @@ Protects scalar field binding, authored document validity, normalization
 defaults, table grid operations, and operation-level invariants. Operation
 coverage includes table row/column insertion, deletion cleanup, width
 preservation, header-row clamping, last-row/last-column guards, and inline
-`fieldRef` insertion in body and table-cell paragraphs. Field registry coverage
+`fieldRef` insertion in body and flow-table-cell paragraphs. Field registry coverage
 collects body/table fieldRef usages and validates duplicate keys, missing
 definitions, and non-inline field targets. Data snapshot coverage validates
 scalar values, readiness warnings, invalid value types, enum options, and
@@ -75,7 +75,7 @@ segments, spacing, and grapheme fallback.
 ### Pagination And Layout
 
 - `packages/core/src/pagination/__tests__/paginator.test.ts`
-- `packages/core/src/pagination/__tests__/tablePagination.test.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
 - `packages/core/src/pagination/__tests__/rowStack.test.ts`
 - `packages/core/src/pagination/__tests__/fragmentMeta.test.ts`
 - `packages/core/src/pagination/__tests__/widowOrphan.test.ts`
@@ -95,7 +95,7 @@ TOC overflow, drift reporting, table split behavior, row/stack behavior, resize
 convergence, user-level report package fixtures, and paginated-output
 invariants.
 
-`tablePagination.test.ts` also owns table row split accounting coverage for
+`flowTablePagination.test.ts` also owns table row split accounting coverage for
 uneven multi-cell splits, empty cells, spacer-before-paragraph cells, padded
 cells, tall repeated headers, and line-range contiguity across continuation
 fragments.
@@ -170,7 +170,7 @@ typing, undo/redo, flicker, and table panel workflows.
 `scripts/editor-smoke.mjs` protects the default `/editor` load path with a real browser, deterministic
 localStorage document fixtures, paragraph inline edit commit, undo/redo, Thai
 composition fallback, table cell selection, the property-panel title,
-table-cell row/column insert/delete controls, table-cell boundary Backspace,
+flow-table-cell row/column insert/delete controls, flow-table-cell boundary Backspace,
 fieldRef paragraph non-editability, continuation-fragment editing with
 three-fragment pagination, page-tracking textarea relocation,
 focus-preserving reflow, undo/redo, and boundary Backspace, localStorage
@@ -200,7 +200,7 @@ Known gaps:
 - broad automated browser workflow regression suite beyond the first editor
   smoke
 - DOCX semantic heading/style assertions
-- broader automated table-cell property-panel regression coverage beyond the
+- broader automated flow-table-cell property-panel regression coverage beyond the
   row/column smoke path
 - broader real-font visual parity checks beyond width/pagination drift
 

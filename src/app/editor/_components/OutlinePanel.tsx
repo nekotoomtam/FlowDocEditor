@@ -16,7 +16,7 @@ function getParaText(node: LayoutNode): string {
 }
 
 function getTableSize(node: LayoutNode): string {
-  if (node.type !== "table" && node.type !== "flow-table") return ""
+  if (node.type !== "flow-table") return ""
   return `${node.rowIds.length}×${node.columns.length}`
 }
 
@@ -393,15 +393,6 @@ function OutlineNode({
   if (node.type === "toc") {
     return (
       <NodeRow icon="☰" label="สารบัญ" depth={depth} nodeId={nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
-        reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder} />
-    )
-  }
-
-  if (node.type === "table") {
-    return (
-      <NodeRow icon="⊞" label={`ตาราง ${getTableSize(node)}`} depth={depth} nodeId={nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder} />

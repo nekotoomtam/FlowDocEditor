@@ -1,5 +1,4 @@
 import type { BodyNode, DocumentSection, FlowRowNode, FlowStackNode, FlowTableCellNode, FlowTableNode, LayoutNode, RowNode, StackNode, TocNode } from "../schema"
-import type { TableNode, TableCellNode } from "../schema"
 import { DEFAULT_STACK_MIN_HEIGHT } from "../document/defaults"
 import { resolveFlowTableGrid } from "../document/flowTableGrid"
 import {
@@ -138,9 +137,6 @@ function flowNode(
         height: measured.height,
         children: [],
       }
-    }
-    case "table": {
-      return flowTable(section, node as unknown as TableNode, x, y, width, measurer, wordBreaker)
     }
     case "flow-table": {
       return flowFlowTable(section, node as unknown as FlowTableNode, x, y, width, measurer, wordBreaker)
@@ -366,63 +362,7 @@ function flowFlowRow(
 
 // ─── Table Layout ─────────────────────────────────────────────────────────────
 
-// สร้าง map จาก cellId → { rowIdx, colStart }
-// โดย resolve occupancy จาก rowspan ของ row ก่อนหน้า
-function buildColStartMap(table: TableNode): Map<string, { rowIdx: number; colStart: number }> {
-  const colCount = table.columns.length
-  const occupiedCols: Set<number>[] = Array.from(
-    { length: table.rowIds.length },
-    () => new Set<number>(),
-  )
-  const result = new Map<string, { rowIdx: number; colStart: number }>()
-
-  table.rowIds.forEach((rowId, rowIdx) => {
-    const rowNode = table.nodes[rowId]
-    if (rowNode?.type !== "table-row") return
-
-    let colCursor = 0
-    rowNode.cellIds.forEach((cellId) => {
-      while (colCursor < colCount && occupiedCols[rowIdx].has(colCursor)) colCursor++
-      if (colCursor >= colCount) return
-
-      const cellNode = table.nodes[cellId]
-      if (cellNode?.type !== "table-cell") return
-
-      const colspan = cellNode.props.colspan ?? 1
-      const rowspan = cellNode.props.rowspan ?? 1
-
-      result.set(cellId, { rowIdx, colStart: colCursor })
-
-      for (let dr = 1; dr < rowspan; dr++) {
-        for (let dc = 0; dc < colspan; dc++) {
-          if (rowIdx + dr < table.rowIds.length) {
-            occupiedCols[rowIdx + dr].add(colCursor + dc)
-          }
-        }
-      }
-
-      colCursor += colspan
-    })
-  })
-
-  return result
-}
-
-function resolveTableCellWidth(
-  cellNode: TableCellNode,
-  colStart: number,
-  colWidths: number[],
-): { cellWidth: number; padding: number; innerWidth: number } {
-  const colspan = cellNode.props.colspan ?? 1
-  const colEnd = Math.min(colStart + colspan - 1, colWidths.length - 1)
-  const cellWidth = colWidths.slice(colStart, colEnd + 1).reduce((s, w) => s + w, 0)
-  const padding = cellNode.props.padding
-    ? toAbstractUnit(cellNode.props.padding.value, cellNode.props.padding.unit)
-    : 0
-  return { cellWidth, padding, innerWidth: Math.max(0, cellWidth - padding * 2) }
-}
-
-function resolveTableColumnWidths(table: TableNode, availableWidth: number): number[] {
+function resolveTableColumnWidths(table: FlowTableNode, availableWidth: number): number[] {
   const rawWidths = table.columns.map((col) =>
     toAbstractUnit(col.width.value, col.width.unit),
   )
@@ -497,7 +437,7 @@ function flowFlowTable(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
 ): FlowBox {
-  const colWidths = resolveTableColumnWidths(table as unknown as TableNode, width)
+  const colWidths = resolveTableColumnWidths(table, width)
   const grid = resolveFlowTableGrid(table)
   const placementByCellId = new Map(grid.placements.map((placement) => [placement.cellId, placement]))
 
@@ -607,154 +547,6 @@ function flowFlowTable(
   return {
     nodeId: table.id,
     nodeType: "flow-table",
-    x,
-    y,
-    width,
-    height: cursorY - y,
-    children: rowBoxes,
-  }
-}
-
-function measureTableCellHeight(
-  cellNode: TableCellNode,
-  table: TableNode,
-  innerWidth: number,
-  measurer: TextMeasurer,
-  wordBreaker: WordBreaker,
-): number {
-  let h = 0
-  cellNode.childIds.forEach((childId) => {
-    const child = table.nodes[childId]
-    if (!child) return
-    if (child.type === "paragraph") h += measureParagraph(child, innerWidth, measurer, wordBreaker).totalHeight
-    else if (child.type === "spacer") h += child.props.height
-  })
-  return h
-}
-
-function flowTable(
-  section: DocumentSection,
-  table: TableNode,
-  x: number,
-  y: number,
-  width: number,
-  measurer: TextMeasurer,
-  wordBreaker: WordBreaker = defaultWordBreaker,
-): FlowBox {
-  const colWidths = resolveTableColumnWidths(table, width)
-  const cellPositions = buildColStartMap(table)
-
-  // ─── Pass 1: measure row heights from rowspan=1 cells ────────────────────────
-
-  const rowHeights: number[] = table.rowIds.map((rowId, rowIdx) => {
-    const rowNode = table.nodes[rowId]
-    if (rowNode?.type !== "table-row") return 0
-
-    let rowHeight = rowNode.props.height
-      ? toAbstractUnit(rowNode.props.height.value, rowNode.props.height.unit)
-      : 0
-
-    rowNode.cellIds.forEach((cellId) => {
-      const pos = cellPositions.get(cellId)
-      if (!pos || pos.rowIdx !== rowIdx) return
-
-      const cellNode = table.nodes[cellId]
-      if (cellNode?.type !== "table-cell") return
-      if ((cellNode.props.rowspan ?? 1) > 1) return
-
-      const { padding, innerWidth } = resolveTableCellWidth(cellNode, pos.colStart, colWidths)
-      rowHeight = Math.max(rowHeight, measureTableCellHeight(cellNode, table, innerWidth, measurer, wordBreaker) + padding * 2)
-    })
-
-    return rowHeight
-  })
-
-  // ─── Pass 2: rowspan > 1 — distribute extra height to last row of span ───────
-
-  for (const [cellId, pos] of cellPositions) {
-    const cellNode = table.nodes[cellId]
-    if (cellNode?.type !== "table-cell") continue
-    const rowspan = cellNode.props.rowspan ?? 1
-    if (rowspan <= 1) continue
-
-    const { padding, innerWidth } = resolveTableCellWidth(cellNode, pos.colStart, colWidths)
-    const cellNeedH = measureTableCellHeight(cellNode, table, innerWidth, measurer, wordBreaker) + padding * 2
-    const spannedH = rowHeights.slice(pos.rowIdx, pos.rowIdx + rowspan).reduce((s, h) => s + h, 0)
-    if (cellNeedH > spannedH) {
-      rowHeights[pos.rowIdx + rowspan - 1] += cellNeedH - spannedH
-    }
-  }
-
-  // ─── Pass 3: place rows and cells ────────────────────────────────────────────
-
-  let cursorY = y
-  const rowBoxes: FlowBox[] = []
-
-  table.rowIds.forEach((rowId, rowIdx) => {
-    const rowNode = table.nodes[rowId]
-    if (rowNode?.type !== "table-row") return
-
-    const rowHeight = rowHeights[rowIdx] ?? 0
-    const cellBoxes: FlowBox[] = []
-
-    rowNode.cellIds.forEach((cellId) => {
-      const pos = cellPositions.get(cellId)
-      if (!pos || pos.rowIdx !== rowIdx) return
-
-      const cellNode = table.nodes[cellId]
-      if (cellNode?.type !== "table-cell") return
-
-      const rowspan = cellNode.props.rowspan ?? 1
-      const { cellWidth, padding, innerWidth } = resolveTableCellWidth(cellNode, pos.colStart, colWidths)
-      const cellHeight = rowHeights.slice(rowIdx, rowIdx + rowspan).reduce((s, h) => s + h, 0)
-      const cellX = x + colWidths.slice(0, pos.colStart).reduce((s, w) => s + w, 0)
-
-      let childCursorY = cursorY + padding
-      const childBoxes: FlowBox[] = []
-
-      cellNode.childIds.forEach((childId) => {
-        const child = table.nodes[childId]
-        if (!child) return
-        const childBox = flowNode(
-          section, child as LayoutNode,
-          cellX + padding, childCursorY,
-          innerWidth, measurer, undefined, wordBreaker,
-        )
-        childBoxes.push(childBox)
-        childCursorY = childBox.y + childBox.height
-      })
-
-      // Flow measurement treats table cells as stack-like containers: cells own
-      // child flow boxes and participate in row height math. Pagination later
-      // emits these boxes as PageFragment nodeType="table-cell" so renderer,
-      // drift/debug, and editor selection use table-cell identity.
-      cellBoxes.push({
-        nodeId: cellId,
-        nodeType: "stack",
-        x: cellX,
-        y: cursorY,
-        width: cellWidth,
-        height: cellHeight,
-        children: childBoxes,
-      })
-    })
-
-    rowBoxes.push({
-      nodeId: rowId,
-      nodeType: "row",
-      x,
-      y: cursorY,
-      width,
-      height: rowHeight,
-      children: cellBoxes,
-    })
-
-    cursorY += rowHeight
-  })
-
-  return {
-    nodeId: table.id,
-    nodeType: "table",
     x,
     y,
     width,

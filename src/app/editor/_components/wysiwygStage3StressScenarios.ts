@@ -1,5 +1,5 @@
 import { pt } from "@/schema"
-import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode, TableNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode } from "@/schema"
 
 export const WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM = "flowdocTestScenario"
 export const WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID = "wysiwyg-stage3-boundary"
@@ -164,8 +164,8 @@ function downstreamParagraph(index: number): ParagraphNode {
   )
 }
 
-function stressTable(): TableNode {
-  const nodes: TableNode["nodes"] = {}
+function stressTable(): FlowTableNode {
+  const nodes: FlowTableNode["nodes"] = {}
   const rowIds: string[] = []
   for (let rowIndex = 0; rowIndex < 5; rowIndex += 1) {
     const cellIds: string[] = []
@@ -184,17 +184,22 @@ function stressTable(): TableNode {
           : `Dense cell ${rowIndex + 1}.${colIndex + 1} ${"layout text ".repeat(8)}`,
         { fontSize: pt(9), lineHeight: 1.2, spacingAfter: pt(0) },
       )
-      nodes[cellId] = { id: cellId, type: "table-cell", props: { padding: pt(3) }, childIds: [paragraphId] }
+      nodes[cellId] = {
+        id: cellId,
+        type: "flow-table-cell",
+        props: { box: { padding: { top: pt(3), right: pt(3), bottom: pt(3), left: pt(3) } } },
+        childIds: [paragraphId],
+      }
       cellIds.push(cellId)
     }
     const rowId = `stage3-table-row${rowIndex}`
-    nodes[rowId] = { id: rowId, type: "table-row", props: {}, cellIds }
+    nodes[rowId] = { id: rowId, type: "flow-table-row", props: {}, cellIds }
     rowIds.push(rowId)
   }
 
   return {
     id: "stage3-downstream-table",
-    type: "table",
+    type: "flow-table",
     props: { headerRowCount: 1 },
     columns: [{ width: pt(451) }],
     rowIds,

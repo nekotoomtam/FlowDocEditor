@@ -50,8 +50,8 @@ Users should be able to:
   same section body. It mutates only the logical `body.childIds` order through a
   core document operation.
 - A six-dot grip on a direct body-child outline row is the drag affordance for
-  this reorder. Nested outline nodes, stack children, table/flow-table rows and
-  cells, canvas row handles, and cross-section reorder remain out of scope.
+  this reorder. Nested outline nodes, stack children, flow-table rows and cells,
+  canvas row handles, and cross-section reorder remain out of scope.
 - During outline reorder, the editor should show a custom drag ghost containing
   the dragged row icon and label, dim the source row as an in-place placeholder,
   and highlight the active target row/drop edge. The ghost is editor-only
@@ -67,7 +67,7 @@ Users should be able to:
 - Single-clicking a normal body paragraph enters or prepares paragraph editing
   according to the current editor mode.
 - Single-clicking rendered content inside a table cell selects the parent
-  `table-cell`, not only the internal paragraph.
+  `flow-table-cell`, not only the internal paragraph.
 - Structural containers such as rows, stacks, tables, table rows, and table cells
   should be selectable when their properties are editable.
 - Flow Table cell hit targets take priority over row chrome. `flow-table-row`
@@ -192,10 +192,10 @@ Paragraph box styling is defined in
   deferred to a more explicit command or the WYSIWYG track.
 - Structural Backspace merge should keep the user in an active textarea when
   possible and must not reuse stale SVG paragraph snapshots as the edit visual.
-- Backspace at the true start of a table-cell paragraph should not call the
+- Backspace at the true start of a flow-table-cell paragraph should not call the
   body-paragraph merge operation.
-- When the flagged WYSIWYG text engine is enabled, paragraphs inside `table-cell`
-  and `flow-table-cell` should use the same active paragraph text-engine path as
+- When the flagged WYSIWYG text engine is enabled, paragraphs inside
+  `flow-table-cell` should use the same active paragraph text-engine path as
   body paragraphs. Table-cell boundary Backspace remains table-specific.
 
 ## Undo/Redo Rules

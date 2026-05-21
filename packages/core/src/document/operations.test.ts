@@ -6,17 +6,12 @@ import type {
   FlowTableRowNode,
   LayoutNode,
   ParagraphNode,
-  TableCellNode,
-  TableNode,
-  TableRowNode,
 } from "../schema"
 import { pt } from "../schema"
 import { assertDocument } from "./assert"
 import { resolveFlowTableGrid } from "./flowTableGrid"
 import {
   applyPlacementOperation,
-  addTableColumn,
-  addTableRow,
   addFlowTableColumn,
   addFlowTableRow,
   addFlowStackColumn,
@@ -25,11 +20,10 @@ import {
   canRemoveFlowTableRow,
   deleteNode,
   mergeParagraphWithPrevious,
-  removeTableColumn,
-  removeTableRow,
   removeFlowTableColumn,
   removeFlowTableRow,
   reorderBodyChild,
+  resizeFlowTableColumnPair,
   resolveFlowTableCellMergeTarget,
   splitParagraphAtIndex,
   updateFlowTableCellSpan,
@@ -81,24 +75,6 @@ function makeDoc(nodes: Record<string, LayoutNode>, childIds: string[]): Documen
   }
 }
 
-function makeTableDoc(paragraph: ParagraphNode): DocumentNode {
-  const cell: TableCellNode = { id: "cell", type: "table-cell", props: {}, childIds: [paragraph.id] }
-  const row: TableRowNode = { id: "row", type: "table-row", props: {}, cellIds: [cell.id] }
-  const table: TableNode = {
-    id: "table",
-    type: "table",
-    props: {},
-    columns: [{ width: pt(200) }],
-    rowIds: [row.id],
-    nodes: {
-      [row.id]: row,
-      [cell.id]: cell,
-      [paragraph.id]: paragraph,
-    },
-  }
-  return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
-}
-
 function makeFlowTableDoc(paragraph: ParagraphNode): DocumentNode {
   const cell: FlowTableCellNode = { id: "flow-cell", type: "flow-table-cell", props: {}, childIds: [paragraph.id] }
   const row: FlowTableRowNode = { id: "flow-row", type: "flow-table-row", props: {}, cellIds: [cell.id] }
@@ -115,52 +91,6 @@ function makeFlowTableDoc(paragraph: ParagraphNode): DocumentNode {
     },
   }
   return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
-}
-
-function makeGridTableDoc(options: {
-  columnWidths?: number[]
-  rows?: string[][]
-  headerRowCount?: number
-} = {}): DocumentNode {
-  const rows = options.rows ?? [
-    ["A", "B", "C"],
-    ["D", "E", "F"],
-    ["G", "H", "I"],
-  ]
-  const columnWidths = options.columnWidths ?? rows[0].map(() => 100)
-  const tableNodes: TableNode["nodes"] = {}
-  const rowIds: string[] = []
-
-  rows.forEach((rowText, rowIndex) => {
-    const cellIds: string[] = []
-    rowText.forEach((text, columnIndex) => {
-      const paragraph = makeParagraph(`p-${rowIndex}-${columnIndex}`, [
-        { id: `t-${rowIndex}-${columnIndex}`, type: "text", text },
-      ])
-      const cell: TableCellNode = {
-        id: `cell-${rowIndex}-${columnIndex}`,
-        type: "table-cell",
-        props: {},
-        childIds: [paragraph.id],
-      }
-      tableNodes[paragraph.id] = paragraph
-      tableNodes[cell.id] = cell
-      cellIds.push(cell.id)
-    })
-    const row: TableRowNode = { id: `row-${rowIndex}`, type: "table-row", props: {}, cellIds }
-    tableNodes[row.id] = row
-    rowIds.push(row.id)
-  })
-
-  const table: TableNode = {
-    id: "table",
-    type: "table",
-    props: options.headerRowCount != null ? { headerRowCount: options.headerRowCount } : {},
-    columns: columnWidths.map((width) => ({ width: pt(width) })),
-    rowIds,
-    nodes: tableNodes,
-  }
-  return makeDoc({ table: table as unknown as LayoutNode }, ["table"])
 }
 
 function makeGridFlowTableDoc(options: {
@@ -239,16 +169,8 @@ function makeSpannedFlowTableDoc(): DocumentNode {
   return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
 }
 
-function getTable(doc: DocumentNode): TableNode {
-  return doc.document.sections[0].nodes.table as unknown as TableNode
-}
-
 function getFlowTable(doc: DocumentNode): FlowTableNode {
   return doc.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
-}
-
-function tableWidth(table: TableNode): number {
-  return table.columns.reduce((sum, column) => sum + column.width.value, 0)
 }
 
 function flowTableWidth(table: FlowTableNode): number {
@@ -339,17 +261,6 @@ describe("paragraph text operations", () => {
 
     expect(result).toBe(doc)
     expect(result.document.sections[0].nodes.p1).toEqual(p)
-  })
-
-  it("updates plain text paragraph inside a table", () => {
-    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Cell text" }])
-    const result = updateParagraphText(makeTableDoc(p), "p1", "Updated cell")
-    const table = result.document.sections[0].nodes.table as unknown as TableNode
-    const updated = table.nodes.p1
-
-    expect(updated.type).toBe("paragraph")
-    if (updated.type !== "paragraph") return
-    expect(paragraphText(updated)).toBe("Updated cell")
   })
 
   it("updates plain text paragraph inside a flow-table", () => {
@@ -499,13 +410,13 @@ describe("paragraph box style operations", () => {
     expect(updated.props.box).toBeUndefined()
   })
 
-  it("updates paragraph box style inside a table cell", () => {
+  it("updates paragraph box style inside a flow-table cell", () => {
     const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Cell" }])
-    const result = updateParagraphBoxStyle(makeTableDoc(p), "p1", {
+    const result = updateParagraphBoxStyle(makeFlowTableDoc(p), "p1", {
       fill: "E0F2FE",
       padding: { left: pt(9) },
     })
-    const table = result.document.sections[0].nodes.table as unknown as TableNode
+    const table = result.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
     const updated = table.nodes.p1
 
     expect(() => assertDocument(result)).not.toThrow()
@@ -594,12 +505,12 @@ describe("field reference operations", () => {
     })
   })
 
-  it("updates fieldRef metadata inside a table-cell paragraph", () => {
+  it("updates fieldRef metadata inside a flow-table-cell paragraph", () => {
     const p = makeParagraph("p1", [
       { id: "f1", type: "fieldRef", key: "line.sku", label: "SKU", fallback: "N/A" },
     ])
-    const updated = updateFieldRefInline(makeTableDoc(p), "f1", { label: "Item SKU" })
-    const table = updated.document.sections[0].nodes.table as unknown as TableNode
+    const updated = updateFieldRefInline(makeFlowTableDoc(p), "f1", { label: "Item SKU" })
+    const table = updated.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
     const paragraph = table.nodes.p1
 
     expect(() => assertDocument(updated)).not.toThrow()
@@ -644,10 +555,10 @@ describe("field reference operations", () => {
     expect(paragraph.children[2]).toMatchObject({ id: "t2", type: "text", text: " due" })
   })
 
-  it("inserts a fieldRef inline into a table-cell paragraph", () => {
+  it("inserts a fieldRef inline into a flow-table-cell paragraph", () => {
     const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "SKU: " }])
     const updated = applyPlacementOperation(
-      makeTableDoc(p),
+      makeFlowTableDoc(p),
       "section",
       { kind: "insert-inline-field", paragraphId: "p1", index: 1 },
       {
@@ -655,7 +566,7 @@ describe("field reference operations", () => {
         field: { key: "line.sku", label: "SKU", fallback: "N/A", fieldType: "text" },
       },
     )
-    const table = updated.document.sections[0].nodes.table as unknown as TableNode
+    const table = updated.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
     const paragraph = table.nodes.p1
 
     expect(() => assertDocument(updated)).not.toThrow()
@@ -1181,151 +1092,6 @@ describe("flow-row / flow-stack operations", () => {
   })
 })
 
-describe("table structural operations", () => {
-  it("adds a row above the first row and preserves the table cell shape", () => {
-    const doc = makeGridTableDoc({
-      columnWidths: [120, 80],
-      rows: [
-        ["A", "B"],
-        ["C", "D"],
-      ],
-    })
-    const updated = addTableRow(doc, "table", -1)
-    const table = getTable(updated)
-    const inserted = table.nodes[table.rowIds[0]]
-
-    expect(() => assertDocument(updated)).not.toThrow()
-    expect(table.rowIds).toHaveLength(3)
-    expect(inserted.type).toBe("table-row")
-    if (inserted.type !== "table-row") return
-    expect(inserted.cellIds).toHaveLength(2)
-
-    inserted.cellIds.forEach((cellId) => {
-      const cell = table.nodes[cellId]
-      expect(cell.type).toBe("table-cell")
-      if (cell.type !== "table-cell") return
-      expect(cell.childIds).toHaveLength(1)
-      const paragraph = table.nodes[cell.childIds[0]]
-      expect(paragraph.type).toBe("paragraph")
-      if (paragraph.type !== "paragraph") return
-      expect(paragraphText(paragraph)).toBe("")
-    })
-  })
-
-  it("removes a row subtree and clamps header rows to the remaining row count", () => {
-    const doc = makeGridTableDoc({ headerRowCount: 3 })
-    const before = getTable(doc)
-    const removedRow = before.nodes[before.rowIds[2]]
-    expect(removedRow.type).toBe("table-row")
-    if (removedRow.type !== "table-row") return
-    const removedIds = new Set<string>([removedRow.id])
-    removedRow.cellIds.forEach((cellId) => {
-      removedIds.add(cellId)
-      const cell = before.nodes[cellId]
-      if (cell.type === "table-cell") cell.childIds.forEach((childId) => { removedIds.add(childId) })
-    })
-
-    const updated = removeTableRow(doc, "table", 2)
-    const table = getTable(updated)
-
-    expect(() => assertDocument(updated)).not.toThrow()
-    expect(table.rowIds).toHaveLength(2)
-    expect(table.props.headerRowCount).toBe(2)
-    removedIds.forEach((id) => {
-      expect(table.nodes[id]).toBeUndefined()
-    })
-  })
-
-  it("does not delete the last table row", () => {
-    const doc = makeGridTableDoc({
-      columnWidths: [100],
-      rows: [["Only cell"]],
-      headerRowCount: 1,
-    })
-    const updated = removeTableRow(doc, "table", 0)
-    const table = getTable(updated)
-
-    expect(() => assertDocument(updated)).not.toThrow()
-    expect(table.rowIds).toHaveLength(1)
-    expect(table.props.headerRowCount).toBe(1)
-  })
-
-  it("adds a column to the left of the first column by splitting the nearest width", () => {
-    const doc = makeGridTableDoc({
-      columnWidths: [120, 80],
-      rows: [
-        ["A", "B"],
-        ["C", "D"],
-      ],
-    })
-    const before = getTable(doc)
-    const updated = addTableColumn(doc, "table", -1)
-    const table = getTable(updated)
-    const firstRow = table.nodes[table.rowIds[0]]
-
-    expect(() => assertDocument(updated)).not.toThrow()
-    expect(table.columns.map((column) => column.width.value)).toEqual([60, 60, 80])
-    expect(tableWidth(table)).toBe(tableWidth(before))
-    expect(firstRow.type).toBe("table-row")
-    if (firstRow.type !== "table-row") return
-    expect(firstRow.cellIds).toHaveLength(3)
-
-    const insertedCell = table.nodes[firstRow.cellIds[0]]
-    expect(insertedCell.type).toBe("table-cell")
-    if (insertedCell.type !== "table-cell") return
-    const insertedParagraph = table.nodes[insertedCell.childIds[0]]
-    expect(insertedParagraph.type).toBe("paragraph")
-    if (insertedParagraph.type !== "paragraph") return
-    expect(paragraphText(insertedParagraph)).toBe("")
-  })
-
-  it("removes a column subtree and transfers its width to the left neighbor", () => {
-    const doc = makeGridTableDoc({ columnWidths: [120, 80, 60] })
-    const before = getTable(doc)
-    const removedIds = new Set<string>()
-    before.rowIds.forEach((rowId) => {
-      const row = before.nodes[rowId]
-      if (row.type !== "table-row") return
-      const cellId = row.cellIds[1]
-      removedIds.add(cellId)
-      const cell = before.nodes[cellId]
-      if (cell.type === "table-cell") cell.childIds.forEach((childId) => { removedIds.add(childId) })
-    })
-
-    const updated = removeTableColumn(doc, "table", 1)
-    const table = getTable(updated)
-
-    expect(() => assertDocument(updated)).not.toThrow()
-    expect(table.columns.map((column) => column.width.value)).toEqual([200, 60])
-    expect(tableWidth(table)).toBe(tableWidth(before))
-    table.rowIds.forEach((rowId) => {
-      const row = table.nodes[rowId]
-      expect(row.type).toBe("table-row")
-      if (row.type !== "table-row") return
-      expect(row.cellIds).toHaveLength(2)
-    })
-    removedIds.forEach((id) => {
-      expect(table.nodes[id]).toBeUndefined()
-    })
-  })
-
-  it("does not delete the last table column", () => {
-    const doc = makeGridTableDoc({
-      columnWidths: [100],
-      rows: [["Only cell"]],
-    })
-    const updated = removeTableColumn(doc, "table", 0)
-    const table = getTable(updated)
-    const row = table.nodes[table.rowIds[0]]
-
-    expect(() => assertDocument(updated)).not.toThrow()
-    expect(table.columns).toHaveLength(1)
-    expect(row.type).toBe("table-row")
-    if (row.type !== "table-row") return
-    expect(row.cellIds).toHaveLength(1)
-  })
-})
-
 describe("flow-table structural operations", () => {
   it("adds a row above the first row and preserves the flow-table cell shape", () => {
     const doc = makeGridFlowTableDoc({
@@ -1503,6 +1269,22 @@ describe("flow-table structural operations", () => {
     removedIds.forEach((id) => {
       expect(table.nodes[id]).toBeUndefined()
     })
+  })
+
+  it("resizes a flow-table column pair while preserving total table width and grid shape", () => {
+    const doc = makeSpannedFlowTableDoc()
+    const before = getFlowTable(doc)
+    const updated = resizeFlowTableColumnPair(doc, "flow-table", 0, 140, 60)
+    const table = getFlowTable(updated)
+    const grid = resolveFlowTableGrid(table)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns.map((column) => column.width.value)).toEqual([140, 60, 60])
+    expect(flowTableWidth(table)).toBe(flowTableWidth(before))
+    expect(grid.slots).toEqual([
+      ["flow-cell-span", "flow-cell-span", "flow-cell-top-right"],
+      ["flow-cell-span", "flow-cell-span", "flow-cell-bottom-right"],
+    ])
   })
 
   it("removes a row inside a flow-table rowspan by shrinking the covering cell", () => {

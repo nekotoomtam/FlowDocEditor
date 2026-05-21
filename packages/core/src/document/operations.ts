@@ -11,9 +11,6 @@ import type {
   ParagraphBoxPadding,
   ParagraphBoxStyle,
   ParagraphNode,
-  TableNode,
-  TableRowNode,
-  TableCellNode,
   TextRun,
   UnitValue,
 } from "../schema"
@@ -29,11 +26,8 @@ import {
   getEqualWidthShares,
   DEFAULT_STACK_MIN_HEIGHT,
   createDefaultFlowTable,
-  createDefaultTable,
   createFlowTableCellNode,
   createFlowTableRowNode,
-  createTableCellNode,
-  createTableRowNode,
   createFieldRefInline,
 } from "./defaults"
 import { tryResolveFlowTableGrid } from "./flowTableGrid"
@@ -71,6 +65,8 @@ export interface FlowTableCellMergeTarget {
   cellId: string
   changes: FlowTableCellSpanChanges
 }
+
+const MIN_TABLE_COLUMN_RESIZE_WIDTH_PT = 24
 
 // ─── Tree Helpers ──────────────────────────────────────────────────────────────
 
@@ -337,13 +333,6 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
     if (source.blockType === "flow-columns") {
       return createPaletteFlowColumnsSubtree(source, 2)
     }
-    if (source.blockType === "table") {
-      const table = createDefaultTable(
-        clampPaletteTableAxis(source.tableSize?.rows),
-        clampPaletteTableAxis(source.tableSize?.columns),
-      )
-      return { insertId: table.id, newNodes: { [table.id]: table as unknown as LayoutNode } }
-    }
     if (source.blockType === "flow-table") {
       const table = createDefaultFlowTable(
         clampPaletteTableAxis(source.tableSize?.rows),
@@ -510,25 +499,7 @@ function collectSubtreeIds(nodes: Nodes, rootId: string): string[] {
   return result
 }
 
-// ─── Table Helpers ────────────────────────────────────────────────────────────
-
-function updateTableInSection(
-  doc: DocumentNode,
-  tableId: string,
-  updater: (table: TableNode) => TableNode,
-): DocumentNode {
-  for (let si = 0; si < doc.document.sections.length; si++) {
-    const section = doc.document.sections[si]
-    const tableNode = section.nodes[tableId]
-    if (tableNode?.type !== "table") continue
-    const newTable = updater(tableNode as unknown as TableNode)
-    const newSections = doc.document.sections.map((s, i) =>
-      i === si ? { ...s, nodes: { ...s.nodes, [tableId]: newTable as unknown as LayoutNode } } : s,
-    )
-    return { ...doc, document: { ...doc.document, sections: newSections } }
-  }
-  return doc
-}
+// ─── Flow Table Helpers ───────────────────────────────────────────────────────
 
 function updateFlowTableInSection(
   doc: DocumentNode,
@@ -552,6 +523,33 @@ function updateFlowTableInSection(
 function unitWidthToPt(width: { value: number; unit: "pt" | "mm" } | undefined): number {
   if (!width) return 0
   return width.unit === "mm" ? width.value * 72 / 25.4 : width.value
+}
+
+function resolveResizedColumnPair(
+  leftWidthPt: number,
+  rightWidthPt: number,
+  currentLeftWidthPt: number,
+  currentRightWidthPt: number,
+  minWidthPt = MIN_TABLE_COLUMN_RESIZE_WIDTH_PT,
+): { leftWidthPt: number; rightWidthPt: number } | null {
+  const pairTotal = currentLeftWidthPt + currentRightWidthPt
+  if (!Number.isFinite(pairTotal) || pairTotal <= 0) return null
+
+  const safeMinWidth = Math.min(
+    Math.max(0.01, minWidthPt),
+    pairTotal / 2,
+  )
+  const requestedLeft = Number.isFinite(leftWidthPt) && Number.isFinite(rightWidthPt) && leftWidthPt + rightWidthPt > 0
+    ? leftWidthPt
+    : currentLeftWidthPt
+  const nextLeft = Math.max(safeMinWidth, Math.min(pairTotal - safeMinWidth, requestedLeft))
+  const roundedLeft = Math.round(nextLeft * 100) / 100
+  const roundedRight = Math.round((pairTotal - roundedLeft) * 100) / 100
+
+  return {
+    leftWidthPt: roundedLeft,
+    rightWidthPt: roundedRight,
+  }
 }
 
 function isSpanFreeFlowTable(table: FlowTableNode): boolean {
@@ -1063,8 +1061,8 @@ function insertInlineField(
       return { ...doc, document: { ...doc.document, sections: newSections } }
     }
     for (const [tableId, candidate] of Object.entries(section.nodes)) {
-      if (candidate.type !== "table" && candidate.type !== "flow-table") continue
-      const table = candidate as unknown as TableNode | FlowTableNode
+      if (candidate.type !== "flow-table") continue
+      const table = candidate as unknown as FlowTableNode
       const inner = table.nodes[paragraphId]
       if (inner?.type !== "paragraph") continue
       const insertAt = Math.min(Math.max(0, index), inner.children.length)
@@ -1101,10 +1099,10 @@ export function updateNodeProps(
       )
       return { ...doc, document: { ...doc.document, sections: newSections } }
     }
-    // search inside tables
+    // search inside flow tables
     for (const [tableId, n] of Object.entries(section.nodes)) {
-      if (n.type !== "table" && n.type !== "flow-table") continue
-      const table = n as unknown as TableNode | FlowTableNode
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
       const inner = table.nodes[nodeId]
       if (inner == null) continue
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1288,8 +1286,8 @@ export function updateParagraphBoxStyle(
     }
 
     for (const [tableId, n] of Object.entries(section.nodes)) {
-      if (n.type !== "table" && n.type !== "flow-table") continue
-      const table = n as unknown as TableNode | FlowTableNode
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
       const inner = table.nodes[paragraphId]
       if (inner?.type !== "paragraph") continue
       const updated = applyBoxStyleChanges(inner, changes)
@@ -1423,10 +1421,10 @@ export function updateParagraphText(
       )
       return { ...doc, document: { ...doc.document, sections: newSections } }
     }
-    // search inside tables
+    // search inside flow tables
     for (const [tableId, n] of Object.entries(section.nodes)) {
-      if (n.type !== "table" && n.type !== "flow-table") continue
-      const table = n as unknown as TableNode | FlowTableNode
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
       const inner = table.nodes[nodeId]
       if (inner?.type !== "paragraph") continue
       if (!isPlainTextParagraph(inner)) continue
@@ -1459,8 +1457,8 @@ export function updateFieldRefInline(
         return { ...doc, document: { ...doc.document, sections: newSections } }
       }
 
-      if (node.type !== "table" && node.type !== "flow-table") continue
-      const table = node as unknown as TableNode | FlowTableNode
+      if (node.type !== "flow-table") continue
+      const table = node as unknown as FlowTableNode
       for (const [innerId, inner] of Object.entries(table.nodes)) {
         if (inner.type !== "paragraph") continue
         const updated = updateFieldRefInParagraph(inner, fieldRefId, changes)
@@ -1578,152 +1576,6 @@ export function mergeParagraphWithPrevious(
     }
   }
   return null
-}
-
-// ─── Table Structural Mutations ───────────────────────────────────────────────
-
-export function addTableRow(doc: DocumentNode, tableId: string, afterIndex?: number): DocumentNode {
-  return updateTableInSection(doc, tableId, (table) => {
-    const colCount = table.columns.length
-    const internalNodes = { ...table.nodes }
-    const cellIds: string[] = []
-    for (let c = 0; c < colCount; c++) {
-      const para = createParagraphNode("", { spacingBefore: pt(2), spacingAfter: pt(2) })
-      const cell = createTableCellNode([para.id])
-      internalNodes[para.id] = para
-      internalNodes[cell.id] = cell
-      cellIds.push(cell.id)
-    }
-    const row = createTableRowNode(cellIds)
-    internalNodes[row.id] = row
-    const newRowIds = [...table.rowIds]
-    if (afterIndex !== undefined) newRowIds.splice(afterIndex + 1, 0, row.id)
-    else newRowIds.push(row.id)
-    return { ...table, rowIds: newRowIds, nodes: internalNodes }
-  })
-}
-
-export function removeTableRow(doc: DocumentNode, tableId: string, rowIndex: number): DocumentNode {
-  return updateTableInSection(doc, tableId, (table) => {
-    if (table.rowIds.length <= 1) return table
-    const rowId = table.rowIds[rowIndex]
-    if (!rowId) return table
-    const internalNodes = { ...table.nodes }
-    const row = internalNodes[rowId] as TableRowNode | undefined
-    if (row) {
-      row.cellIds.forEach((cellId) => {
-        const cell = internalNodes[cellId] as TableCellNode | undefined
-        if (cell) {
-          cell.childIds.forEach((id) => { delete internalNodes[id] })
-          delete internalNodes[cellId]
-        }
-      })
-      delete internalNodes[rowId]
-    }
-    const rowIds = table.rowIds.filter((_, i) => i !== rowIndex)
-    const headerRowCount = table.props.headerRowCount
-    const props = headerRowCount != null && headerRowCount > rowIds.length
-      ? { ...table.props, headerRowCount: rowIds.length }
-      : table.props
-    return { ...table, props, rowIds, nodes: internalNodes }
-  })
-}
-
-export function addTableColumn(doc: DocumentNode, tableId: string, afterColIndex?: number): DocumentNode {
-  return updateTableInSection(doc, tableId, (table) => {
-    const insertAt = afterColIndex != null
-      ? Math.min(Math.max(0, afterColIndex + 1), table.columns.length)
-      : table.columns.length
-    const splitIndex = afterColIndex != null
-      ? Math.min(Math.max(0, afterColIndex), table.columns.length - 1)
-      : table.columns.length - 1
-    const splitWidth = Math.max(24, unitWidthToPt(table.columns[splitIndex]?.width) || 150)
-    const insertedWidth = Math.max(24, splitWidth / 2)
-    const remainingWidth = Math.max(24, splitWidth - insertedWidth)
-
-    const newColumns = table.columns.map((column, index) =>
-      index === splitIndex ? { ...column, width: pt(remainingWidth) } : column,
-    )
-    newColumns.splice(insertAt, 0, { width: pt(insertedWidth) })
-
-    const internalNodes = { ...table.nodes }
-
-    table.rowIds.forEach((rowId) => {
-      const row = internalNodes[rowId] as TableRowNode | undefined
-      if (!row) return
-
-      // หา position ใน cellIds ที่ตรงกับ column insertAt โดยนับ colspan
-      let colCursor = 0
-      let cellInsertIdx = row.cellIds.length
-      for (let i = 0; i < row.cellIds.length; i++) {
-        if (colCursor >= insertAt) { cellInsertIdx = i; break }
-        const cellNode = internalNodes[row.cellIds[i]] as TableCellNode | undefined
-        colCursor += cellNode?.props.colspan ?? 1
-      }
-
-      const para = createParagraphNode("", { spacingBefore: pt(2), spacingAfter: pt(2) })
-      const cell = createTableCellNode([para.id])
-      internalNodes[para.id] = para
-      internalNodes[cell.id] = cell
-      internalNodes[rowId] = {
-        ...row,
-        cellIds: [...row.cellIds.slice(0, cellInsertIdx), cell.id, ...row.cellIds.slice(cellInsertIdx)],
-      }
-    })
-
-    return { ...table, columns: newColumns, nodes: internalNodes }
-  })
-}
-
-export function removeTableColumn(doc: DocumentNode, tableId: string, colIndex: number): DocumentNode {
-  return updateTableInSection(doc, tableId, (table) => {
-    if (table.columns.length <= 1) return table
-    const internalNodes = { ...table.nodes }
-    const removedWidth = unitWidthToPt(table.columns[colIndex]?.width)
-
-    table.rowIds.forEach((rowId) => {
-      const row = internalNodes[rowId] as TableRowNode | undefined
-      if (!row) return
-
-      // ติดตาม column position ด้วย colspan เพื่อหา cell ที่ถูกต้อง
-      let colCursor = 0
-      let removeCellId: string | null = null
-
-      for (const cellId of row.cellIds) {
-        const cellNode = internalNodes[cellId] as TableCellNode | undefined
-        if (!cellNode) { colCursor++; continue }
-        const colspan = cellNode.props.colspan ?? 1
-        if (colCursor <= colIndex && colIndex < colCursor + colspan) {
-          if (colspan > 1) {
-            // ลด colspan แทนการลบ — cell ยังคงอยู่แต่แคบลง
-            internalNodes[cellId] = { ...cellNode, props: { ...cellNode.props, colspan: colspan - 1 } }
-          } else {
-            removeCellId = cellId
-          }
-          break
-        }
-        colCursor += colspan
-      }
-
-      if (removeCellId != null) {
-        const cell = internalNodes[removeCellId] as TableCellNode | undefined
-        if (cell) {
-          cell.childIds.forEach((id) => { delete internalNodes[id] })
-          delete internalNodes[removeCellId]
-        }
-        internalNodes[rowId] = { ...row, cellIds: row.cellIds.filter((id) => id !== removeCellId) }
-      }
-    })
-
-    const columns = table.columns.filter((_, i) => i !== colIndex)
-    if (columns.length > 0 && removedWidth > 0) {
-      const absorbIndex = Math.min(Math.max(0, colIndex - 1), columns.length - 1)
-      const absorbWidth = unitWidthToPt(columns[absorbIndex]?.width)
-      columns[absorbIndex] = { ...columns[absorbIndex], width: pt(absorbWidth + removedWidth) }
-    }
-
-    return { ...table, columns, nodes: internalNodes }
-  })
 }
 
 export function addFlowTableRow(doc: DocumentNode, tableId: string, afterIndex?: number): DocumentNode {
@@ -1937,6 +1789,38 @@ export function removeFlowTableColumn(doc: DocumentNode, tableId: string, colInd
     }
 
     return { ...table, columns, nodes: internalNodes }
+  })
+}
+
+export function resizeFlowTableColumnPair(
+  doc: DocumentNode,
+  tableId: string,
+  leftColIndex: number,
+  leftWidthPt: number,
+  rightWidthPt: number,
+): DocumentNode {
+  return updateFlowTableInSection(doc, tableId, (table) => {
+    const resolved = tryResolveFlowTableGrid(table)
+    if (!resolved.ok) return table
+    const rightColIndex = leftColIndex + 1
+    if (leftColIndex < 0 || rightColIndex >= table.columns.length) return table
+
+    const currentLeftWidth = unitWidthToPt(table.columns[leftColIndex]?.width)
+    const currentRightWidth = unitWidthToPt(table.columns[rightColIndex]?.width)
+    const nextPair = resolveResizedColumnPair(leftWidthPt, rightWidthPt, currentLeftWidth, currentRightWidth)
+    if (!nextPair) return table
+    if (
+      Math.abs(nextPair.leftWidthPt - currentLeftWidth) < 0.01 &&
+      Math.abs(nextPair.rightWidthPt - currentRightWidth) < 0.01
+    ) return table
+
+    const columns = table.columns.map((column, index) => {
+      if (index === leftColIndex) return { ...column, width: pt(nextPair.leftWidthPt) }
+      if (index === rightColIndex) return { ...column, width: pt(nextPair.rightWidthPt) }
+      return column
+    })
+
+    return { ...table, columns }
   })
 }
 

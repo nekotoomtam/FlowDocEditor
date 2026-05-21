@@ -157,20 +157,20 @@ describe("comparePagination", () => {
     expect(gd.pageMovement).toBe(false)
   })
 
-  it("tracks page movement for table-row fragment", () => {
+  it("tracks page movement for flow-table-row fragment", () => {
     const browser = makeDoc([{ pages: [
-      { fragments: [{ nodeId: "tr1", nodeType: "table-row", height: 24 }] },
+      { fragments: [{ nodeId: "tr1", nodeType: "flow-table-row", height: 24 }] },
       { fragments: [] },
     ] }])
     const server = makeDoc([{ pages: [
       { fragments: [] },
-      { fragments: [{ nodeId: "tr1", nodeType: "table-row", height: 24 }] },
+      { fragments: [{ nodeId: "tr1", nodeType: "flow-table-row", height: 24 }] },
     ] }])
     const report = comparePagination(browser, server)
     expect(report.pageBreakChanged).toBe(true)
     const gd = report.geometryDriftMap.get("tr1")!
     expect(gd.pageMovement).toBe(true)
-    expect(gd.nodeType).toBe("table-row")
+    expect(gd.nodeType).toBe("flow-table-row")
   })
 
   it("reports no geometry drift when row matches exactly", () => {

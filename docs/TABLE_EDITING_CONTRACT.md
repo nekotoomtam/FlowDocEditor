@@ -17,61 +17,61 @@ editable document model and editor operations. For page-boundary behavior, use
 
 ## Authored Table Model
 
-Tables are authored data, not computed layout output.
+Tables are authored data, not computed layout output. The active table
+primitive is the `flow-table` node family.
 
-- `table.columns` stores authored column widths.
-- `table.rowIds` stores row order.
-- `table.nodes` owns table rows, cells, and cell child content.
-- `table-cell` nodes are the editable cell containers. Paragraphs inside cells
-  remain normal authored paragraph nodes, but they are scoped to the table.
+- `flow-table.columns` stores authored column widths.
+- `flow-table.rowIds` stores row order.
+- `flow-table.nodes` owns table rows, cells, and cell child content.
+- `flow-table-cell` nodes are the editable cell containers. Paragraphs inside
+  cells remain normal authored paragraph nodes, but they are scoped to the
+  table.
 - `headerRowCount` means the first N rows are header rows for pagination.
 - `allowBreak` belongs to table rows. Omitted means `true` for single-row groups.
 
 Computed values such as page index, rendered cell x/y, split line boundaries,
 and repeated-header placement belong to `PaginatedDocument`, not the table model.
 
-Flow measurement note:
+Fragment identity note:
 
-- During layout measurement, table cells currently use stack-like
-  `FlowBox.nodeType="stack"` container semantics.
-- Pagination converts those cell flow boxes to
-  `PageFragment.nodeType="table-cell"` for renderer/debug/placement identity.
+- Layout and pagination emit table fragments with `flow-table`,
+  `flow-table-row`, and `flow-table-cell` identity.
 - Code that needs rendered or user-visible table identity should use authored
-  `table-cell` nodes or paginated fragments, not infer it from the internal
-  flow-box container detail.
+  `flow-table-cell` nodes or paginated fragments, not infer it from text
+  fragments alone.
 
 ## Editor Selection Rules
 
 The canvas should make the table structure directly editable.
 
 - Single-clicking rendered content inside a cell selects the parent
-  `table-cell`, not the inner paragraph.
+  `flow-table-cell`, not the inner paragraph.
 - Double-clicking a table cell may enter inline edit for the first paragraph in
   that cell.
-- The property panel for `table-cell` is the main surface for cell text and cell
-  props.
+- The property panel for `flow-table-cell` is the main surface for cell text and
+  cell props.
 - Clicking an editable paragraph inside a table cell may enter inline edit in a
   single click while keeping the parent cell selected for the property panel.
 - Flow Table row chrome is visual-only on the canvas until a dedicated row
   handle/gutter exists. Cell hit targets own merged and row-spanning cell areas,
   so lower row fragments must not steal clicks from an overlapping cell or draw
   visible row labels/fills/strokes over that cell area.
-- Paragraphs inside `table-cell` and `flow-table-cell` use the same flagged
-  WYSIWYG text-engine edit lane as body paragraphs. Table-specific boundary
-  rules, including Backspace at the true start of a cell paragraph, remain
-  separate.
-- Active table-cell and flow-table-cell text-engine edits use responsive draft
-  pagination for line-count and page-boundary changes. Same-page row/cell height
-  patching remains guarded so the editor does not show table geometry that the
-  paginator cannot reproduce.
+- Paragraphs inside `flow-table-cell` use the same flagged WYSIWYG text-engine
+  edit lane as body paragraphs. Table-specific boundary rules, including
+  Backspace at the true start of a cell paragraph, remain separate.
+- Active `flow-table-cell` text-engine edits use responsive draft pagination for
+  line-count and page-boundary changes. Same-page row/cell height patching
+  remains guarded so the editor does not show table geometry that the paginator
+  cannot reproduce.
 - Same-page active cell draft lines may render immediately in the text-engine
   layer. Page-boundary cell edits must not reuse the body-paragraph cross-page
-  visual preview; table/flow-table pagination owns the continuation split.
+  visual preview; Flow Table pagination owns the continuation split.
 - Table-aware page-boundary visual preview must pass a separate eligibility
   gate before rendering. The first rendering slice is conservative: it may draw
-  paragraph source/continuation fragments plus visual-only parent table/row/cell
-  chrome for active table-cell edits before settled draft pagination exists. The
-  chrome is non-interactive preview state, not document state. Table/row
+  paragraph source/continuation fragments plus visual-only parent
+  flow-table/row/cell chrome for active cell edits before settled draft
+  pagination exists. The chrome is non-interactive preview state, not document
+  state. Table/row
   structure scaffolds may reserve geometry for this preview but should not paint
   visible fills, strokes, or labels; cell chrome remains visible as the edit
   target. Source-page chrome may extend to the split slice height and shift
@@ -105,31 +105,30 @@ Prop controls should clamp to values the schema accepts:
 
 Table operations must preserve document validity.
 
-- `addTableRow` and `removeTableRow` must preserve table grid invariants and
-  pass `assertDocument`.
-- `addTableColumn` and `removeTableColumn` must preserve table grid invariants
-  and pass `assertDocument`.
+- `addFlowTableRow` and `removeFlowTableRow` must preserve table grid
+  invariants and pass `assertDocument`.
+- `addFlowTableColumn` and `removeFlowTableColumn` must preserve table grid
+  invariants and pass `assertDocument`.
 - Row deletion must keep `headerRowCount` valid by clamping it to the remaining
   row count.
 - Column insertion should keep the total table width stable by splitting the
   target or nearest column width.
 - Column deletion should keep the total table width stable by transferring the
   removed width to a neighboring column.
-- Adding or deleting columns is not an implicit table resize. A future explicit
-  resize interaction should be the only UI action that intentionally changes the
-  total table width.
+- Adding or deleting columns is not an implicit table resize.
+- Explicit internal column-boundary resize updates only the adjacent authored
+  column widths and must preserve the total table width. Outer-edge table width
+  resize is a separate product decision and is not part of this contract slice.
 - Operations that cannot preserve the table grid should no-op or fail clearly
   rather than leaving cleanup work for the UI.
 
 Flow Table C1 operations:
 
-- `flow-table` has separate row/column operations from legacy `table`.
 - C1 supports add/remove row and add/remove column only for span-free Flow
   Tables where every cell has `rowspan=1` and `colspan=1`.
 - If a Flow Table contains any span, C1 structural operations no-op. Span-aware
   row/column edits belong to the later C2 span operation slice.
-- Flow Table row deletion must clamp `headerRowCount` in the same way as legacy
-  table row deletion.
+- Flow Table row deletion must clamp `headerRowCount`.
 - Flow Table column insertion/deletion must preserve total authored table width
   by splitting the target column or transferring removed width to a neighbor.
 
@@ -198,8 +197,8 @@ These authored props directly affect cross-page behavior:
 - `headerRowCount`: header rows repeat on continuation pages where body rows
   continue.
 - `allowBreak=false`: a single-row group should move as a whole when possible.
-- `allowBreak=true` or omitted: a single-row group may split by table-cell
-  paragraph line boundaries.
+- `allowBreak=true` or omitted: a single-row group may split by
+  `flow-table-cell` paragraph line boundaries.
 - `colspan>1` with `rowspan=1` remains in the single-row split lane. The
   spanned cell may split across pages using its full rendered width, while
   shorter sibling cells must not duplicate content on continuation pages.
@@ -211,9 +210,6 @@ These authored props directly affect cross-page behavior:
   `rowspan`/`colspan` geometry keeps original grid/span metadata, and a
   low-capacity rowspan slice may force one content unit with a Flow Table
   warning.
-- Legacy table rowspan-linked groups stay atomic until a separate design accepts
-  the same row-boundary split policy.
-
 Changing these rules requires updating `docs/CROSS_PAGE_BEHAVIOR.md`, adding or
 adjusting fixtures, and keeping the full test suite green.
 
@@ -223,7 +219,7 @@ Any table editing change should check the smallest set that protects the touched
 behavior:
 
 - Core table operation or pagination change:
-  - run the focused `tablePagination.test.ts`
+  - run the focused `flowTablePagination.test.ts`
   - run the full test command for the current shell
 - Editor table interaction change:
   - run type-check for the current shell
@@ -236,10 +232,9 @@ behavior:
 
 - Canvas selection/editing ergonomics for multiple paragraphs inside one table
   cell.
-- Explicit table or column resize UI.
+- Explicit outer-edge table width resize UI.
 - Broader content-mapping controls beyond merge-map-backed shrink/unmerge.
 - True span-origin movement for arbitrary left/up span authoring.
 - More complex Flow Table span interactions beyond the covered mixed
   `rowspan`/`colspan` core pagination cases.
-- Split-at-row-boundary within legacy table rowspan-linked groups.
 - Visual regression tests for editor/PDF parity on multi-page tables.

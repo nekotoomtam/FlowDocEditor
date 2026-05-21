@@ -1,59 +1,11 @@
 import { toAbstractUnit } from "../../layout"
 import type {
-  BorderSide,
-  CellBorder,
   FlowTableCellNode,
   FlowTableNode,
-  TableCellNode,
-  TableNode,
 } from "../../schema"
 import type {
   ParagraphBoxRenderProps,
-  ResolvedBorderSide,
-  ResolvedCellBorder,
-  TableCellRenderProps,
 } from "../types"
-
-function resolveBorderSide(
-  tableDefault: BorderSide | undefined,
-  cellOverride: BorderSide | undefined,
-): ResolvedBorderSide | undefined {
-  const side = cellOverride ?? tableDefault
-  if (!side) return undefined
-  return {
-    style: side.style,
-    width: toAbstractUnit(side.width.value, side.width.unit),
-    color: side.color,
-  }
-}
-
-function resolveCellBorder(
-  tableBorder: CellBorder | undefined,
-  cellBorder: CellBorder | undefined,
-): ResolvedCellBorder {
-  return {
-    top: resolveBorderSide(tableBorder?.top, cellBorder?.top),
-    right: resolveBorderSide(tableBorder?.right, cellBorder?.right),
-    bottom: resolveBorderSide(tableBorder?.bottom, cellBorder?.bottom),
-    left: resolveBorderSide(tableBorder?.left, cellBorder?.left),
-  }
-}
-
-export function buildTableCellRenderProps(
-  tableNode: TableNode,
-  cellNode: TableCellNode,
-): TableCellRenderProps {
-  return {
-    colspan: cellNode.props.colspan ?? 1,
-    rowspan: cellNode.props.rowspan ?? 1,
-    border: resolveCellBorder(tableNode.props.border, cellNode.props.border),
-    background: cellNode.props.background,
-    padding: cellNode.props.padding
-      ? toAbstractUnit(cellNode.props.padding.value, cellNode.props.padding.unit)
-      : 0,
-    verticalAlign: cellNode.props.verticalAlign ?? "top",
-  }
-}
 
 export function resolveFlowTableCellBoxRenderProps(cellNode: FlowTableCellNode): ParagraphBoxRenderProps | undefined {
   const box = cellNode.props.box

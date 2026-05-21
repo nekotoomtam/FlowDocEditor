@@ -159,6 +159,80 @@ function docWithFlowTable(): DocumentNode {
   } as DocumentNode
 }
 
+function docWithShortIdFlowTable(): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 72, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 72, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["tbl1"] },
+          tbl1: {
+            id: "tbl1",
+            type: "flow-table",
+            props: {},
+            columns: [
+              { width: { value: 120, unit: "pt" } },
+              { width: { value: 120, unit: "pt" } },
+            ],
+            rowIds: ["tr1"],
+            nodes: {
+              tr1: { id: "tr1", type: "flow-table-row", props: {}, cellIds: ["tc1", "tc2"] },
+              tc1: { id: "tc1", type: "flow-table-cell", props: {}, childIds: ["p1"] },
+              tc2: { id: "tc2", type: "flow-table-cell", props: {}, childIds: ["p2"] },
+              p1: {
+                id: "p1",
+                type: "paragraph",
+                props: {
+                  align: "left",
+                  fontSize: { value: 12, unit: "pt" },
+                  fontFamilyKey: "default",
+                  lineHeight: 1.5,
+                  spacingBefore: { value: 0, unit: "pt" },
+                  spacingAfter: { value: 0, unit: "pt" },
+                  textIndent: { value: 0, unit: "pt" },
+                  indentLeft: { value: 0, unit: "pt" },
+                  indentRight: { value: 0, unit: "pt" },
+                },
+                children: [{ id: "t1", type: "text", text: "A" }],
+              },
+              p2: {
+                id: "p2",
+                type: "paragraph",
+                props: {
+                  align: "left",
+                  fontSize: { value: 12, unit: "pt" },
+                  fontFamilyKey: "default",
+                  lineHeight: 1.5,
+                  spacingBefore: { value: 0, unit: "pt" },
+                  spacingAfter: { value: 0, unit: "pt" },
+                  textIndent: { value: 0, unit: "pt" },
+                  indentLeft: { value: 0, unit: "pt" },
+                  indentRight: { value: 0, unit: "pt" },
+                },
+                children: [{ id: "t2", type: "text", text: "B" }],
+              },
+            },
+          },
+        },
+      }],
+    },
+  } as DocumentNode
+}
+
 function docWithSpannedFlowTable(): DocumentNode {
   const doc = docWithFlowTable()
   const table = doc.document.sections[0].nodes.ft1
@@ -439,9 +513,13 @@ describe("PropertyPanel selection context", () => {
 
     expect(markup).toContain("Flow table")
     expect(markup).toContain("2 rows × 2 cols")
+    expect(markup).toContain("data-testid=\"flow-table-header-rows-control\"")
+    expect(markup).toContain("data-testid=\"flow-table-header-rows-control-input\"")
     expect(markup).toContain("+ Row")
     expect(markup).toContain("- Last")
     expect(markup).toContain("+ Col")
+    expect(markup).toContain("Delete table")
+    expect(markup).not.toContain("Delete block")
   })
 
   it("renders C1 flow-table cell row and column controls", () => {
@@ -471,6 +549,8 @@ describe("PropertyPanel selection context", () => {
 
     expect(markup).toContain("Flow table cell")
     expect(markup).toContain("Row 1, Col 1")
+    expect(markup).toContain("data-testid=\"flow-table-cell-header-rows-control\"")
+    expect(markup).toContain("Header through row 1")
     expect(markup).toContain("data-testid=\"flow-table-cell-rowspan-input\"")
     expect(markup).toContain("data-testid=\"flow-table-cell-colspan-input\"")
     expect(markup).toContain("data-testid=\"info-hint\"")
@@ -486,6 +566,94 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("↑ Above")
     expect(markup).toContain("Right →")
     expect(markup).toContain("Delete column")
+    expect(markup).toContain("Delete table")
+  })
+
+  it("renders a whole-table delete action from a table cell", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithShortIdFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "tc1",
+      selectionAnchorNodeId: "p1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("Flow table cell")
+    expect(markup).toContain("data-testid=\"flow-table-cell-header-rows-control\"")
+    expect(markup).toContain("Header through row 1")
+    expect(markup).toContain("Delete column")
+    expect(markup).toContain("Delete row")
+    expect(markup).toContain("Delete table")
+  })
+
+  it("renders table header controls from root and row selections", () => {
+    const noop = () => undefined
+    const rootMarkup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithShortIdFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "tbl1",
+      selectionAnchorNodeId: "tbl1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+    const flowRowMarkup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "ftr2",
+      selectionAnchorNodeId: "ftr2",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(rootMarkup).toContain("data-testid=\"flow-table-header-rows-control\"")
+    expect(rootMarkup).toContain("data-testid=\"flow-table-header-rows-control-input\"")
+    expect(flowRowMarkup).toContain("data-testid=\"flow-table-row-header-rows-control\"")
+    expect(flowRowMarkup).toContain("Header through row 2")
+    expect(flowRowMarkup).toContain("Clear")
   })
 
   it("enables flow-table merge left when an aligned neighboring origin can consume the selected cell", () => {

@@ -4,10 +4,8 @@ import {
   FlowTableRowNodeSchema,
   ParagraphNodeSchema,
   SpacerNodeSchema,
-  TableCellNodeSchema,
-  TableRowNodeSchema,
 } from "../schema"
-import type { DocumentNode, DocumentSection, FlowRowNode, FlowTableCellNode, FlowTableNode, LayoutNode, RowNode, TableCellNode, TableNode } from "../schema"
+import type { DocumentNode, DocumentSection, FlowRowNode, FlowTableCellNode, FlowTableNode, LayoutNode, RowNode } from "../schema"
 import { FlowTableGridError, resolveFlowTableGrid } from "./flowTableGrid"
 
 // ─── Error Types ──────────────────────────────────────────────────────────────
@@ -85,7 +83,7 @@ function assertFlowWidthShareSum(section: DocumentSection, row: FlowRowNode, pat
   }
 }
 
-// ─── Table Internals ──────────────────────────────────────────────────────────
+// ─── Nested Structure Internals ───────────────────────────────────────────────
 
 function assertUniqueIds(ids: string[], path: string, label: string): void {
   const seen = new Set<string>()
@@ -99,156 +97,6 @@ function assertNodeIdMatchesKey(node: { id: string }, key: string, path: string)
   if (node.id !== key) {
     fail(path, `node id "${node.id}" must match map key "${key}"`)
   }
-}
-
-function assertTableInternalSchema(node: { type: string }, path: string): void {
-  const schema =
-    node.type === "table-row" ? TableRowNodeSchema :
-    node.type === "table-cell" ? TableCellNodeSchema :
-    node.type === "paragraph" ? ParagraphNodeSchema :
-    node.type === "spacer" ? SpacerNodeSchema :
-    null
-
-  if (schema == null) {
-    fail(path, `unsupported table internal node type "${node.type}"`)
-  }
-
-  const result = schema.safeParse(node)
-  if (!result.success) {
-    const issue = result.error.issues[0]
-    fail(`${path}.${issue?.path.join(".") ?? ""}`, issue?.message ?? "invalid table internal node")
-  }
-}
-
-function assertTableCellContents(
-  table: TableNode,
-  cell: TableCellNode,
-  tablePath: string,
-  path: string,
-  reachable: Set<string>,
-  seenContentParents: Map<string, string>,
-): void {
-  assertUniqueIds(cell.childIds, `${path}.childIds`, "cell child")
-
-  cell.childIds.forEach((childId, index) => {
-    const childPath = `${path}.childIds[${index}]`
-    const child = table.nodes[childId]
-
-    if (child == null) fail(childPath, `missing child "${childId}"`)
-    if (child.type !== "paragraph" && child.type !== "spacer") {
-      fail(childPath, `table cell child must be paragraph or spacer — got "${child.type}"`)
-    }
-
-    const existingParent = seenContentParents.get(childId)
-    if (existingParent != null && existingParent !== cell.id) {
-      fail(childPath, `node "${childId}" has multiple table cell parents`)
-    }
-    seenContentParents.set(childId, cell.id)
-
-    reachable.add(childId)
-    assertNoLayoutKeys(child, `${tablePath}.nodes.${childId}`)
-  })
-}
-
-function assertTableGrid(
-  table: TableNode,
-  path: string,
-  reachable: Set<string>,
-  seenCellParents: Map<string, string>,
-  seenContentParents: Map<string, string>,
-): void {
-  const colCount = table.columns.length
-  const occupiedCols: Set<number>[] = Array.from(
-    { length: table.rowIds.length },
-    () => new Set<number>(),
-  )
-
-  table.rowIds.forEach((rowId, rowIndex) => {
-    const rowPath = `${path}.nodes.${rowId}`
-    const row = table.nodes[rowId]
-
-    if (row == null) fail(`${path}.rowIds[${rowIndex}]`, `missing row "${rowId}"`)
-    if (row.type !== "table-row") {
-      fail(`${path}.rowIds[${rowIndex}]`, `table row id must reference table-row — got "${row.type}"`)
-    }
-
-    reachable.add(rowId)
-    assertUniqueIds(row.cellIds, `${rowPath}.cellIds`, "table cell")
-
-    let colCursor = 0
-    row.cellIds.forEach((cellId, cellIndex) => {
-      while (colCursor < colCount && occupiedCols[rowIndex].has(colCursor)) colCursor++
-      if (colCursor >= colCount) {
-        fail(`${rowPath}.cellIds[${cellIndex}]`, `cell "${cellId}" exceeds table column count`)
-      }
-
-      const cell = table.nodes[cellId]
-      const cellRefPath = `${rowPath}.cellIds[${cellIndex}]`
-
-      if (cell == null) fail(cellRefPath, `missing cell "${cellId}"`)
-      if (cell.type !== "table-cell") {
-        fail(cellRefPath, `table row child must be table-cell — got "${cell.type}"`)
-      }
-
-      const existingParent = seenCellParents.get(cellId)
-      if (existingParent != null && existingParent !== row.id) {
-        fail(cellRefPath, `cell "${cellId}" has multiple table row parents`)
-      }
-      seenCellParents.set(cellId, row.id)
-
-      const colspan = cell.props.colspan ?? 1
-      const rowspan = cell.props.rowspan ?? 1
-      if (colCursor + colspan > colCount) {
-        fail(`${path}.nodes.${cellId}.props.colspan`, `cell "${cellId}" colspan exceeds table column count`)
-      }
-      if (rowIndex + rowspan > table.rowIds.length) {
-        fail(`${path}.nodes.${cellId}.props.rowspan`, `cell "${cellId}" rowspan exceeds table row count`)
-      }
-
-      reachable.add(cellId)
-      assertTableCellContents(table, cell, path, `${path}.nodes.${cellId}`, reachable, seenContentParents)
-
-      for (let dr = 1; dr < rowspan; dr++) {
-        for (let dc = 0; dc < colspan; dc++) {
-          occupiedCols[rowIndex + dr].add(colCursor + dc)
-        }
-      }
-
-      colCursor += colspan
-    })
-
-    while (colCursor < colCount && occupiedCols[rowIndex].has(colCursor)) colCursor++
-    if (colCursor !== colCount) {
-      fail(`${rowPath}.cellIds`, `table row must fill all ${colCount} columns`)
-    }
-  })
-}
-
-function assertTable(table: TableNode, path: string): void {
-  assertUniqueIds(table.rowIds, `${path}.rowIds`, "table row")
-
-  if ((table.props.headerRowCount ?? 0) > table.rowIds.length) {
-    fail(`${path}.props.headerRowCount`, "headerRowCount cannot exceed table row count")
-  }
-
-  Object.entries(table.nodes).forEach(([nodeId, node]) => {
-    const nodePath = `${path}.nodes.${nodeId}`
-    assertNodeIdMatchesKey(node, nodeId, nodePath)
-    assertNoLayoutKeys(node, nodePath)
-    assertTableInternalSchema(node, nodePath)
-  })
-
-  const reachable = new Set<string>()
-  const seenCellParents = new Map<string, string>()
-  const seenContentParents = new Map<string, string>()
-
-  assertTableGrid(table, path, reachable, seenCellParents, seenContentParents)
-
-  Object.keys(table.nodes).forEach((nodeId) => {
-    if (!reachable.has(nodeId)) {
-      fail(`${path}.nodes.${nodeId}`, `orphan table node — not reachable from table rows`)
-    }
-  })
 }
 
 // ─── Flow Table Internals ────────────────────────────────────────────────────
@@ -416,10 +264,6 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
     reachable.add(nodeId)
     assertNoLayoutKeys(node, nodePath)
 
-    if (node.type === "table") {
-      assertTable(node as unknown as TableNode, nodePath)
-      return
-    }
     if (node.type === "flow-table") {
       assertFlowTable(node as unknown as FlowTableNode, nodePath)
       return
@@ -444,8 +288,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
 
       // Tree law enforcement
       if (node.type === "body") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "flow-row" && child.type !== "spacer" && child.type !== "table" && child.type !== "flow-table" && child.type !== "toc") {
-          fail(childPath, `body child must be paragraph, row, flow-row, spacer, table, flow-table, or toc — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "flow-row" && child.type !== "spacer" && child.type !== "flow-table" && child.type !== "toc") {
+          fail(childPath, `body child must be paragraph, row, flow-row, spacer, flow-table, or toc — got "${child.type}"`)
         }
       }
 
@@ -460,8 +304,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
       }
 
       if (node.type === "stack") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "table" && child.type !== "flow-table" && child.type !== "toc") {
-          fail(childPath, `stack child must be paragraph, row, spacer, table, flow-table, or toc — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "flow-table" && child.type !== "toc") {
+          fail(childPath, `stack child must be paragraph, row, spacer, flow-table, or toc — got "${child.type}"`)
         }
       }
 

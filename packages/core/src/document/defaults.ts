@@ -20,9 +20,6 @@ import type {
   SpacerProps,
   StackNode,
   StackProps,
-  TableNode,
-  TableRowNode,
-  TableCellNode,
   TocNode,
   TocProps,
 } from "../schema"
@@ -233,51 +230,7 @@ export function createTocNode(props: Partial<TocProps> = {}): TocNode {
   return { id: createId("toc"), type: "toc", props: { title: "สารบัญ", maxLevel: 3, ...props } }
 }
 
-// ─── Table Factories ──────────────────────────────────────────────────────────
-
-export function createTableCellNode(childIds: string[]): TableCellNode {
-  return { id: createId("tcell"), type: "table-cell", props: {}, childIds }
-}
-
-export function createTableRowNode(cellIds: string[]): TableRowNode {
-  return { id: createId("trow"), type: "table-row", props: {}, cellIds }
-}
-
-export function createDefaultTable(rowCount = 3, colCount = 3): TableNode {
-  const colWidthPt = 150
-  const internalNodes: TableNode["nodes"] = {}
-  const rowIds: string[] = []
-
-  for (let r = 0; r < rowCount; r++) {
-    const cellIds: string[] = []
-    for (let c = 0; c < colCount; c++) {
-      const para = createParagraphNode("", { spacingBefore: pt(2), spacingAfter: pt(2) })
-      const cell = createTableCellNode([para.id])
-      internalNodes[para.id] = para
-      internalNodes[cell.id] = cell
-      cellIds.push(cell.id)
-    }
-    const row = createTableRowNode(cellIds)
-    internalNodes[row.id] = row
-    rowIds.push(row.id)
-  }
-
-  return {
-    id: createId("table"),
-    type: "table",
-    props: {
-      border: {
-        top: { style: "solid", width: pt(0.5), color: "000000" },
-        right: { style: "solid", width: pt(0.5), color: "000000" },
-        bottom: { style: "solid", width: pt(0.5), color: "000000" },
-        left: { style: "solid", width: pt(0.5), color: "000000" },
-      },
-    },
-    columns: Array.from({ length: colCount }, () => ({ width: pt(colWidthPt) })),
-    rowIds,
-    nodes: internalNodes,
-  }
-}
+// ─── Flow Table Factories ─────────────────────────────────────────────────────
 
 export function createFlowTableCellNode(childIds: string[]): FlowTableCellNode {
   return { id: createId("ftcell"), type: "flow-table-cell", props: {}, childIds }

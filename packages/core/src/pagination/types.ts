@@ -44,17 +44,6 @@ export interface ResolvedCellBorder {
   left?: ResolvedBorderSide
 }
 
-export interface TableCellRenderProps {
-  colspan: number
-  rowspan: number
-  border: ResolvedCellBorder
-  background?: string
-  padding: number  // abstract pt
-  verticalAlign: "top" | "middle" | "bottom"
-  continuesOnNext?: boolean    // cell ถูกตัดข้ามหน้า — ไม่วาด border ด้านล่าง
-  continuedFromPrev?: boolean  // cell ต่อจากหน้าก่อน — ไม่วาด border ด้านบน
-}
-
 export interface FlowTableGridRenderProps {
   columnWidths: number[]
 }
@@ -101,13 +90,11 @@ export interface PageFragment {
     | "spacer"
     | "stack"
     | "flow-stack"
-    | "table-cell"
     | "flow-table-cell"
     | "row"
     | "flow-row"
     | "flow-table-row"
     | "body"
-    | "table"
     | "flow-table"
     | "toc"
   parentNodeId?: string
@@ -119,7 +106,6 @@ export interface PageFragment {
   lines?: PaginatedLine[]
   renderProps?: ParagraphRenderProps
   boxRenderProps?: ParagraphBoxRenderProps
-  cellRenderProps?: TableCellRenderProps
   flowTableGridProps?: FlowTableGridRenderProps
   flowTableCellGridProps?: FlowTableCellGridRenderProps
   // Split metadata — populated by pagination paths that split or explicitly

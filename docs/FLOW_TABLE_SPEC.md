@@ -1,7 +1,9 @@
 # Flow Table Spec
 
-Status: Design draft with partial runtime implementation. Flow Table remains
-experimental and is not the default inserted table.
+Status: Accepted active table primitive. Flow Table is the canonical authored
+table model in the current codebase. The node family keeps the `flow-table`,
+`flow-table-row`, and `flow-table-cell` names for this slice; renaming it to
+`table` is intentionally not part of the legacy-table removal patch.
 
 Implementation status:
 
@@ -38,9 +40,7 @@ Implementation status:
   `flow-table-cell` fragments.
 - DOCX output has best-effort fixed-table projection from paginated Flow Table
   fragments, including grid/span metadata.
-- Editor insertion is available as an explicit 3x3 `flow-table` palette block.
-  Initial selection/text editing support is conservative and does not replace
-  legacy `table`.
+- Editor insertion creates a 3x3 `flow-table` table.
 - Span-free editor row/column operations are available as the C1 slice. They
   intentionally no-op when the table contains `rowspan` or `colspan`; C2 owns
   span-aware structural edits.
@@ -87,9 +87,8 @@ Implementation status:
 - Broader property editing and row/column/span operations remain intentionally
   incremental.
 
-This document drafts a new table primitive that can be developed beside the
-current `table` node. The working title is **Flow Table** and the provisional
-node type name is `flow-table`.
+This document describes the active table primitive. The working product name is
+still **table**, but the persisted node type name remains `flow-table`.
 
 Use this document together with:
 
@@ -101,35 +100,29 @@ Use this document together with:
 
 ## Decision
 
-Flow Table is a new explicit primitive, not a hidden replacement for the
-existing `table` node.
+Flow Table is the current explicit table primitive.
 
 Rules:
 
-- Existing `table` nodes remain current/legacy authored nodes during Flow Table
-  development.
-- New Flow Table content uses an explicit `flow-table` node type.
-- The draft node family name is `flow-table`, `flow-table-row`, and
-  `flow-table-cell`; final TypeScript naming may still adjust during schema
-  review.
+- Authored table content uses the explicit `flow-table` node type.
+- The active node family name is `flow-table`, `flow-table-row`, and
+  `flow-table-cell`.
 - Flow Table cell visual styling uses a `box` object in v1, matching the
   paragraph/flow-stack box concept.
-- There is no automatic migration from `table` to `flow-table`.
-- There is no render-time projection that secretly lays out old `table` nodes
-  with the Flow Table engine.
-- There is no hidden compatibility conversion.
-- If Flow Table reaches acceptance, new insertions may default to Flow Table
-  while existing `table` documents remain readable.
-- Hiding or removing legacy `table` is an open decision after Flow Table
-  acceptance, not part of v1.
+- Legacy `table` is not part of the active schema/runtime after the
+  table-reduction slice.
+- There is no hidden compatibility conversion in pagination, export, or editor
+  rendering.
+- Old pre-production documents that still contain legacy `table` nodes are not a
+  compatibility target for this slice.
 
-This mirrors the successful `row` / `stack` and `flow-row` / `flow-stack`
-separation pattern: protect existing behavior while a stronger primitive proves
-itself.
+The original separate-node rollout protected development while the stronger
+primitive proved itself. Now that Flow Table is accepted, the codebase keeps one
+table implementation path.
 
-## Why Not Patch Current Table First
+## Why The Node Name Remains Flow Table
 
-The current table path is already doing several hard things:
+The original legacy table path did several hard things:
 
 - authored grid structure, columns, rows, cells, rowspans, and colspans
 - row splitting through a table-specific pagination loop
@@ -137,9 +130,10 @@ The current table path is already doing several hard things:
 - cell border, padding, background, and vertical-align props
 - PDF/DOCX/editor output from paginated fragments
 
-Changing the current `table` semantics directly would risk surprising existing
-documents and make debugging harder. A separate primitive lets Flow Table define
-new page-slicing rules without silently changing the meaning of old documents.
+Developing Flow Table separately kept those semantics from shifting underneath
+the early implementation. The old documents are not a current compatibility
+target, so the active runtime now uses Flow Table directly. The `flow-table`
+node name remains to avoid a large rename in the same change.
 
 ## Relationship To Flow Row / Flow Stack
 
@@ -202,31 +196,25 @@ Guardrails:
 - Do not add computed page/slice data to `DocumentNode`.
 - Do not make the editor draw a rowspan continuation that core pagination
   cannot reproduce.
-- Keep legacy `table` behavior unchanged unless a separate design accepts the
-  same rowspan split policy there too.
 
 ## Current Evidence
 
-The current code/docs show why Flow Table should be designed as a separate
-primitive:
+The current code/docs show Flow Table as the active table path:
 
-- `packages/core/src/schema/table.ts` defines current authored table props:
-  table border/header rows, row `allowBreak`, and cell `rowspan`, `colspan`,
-  `padding`, `background`, and `verticalAlign`.
-- `packages/core/src/layout/flow.ts` measures current tables in `flowTable(...)`
-  and treats table cells as stack-like internal flow boxes before pagination
-  emits table-cell fragments.
-- `packages/core/src/pagination/paginator.ts` owns current table pagination in
-  `paginateTable(...)`, `paginateTableRowFull(...)`,
-  `paginateTableRowSplit(...)`, `pushTableCellContents(...)`, and
-  `pushCellSlice(...)`.
-- `packages/core/src/renderer/pdf/index.ts` renders table cells from
-  `cellRenderProps` in `drawCellBorders(...)`; it does not own table layout.
+- `packages/core/src/schema/table.ts` defines the authored `flow-table`,
+  `flow-table-row`, and `flow-table-cell` model, including header rows, row
+  `allowBreak`, cell `rowspan`/`colspan`, `box`, `verticalAlign`, and
+  `mergeMap`.
+- `packages/core/src/layout/flow.ts` measures Flow Table fragments with
+  `flowFlowTable(...)`.
+- `packages/core/src/pagination/paginator/flowTable.ts` owns Flow Table
+  pagination through `paginateFlowTable(...)`.
+- `packages/core/src/renderer/pdf/index.ts` renders Flow Table cells from
+  paginated `flow-table-cell` fragments; it does not own table layout.
 - `docs/TABLE_EDITING_CONTRACT.md` states that renderers consume paginated
   fragments and must not invent a separate table layout policy.
-- `docs/CROSS_PAGE_BEHAVIOR.md` documents the current table split and header
-  repeat behavior as current `table` behavior, not as the final Flow Table
-  architecture.
+- `docs/CROSS_PAGE_BEHAVIOR.md` documents Flow Table split, header repeat, and
+  rowspan behavior as current table behavior.
 
 ## Goals
 
@@ -234,16 +222,14 @@ primitive:
   relying on hidden migration or renderer-side relayout.
 - Preserve grid/span semantics as first-class authored structure.
 - Make PDF/editor visual output consume the same cell slice primitives.
-- Keep current `table` behavior stable while Flow Table is experimental.
-- Let Flow Table become the future insertion default only after acceptance.
+- Keep table behavior on one implementation path.
 - Keep the model extensible for complex document tables without overcommitting
   v1 to every advanced split case.
 
 ## Non-Goals
 
-- Do not auto-convert existing `table` nodes.
-- Do not secretly render existing `table` nodes with Flow Table.
-- Do not remove legacy `table` in v1.
+- Do not add a hidden compatibility layer for legacy `table` nodes.
+- Do not rename the persisted node family to `table` in this slice.
 - Do not promise pixel-perfect DOCX output.
 - Do not implement live cross-page WYSIWYG editing in v1.
 - Do not implement advanced split-inside-rowspan behavior in v1 unless a later
@@ -494,9 +480,9 @@ DOCX:
 
 ## Editor Behavior Draft
 
-v1 editor support should be static and explicit:
+Editor support is explicit:
 
-- palette inserts a new 3x3 Flow Table primitive, not legacy `table`
+- palette insertion creates a 3x3 Flow Table primitive
 - selection can target table, row, and cell fragments
 - property panel can edit the first accepted v1 props: table header rows,
   row break allowance, and basic cell text/vertical alignment
@@ -507,22 +493,18 @@ v1 editor support should be static and explicit:
   preserve grid law; merge-map-backed unmerge restores mapped children to
   replacement cells where source-slot metadata exists
 
-## Migration And Compatibility
+## Legacy Table Removal
 
-No automatic migration is planned.
+No automatic migration is planned in this slice.
 
 Explicit decisions:
 
-- Existing documents with `table` keep `table`.
-- New Flow Table documents use `flow-table`.
-- Import does not rewrite `table` to `flow-table`.
-- Renderers do not secretly project `table` into Flow Table.
-- Persistence should round-trip both node families independently while both are
-  supported.
-- A future manual conversion command may be discussed later, but it is not part
-  of v1.
-- Removing or hiding legacy `table` is an open decision after Flow Table
-  acceptance.
+- Active documents use `flow-table`.
+- Import does not rewrite legacy `table` nodes to `flow-table`.
+- Renderers do not secretly project legacy `table` into Flow Table.
+- Persistence does not round-trip the removed legacy node family.
+- A future manual conversion command can be discussed only if old pre-release
+  documents become a real requirement.
 
 ## Implementation Path
 
@@ -541,7 +523,7 @@ Suggested order:
 10. Add PDF/editor cell visual primitives and focused raster tests.
 11. Add DOCX best-effort projection.
 12. Add insertion UI after schema, pagination, PDF, and editor preview have
-    enough coverage. Current status: explicit 3x3 palette insertion exists.
+    enough coverage. Current status: 3x3 table insertion creates `flow-table`.
 13. Add C1 span-free row/column editor operations. Current status: implemented
     for non-spanning Flow Tables.
 14. Add C2.0 mutation-oriented grid resolver metadata. Current status:
@@ -584,7 +566,6 @@ Schema/assert tests:
 - invalid missing row/cell ids fail
 - overlapping spans fail
 - out-of-range spans fail
-- legacy `table` remains valid and unchanged
 
 Pagination tests:
 
@@ -617,15 +598,14 @@ Product fixture tests:
 
 ## Acceptance Gate
 
-Flow Table should not become the default inserted table until:
+Flow Table is the default active table primitive when:
 
 - schema/assert/normalize support is covered
 - static pagination supports the accepted v1 cases
 - PDF/editor preview use the same paginated cell primitives
 - focused PDF raster visual tests pass for cell fill/border/split behavior
 - DOCX best-effort output is documented and smoke-tested
-- legacy `table` documents remain unaffected
-- no automatic migration exists
+- no hidden legacy compatibility projection exists
 
 ## Risk Map
 
@@ -637,16 +617,15 @@ High risks:
 - rowspan policy becoming ambiguous across pages
 - repeated headers consuming all available height
 - renderer code accidentally becoming a second layout engine
-- user confusion if legacy `table` and Flow Table are not visibly distinct
+- user confusion if internal `flow-table` names leak into product-facing copy
 
 Mitigation:
 
-- keep Flow Table explicit and separate
+- keep Flow Table explicit in code and use clear table terminology in UI
 - implement schema/assert before editor UI
 - add pagination tests before renderer output
 - keep v1 split policy conservative
 - use PDF raster tests for visual primitives, not for broad layout invention
-- defer legacy table hiding/removal until Flow Table acceptance
 
 ## Open Decisions
 
@@ -659,5 +638,3 @@ Mitigation:
 - How much vertical-align behavior belongs in v1.
 - Whether split-inside-rowspan should ever be supported or remain permanently
   out of scope.
-- When, if ever, legacy `table` should be hidden or removed from the insertion
-  UI.

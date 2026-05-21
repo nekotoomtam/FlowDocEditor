@@ -9,7 +9,7 @@ import type { LayoutNode } from "../schema"
 
 // ─── Drag Source ──────────────────────────────────────────────────────────────
 
-export type PaletteBlockType = "paragraph" | "row" | "columns" | "flow-columns" | "table" | "flow-table"
+export type PaletteBlockType = "paragraph" | "row" | "columns" | "flow-columns" | "flow-table"
 
 export interface PaletteTableSize {
   rows: number
@@ -50,7 +50,7 @@ export type PlacementZone = NodeZone | RowZone
 
 // target คือ semantic surface ที่ user hover อยู่
 export type PlacementTarget =
-  | { kind: "node"; nodeId: string; nodeType: LayoutNode["type"] | "table-cell" | "table-row" | "flow-table-cell" | "flow-table-row" | "table" | null }
+  | { kind: "node"; nodeId: string; nodeType: LayoutNode["type"] | "flow-table-cell" | "flow-table-row" | null }
   | { kind: "row-outer-top"; rowId: string }
   | { kind: "row-outer-bottom"; rowId: string }
   | { kind: "row-stack-inner"; rowId: string; stackId: string }

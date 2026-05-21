@@ -207,13 +207,13 @@ function makeTableCellDoc(text = "A"): DocumentNode {
           body: { id: "body", type: "body", props: {}, childIds: ["tbl1"] },
           tbl1: {
             id: "tbl1",
-            type: "table",
+            type: "flow-table",
             props: {},
             columns: [{ width: { value: 120, unit: "pt" } }],
             rowIds: ["tr1"],
             nodes: {
-              tr1: { id: "tr1", type: "table-row", props: {}, cellIds: ["tc1"] },
-              tc1: { id: "tc1", type: "table-cell", props: {}, childIds: ["cell-p"] },
+              tr1: { id: "tr1", type: "flow-table-row", props: {}, cellIds: ["tc1"] },
+              tc1: { id: "tc1", type: "flow-table-cell", props: {}, childIds: ["cell-p"] },
               "cell-p": cellParagraph,
             },
           },
@@ -255,6 +255,54 @@ function makeFlowTableCellDoc(text = "A"): DocumentNode {
               ftr1: { id: "ftr1", type: "flow-table-row", props: {}, cellIds: ["ftc1"] },
               ftc1: { id: "ftc1", type: "flow-table-cell", props: {}, childIds: ["cell-p"] },
               "cell-p": cellParagraph,
+            },
+          },
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
+function makeTwoColumnTableCellDoc(kind: "short-ids" | "flow-table" = "short-ids"): DocumentNode {
+  const left = paragraphNode("cell-p-left", "A")
+  const right = paragraphNode("cell-p-right", "B")
+  const useFlowIds = kind === "flow-table"
+  const tableId = useFlowIds ? "ft1" : "tbl1"
+  const rowId = useFlowIds ? "ftr1" : "tr1"
+  const leftCellId = useFlowIds ? "ftc1" : "tc1"
+  const rightCellId = useFlowIds ? "ftc2" : "tc2"
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 36, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 36, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: [tableId] },
+          [tableId]: {
+            id: tableId,
+            type: "flow-table",
+            props: {},
+            columns: [{ width: { value: 80, unit: "pt" } }, { width: { value: 40, unit: "pt" } }],
+            rowIds: [rowId],
+            nodes: {
+              [rowId]: { id: rowId, type: "flow-table-row", props: {}, cellIds: [leftCellId, rightCellId] },
+              [leftCellId]: { id: leftCellId, type: "flow-table-cell", props: {}, childIds: [left.id] },
+              [rightCellId]: { id: rightCellId, type: "flow-table-cell", props: {}, childIds: [right.id] },
+              [left.id]: left,
+              [right.id]: right,
             },
           },
         },
@@ -342,13 +390,11 @@ function makeTwoStackFlowPaginated(): PaginatedDocument {
   }
 }
 
-function makeTableCellPaginated(kind: "table" | "flow-table" = "table"): PaginatedDocument {
-  const isFlow = kind === "flow-table"
-  const tableId = isFlow ? "ft1" : "tbl1"
-  const rowId = isFlow ? "ftr1" : "tr1"
-  const cellId = isFlow ? "ftc1" : "tc1"
-  const rowType = isFlow ? "flow-table-row" : "row"
-  const cellType = isFlow ? "flow-table-cell" : "table-cell"
+function makeTableCellPaginated(kind: "short-ids" | "flow-table" = "short-ids"): PaginatedDocument {
+  const useFlowIds = kind === "flow-table"
+  const tableId = useFlowIds ? "ft1" : "tbl1"
+  const rowId = useFlowIds ? "ftr1" : "tr1"
+  const cellId = useFlowIds ? "ftc1" : "tc1"
   return {
     sections: [{
       sectionId: "section",
@@ -359,9 +405,9 @@ function makeTableCellPaginated(kind: "table" | "flow-table" = "table"): Paginat
           height: 160,
           contentBox: { x: 36, y: 72, width: 228, height: 28 },
           fragments: [
-            { nodeId: tableId, nodeType: kind, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
-            { nodeId: rowId, nodeType: rowType, parentNodeId: tableId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
-            { nodeId: cellId, nodeType: cellType, parentNodeId: rowId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+            { nodeId: tableId, nodeType: "flow-table", pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+            { nodeId: rowId, nodeType: "flow-table-row", parentNodeId: tableId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+            { nodeId: cellId, nodeType: "flow-table-cell", parentNodeId: rowId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
             textFragment("cell-p", "A", 72, {
               parentNodeId: cellId,
               width: 120,
@@ -396,22 +442,50 @@ function makeTableCellPaginated(kind: "table" | "flow-table" = "table"): Paginat
   }
 }
 
-function makeSplitTableCellPaginated(kind: "table" | "flow-table" = "table"): PaginatedDocument {
+function makeTwoColumnTableCellPaginated(kind: "short-ids" | "flow-table" = "short-ids"): PaginatedDocument {
+  const useFlowIds = kind === "flow-table"
+  const tableId = useFlowIds ? "ft1" : "tbl1"
+  const rowId = useFlowIds ? "ftr1" : "tr1"
+  const leftCellId = useFlowIds ? "ftc1" : "tc1"
+  const rightCellId = useFlowIds ? "ftc2" : "tc2"
+  return {
+    sections: [{
+      sectionId: "section",
+      pages: [{
+        index: 0,
+        width: 300,
+        height: 160,
+        contentBox: { x: 36, y: 72, width: 228, height: 28 },
+        fragments: [
+          { nodeId: tableId, nodeType: "flow-table", pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+          { nodeId: rowId, nodeType: "flow-table-row", parentNodeId: tableId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+          { nodeId: leftCellId, nodeType: "flow-table-cell", parentNodeId: rowId, pageIndex: 0, x: 36, y: 72, width: 80, height: 28 },
+          { nodeId: rightCellId, nodeType: "flow-table-cell", parentNodeId: rowId, pageIndex: 0, x: 116, y: 72, width: 40, height: 28 },
+          textFragment("cell-p-left", "A", 72, { parentNodeId: leftCellId, width: 80 }),
+          textFragment("cell-p-right", "B", 72, { parentNodeId: rightCellId, x: 116, width: 40 }),
+        ],
+        headerFragments: [],
+        footerFragments: [],
+      }],
+    }],
+    tocEntries: [],
+  }
+}
+
+function makeSplitTableCellPaginated(kind: "short-ids" | "flow-table" = "short-ids"): PaginatedDocument {
   const paginated = makeTableCellPaginated(kind)
-  const isFlow = kind === "flow-table"
-  const tableId = isFlow ? "ft1" : "tbl1"
-  const rowId = isFlow ? "ftr1" : "tr1"
-  const cellId = isFlow ? "ftc1" : "tc1"
-  const rowType = isFlow ? "flow-table-row" : "row"
-  const cellType = isFlow ? "flow-table-cell" : "table-cell"
+  const useFlowIds = kind === "flow-table"
+  const tableId = useFlowIds ? "ft1" : "tbl1"
+  const rowId = useFlowIds ? "ftr1" : "tr1"
+  const cellId = useFlowIds ? "ftc1" : "tc1"
   const splitRenderProps = {
     ...renderProps,
     lineHeight: 12,
   }
   paginated.sections[0].pages[0].fragments = [
-    { nodeId: tableId, nodeType: kind, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
-    { nodeId: rowId, nodeType: rowType, parentNodeId: tableId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
-    { nodeId: cellId, nodeType: cellType, parentNodeId: rowId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+    { nodeId: tableId, nodeType: "flow-table", pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+    { nodeId: rowId, nodeType: "flow-table-row", parentNodeId: tableId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+    { nodeId: cellId, nodeType: "flow-table-cell", parentNodeId: rowId, pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
     textFragment("cell-p", "A", 72, {
       parentNodeId: cellId,
       width: 120,
@@ -441,9 +515,9 @@ function makeSplitTableCellPaginated(kind: "table" | "flow-table" = "table"): Pa
     }),
   ]
   paginated.sections[0].pages[1].fragments = [
-    { nodeId: tableId, nodeType: kind, pageIndex: 1, x: 36, y: 72, width: 120, height: 28 },
-    { nodeId: rowId, nodeType: rowType, parentNodeId: tableId, pageIndex: 1, x: 36, y: 72, width: 120, height: 28 },
-    { nodeId: cellId, nodeType: cellType, parentNodeId: rowId, pageIndex: 1, x: 36, y: 72, width: 120, height: 28 },
+    { nodeId: tableId, nodeType: "flow-table", pageIndex: 1, x: 36, y: 72, width: 120, height: 28 },
+    { nodeId: rowId, nodeType: "flow-table-row", parentNodeId: tableId, pageIndex: 1, x: 36, y: 72, width: 120, height: 28 },
+    { nodeId: cellId, nodeType: "flow-table-cell", parentNodeId: rowId, pageIndex: 1, x: 36, y: 72, width: 120, height: 28 },
     textFragment("cell-p", "C", 72, {
       parentNodeId: cellId,
       pageIndex: 1,
@@ -514,6 +588,7 @@ function renderCanvas(
     onNodePointerDown: noop,
     onBackgroundPointerDown: noop,
     onResizeStart: noop,
+    onTableColumnResizeStart: noop,
     onMinHeightResizeStart: noop,
     onMarginResizeStart: noop,
     onScaleChange: noop,
@@ -737,6 +812,30 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     expect(markup).toContain("fill=\"#fef9c3\"")
   })
 
+  it("renders an internal table column resize handle for a selected table cell", () => {
+    const markup = renderCanvas(
+      makeTwoColumnTableCellPaginated(),
+      makeTwoColumnTableCellDoc(),
+      "tc1",
+    )
+
+    expect(markup).toContain("data-testid=\"table-column-resize-handle\"")
+    expect(markup).toContain("data-table-id=\"tbl1\"")
+    expect(markup).toContain("data-left-col-index=\"0\"")
+  })
+
+  it("renders an internal table column resize handle for a selected flow-table cell", () => {
+    const markup = renderCanvas(
+      makeTwoColumnTableCellPaginated("flow-table"),
+      makeTwoColumnTableCellDoc("flow-table"),
+      "ftc1",
+    )
+
+    expect(markup).toContain("data-testid=\"table-column-resize-handle\"")
+    expect(markup).toContain("data-table-id=\"ft1\"")
+    expect(markup).toContain("data-left-col-index=\"0\"")
+  })
+
   it("builds a conservative table-cell continuation preview before settled draft pagination", () => {
     const paginated = makeTableCellPaginated()
     const preview = buildWysiwygDraftVisualPreview({
@@ -771,12 +870,12 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
 
     const chromeByPage = buildWysiwygTableCellDraftVisualChromeFragments({ paginated, preview })
     const sourceChrome = chromeByPage.get(0) ?? []
-    expect(sourceChrome.map((fragment) => fragment.nodeType)).toEqual(["table", "row", "table-cell"])
+    expect(sourceChrome.map((fragment) => fragment.nodeType)).toEqual(["flow-table", "flow-table-row", "flow-table-cell"])
     expect(sourceChrome.every((fragment) => fragment.continuesFrom === false)).toBe(true)
     expect(sourceChrome.every((fragment) => fragment.isContinued)).toBe(true)
 
     const chrome = chromeByPage.get(1) ?? []
-    expect(chrome.map((fragment) => fragment.nodeType)).toEqual(["table", "row", "table-cell"])
+    expect(chrome.map((fragment) => fragment.nodeType)).toEqual(["flow-table", "flow-table-row", "flow-table-cell"])
     expect(chrome.every((fragment) => fragment.continuesFrom)).toBe(true)
     expect(chrome.every((fragment) => fragment.height === preview?.fragments[1].height)).toBe(true)
   })
@@ -784,7 +883,7 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
   it("extends source-page table-cell chrome to the split slice height", () => {
     const paginated = makeTableCellPaginated()
     for (const fragment of paginated.sections[0].pages[0].fragments) {
-      if (fragment.nodeType === "table" || fragment.nodeType === "row" || fragment.nodeType === "table-cell") {
+      if (fragment.nodeType === "flow-table" || fragment.nodeType === "flow-table-row" || fragment.nodeType === "flow-table-cell") {
         fragment.height = 12
       }
     }
@@ -798,9 +897,9 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
       textMeasurer: defaultTextMeasurer,
     })
     const sourceChrome = buildWysiwygTableCellDraftVisualChromeFragments({ paginated, preview }).get(0) ?? []
-    const sourceTable = sourceChrome.find((fragment) => fragment.nodeType === "table")
-    const sourceRow = sourceChrome.find((fragment) => fragment.nodeType === "row")
-    const sourceCell = sourceChrome.find((fragment) => fragment.nodeType === "table-cell")
+    const sourceTable = sourceChrome.find((fragment) => fragment.nodeType === "flow-table")
+    const sourceRow = sourceChrome.find((fragment) => fragment.nodeType === "flow-table-row")
+    const sourceCell = sourceChrome.find((fragment) => fragment.nodeType === "flow-table-cell")
 
     expect(sourceRow?.height).toBe(28)
     expect(sourceCell?.height).toBe(28)

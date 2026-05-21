@@ -21,7 +21,9 @@ const NODE_COLORS: Record<string, string> = {
   row:       "#fed7aa",
   stack:     "#e9d5ff",
   body:      "#bbf7d0",
-  table:     "#fde68a",
+  "flow-table": "#eef2ff",
+  "flow-table-row": "#e0e7ff",
+  "flow-table-cell": "#fef9c3",
 }
 
 const ZONE_COLORS = { header: "#fef9c3", footer: "#fce7f3" }
@@ -32,7 +34,9 @@ const BADGE: Record<string, { bg: string; fg: string }> = {
   row:       { bg: "#ffedd5", fg: "#c2410c" },
   stack:     { bg: "#f3e8ff", fg: "#7e22ce" },
   body:      { bg: "#dcfce7", fg: "#15803d" },
-  table:     { bg: "#fef9c3", fg: "#92400e" },
+  "flow-table": { bg: "#eef2ff", fg: "#3730a3" },
+  "flow-table-row": { bg: "#e0e7ff", fg: "#3730a3" },
+  "flow-table-cell": { bg: "#fef9c3", fg: "#92400e" },
 }
 
 function fmt(n: number) { return n.toFixed(1) }

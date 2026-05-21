@@ -36,7 +36,7 @@ remain true:
   to a neighboring column.
 - `headerRowCount` and `allowBreak` are authored properties, not renderer-only
   switches.
-- Editor selection may select a `table-cell` from rendered cell text, but
+- Editor selection may select a `flow-table-cell` from rendered cell text, but
   pagination still receives the same authored table model.
 
 ## Current Behavior Matrix
@@ -47,14 +47,10 @@ remain true:
 | Stack/column paragraph | Does not split independently today. The containing row is atomic; paragraph content is placed as one fragment inside the row's allocated height. If the row is taller than one content page, overflow is documented. | `rowStack.test.ts` |
 | Row/stack group | Moves as a whole row when it fits on the next page. Very tall rows stay at page content top and may overflow to force progress. | `rowStack.test.ts`, `resizeConvergence.test.ts` |
 | Flow-row / flow-stack group | Static pagination may split a `flow-row` into page slices. Each `flow-stack` slice keeps parent/child traceability and sibling stack heights align to the row slice. During flagged WYSIWYG text-engine editing, same-page `flow-stack` paragraph growth and shrink may use a local editor preview; once the active paragraph reaches a page boundary, the editor accelerates draft pagination for that `flow-stack` paragraph instead of extending the same-page preview past the content bottom. The accelerated path coalesces pending pagination instead of repeatedly resetting the timer, so key-repeat Backspace can shrink continuation slices while the key is still held. Re-entering an already split `flow-stack` paragraph keeps draft changes on the same responsive draft-pagination path. Full live cross-page caret/selection behavior inside `flow-stack` remains deferred. | `flowRowStack.test.ts`, `inlineEditHeightPreview.test.ts`, `wysiwygReflow.test.ts`, `wysiwygDraftPreview.test.ts` |
-| Table row with `allowBreak=false` | Moves as a whole row when possible. Too-tall rows may overflow according to the documented forced-progress policy. | `tablePagination.test.ts` |
-| Table row with `allowBreak=true` or omitted (default breakable) | A single-row group may split across pages, including colspan-only cells where `rowspan=1`. Cell paragraphs split by measured line boundaries through the table row split loop. Shorter cells render only once and are not duplicated on continuation pages. A split slice must advance at least one remaining cell content unit before consuming row height; if padding/repeated headers leave no line capacity even on a clean continuation page, the row may force one-line overflow progress. During flagged WYSIWYG text-engine editing, table-cell paragraph line-count and page-boundary changes use responsive draft pagination so active row/cell geometry settles close to the input frame; before settled draft pagination exists, the editor may draw a conservative source/continuation preview for the active cell paragraph with non-interactive parent table/row/cell chrome, invisible table/row structure scaffolding, source-page downstream shifting, and table-cell-specific preservation of usable boundary lines. Once split, later edits keep the responsive marker until the paragraph returns to one fragment. Same-page local height patching remains guarded. | `tablePagination.test.ts`, `EditorCanvas.test.ts` |
-| Rowspan-linked table rows | Rowspan-linked rows stay together as an atomic group. If the group does not fit, it moves to the next page as a unit. Split-at-row-boundary inside a rowspan group is deferred. | `tablePagination.test.ts` |
-| Repeating table headers | The first `headerRowCount` rows repeat at the top of continuation pages where table body rows continue. | `tablePagination.test.ts` |
 | Flow Table row with `allowBreak=true` or omitted (default breakable) | A single Flow Table row may split across pages, including colspan-only cells where `rowspan=1`. Flow Table cell paragraphs split by measured line boundaries through the Flow Table row split loop. Shorter sibling cells render their content only once and are not duplicated on continuation pages. A split slice must advance at least one remaining cell content unit before consuming row height; if no clean page can fit one unit, the row may force one-unit overflow progress with a Flow Table warning. During flagged WYSIWYG text-engine editing, flow-table-cell paragraph line-count and page-boundary changes use responsive draft pagination so active row/cell geometry settles close to the input frame; before settled draft pagination exists, the editor may draw a conservative source/continuation preview for the active cell paragraph with non-interactive parent flow-table/row/cell chrome, invisible flow-table/row structure scaffolding, source-page downstream shifting, and table-cell-specific preservation of usable boundary lines. Once split, later edits keep the responsive marker until the paragraph returns to one fragment. Same-page local height patching remains guarded. | `flowTablePagination.test.ts`, `EditorCanvas.test.ts` |
 | Rowspan-linked Flow Table rows | Breakable rowspan-linked Flow Table groups use remaining page space instead of moving the whole row group when the group would fit a clean page. Spanning cells emit continuation `flow-table-cell` fragments with the same `nodeId`; continuation fragments use the visible row fragment as `parentNodeId`, set continuation flags, and keep original grid/span metadata, including mixed `rowspan`/`colspan` geometry. Spanning-cell paragraph content follows measured line/spacer split-point accounting across those slices, with content fragments parented to the authored spanning cell so the logical paragraph identity stays intact. If a single visible row slice does not fit the remaining page space, Flow Table subdivides it across pages using the same line/spacer split accounting as normal breakable Flow Table rows; shorter sibling content still renders once. If a row-boundary slice cannot fit normal spanning-cell content progress, it may force one content unit with a Flow Table warning. If any row in the linked group has `allowBreak=false`, the group remains atomic. | `flowTablePagination.test.ts` |
 | Repeating Flow Table headers | The first `headerRowCount` Flow Table rows repeat at the top of continuation pages where body rows continue. Repeated headers consume continuation-page height before body row split decisions. | `flowTablePagination.test.ts` |
-| Header/footer page numbers | Header and footer fragments are cloned per page and inline page-number fields resolve using physical or section-local display page numbers. | `sectionPageNumbers.test.ts`, `tablePagination.test.ts`, `multiSection.test.ts` |
+| Header/footer page numbers | Header and footer fragments are cloned per page and inline page-number fields resolve using physical or section-local display page numbers. | `sectionPageNumbers.test.ts`, `flowTablePagination.test.ts`, `multiSection.test.ts` |
 | TOC placeholder | Pass 1 estimates height and collects entries. If generated TOC content exceeds the placeholder, pass 2 repaginates with corrected height before rendering TOC lines. | `tocOverflow.test.ts`, `multiSection.test.ts` |
 
 ## Fragment Contract
@@ -75,7 +71,7 @@ These fields describe the line slice that pagination placed on a page. Renderers
 and drift reporting should use these fields instead of inferring continuation
 from object order alone.
 
-Table-cell paragraphs expose `lineStart`, `lineEnd`, `continuesFrom`, and
+Flow Table cell paragraphs expose `lineStart`, `lineEnd`, `continuesFrom`, and
 `isContinued` in both full-row placement and breakable-row continuation. For
 split rows, continuation follows the table row split loop, and these fields let
 renderers and drift tools identify the source line slice. Table-cell paragraphs
@@ -92,9 +88,6 @@ Overflow is allowed only as an explicit fallback.
   yet, pagination may place it at the page content top and allow overflow.
 - A too-tall single paragraph line must force progress instead of causing an
   infinite loop.
-- A breakable table-row continuation must not emit an empty body-row slice while
-  remaining cell content stays at the same split point. Forced one-line/spacer
-  overflow is accepted only as the explicit low-capacity fallback.
 - A breakable Flow Table row continuation follows the same no-empty-slice rule
   for non-rowspan rows. Rowspan row-boundary continuation must also avoid
   silent no-progress content slices. Forced one-line/spacer overflow is accepted
@@ -105,7 +98,6 @@ Overflow is allowed only as an explicit fallback.
 
 ## Deferred Work
 
-- Split-at-row-boundary inside legacy table rowspan-linked groups.
 - More complex Flow Table span interactions beyond the covered mixed
   `rowspan`/`colspan` core pagination cases.
 - Independent row/column paragraph continuation across pages. The planned
@@ -122,5 +114,6 @@ Overflow is allowed only as an explicit fallback.
 
 Any change to page-boundary behavior should update this document, add or adjust a
 focused fixture, and keep the full test suite green. High-risk areas are body
-paragraph splitting, widow/orphan rules, `keepWithNext`, table row splitting,
-rowspan groups, repeating headers, page numbers, and TOC repagination.
+paragraph splitting, widow/orphan rules, `keepWithNext`, Flow Table row
+splitting, rowspan groups, repeating headers, page numbers, and TOC
+repagination.
