@@ -22,6 +22,73 @@ Each entry should include:
 
 ---
 
+## 2026-05-21
+
+### Layout Refactor Guardrails and 0.5.18 Baseline
+
+Goal: Reduce risky editor/layout concentration points while preserving current
+document semantics, pagination behavior, undo/redo behavior, and export
+contracts.
+
+Completed:
+
+- Split the large paginator orchestrator into focused pagination modules for
+  cursor state, paragraph flow, TOC, row/flow-row handling, table splitting, and
+  Flow Table rowspan continuation.
+- Extracted conservative editor UI/state seams from `EditorShell.tsx`,
+  including the editor reducer, Page panel, Add panel, and animation-frame state
+  hook, while keeping reducer action behavior unchanged.
+- Replaced fragile table/flow-table binding casts with type guards.
+- Switched document ID generation to prefer `crypto.randomUUID()` while keeping
+  a timestamp/counter fallback for environments without crypto support.
+- Added a flow-row/flow-stack width-total regression check and project version
+  alignment test updates.
+- Added browser font loading/fallback status indicators so preview metric drift
+  is visible without changing persisted document/package versions.
+- Bumped the project release marker to `0.5.18`, while keeping persisted
+  document/package versions unchanged.
+
+Files changed:
+
+- `packages/core/src/binding/index.ts`
+- `packages/core/src/document/defaults.ts`
+- `packages/core/src/document/defaults.test.ts`
+- `packages/core/src/layout/__tests__/flowRowStack.test.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/paginator/`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/AddPanel.tsx`
+- `src/app/editor/_components/PagePanel.tsx`
+- `src/app/editor/_components/editorReducer.ts`
+- `src/app/editor/_components/useAnimationFrameState.ts`
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core --`
+- `git diff --check`
+- Playwright smoke opened
+  `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary`,
+  found the editor shell, Page rail button, Add rail button, and no console/page
+  errors.
+
+Notes / follow-ups:
+
+- Manual deep smoke for undo/redo, inline edit commit/reset, margin editing, and
+  drag/drop remains useful before treating the EditorShell reducer extraction as
+  fully accepted.
+- Future EditorShell decomposition should continue in small slices around
+  persistence/import-export, drag session, WYSIWYG session, and layout
+  reconciliation rather than a broad rewrite.
+
+---
+
 ## 2026-05-20
 
 ### Resize Preview Performance P1-P5

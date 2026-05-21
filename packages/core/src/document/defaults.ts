@@ -30,10 +30,19 @@ import { pt } from "../schema"
 
 // ─── ID Factory ───────────────────────────────────────────────────────────────
 
-let _counter = 0
+let _fallbackCounter = 0
+
+function createRandomIdSegment(): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  if (uuid) return uuid.replace(/-/g, "")
+
+  _fallbackCounter += 1
+  const random = Math.random().toString(36).slice(2)
+  return `${Date.now().toString(36)}_${random}_${_fallbackCounter}`
+}
+
 export function createId(prefix = "node"): string {
-  _counter += 1
-  return `${prefix}_${Date.now()}_${_counter}`
+  return `${prefix}_${createRandomIdSegment()}`
 }
 
 // ─── Default Values ───────────────────────────────────────────────────────────

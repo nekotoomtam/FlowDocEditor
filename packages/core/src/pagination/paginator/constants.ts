@@ -1,0 +1,1 @@
+export const MINIMUM_ROW_SPLIT_HEIGHT = 20

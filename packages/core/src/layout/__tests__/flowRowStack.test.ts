@@ -113,6 +113,27 @@ describe("flow-row / flow-stack measurement", () => {
     expect(right.x).toBeCloseTo(left.x + left.width + 12, 0)
   })
 
+  it("keeps irregular flow-stack widths plus gaps equal to the available width", () => {
+    const p1 = makePara("p1", "A")
+    const p2 = makePara("p2", "B")
+    const p3 = makePara("p3", "C")
+    const row = measureFlowRow(makeDoc(["fr1"], {
+      fr1: { id: "fr1", type: "flow-row", props: { gap: 7 }, childIds: ["fs1", "fs2", "fs3"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 33.33 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 33.33 }, childIds: ["p2"] },
+      fs3: { id: "fs3", type: "flow-stack", props: { widthShare: 33.34 }, childIds: ["p3"] },
+      p1,
+      p2,
+      p3,
+    }))
+
+    const widthSum = row.children.reduce((sum, child) => sum + child.width, 0)
+    const totalGap = 7 * (row.children.length - 1)
+
+    expect(widthSum + totalGap).toBeCloseTo(CW, 8)
+    expect(row.children[2].x + row.children[2].width).toBeCloseTo(CX + CW, 8)
+  })
+
   it("aligns sibling flow-stack heights to the flow-row height", () => {
     const p1 = makePara("p1", "Short")
     const p2 = makePara("p2", "A\nB\nC\nD")

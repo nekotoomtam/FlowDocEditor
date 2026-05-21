@@ -131,6 +131,16 @@ function bindParagraphWithResolver(
 }
 
 type TableLikeNode = TableNode | FlowTableNode
+type PreciseLayoutTableNode = Extract<LayoutNode, { type: "table" }> & TableNode
+type PreciseLayoutFlowTableNode = Extract<LayoutNode, { type: "flow-table" }> & FlowTableNode
+
+function isTableLayoutNode(node: LayoutNode): node is PreciseLayoutTableNode {
+  return node.type === "table"
+}
+
+function isFlowTableLayoutNode(node: LayoutNode): node is PreciseLayoutFlowTableNode {
+  return node.type === "flow-table"
+}
 
 function bindTableWithResolver<T extends TableLikeNode>(
   table: T,
@@ -152,8 +162,8 @@ function bindLayoutNodeWithResolver(
   resolveFallback: FieldRefFallbackResolver,
 ): LayoutNode {
   if (node.type === "paragraph") return bindParagraphWithResolver(node, resolveValue, resolveFallback)
-  if (node.type === "table") return bindTableWithResolver(node as unknown as TableNode, resolveValue, resolveFallback) as unknown as LayoutNode
-  if (node.type === "flow-table") return bindTableWithResolver(node as unknown as FlowTableNode, resolveValue, resolveFallback) as unknown as LayoutNode
+  if (isTableLayoutNode(node)) return bindTableWithResolver(node, resolveValue, resolveFallback)
+  if (isFlowTableLayoutNode(node)) return bindTableWithResolver(node, resolveValue, resolveFallback)
   return node
 }
 
