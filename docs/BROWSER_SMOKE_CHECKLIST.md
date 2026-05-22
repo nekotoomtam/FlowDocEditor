@@ -28,6 +28,9 @@ validates a current browser behavior.
 - WYSIWYG inline editing is opt-in. Set
   `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1` before starting the app when the
   smoke intentionally targets the experimental WYSIWYG path.
+- For local rich text draft work, `npm.cmd run dev:wysiwyg` starts the dev
+  server with the base WYSIWYG text engine, inline edit, and rich draft flags
+  enabled together.
 - Confirm the editor loads and no unexpected layout error is visible.
 - Be aware that `localStorage` may contain a dirty document from earlier manual
   work. Use the existing document when the bug depends on it; use New or clear
@@ -82,6 +85,19 @@ documents into `localStorage`, explicitly enables
 - a package v2 custom registry appears in the Field palette and selected
   fieldRef details appear in the property panel
 - property-panel fieldRef label/fallback edits autosave back into package v2
+
+Run the rich draft smoke when a change touches the flag-gated rich text draft
+bridge, rich toolbar commands, pending style, selected-range rich styling, or
+rich draft visual preview behavior:
+
+- Windows PowerShell: `npm.cmd run smoke:wysiwyg-rich-draft`
+- Non-Windows: `npm run smoke:wysiwyg-rich-draft`
+
+The rich draft smoke starts a flagged editor and verifies styled paragraph
+commit/undo/redo, keyboard-created bold runs, toolbar-created underline runs,
+collapsed-caret toolbar state, selected-range toolbar styling with a visible
+SVG selection overlay, `range` toolbar mode, the rich toolbar scope chip, and a
+styled Flow Table cell paragraph.
 
 Use `SMOKE_BASE_URL=http://localhost:<port>/editor npm run smoke:editor` when
 you intentionally want to run against an already-started server. That external

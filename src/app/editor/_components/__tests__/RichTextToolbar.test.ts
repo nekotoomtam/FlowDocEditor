@@ -6,7 +6,9 @@ import type { DocumentNode, InlineNode, ParagraphNode, ParagraphProps, TextRunSt
 import { pt } from "@/schema"
 import {
   RichTextToolbar,
+  resolveRichTextToolbarCommandRange,
   resolveRichTextToolbarRange,
+  resolveRichTextToolbarScope,
   resolveRichTextToolbarStyleStateRange,
   type RichTextToolbarSelection,
 } from "../RichTextToolbar"
@@ -121,6 +123,9 @@ describe("RichTextToolbar", () => {
     expect(markup).toContain('data-active-node-id="p1"')
     expect(markup).toContain('data-enabled="true"')
     expect(markup).toContain('data-style-mode="paragraph"')
+    expect(markup).toContain('data-testid="rich-text-toolbar-scope"')
+    expect(markup).toContain('data-scope="paragraph"')
+    expect(markup).toContain("Paragraph")
     expect(markup).toContain('data-testid="rich-text-toolbar-font-family"')
     expect(markup).toContain('data-testid="rich-text-toolbar-bold"')
     expect(markup).toContain('aria-pressed="true"')
@@ -159,6 +164,8 @@ describe("RichTextToolbar", () => {
     expect(markup).toContain('data-style-mode="range"')
     expect(markup).toContain('data-style-start="1"')
     expect(markup).toContain('data-style-end="3"')
+    expect(markup).toContain('data-scope="range"')
+    expect(markup).toContain("Selected text")
     expect(markup).not.toContain('data-mixed="true"')
   })
 
@@ -202,6 +209,25 @@ describe("RichTextToolbar", () => {
     expect(markup).toContain('aria-pressed="true"')
   })
 
+  it("communicates collapsed rich draft styling as next typed text", () => {
+    const docParagraph = paragraphNode({}, [{ id: "t1", type: "text", text: "A" }])
+    const draftParagraph = paragraphNode({}, [{ id: "t1", type: "text", text: "A" }])
+    const markup = renderToolbar(
+      docWithParagraph(docParagraph),
+      "p1",
+      true,
+      { nodeId: "p1", anchorOffset: 1, focusOffset: 1 },
+      draftParagraph,
+      { fontStyle: "italic" },
+    )
+
+    expect(markup).toContain('data-style-mode="paragraph"')
+    expect(markup).toContain('data-scope="caret"')
+    expect(markup).toContain("Next text")
+    expect(markup).toContain('data-testid="rich-text-toolbar-italic"')
+    expect(markup).toContain('aria-pressed="true"')
+  })
+
   it("falls back to paragraph mode when the WYSIWYG selection is collapsed", () => {
     expect(resolveRichTextToolbarRange("p1", 5, { nodeId: "p1", anchorOffset: 2, focusOffset: 2 })).toEqual({
       start: 0,
@@ -218,6 +244,58 @@ describe("RichTextToolbar", () => {
     })
   })
 
+  it("uses live command selection ahead of the debounced display selection", () => {
+    expect(resolveRichTextToolbarCommandRange(
+      "p1",
+      8,
+      { nodeId: "p1", anchorOffset: 1, focusOffset: 4 },
+      { nodeId: "p1", anchorOffset: 3, focusOffset: 7 },
+    )).toEqual({
+      start: 3,
+      end: 7,
+      mode: "range",
+    })
+  })
+
+  it("falls back to debounced display selection when no command selection prop is provided", () => {
+    expect(resolveRichTextToolbarCommandRange(
+      "p1",
+      8,
+      { nodeId: "p1", anchorOffset: 1, focusOffset: 4 },
+      undefined,
+    )).toEqual({
+      start: 1,
+      end: 4,
+      mode: "range",
+    })
+  })
+
+  it("lets an explicit null command selection override a stale display range", () => {
+    expect(resolveRichTextToolbarCommandRange(
+      "p1",
+      8,
+      { nodeId: "p1", anchorOffset: 1, focusOffset: 4 },
+      null,
+    )).toEqual({
+      start: 0,
+      end: 8,
+      mode: "paragraph",
+    })
+  })
+
+  it("lets a live collapsed command selection override a stale display range", () => {
+    expect(resolveRichTextToolbarCommandRange(
+      "p1",
+      8,
+      { nodeId: "p1", anchorOffset: 1, focusOffset: 4 },
+      { nodeId: "p1", anchorOffset: 5, focusOffset: 5 },
+    )).toEqual({
+      start: 0,
+      end: 8,
+      mode: "paragraph",
+    })
+  })
+
   it("resolves collapsed style-state ranges at the caret", () => {
     expect(resolveRichTextToolbarStyleStateRange("p1", 5, { nodeId: "p1", anchorOffset: 9, focusOffset: 2 })).toEqual({
       start: 2,
@@ -227,6 +305,33 @@ describe("RichTextToolbar", () => {
       start: 2,
       end: 2,
     })
+  })
+
+  it("resolves the visible toolbar scope from range, caret, and inactive state", () => {
+    expect(resolveRichTextToolbarScope({
+      canStyleText: true,
+      mode: "range",
+      hasActiveRichDraft: true,
+      hasCollapsedSelection: false,
+    })).toBe("range")
+    expect(resolveRichTextToolbarScope({
+      canStyleText: true,
+      mode: "paragraph",
+      hasActiveRichDraft: true,
+      hasCollapsedSelection: true,
+    })).toBe("caret")
+    expect(resolveRichTextToolbarScope({
+      canStyleText: true,
+      mode: "paragraph",
+      hasActiveRichDraft: false,
+      hasCollapsedSelection: true,
+    })).toBe("paragraph")
+    expect(resolveRichTextToolbarScope({
+      canStyleText: false,
+      mode: "range",
+      hasActiveRichDraft: true,
+      hasCollapsedSelection: false,
+    })).toBe("inactive")
   })
 
   it("disables the toolbar for paragraphs that still contain non-text inline nodes", () => {

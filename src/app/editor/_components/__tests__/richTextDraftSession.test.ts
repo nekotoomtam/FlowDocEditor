@@ -250,6 +250,19 @@ describe("rich text draft session adapter", () => {
     expect(isWysiwygRichTextDraftSessionLayoutFresh(moved)).toBe(true)
   })
 
+  it("keeps the same object for duplicate rich draft selection moves", () => {
+    const started = startWysiwygRichTextDraftSessionState(INACTIVE_WYSIWYG_RICH_TEXT_DRAFT_SESSION, {
+      nodeId: "p1",
+      paragraph: paragraph([textRun("t1", "Alpha")]),
+      caretOffset: 2,
+    })
+
+    expect(moveWysiwygRichTextDraftSessionSelection(started, 2, {
+      anchorOffset: 2,
+      focusOffset: 2,
+    })).toBe(started)
+  })
+
   it("marks layout freshness independently from rich draft content", () => {
     const started = startWysiwygRichTextDraftSessionState(INACTIVE_WYSIWYG_RICH_TEXT_DRAFT_SESSION, {
       nodeId: "p1",

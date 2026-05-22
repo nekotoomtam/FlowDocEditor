@@ -81,6 +81,9 @@ Users should be able to:
 - Normal node chrome must not use per-node background tint as the primary
   structure cue. Authored fills, active edit previews, selection outlines,
   resize affordances, and read-only zone backgrounds remain allowed.
+- Rich text toolbar scope indicators are editor-only affordances. They should
+  communicate the command target (`Paragraph`, `Next text`, or `Selected text`)
+  without becoming document data or creating history entries.
 - The canvas may show a selected-node action rail as editor-only chrome. The
   rail is action-focused, separate from the path, and should stay selected-only
   so hover remains preview-only. Drag, duplicate, and delete actions must route
@@ -152,6 +155,25 @@ Paragraph box styling is defined in
 - The active custom caret should blink while the editor focus remains in the
   inline text session. A caret-only move must keep the SVG caret visible and
   must not require document or pagination changes.
+- In the FlowDoc-owned text-engine lane, printable Space input must insert a
+  literal U+0020 space whether the browser reports the key as `" "`, `Space`,
+  or `Spacebar`.
+- Editor SVG text layers must preserve authored interior whitespace when
+  drawing text. Line-edge whitespace trimming remains a layout/document policy,
+  so the active WYSIWYG edit layer may draw an editor-only trailing-whitespace
+  caret overlay to show the caret advancing over draft spaces without changing
+  pagination, export, or stored document semantics.
+- Immediate text-engine visual state should dedupe equivalent echo/layout
+  states and avoid repeated synchronous flushes during key-repeat bursts. Key
+  repeat must not create document history, pagination, or nested-update loops
+  beyond the actual text changes.
+- Text-changing WYSIWYG draft sync may coalesce parent/session updates to the
+  latest payload per animation frame so typing, Space repeat, Backspace repeat,
+  and line wrapping do not push every key through the whole editor tree. Pending
+  draft sync must still flush before edit completion, blur completion, rich text
+  shortcut handling, and unmount cleanup so commit/style commands never read a
+  stale final character. Stale parent props must not overwrite a newer local
+  draft while that local draft is still the active visual truth.
 - In the FlowDoc-owned text-engine lane, ArrowLeft/ArrowRight/ArrowUp/ArrowDown
   should update the transient caret/selection state from FlowDoc text and line
   geometry. Vertical ArrowUp/ArrowDown navigation should use the rendered
@@ -172,6 +194,11 @@ Paragraph box styling is defined in
 - Page splitting and non-active continuation fragments still come from
   `PaginatedDocument`.
 - Full browser/server pagination should reconcile after edit settles or exits.
+- In the rich text draft lane, non-layout run styles (`textColor`,
+  `textDecoration`, `strikethrough`) may use an active-paragraph visual preview
+  instead of full draft pagination when the paragraph is not inside row-stack,
+  Flow Stack, or Flow Table layout. Layout-affecting styles and complex
+  containers must continue through draft pagination.
 - Continuation fragments need extra care: only the clicked fragment should enter
   edit mode, and continuation text/caret offsets must remain slice-aware. The
   active textarea must hold only the current fragment text slice when line
@@ -190,6 +217,26 @@ Paragraph box styling is defined in
   remounting textarea.
 - Caret movement without text changes should update editor caret state without
   dispatching a document draft update.
+- Pointer/range selection may coalesce move events to the latest position per
+  animation frame, and duplicate caret/selection offsets should be ignored.
+  Selection remains editor/session state only and must not dirty document
+  content or layout history by itself.
+- During pointer-drag range selection, the active WYSIWYG text layer may render
+  a local selection preview and defer syncing the authoritative editor session
+  selection until pointerup/cancel resolution. The preview must remain local to
+  the text layer, use the same FlowDoc line geometry, and must not create
+  document history or pagination state.
+- While that pointer-selection overlay is active, wheel input may be forwarded
+  to the editor canvas scroll container so the user can continue extending a
+  selection through vertically distant content. This is editor-only interaction
+  behavior and must not mutate document content or history.
+- Rich text toolbar display/scope state may debounce non-collapsed range
+  selections during pointer drags, but toolbar commands must apply to the
+  latest live text selection rather than the debounced display snapshot.
+- WYSIWYG selection-drag and canvas commit performance probes must remain
+  editor-only and trace-gated. They may record scalar timings and counts for
+  pointer frame, hit-test, selection apply, overlay geometry, and React commit
+  work, but must not store paragraph text or mutate document/history state.
 - Blur from remounting/repositioning the active inline textarea should not
   finalize the edit session if focus lands on the replacement textarea for the
   same paragraph.

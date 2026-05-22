@@ -3,7 +3,7 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.6`: suitable for self-use with accepted
+The current baseline is `0.6.7`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -36,6 +36,7 @@ but not yet a general-user `v1`.
 | `0.6.4` | Patch baseline for run-level rich text document operations, styled-run WYSIWYG text preservation, read-only render/export style coverage, and the fixed paragraph text toolbar shell without changing persisted document or package schema versions. |
 | `0.6.5` | Patch baseline for the flag-gated rich draft live editor bridge, basic toolbar/keyboard rich text commands, pending-style typed insertion, and rich draft browser smoke coverage without changing persisted document or package schema versions. |
 | `0.6.6` | Patch baseline for collapsed-caret rich toolbar state, rich draft smoke caret assertions, and DOCX rich-run semantic export coverage without changing persisted document or package schema versions. |
+| `0.6.7` | Patch baseline for WYSIWYG Space insertion feedback, repeated-space rendering, Space key-repeat hardening, rich draft toolbar selection smoothness probes, and focused browser smoke/probe coverage without changing persisted document or package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

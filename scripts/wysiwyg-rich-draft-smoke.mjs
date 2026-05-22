@@ -8,10 +8,16 @@ const DEFAULT_SMOKE_PORT = 4022
 const RICH_PARAGRAPH_ID = "rich-draft-smoke-p1"
 const KEYBOARD_PARAGRAPH_ID = "rich-draft-smoke-keyboard-p1"
 const TOOLBAR_PARAGRAPH_ID = "rich-draft-smoke-toolbar-p1"
+const RANGE_PARAGRAPH_ID = "rich-draft-smoke-range-p1"
+const SPACE_PARAGRAPH_ID = "rich-draft-smoke-space-p1"
 const FLOW_TABLE_PARAGRAPH_ID = "rich-draft-smoke-flow-table-p1"
 const RICH_MARKER = "RICH_DRAFT_BROWSER_MARKER"
 const KEYBOARD_MARKER = "RICH_DRAFT_KEYBOARD_MARKER"
 const TOOLBAR_MARKER = "RICH_DRAFT_TOOLBAR_MARKER"
+const RANGE_TARGET_TEXT = "target"
+const SPACE_MARKER = "SPACE_KEY_MARKER"
+const SPACE_REPEAT_COUNT = 48
+const SPACE_INSERTION = " ".repeat(SPACE_REPEAT_COUNT)
 const FLOW_TABLE_MARKER = "RICH_DRAFT_FLOW_TABLE_MARKER"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
@@ -61,6 +67,12 @@ function makeRichDraftSmokeDocument() {
   ])
   const toolbarParagraph = paragraph(TOOLBAR_PARAGRAPH_ID, [
     { id: "rich-draft-smoke-toolbar-p1-text", type: "text", text: "Toolbar base" },
+  ])
+  const rangeParagraph = paragraph(RANGE_PARAGRAPH_ID, [
+    { id: "rich-draft-smoke-range-p1-text", type: "text", text: `Range ${RANGE_TARGET_TEXT}` },
+  ])
+  const spaceParagraph = paragraph(SPACE_PARAGRAPH_ID, [
+    { id: "rich-draft-smoke-space-p1-text", type: "text", text: "Space base" },
   ])
   const flowTableParagraph = paragraph(FLOW_TABLE_PARAGRAPH_ID, [
     { id: "rich-draft-smoke-flow-table-p1-italic", type: "text", text: "Flow cell base", style: { fontStyle: "italic" } },
@@ -114,11 +126,20 @@ function makeRichDraftSmokeDocument() {
             id: "rich-draft-smoke-body",
             type: "body",
             props: {},
-            childIds: [RICH_PARAGRAPH_ID, KEYBOARD_PARAGRAPH_ID, TOOLBAR_PARAGRAPH_ID, flowTable.id],
+            childIds: [
+              RICH_PARAGRAPH_ID,
+              KEYBOARD_PARAGRAPH_ID,
+              TOOLBAR_PARAGRAPH_ID,
+              RANGE_PARAGRAPH_ID,
+              SPACE_PARAGRAPH_ID,
+              flowTable.id,
+            ],
           },
           [RICH_PARAGRAPH_ID]: richParagraph,
           [KEYBOARD_PARAGRAPH_ID]: keyboardParagraph,
           [TOOLBAR_PARAGRAPH_ID]: toolbarParagraph,
+          [RANGE_PARAGRAPH_ID]: rangeParagraph,
+          [SPACE_PARAGRAPH_ID]: spaceParagraph,
           [flowTable.id]: flowTable,
         },
       }],
@@ -296,10 +317,12 @@ async function assertToolbarCaretRunState(page) {
   await page.keyboard.press("Home")
   await waitForToolbarButtonPressed(page, "rich-text-toolbar-bold", true, "bold run caret")
   assert(await toolbar.getAttribute("data-style-mode") === "paragraph", "collapsed caret should keep paragraph update mode")
+  assert(await page.getByTestId("rich-text-toolbar-scope").getAttribute("data-scope") === "caret", "collapsed rich draft caret should show next-text scope")
   assert(await page.getByTestId("rich-text-toolbar-bold").getAttribute("data-mixed") === "false", "bold run caret should not show mixed state")
 
   await page.keyboard.press("End")
   await waitForToolbarButtonPressed(page, "rich-text-toolbar-bold", false, "normal run caret")
+  assert(await page.getByTestId("rich-text-toolbar-scope").getAttribute("data-scope") === "caret", "normal rich draft caret should keep next-text scope")
   assert(await page.getByTestId("rich-text-toolbar-bold").getAttribute("data-mixed") === "false", "normal run caret should not show mixed state")
 
   await page.keyboard.press("Escape")
@@ -405,6 +428,44 @@ async function editParagraphWithToolbarCommandAndCommit(page, nodeId, marker) {
   await page.locator(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${nodeId}"]`).waitFor({ state: "detached", timeout: 10000 })
 }
 
+async function editParagraphWithSpaceKeyAndCommit(page, nodeId, marker) {
+  await focusWysiwygBridge(page, nodeId)
+  for (let index = 0; index < SPACE_REPEAT_COUNT; index += 1) {
+    await page.keyboard.press("Space")
+  }
+  await page.keyboard.type(marker, { delay: 4 })
+  await page.waitForFunction((expected) => document.body.textContent?.includes(expected), marker, { timeout: 10000 })
+  await expectNoTextarea(page)
+  await expectNoLayoutError(page)
+  await page.keyboard.press("Escape")
+  await page.locator(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${nodeId}"]`).waitFor({ state: "detached", timeout: 10000 })
+}
+
+async function styleSelectedRangeWithToolbarAndCommit(page) {
+  await focusWysiwygBridge(page, RANGE_PARAGRAPH_ID)
+  const toolbar = page.getByTestId("rich-text-toolbar")
+  for (let index = 0; index < RANGE_TARGET_TEXT.length; index += 1) {
+    await page.keyboard.press("Shift+ArrowLeft")
+  }
+  await page.waitForFunction(
+    ({ start, end }) => {
+      const toolbar = document.querySelector('[data-testid="rich-text-toolbar"]')
+      return toolbar?.getAttribute("data-style-mode") === "range" &&
+        toolbar.getAttribute("data-style-start") === String(start) &&
+        toolbar.getAttribute("data-style-end") === String(end)
+    },
+    { start: "Range ".length, end: "Range ".length + RANGE_TARGET_TEXT.length },
+    { timeout: 10000 },
+  )
+  assert(await page.locator('[data-wysiwyg-selection="true"]').count() > 0, "selected range overlay is not visible")
+  assert(await toolbar.getAttribute("data-style-mode") === "range", "toolbar did not enter range style mode")
+  assert(await page.getByTestId("rich-text-toolbar-scope").getAttribute("data-scope") === "range", "selected range should show range toolbar scope")
+  await page.getByTestId("rich-text-toolbar-bold").click()
+  await waitForToolbarButtonPressed(page, "rich-text-toolbar-bold", true, "selected range bold")
+  await page.keyboard.press("Escape")
+  await page.locator(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${RANGE_PARAGRAPH_ID}"]`).waitFor({ state: "detached", timeout: 10000 })
+}
+
 async function runSmokeAssertions(page) {
   await openSeededEditor(page)
   const toolbarCaretStates = await assertToolbarCaretRunState(page)
@@ -471,6 +532,30 @@ async function runSmokeAssertions(page) {
   )
 
   await installPredicate(page, `(paragraph) =>
+    paragraph.children.some((child) => child.type === "text" && child.text === "${RANGE_TARGET_TEXT}" && child.style?.fontWeight === "bold") &&
+    paragraph.children.some((child) => child.type === "text" && child.text === "Range " && child.style?.fontWeight !== "bold")
+  `)
+  await styleSelectedRangeWithToolbarAndCommit(page)
+  const rangeParagraph = await waitForStoredParagraph(
+    page,
+    RANGE_PARAGRAPH_ID,
+    (paragraph) => paragraph.children.some((child) => child.type === "text" && child.text === RANGE_TARGET_TEXT && child.style?.fontWeight === "bold") &&
+      paragraph.children.some((child) => child.type === "text" && child.text === "Range " && child.style?.fontWeight !== "bold"),
+    "rich toolbar selected range style commit",
+  )
+
+  await installPredicate(page, `(paragraph) =>
+    paragraph.children.map((child) => child.text ?? "").join("").includes("Space base${SPACE_INSERTION}${SPACE_MARKER}")
+  `)
+  await editParagraphWithSpaceKeyAndCommit(page, SPACE_PARAGRAPH_ID, SPACE_MARKER)
+  const spaceParagraph = await waitForStoredParagraph(
+    page,
+    SPACE_PARAGRAPH_ID,
+    (paragraph) => paragraph.children.map((child) => child.text ?? "").join("").includes(`Space base${SPACE_INSERTION}${SPACE_MARKER}`),
+    "space key paragraph commit",
+  )
+
+  await installPredicate(page, `(paragraph) =>
     paragraph.children.some((child) => child.type === "text" && child.text.includes("${FLOW_TABLE_MARKER}")) &&
     paragraph.children.some((child) => child.id === "rich-draft-smoke-flow-table-p1-italic" && child.style?.fontStyle === "italic")
   `)
@@ -488,6 +573,8 @@ async function runSmokeAssertions(page) {
     richParagraphRuns: richParagraph.children.map((child) => ({ id: child.id, text: child.text, style: child.style ?? null })),
     keyboardRuns: keyboardParagraph.children.map((child) => ({ id: child.id, text: child.text, style: child.style ?? null })),
     toolbarRuns: toolbarParagraph.children.map((child) => ({ id: child.id, text: child.text, style: child.style ?? null })),
+    rangeRuns: rangeParagraph.children.map((child) => ({ id: child.id, text: child.text, style: child.style ?? null })),
+    spaceRuns: spaceParagraph.children.map((child) => ({ id: child.id, text: child.text, style: child.style ?? null })),
     flowTableRuns: flowTableParagraph.children.map((child) => ({ id: child.id, text: child.text, style: child.style ?? null })),
   }
 }

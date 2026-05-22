@@ -3,6 +3,7 @@ import {
   appendWysiwygPerfEvent,
   finishWysiwygPerfSpan,
   isWysiwygPerfTraceRuntimeEnabled,
+  recordWysiwygPerfEvent,
   summarizePaginatedForWysiwygPerf,
   type WysiwygPerfEvent,
 } from "../wysiwygPerformance"
@@ -145,6 +146,74 @@ describe("finishWysiwygPerfSpan", () => {
       availableWidth: 120,
       paragraphHeight: 54,
       source: "test-source",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
+  it("records selection hot-path probe metadata without text content", () => {
+    vi.stubGlobal("window", {})
+
+    finishWysiwygPerfSpan(true, "text-engine-pointer-frame", 10, {
+      nodeId: "p1",
+      pageIndex: 0,
+      pointerTargetCount: 2,
+      source: "applied",
+    })
+    finishWysiwygPerfSpan(true, "text-engine-pointer-hit-test", 11, {
+      nodeId: "p1",
+      pageIndex: 0,
+      pointerTargetCount: 2,
+      source: "hit",
+    })
+    finishWysiwygPerfSpan(true, "text-engine-pointer-selection-apply", 12, {
+      nodeId: "p1",
+      textLength: 20,
+      selectionRangeLength: 5,
+      selectionCollapsed: false,
+      source: "changed",
+    })
+    finishWysiwygPerfSpan(true, "text-engine-selection-overlay", 13, {
+      nodeId: "p1",
+      lineCount: 1,
+      overlayRectCount: 1,
+      selectionRangeLength: 5,
+      source: "active",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.map((item) => item.kind)).toEqual([
+      "text-engine-pointer-frame",
+      "text-engine-pointer-hit-test",
+      "text-engine-pointer-selection-apply",
+      "text-engine-selection-overlay",
+    ])
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("selected text")
+  })
+
+  it("records editor canvas React commit metadata with explicit duration", () => {
+    vi.stubGlobal("window", {})
+
+    recordWysiwygPerfEvent(true, {
+      kind: "editor-canvas-react-commit",
+      startedAt: 100,
+      durationMs: 3.5,
+      baseDurationMs: 7.25,
+      commitTime: 120,
+      nodeId: "p1",
+      selectionRangeLength: 4,
+      selectionCollapsed: false,
+      source: "update",
+      pageCount: 1,
+      fragmentCount: 3,
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "editor-canvas-react-commit",
+      durationMs: 3.5,
+      baseDurationMs: 7.25,
+      commitTime: 120,
+      nodeId: "p1",
+      selectionRangeLength: 4,
+      source: "update",
     })
     expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
   })

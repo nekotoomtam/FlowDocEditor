@@ -19,15 +19,17 @@ import {
   resolveVerticalCaretNavigationInFragments,
   resolveSelectionOverlayRectsInFragment,
 } from "./wysiwygCaretMapping"
-import type { WysiwygVerticalCaretLineAffinity } from "./wysiwygCaretMapping"
+import type { WysiwygCollapsedCaretOverlay, WysiwygVerticalCaretLineAffinity } from "./wysiwygCaretMapping"
 import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
 import type { InlineEditSelectionSnapshot } from "./wysiwygTextInteraction"
 import {
   applyWysiwygTextClipboardCut,
   applyWysiwygTextInputKey,
   applyWysiwygTextInputText,
+  areWysiwygTextSelectionsEqual,
   clampWysiwygTextOffset,
   getWysiwygTextSelectedText,
+  normalizeWysiwygTextInputKey,
   WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
 import type { WysiwygTextInputKey, WysiwygTextSelection, WysiwygTextSessionDraftChange } from "./useWysiwygTextSession"
@@ -40,7 +42,7 @@ import {
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
-import { finishWysiwygPerfSpan, startWysiwygPerfSpan } from "./wysiwygPerformance"
+import { finishWysiwygPerfSpan, isWysiwygPerfTraceRuntimeEnabled, startWysiwygPerfSpan } from "./wysiwygPerformance"
 import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
 
 interface Props {
@@ -113,6 +115,11 @@ const INLINE_EDIT_TEXT_COLOR = "#1e40af"
 const WYSIWYG_CARET_BLINK_DURATION = "1.05s"
 const WYSIWYG_TEXT_BLUR_SETTLE_MS = 32
 const POINTER_SELECTION_DRAG_THRESHOLD_PX = 3
+const SVG_TEXT_PRESERVE_WHITESPACE_STYLE: React.CSSProperties = {
+  pointerEvents: "none",
+  userSelect: "none",
+  whiteSpace: "pre",
+}
 
 export function focusElementWithoutScroll(
   element: { focus: (options?: FocusOptions) => void } | null | undefined,
@@ -484,15 +491,15 @@ function renderRichLineRuns(
   if (!line.runs?.length) return null
   const baseY = lineBaselineY(line) * scale
   const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
-  const style: React.CSSProperties = { pointerEvents: "none", userSelect: "none" }
 
   return (
-    <g key={index} clipPath={clip} opacity={opacity} style={style}>
+    <g key={index} clipPath={clip} opacity={opacity} style={{ pointerEvents: "none", userSelect: "none" }}>
       {line.runs
         .filter((run) => run.text.trim() !== "")
         .map((run, runIndex) => (
           <text
             key={runIndex}
+            xmlSpace="preserve"
             x={(line.x + run.x) * scale}
             y={baseY}
             fontSize={run.style.fontSize * scale}
@@ -501,6 +508,7 @@ function renderRichLineRuns(
             fontStyle={fontStyleForLineRun(run)}
             textDecoration={textDecorationForLineRun(run)}
             fill={`#${run.style.textColor}`}
+            style={SVG_TEXT_PRESERVE_WHITESPACE_STYLE}
           >
             {run.text}
           </text>
@@ -528,7 +536,6 @@ function renderLine(
   const textDecoration = textDecorationForRenderProps(renderProps)
   const textColor = textColorForRenderProps(renderProps)
   const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
-  const style: React.CSSProperties = { pointerEvents: "none", userSelect: "none" }
 
   const richLine = renderRichLineRuns(line, index, fragment, pageKey, scale, opacity, clipPathId)
   if (richLine) return richLine
@@ -536,13 +543,14 @@ function renderLine(
   // Justify: draw each non-space word segment at its adjusted x position
   if (align === "justify" && line.segments?.length) {
     return (
-      <g key={index} clipPath={clip} opacity={opacity} style={style}>
+      <g key={index} clipPath={clip} opacity={opacity} style={{ pointerEvents: "none", userSelect: "none" }}>
         {line.segments
           .filter((seg) => seg.kind !== "space" && seg.text.trim() !== "")
           .map((seg, si) => (
-            <text key={si} x={(line.x + seg.x) * scale} y={baseY}
+            <text key={si} xmlSpace="preserve" x={(line.x + seg.x) * scale} y={baseY}
               fontSize={fontSize} fontFamily={fontFamily} fontWeight={fontWeight}
-              fontStyle={fontStyle} textDecoration={textDecoration} fill={textColor}>
+              fontStyle={fontStyle} textDecoration={textDecoration} fill={textColor}
+              style={SVG_TEXT_PRESERVE_WHITESPACE_STYLE}>
               {seg.text}
             </text>
           ))}
@@ -564,7 +572,8 @@ function renderLine(
       fill={textColor}
       opacity={opacity}
       clipPath={clip}
-      style={style}
+      xmlSpace="preserve"
+      style={SVG_TEXT_PRESERVE_WHITESPACE_STYLE}
     >
       {line.text}
     </text>
@@ -625,16 +634,13 @@ function renderCaretBlinkAnimation() {
   )
 }
 
-function renderCollapsedCaret(
+function renderCollapsedCaretOverlay(
   fragment: PageFragment,
   pageKey: string,
   scale: number,
-  caretIndex: number | null,
-  textMeasurer: TextMeasurer | undefined,
+  overlay: WysiwygCollapsedCaretOverlay | null,
   clipPathId?: string,
 ) {
-  if (caretIndex == null) return null
-  const overlay = resolveCollapsedCaretOverlayInFragment(fragment, caretIndex, { textMeasurer })
   if (!overlay) return null
 
   return (
@@ -654,6 +660,65 @@ function renderCollapsedCaret(
       {renderCaretBlinkAnimation()}
     </line>
   )
+}
+
+function renderCollapsedCaret(
+  fragment: PageFragment,
+  pageKey: string,
+  scale: number,
+  caretIndex: number | null,
+  textMeasurer: TextMeasurer | undefined,
+  clipPathId?: string,
+) {
+  if (caretIndex == null) return null
+  const overlay = resolveCollapsedCaretOverlayInFragment(fragment, caretIndex, { textMeasurer })
+  return renderCollapsedCaretOverlay(fragment, pageKey, scale, overlay, clipPathId)
+}
+
+export function resolveTrailingWhitespaceCaretOverlayInFragment(input: {
+  fragment: PageFragment
+  caretIndex: number | null
+  draftText: string
+  textMeasurer?: TextMeasurer
+}): WysiwygCollapsedCaretOverlay | null {
+  const caret = clampWysiwygTextOffset(input.draftText, input.caretIndex)
+  if (caret == null || caret === 0) return null
+  const lines = input.fragment.lines ?? []
+
+  for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex -= 1) {
+    const line = lines[lineIndex]
+    const segments = line.segments ?? []
+    const lastSegment = segments.at(-1)
+    if (!lastSegment) continue
+    if (caret <= lastSegment.end) continue
+    const trailingText = input.draftText.slice(lastSegment.end, caret)
+    if (!/^[ \t]+$/.test(trailingText)) continue
+    const baseCaret = resolveCaretPositionInFragment(input.fragment, lastSegment.end, {
+      textMeasurer: input.textMeasurer,
+    })
+    if (!baseCaret) continue
+    const fontFamilyKey = input.fragment.renderProps?.fontFamilyKey
+    const fontSize = line.fontSize ?? input.fragment.renderProps?.fontSize
+    const fontVariant = resolveFontVariantKeyForStyle(
+      input.fragment.renderProps?.fontWeight,
+      input.fragment.renderProps?.fontStyle,
+    )
+    const trailingWidth = input.textMeasurer && fontFamilyKey && fontSize
+      ? input.textMeasurer.measureText(trailingText, fontFamilyKey, fontSize, fontVariant).width
+      : 0
+    const x = baseCaret.x + trailingWidth
+    return {
+      offset: caret,
+      pageIndex: input.fragment.pageIndex,
+      fragmentIndex: input.fragment.fragmentIndex,
+      x1: x,
+      y1: baseCaret.y,
+      x2: x,
+      y2: baseCaret.y + baseCaret.height,
+    }
+  }
+
+  return null
 }
 
 function renderSelectionOverlay(
@@ -677,6 +742,34 @@ function renderSelectionOverlay(
       style={{ pointerEvents: "none" }}
     />
   ))
+}
+
+export function resolveSelectionOverlayRectsInFragmentWithPerf(input: {
+  fragment: PageFragment
+  anchorOffset: number
+  focusOffset: number
+  textMeasurer?: TextMeasurer
+  tracePerf?: boolean
+  source?: string
+}): ReturnType<typeof resolveSelectionOverlayRectsInFragment> {
+  const startedAt = input.tracePerf ? startWysiwygPerfSpan() : null
+  const rects = resolveSelectionOverlayRectsInFragment(
+    input.fragment,
+    input.anchorOffset,
+    input.focusOffset,
+    { textMeasurer: input.textMeasurer },
+  )
+  if (startedAt !== null) {
+    finishWysiwygPerfSpan(true, "text-engine-selection-overlay", startedAt, {
+      nodeId: input.fragment.nodeId,
+      pageIndex: input.fragment.pageIndex,
+      lineCount: input.fragment.lines?.length ?? 0,
+      selectionRangeLength: Math.abs(input.focusOffset - input.anchorOffset),
+      overlayRectCount: rects.length,
+      source: input.source,
+    })
+  }
+  return rects
 }
 
 interface TextEngineClipboardShortcutEvent {
@@ -719,6 +812,54 @@ export interface WysiwygImmediateDraftLayoutState {
   baseText: string
   draftText: string
   layout: WysiwygDraftParagraphLayout
+}
+
+export interface WysiwygDraftSyncPayload {
+  text: string
+  caretOffset: number | null
+  selection: WysiwygTextSelection | null
+}
+
+export function areWysiwygImmediateTextEchoStatesEqual(
+  a: WysiwygImmediateTextEcho | null,
+  b: WysiwygImmediateTextEcho | null,
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.baseText === b.baseText && a.draftText === b.draftText
+}
+
+export function areWysiwygImmediateDraftLayoutStatesEqual(
+  a: WysiwygImmediateDraftLayoutState | null,
+  b: WysiwygImmediateDraftLayoutState | null,
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.baseText === b.baseText && a.draftText === b.draftText
+}
+
+export function shouldFlushWysiwygImmediateVisualState(input: {
+  previousTextEcho: WysiwygImmediateTextEcho | null
+  previousDraftLayout: WysiwygImmediateDraftLayoutState | null
+  nextTextEcho: WysiwygImmediateTextEcho | null
+  nextDraftLayout: WysiwygImmediateDraftLayoutState | null
+}): boolean {
+  return (
+    !input.previousTextEcho &&
+    !input.previousDraftLayout &&
+    Boolean(input.nextTextEcho || input.nextDraftLayout)
+  )
+}
+
+export function areWysiwygDraftSyncPayloadsEqual(
+  a: WysiwygDraftSyncPayload | null,
+  b: WysiwygDraftSyncPayload | null,
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.text === b.text &&
+    a.caretOffset === b.caretOffset &&
+    areWysiwygTextSelectionsEqual(a.selection, b.selection)
 }
 
 export function shouldKeepWysiwygImmediateDraftLayout(
@@ -937,6 +1078,30 @@ export function resolveWysiwygWordSelectionRange(
   return start < end ? { anchorOffset: start, focusOffset: end } : null
 }
 
+export function resolveWysiwygPointerSelectionState(input: {
+  text: string
+  anchorOffset: number
+  focusOffset: number
+  currentCaretOffset: number | null | undefined
+  currentSelection: WysiwygTextSelection | null | undefined
+}): {
+  caretOffset: number
+  selection: WysiwygTextSelection
+  selectionRangeLength: number
+  changed: boolean
+} {
+  const safeAnchor = clampWysiwygTextOffset(input.text, input.anchorOffset) ?? 0
+  const safeFocus = clampWysiwygTextOffset(input.text, input.focusOffset) ?? safeAnchor
+  const selection = { anchorOffset: safeAnchor, focusOffset: safeFocus }
+  return {
+    caretOffset: safeFocus,
+    selection,
+    selectionRangeLength: Math.abs(safeFocus - safeAnchor),
+    changed: input.currentCaretOffset !== safeFocus ||
+      !areWysiwygTextSelectionsEqual(input.currentSelection, selection),
+  }
+}
+
 export interface WysiwygTextPointerFragmentTarget {
   pageKey: string
   fragment: PageFragment
@@ -972,6 +1137,46 @@ function safelyReleasePointerCapture(element: Element | null | undefined, pointe
   } catch {
     // The browser may already have released capture when pointerup/cancel fires.
   }
+}
+
+export function resolvePointerSelectionWheelScrollDelta(input: {
+  deltaX: number
+  deltaY: number
+  deltaMode: number
+  lineHeight?: number
+  pageHeight?: number
+}): { left: number; top: number } {
+  const unit = input.deltaMode === 1
+    ? input.lineHeight ?? 16
+    : input.deltaMode === 2
+      ? input.pageHeight ?? 800
+      : 1
+  return {
+    left: input.deltaX * unit,
+    top: input.deltaY * unit,
+  }
+}
+
+function scrollEditorCanvasByPointerSelectionWheel(input: {
+  deltaX: number
+  deltaY: number
+  deltaMode: number
+}): boolean {
+  if (typeof document === "undefined") return false
+  const canvas = document.querySelector<HTMLElement>('[data-testid="editor-canvas"]')
+  if (!canvas) return false
+  const delta = resolvePointerSelectionWheelScrollDelta({
+    ...input,
+    pageHeight: canvas.clientHeight,
+  })
+  if (delta.left === 0 && delta.top === 0) return false
+  if (typeof canvas.scrollBy === "function") {
+    canvas.scrollBy({ left: delta.left, top: delta.top, behavior: "auto" })
+  } else {
+    canvas.scrollLeft += delta.left
+    canvas.scrollTop += delta.top
+  }
+  return true
 }
 
 export function resolveWysiwygTextPointerOffsetFromFragmentTargets(input: {
@@ -1098,7 +1303,8 @@ function renderLiveTextEcho(
         textDecoration={textDecoration}
         fill={textColor}
         opacity={0.88}
-        style={{ pointerEvents: "none", userSelect: "none" }}
+        xmlSpace="preserve"
+        style={SVG_TEXT_PRESERVE_WHITESPACE_STYLE}
       >
         {part}
       </text>,
@@ -1165,15 +1371,29 @@ export function WysiwygTextLayer({
   const pointerSelectionAnchorRef = useRef<number | null>(null)
   const activePointerIdRef = useRef<number | null>(null)
   const pointerDragStartPointRef = useRef<{ x: number; y: number } | null>(null)
+  const scheduledPointerSelectionFrameRef = useRef<number | null>(null)
+  const scheduledPointerSelectionStartedAtRef = useRef<number | null>(null)
+  const scheduledPointerSelectionPointRef = useRef<{ clientX: number; clientY: number } | null>(null)
   const verticalCaretXRef = useRef<number | null>(null)
   const verticalCaretLineAffinityRef = useRef<WysiwygVerticalCaretLineAffinity | null>(null)
   const isComposingTextEngineRef = useRef(false)
   const suppressNextCompositionInputRef = useRef(false)
   const blurEndEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isPointerSelecting, setIsPointerSelecting] = useState(false)
+  const [localPointerSelectionPreview, setLocalPointerSelectionPreviewState] = useState<WysiwygTextSelection | null>(null)
+  const localPointerSelectionPreviewRef = useRef<WysiwygTextSelection | null>(null)
   const [immediateTextEcho, setImmediateTextEcho] = useState<WysiwygImmediateTextEcho | null>(null)
   const immediateTextEchoRef = useRef<WysiwygImmediateTextEcho | null>(null)
   const [immediateDraftLayout, setImmediateDraftLayout] = useState<WysiwygImmediateDraftLayoutState | null>(null)
+  const immediateDraftLayoutRef = useRef<WysiwygImmediateDraftLayoutState | null>(null)
+  const isApplyingImmediateVisualStateRef = useRef(false)
+  const pendingDraftSyncRef = useRef<WysiwygDraftSyncPayload | null>(null)
+  const scheduledDraftSyncFrameRef = useRef<number | null>(null)
+  const onDraftChangeRef = useRef(onDraftChange)
+  const nodeIdRef = useRef(fragment.nodeId)
+  const traceHotPathPerf = useMemo(() => (
+    isWysiwygPerfTraceRuntimeEnabled(WYSIWYG_PERF_TRACE_ENABLED)
+  ), [])
   const draftStateRef = useRef<{
     text: string
     caretOffset: number | null
@@ -1244,26 +1464,105 @@ export function WysiwygTextLayer({
     ? null
     : liveEchoVisual ?? immediateLiveEchoVisual
 
+  onDraftChangeRef.current = onDraftChange
+  nodeIdRef.current = fragment.nodeId
+
+  const setLocalPointerSelectionPreview = useCallback((next: WysiwygTextSelection | null) => {
+    localPointerSelectionPreviewRef.current = next
+    setLocalPointerSelectionPreviewState((current) => (
+      areWysiwygTextSelectionsEqual(current, next) ? current : next
+    ))
+  }, [])
+
+  const cancelScheduledDraftSyncFrame = useCallback(() => {
+    if (scheduledDraftSyncFrameRef.current === null) return
+    if (typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(scheduledDraftSyncFrameRef.current)
+    }
+    scheduledDraftSyncFrameRef.current = null
+  }, [])
+
+  const flushPendingDraftSync = useCallback(() => {
+    cancelScheduledDraftSyncFrame()
+    const pending = pendingDraftSyncRef.current
+    const currentOnDraftChange = onDraftChangeRef.current
+    if (!pending || !currentOnDraftChange) return false
+    pendingDraftSyncRef.current = null
+    currentOnDraftChange(nodeIdRef.current, pending.text, pending.caretOffset, pending.selection)
+    return true
+  }, [cancelScheduledDraftSyncFrame])
+
+  const flushPendingDraftSyncImmediately = useCallback(() => {
+    let flushed = false
+    flushSync(() => {
+      flushed = flushPendingDraftSync()
+    })
+    return flushed
+  }, [flushPendingDraftSync])
+
+  const scheduleDraftSync = useCallback((payload: WysiwygDraftSyncPayload, options: { defer?: boolean } = {}) => {
+    const currentOnDraftChange = onDraftChangeRef.current
+    if (!currentOnDraftChange) return false
+    if (areWysiwygDraftSyncPayloadsEqual(pendingDraftSyncRef.current, payload)) return true
+    pendingDraftSyncRef.current = payload
+    if (!options.defer || typeof requestAnimationFrame !== "function") {
+      flushPendingDraftSync()
+      return true
+    }
+    if (scheduledDraftSyncFrameRef.current !== null) return true
+    scheduledDraftSyncFrameRef.current = requestAnimationFrame(() => {
+      scheduledDraftSyncFrameRef.current = null
+      const latest = pendingDraftSyncRef.current
+      if (!latest || !onDraftChangeRef.current) return
+      pendingDraftSyncRef.current = null
+      onDraftChangeRef.current(nodeIdRef.current, latest.text, latest.caretOffset, latest.selection)
+    })
+    return true
+  }, [flushPendingDraftSync])
+
   useEffect(() => {
+    const nextText = draftText ?? ""
+    const pendingDraftSync = pendingDraftSyncRef.current
+    const immediateDraftText = immediateDraftLayoutRef.current?.draftText ??
+      immediateTextEchoRef.current?.draftText ??
+      null
+    const shouldPreserveLocalDraft = Boolean(
+      (
+        pendingDraftSync &&
+        pendingDraftSync.text !== nextText &&
+        draftStateRef.current.text !== nextText
+      ) ||
+      (
+        immediateDraftText &&
+        immediateDraftText !== nextText &&
+        draftStateRef.current.text === immediateDraftText
+      ),
+    )
+    if (shouldPreserveLocalDraft) return
     draftStateRef.current = {
-      text: draftText ?? "",
+      text: nextText,
       caretOffset: caretIndex,
       selection,
     }
     setImmediateTextEcho((current) => {
-      const next = current?.draftText === (draftText ?? "") && (lines != null || liveTextEcho != null)
+      const next = current?.draftText === nextText && (lines != null || liveTextEcho != null)
         ? null
         : current
       immediateTextEchoRef.current = next
       return next
     })
     setImmediateDraftLayout((current) => {
-      const next = shouldKeepWysiwygImmediateDraftLayout(current, draftText ?? "", lines != null)
+      const next = shouldKeepWysiwygImmediateDraftLayout(current, nextText, lines != null)
         ? current
         : null
+      immediateDraftLayoutRef.current = next
       return next
     })
   }, [caretIndex, draftText, lines, liveTextEcho, selection])
+
+  useEffect(() => {
+    setLocalPointerSelectionPreview(null)
+  }, [draftText, fragment.nodeId, setLocalPointerSelectionPreview])
 
   useEffect(() => {
     focusElementWithoutScroll(inputBridgeRef.current)
@@ -1276,6 +1575,10 @@ export function WysiwygTextLayer({
     }
   }, [])
 
+  useEffect(() => () => {
+    flushPendingDraftSync()
+  }, [flushPendingDraftSync])
+
   const scheduleBlurEndEdit = useCallback(() => {
     if (!onEndEdit) return
     if (blurEndEditTimerRef.current) clearTimeout(blurEndEditTimerRef.current)
@@ -1283,9 +1586,10 @@ export function WysiwygTextLayer({
       blurEndEditTimerRef.current = null
       const activeElement = typeof document === "undefined" ? null : document.activeElement
       if (isWysiwygTextSessionFocusTarget(activeElement, fragment.nodeId)) return
+      flushPendingDraftSyncImmediately()
       onEndEdit(fragment.nodeId, "blur")
     }, WYSIWYG_TEXT_BLUR_SETTLE_MS)
-  }, [fragment.nodeId, onEndEdit])
+  }, [flushPendingDraftSyncImmediately, fragment.nodeId, onEndEdit])
 
   const handleLayerBlur = useCallback((event: React.FocusEvent<SVGGElement>) => {
     const relatedTarget = event.relatedTarget instanceof Element ? event.relatedTarget : null
@@ -1321,11 +1625,20 @@ export function WysiwygTextLayer({
       verticalCaretLineAffinityRef.current = null
     }
     const previousText = draftStateRef.current.text
+    const previousCaretOffset = draftStateRef.current.caretOffset
+    const previousSelection = draftStateRef.current.selection ?? null
+    const nextCaretOffset = change.caretOffset ?? null
+    const nextSelection = change.selection ?? null
     const textChanged = change.text !== previousText
+    if (
+      !textChanged &&
+      previousCaretOffset === nextCaretOffset &&
+      areWysiwygTextSelectionsEqual(previousSelection, nextSelection)
+    ) return false
     draftStateRef.current = {
       text: change.text,
-      caretOffset: change.caretOffset ?? null,
-      selection: change.selection ?? null,
+      caretOffset: nextCaretOffset,
+      selection: nextSelection,
     }
     const immediateEchoBaseText = immediateTextEchoRef.current?.baseText ?? draftText ?? ""
     const nextImmediateTextEcho = change.text === immediateEchoBaseText
@@ -1337,20 +1650,54 @@ export function WysiwygTextLayer({
     const nextImmediateDraftLayoutState = nextImmediateDraftLayout
       ? { baseText: previousText, draftText: change.text, layout: nextImmediateDraftLayout }
       : null
+    const previousImmediateTextEcho = immediateTextEchoRef.current
+    const previousImmediateDraftLayout = immediateDraftLayoutRef.current
+    const immediateVisualChanged = !areWysiwygImmediateTextEchoStatesEqual(
+      previousImmediateTextEcho,
+      nextImmediateTextEcho,
+    ) || !areWysiwygImmediateDraftLayoutStatesEqual(
+      previousImmediateDraftLayout,
+      nextImmediateDraftLayoutState,
+    )
     const applyImmediateVisualState = () => {
-      setImmediateTextEcho(nextImmediateTextEcho)
-      setImmediateDraftLayout(nextImmediateDraftLayoutState)
+      setImmediateTextEcho((current) => (
+        areWysiwygImmediateTextEchoStatesEqual(current, nextImmediateTextEcho)
+          ? current
+          : nextImmediateTextEcho
+      ))
+      setImmediateDraftLayout((current) => (
+        areWysiwygImmediateDraftLayoutStatesEqual(current, nextImmediateDraftLayoutState)
+          ? current
+          : nextImmediateDraftLayoutState
+      ))
     }
-    if (nextImmediateTextEcho || nextImmediateDraftLayoutState) {
-      immediateTextEchoRef.current = nextImmediateTextEcho
-      flushSync(applyImmediateVisualState)
-    } else {
-      immediateTextEchoRef.current = null
-      applyImmediateVisualState()
+    immediateTextEchoRef.current = nextImmediateTextEcho
+    immediateDraftLayoutRef.current = nextImmediateDraftLayoutState
+    if (immediateVisualChanged) {
+      const shouldFlush = shouldFlushWysiwygImmediateVisualState({
+        previousTextEcho: previousImmediateTextEcho,
+        previousDraftLayout: previousImmediateDraftLayout,
+        nextTextEcho: nextImmediateTextEcho,
+        nextDraftLayout: nextImmediateDraftLayoutState,
+      })
+      if (shouldFlush && !isApplyingImmediateVisualStateRef.current) {
+        isApplyingImmediateVisualStateRef.current = true
+        try {
+          flushSync(applyImmediateVisualState)
+        } finally {
+          isApplyingImmediateVisualStateRef.current = false
+        }
+      } else {
+        applyImmediateVisualState()
+      }
     }
-    onDraftChange(fragment.nodeId, change.text, change.caretOffset ?? null, change.selection ?? null)
+    scheduleDraftSync({
+      text: change.text,
+      caretOffset: nextCaretOffset,
+      selection: nextSelection,
+    }, { defer: textChanged })
     return true
-  }, [draftText, fragment.nodeId, onDraftChange, resolveImmediateDraftLayout])
+  }, [draftText, onDraftChange, resolveImmediateDraftLayout, scheduleDraftSync])
 
   const applyTextInput = useCallback((insertedText: string) => {
     if (!insertedText || !onDraftChange) return false
@@ -1498,11 +1845,12 @@ export function WysiwygTextLayer({
   }, [applyDraftChange, onDraftChange, pointerFragmentTargets, textMeasurer])
 
   const resolveTextEnginePointerOffsetFromClientPoint = useCallback((clientX: number, clientY: number): number | null => {
+    const startedAt = traceHotPathPerf ? startWysiwygPerfSpan() : null
     const pageElements = typeof document === "undefined"
       ? []
       : Array.from(document.querySelectorAll<SVGSVGElement>('[data-testid="editor-page"]'))
 
-    return resolveWysiwygTextPointerOffsetFromFragmentTargets({
+    const offset = resolveWysiwygTextPointerOffsetFromFragmentTargets({
       clientX,
       clientY,
       scale,
@@ -1518,35 +1866,131 @@ export function WysiwygTextLayer({
           ?.getBoundingClientRect()
       },
     })
-  }, [pointerFragmentTargets, scale, textMeasurer])
+    if (startedAt !== null) {
+      finishWysiwygPerfSpan(true, "text-engine-pointer-hit-test", startedAt, {
+        nodeId: fragment.nodeId,
+        pageIndex: fragment.pageIndex,
+        pointerTargetCount: pointerFragmentTargets.length,
+        source: offset === null ? "miss" : "hit",
+      })
+    }
+    return offset
+  }, [fragment.nodeId, fragment.pageIndex, pointerFragmentTargets, scale, textMeasurer, traceHotPathPerf])
 
   const resolveTextEnginePointerOffset = useCallback((event: React.PointerEvent<SVGGElement> | React.MouseEvent<SVGGElement>): number | null => (
     resolveTextEnginePointerOffsetFromClientPoint(event.clientX, event.clientY)
   ), [resolveTextEnginePointerOffsetFromClientPoint])
 
-  const applyPointerSelection = useCallback((anchorOffset: number, focusOffset: number) => {
+  const applyPointerSelection = useCallback((anchorOffset: number, focusOffset: number, options: { syncToSession?: boolean } = {}) => {
     if (!onDraftChange) return false
+    const startedAt = traceHotPathPerf ? startWysiwygPerfSpan() : null
+    const syncToSession = options.syncToSession ?? true
     verticalCaretXRef.current = null
     verticalCaretLineAffinityRef.current = null
     const text = draftStateRef.current.text
-    const safeAnchor = clampWysiwygTextOffset(text, anchorOffset) ?? 0
-    const safeFocus = clampWysiwygTextOffset(text, focusOffset) ?? safeAnchor
-    const nextSelection = { anchorOffset: safeAnchor, focusOffset: safeFocus }
+    const previewSelection = localPointerSelectionPreviewRef.current
+    const resolved = resolveWysiwygPointerSelectionState({
+      text,
+      anchorOffset,
+      focusOffset,
+      currentCaretOffset: syncToSession
+        ? draftStateRef.current.caretOffset
+        : previewSelection?.focusOffset ?? draftStateRef.current.caretOffset,
+      currentSelection: syncToSession
+        ? draftStateRef.current.selection
+        : previewSelection ?? draftStateRef.current.selection,
+    })
+    if (!resolved.changed) {
+      if (startedAt !== null) {
+        finishWysiwygPerfSpan(true, "text-engine-pointer-selection-apply", startedAt, {
+          nodeId: fragment.nodeId,
+          pageIndex: fragment.pageIndex,
+          textLength: text.length,
+          selectionRangeLength: resolved.selectionRangeLength,
+          selectionCollapsed: resolved.selection.anchorOffset === resolved.selection.focusOffset,
+          source: syncToSession ? "duplicate" : "preview-duplicate",
+        })
+      }
+      return false
+    }
+    if (!syncToSession) {
+      setLocalPointerSelectionPreview(resolved.selection)
+      if (startedAt !== null) {
+        finishWysiwygPerfSpan(true, "text-engine-pointer-selection-apply", startedAt, {
+          nodeId: fragment.nodeId,
+          pageIndex: fragment.pageIndex,
+          textLength: text.length,
+          selectionRangeLength: resolved.selectionRangeLength,
+          selectionCollapsed: resolved.selection.anchorOffset === resolved.selection.focusOffset,
+          source: "preview",
+        })
+      }
+      return true
+    }
+    setLocalPointerSelectionPreview(null)
     draftStateRef.current = {
       text,
-      caretOffset: safeFocus,
-      selection: nextSelection,
+      caretOffset: resolved.caretOffset,
+      selection: resolved.selection,
     }
-    onDraftChange(fragment.nodeId, text, safeFocus, nextSelection)
+    onDraftChange(fragment.nodeId, text, resolved.caretOffset, resolved.selection)
+    if (startedAt !== null) {
+      finishWysiwygPerfSpan(true, "text-engine-pointer-selection-apply", startedAt, {
+        nodeId: fragment.nodeId,
+        pageIndex: fragment.pageIndex,
+        textLength: text.length,
+        selectionRangeLength: resolved.selectionRangeLength,
+        selectionCollapsed: resolved.selection.anchorOffset === resolved.selection.focusOffset,
+        source: "changed",
+      })
+    }
     return true
-  }, [fragment.nodeId, onDraftChange])
+  }, [fragment.nodeId, fragment.pageIndex, onDraftChange, setLocalPointerSelectionPreview, traceHotPathPerf])
 
-  const applyPointerSelectionFromClientPoint = useCallback((clientX: number, clientY: number) => {
+  const applyPointerSelectionFromClientPoint = useCallback((clientX: number, clientY: number, options: { syncToSession?: boolean } = {}) => {
     if (pointerSelectionAnchorRef.current === null) return false
     const offset = resolveTextEnginePointerOffsetFromClientPoint(clientX, clientY)
     if (offset === null) return false
-    return applyPointerSelection(pointerSelectionAnchorRef.current, offset)
+    return applyPointerSelection(pointerSelectionAnchorRef.current, offset, options)
   }, [applyPointerSelection, resolveTextEnginePointerOffsetFromClientPoint])
+
+  const cancelScheduledPointerSelection = useCallback(() => {
+    if (scheduledPointerSelectionFrameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(scheduledPointerSelectionFrameRef.current)
+    }
+    scheduledPointerSelectionFrameRef.current = null
+    scheduledPointerSelectionPointRef.current = null
+    scheduledPointerSelectionStartedAtRef.current = null
+  }, [])
+
+  const schedulePointerSelectionFromClientPoint = useCallback((clientX: number, clientY: number) => {
+    if (pointerSelectionAnchorRef.current === null) return false
+    scheduledPointerSelectionPointRef.current = { clientX, clientY }
+    if (scheduledPointerSelectionFrameRef.current !== null) return true
+    scheduledPointerSelectionStartedAtRef.current = traceHotPathPerf ? startWysiwygPerfSpan() : null
+    if (typeof requestAnimationFrame === "undefined") {
+      scheduledPointerSelectionPointRef.current = null
+      scheduledPointerSelectionStartedAtRef.current = null
+      return applyPointerSelectionFromClientPoint(clientX, clientY)
+    }
+    scheduledPointerSelectionFrameRef.current = requestAnimationFrame(() => {
+      scheduledPointerSelectionFrameRef.current = null
+      const startedAt = scheduledPointerSelectionStartedAtRef.current
+      scheduledPointerSelectionStartedAtRef.current = null
+      const point = scheduledPointerSelectionPointRef.current
+      scheduledPointerSelectionPointRef.current = null
+      const applied = point ? applyPointerSelectionFromClientPoint(point.clientX, point.clientY, { syncToSession: false }) : false
+      if (startedAt !== null) {
+        finishWysiwygPerfSpan(true, "text-engine-pointer-frame", startedAt, {
+          nodeId: fragment.nodeId,
+          pageIndex: fragment.pageIndex,
+          pointerTargetCount: pointerFragmentTargets.length,
+          source: applied ? "applied" : "skipped",
+        })
+      }
+    })
+    return true
+  }, [applyPointerSelectionFromClientPoint, fragment.nodeId, fragment.pageIndex, pointerFragmentTargets.length, traceHotPathPerf])
 
   const maybeStartPointerSelectionDrag = useCallback((clientX: number, clientY: number) => {
     const startPoint = pointerDragStartPointRef.current
@@ -1558,6 +2002,7 @@ export function WysiwygTextLayer({
   }, [isPointerSelecting])
 
   const finishPointerSelection = useCallback((clientX: number, clientY: number) => {
+    cancelScheduledPointerSelection()
     applyPointerSelectionFromClientPoint(clientX, clientY)
     if (activePointerIdRef.current !== null) {
       safelyReleasePointerCapture(document.body, activePointerIdRef.current)
@@ -1566,21 +2011,21 @@ export function WysiwygTextLayer({
     activePointerIdRef.current = null
     pointerDragStartPointRef.current = null
     setIsPointerSelecting(false)
-  }, [applyPointerSelectionFromClientPoint])
+  }, [applyPointerSelectionFromClientPoint, cancelScheduledPointerSelection])
 
   useEffect(() => {
     const handleWindowPointerMove = (event: PointerEvent) => {
       if (pointerSelectionAnchorRef.current === null) return
       maybeStartPointerSelectionDrag(event.clientX, event.clientY)
       event.preventDefault()
-      applyPointerSelectionFromClientPoint(event.clientX, event.clientY)
+      schedulePointerSelectionFromClientPoint(event.clientX, event.clientY)
     }
 
     const handleWindowMouseMove = (event: MouseEvent) => {
       if (pointerSelectionAnchorRef.current === null) return
       maybeStartPointerSelectionDrag(event.clientX, event.clientY)
       event.preventDefault()
-      applyPointerSelectionFromClientPoint(event.clientX, event.clientY)
+      schedulePointerSelectionFromClientPoint(event.clientX, event.clientY)
     }
 
     const finishWindowPointerSelection = (event: PointerEvent) => {
@@ -1614,10 +2059,12 @@ export function WysiwygTextLayer({
       document.removeEventListener("mouseup", finishWindowMouseSelection, true)
     }
   }, [
-    applyPointerSelectionFromClientPoint,
     finishPointerSelection,
     maybeStartPointerSelectionDrag,
+    schedulePointerSelectionFromClientPoint,
   ])
+
+  useEffect(() => () => cancelScheduledPointerSelection(), [cancelScheduledPointerSelection])
 
   useEffect(() => {
     const input = inputBridgeRef.current
@@ -1627,18 +2074,20 @@ export function WysiwygTextLayer({
       event.stopPropagation()
       if (event.key === "Escape") {
         event.preventDefault()
+        flushPendingDraftSyncImmediately()
         onEndEdit?.(fragment.nodeId, "keyboard")
         return
       }
       if (handleClipboardShortcutKeyDown(event)) return
       const keyInput = {
-        key: event.key,
+        key: normalizeWysiwygTextInputKey(event.key),
         shiftKey: event.shiftKey,
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         isComposing: event.isComposing,
       }
+      if (hasPlatformShortcutModifier(keyInput)) flushPendingDraftSyncImmediately()
       if (onRichTextShortcut?.(fragment.nodeId, keyInput)) {
         event.preventDefault()
         return
@@ -1745,6 +2194,7 @@ export function WysiwygTextLayer({
     consumeSuppressedCompositionInput,
     endCompositionInput,
     fragment.nodeId,
+    flushPendingDraftSyncImmediately,
     getSelectedDraftText,
     handleClipboardShortcutKeyDown,
     isCompositionBridgeInput,
@@ -1798,12 +2248,10 @@ export function WysiwygTextLayer({
   const handlePointerMove = useCallback((event: React.PointerEvent<SVGGElement>) => {
     if (pointerSelectionAnchorRef.current === null || (event.buttons & 1) === 0) return
     maybeStartPointerSelectionDrag(event.clientX, event.clientY)
-    const offset = resolveTextEnginePointerOffset(event)
-    if (offset === null) return
     event.stopPropagation()
     event.preventDefault()
-    applyPointerSelection(pointerSelectionAnchorRef.current, offset)
-  }, [applyPointerSelection, maybeStartPointerSelectionDrag, resolveTextEnginePointerOffset])
+    schedulePointerSelectionFromClientPoint(event.clientX, event.clientY)
+  }, [maybeStartPointerSelectionDrag, schedulePointerSelectionFromClientPoint])
 
   const handlePointerUp = useCallback((event: React.PointerEvent<SVGGElement>) => {
     if (pointerSelectionAnchorRef.current === null) return
@@ -1815,11 +2263,49 @@ export function WysiwygTextLayer({
     if (activePointerIdRef.current !== null) {
       safelyReleasePointerCapture(document.body, activePointerIdRef.current)
     }
+    cancelScheduledPointerSelection()
+    setLocalPointerSelectionPreview(null)
     pointerSelectionAnchorRef.current = null
     activePointerIdRef.current = null
     pointerDragStartPointRef.current = null
     setIsPointerSelecting(false)
+  }, [cancelScheduledPointerSelection, setLocalPointerSelectionPreview])
+
+  const handlePointerSelectionWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    const scrolled = scrollEditorCanvasByPointerSelectionWheel({
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+      deltaMode: event.deltaMode,
+    })
+    if (!scrolled) return
+    event.preventDefault()
+    event.stopPropagation()
   }, [])
+
+  const localPointerSelectionOverlayRects = useMemo(() => {
+    if (!localPointerSelectionPreview) return []
+    if (localPointerSelectionPreview.anchorOffset === localPointerSelectionPreview.focusOffset) return []
+    return resolveSelectionOverlayRectsInFragmentWithPerf({
+      fragment: visualFragment,
+      anchorOffset: localPointerSelectionPreview.anchorOffset,
+      focusOffset: localPointerSelectionPreview.focusOffset,
+      textMeasurer,
+      tracePerf: traceHotPathPerf,
+      source: "local-pointer",
+    })
+  }, [localPointerSelectionPreview, textMeasurer, traceHotPathPerf, visualFragment])
+  const activeSelectionOverlayRects = localPointerSelectionPreview
+    ? localPointerSelectionOverlayRects
+    : selectionOverlayRects
+  const activeCaretIndex = localPointerSelectionPreview?.focusOffset ?? caretIndex
+  const trailingWhitespaceCaretOverlay = activeLiveEchoVisual?.caret
+    ? null
+    : resolveTrailingWhitespaceCaretOverlayInFragment({
+      fragment: visualFragment,
+      caretIndex: activeCaretIndex,
+      draftText: draftStateRef.current.text,
+      textMeasurer,
+    })
 
   const pointerSelectionOverlay = isPointerSelecting && typeof document !== "undefined"
     ? createPortal(
@@ -1835,7 +2321,7 @@ export function WysiwygTextLayer({
         }}
         onMouseMove={(event) => {
           event.preventDefault()
-          applyPointerSelectionFromClientPoint(event.clientX, event.clientY)
+          schedulePointerSelectionFromClientPoint(event.clientX, event.clientY)
         }}
         onMouseUp={(event) => {
           event.preventDefault()
@@ -1843,18 +2329,20 @@ export function WysiwygTextLayer({
         }}
         onPointerMove={(event) => {
           event.preventDefault()
-          applyPointerSelectionFromClientPoint(event.clientX, event.clientY)
+          schedulePointerSelectionFromClientPoint(event.clientX, event.clientY)
         }}
         onPointerUp={(event) => {
           event.preventDefault()
           finishPointerSelection(event.clientX, event.clientY)
         }}
         onPointerCancel={() => {
+          cancelScheduledPointerSelection()
           pointerSelectionAnchorRef.current = null
           activePointerIdRef.current = null
           pointerDragStartPointRef.current = null
           setIsPointerSelecting(false)
         }}
+        onWheel={handlePointerSelectionWheel}
       />,
       document.body,
     )
@@ -1870,6 +2358,7 @@ export function WysiwygTextLayer({
         data-wysiwyg-reflow-kind={reflowKind}
         data-wysiwyg-line-count={visualFragment.lines?.length ?? 0}
         data-wysiwyg-immediate-draft-layout={activeImmediateDraftLayout ? "true" : undefined}
+        data-wysiwyg-local-selection-preview={localPointerSelectionPreview ? "true" : undefined}
         data-wysiwyg-table-cell-preview-candidate={tableCellDraftVisualPreviewCandidate ? "true" : undefined}
         data-inline-edit-node-id={fragment.nodeId}
         data-inline-edit-visual-mode="text-engine"
@@ -1926,13 +2415,15 @@ export function WysiwygTextLayer({
         fill="transparent"
         pointerEvents="all"
       />
-      {renderSelectionOverlay(visualFragment, pageKey, scale, selectionOverlayRects, clipPathId)}
+      {renderSelectionOverlay(visualFragment, pageKey, scale, activeSelectionOverlayRects, clipPathId)}
       {visualFragment.lines?.map((line, index) =>
         renderLine(line, index, visualFragment, renderProps, pageKey, scale, undefined, clipPathId),
       )}
       {activeLiveEchoVisual?.content}
       {showTextSegments && renderSegmentDebug(visualFragment.lines, visualFragment, renderProps, scale)}
-      {activeLiveEchoVisual?.caret ?? renderCollapsedCaret(visualFragment, pageKey, scale, caretIndex, textMeasurer, clipPathId)}
+      {activeLiveEchoVisual?.caret ??
+        renderCollapsedCaretOverlay(visualFragment, pageKey, scale, trailingWhitespaceCaretOverlay, clipPathId) ??
+        renderCollapsedCaret(visualFragment, pageKey, scale, activeCaretIndex, textMeasurer, clipPathId)}
       </g>
     </>
   )
@@ -1978,6 +2469,9 @@ export function ParagraphTextSurface({
   const [isSelectionCollapsed, setIsSelectionCollapsed] = useState(true)
   const [selectionSnapshot, setSelectionSnapshot] = useState<InlineEditSelectionSnapshot | null>(null)
   const [isComposing, setIsComposing] = useState(false)
+  const traceHotPathPerf = useMemo(() => (
+    isWysiwygPerfTraceRuntimeEnabled(WYSIWYG_PERF_TRACE_ENABLED)
+  ), [])
   const renderProps = fragment.renderProps
   const editHeight = Math.max(fragment.height * scale, 1)
   const fontSize = (renderProps?.fontSize ?? 12) * scale
@@ -2157,24 +2651,28 @@ export function ParagraphTextSurface({
     if (!useWysiwygTextEngineLayer || !wysiwygTextSelection) return []
     if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
     const visualFragment = textEngineVisualDraftLines ? { ...fragment, lines: textEngineVisualDraftLines } : fragment
-    return resolveSelectionOverlayRectsInFragment(
-      visualFragment,
-      wysiwygTextSelection.anchorOffset,
-      wysiwygTextSelection.focusOffset,
-      { textMeasurer },
-    )
-  }, [fragment, textEngineVisualDraftLines, textMeasurer, useWysiwygTextEngineLayer, wysiwygTextSelection])
+    return resolveSelectionOverlayRectsInFragmentWithPerf({
+      fragment: visualFragment,
+      anchorOffset: wysiwygTextSelection.anchorOffset,
+      focusOffset: wysiwygTextSelection.focusOffset,
+      textMeasurer,
+      tracePerf: traceHotPathPerf,
+      source: "active",
+    })
+  }, [fragment, textEngineVisualDraftLines, textMeasurer, traceHotPathPerf, useWysiwygTextEngineLayer, wysiwygTextSelection])
   const passiveTextEngineSelectionOverlayRects = useMemo(() => {
     if (isEditing || !wysiwygTextEngineEnabled || !wysiwygTextSelection) return []
     if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
     const visualFragment = wysiwygTextVisualDraftLines ? { ...fragment, lines: wysiwygTextVisualDraftLines } : fragment
-    return resolveSelectionOverlayRectsInFragment(
-      visualFragment,
-      wysiwygTextSelection.anchorOffset,
-      wysiwygTextSelection.focusOffset,
-      { textMeasurer },
-    )
-  }, [fragment, isEditing, textMeasurer, wysiwygTextEngineEnabled, wysiwygTextSelection, wysiwygTextVisualDraftLines])
+    return resolveSelectionOverlayRectsInFragmentWithPerf({
+      fragment: visualFragment,
+      anchorOffset: wysiwygTextSelection.anchorOffset,
+      focusOffset: wysiwygTextSelection.focusOffset,
+      textMeasurer,
+      tracePerf: traceHotPathPerf,
+      source: "passive",
+    })
+  }, [fragment, isEditing, textMeasurer, traceHotPathPerf, wysiwygTextEngineEnabled, wysiwygTextSelection, wysiwygTextVisualDraftLines])
   const passiveTextEngineSelectionFragment = wysiwygTextVisualDraftLines
     ? { ...fragment, lines: wysiwygTextVisualDraftLines }
     : fragment

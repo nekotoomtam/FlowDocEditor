@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { defaultTextMeasurer } from "@/layout"
 import type { PaginatedDocument, PaginatedPage, PageFragment, ParagraphRenderProps } from "@/pagination"
-import type { DocumentNode } from "@/schema"
+import type { DocumentNode, ParagraphNode } from "@/schema"
 import {
   buildEditorFragmentClipPathId,
   buildEditorFragmentRenderKey,
@@ -550,6 +550,8 @@ interface RenderCanvasOptions {
   wysiwygTextEngineEnabled?: boolean
   wysiwygTextDraftNodeId?: string | null
   wysiwygTextDraftText?: string | null
+  wysiwygTextDraftParagraph?: ParagraphNode | null
+  wysiwygTextDraftDirtyVersion?: number
   wysiwygTextCaretOffset?: number | null
   wysiwygTextDraftPaginationActive?: boolean
 }
@@ -605,6 +607,8 @@ function renderCanvas(
     wysiwygTextEngineEnabled: options.wysiwygTextEngineEnabled ?? false,
     wysiwygTextDraftNodeId: options.wysiwygTextDraftNodeId ?? null,
     wysiwygTextDraftText: options.wysiwygTextDraftText ?? null,
+    wysiwygTextDraftParagraph: options.wysiwygTextDraftParagraph ?? null,
+    wysiwygTextDraftDirtyVersion: options.wysiwygTextDraftDirtyVersion ?? 0,
     wysiwygTextCaretOffset: options.wysiwygTextCaretOffset ?? null,
     wysiwygTextSelection: null,
     wysiwygTextDraftPaginationActive: options.wysiwygTextDraftPaginationActive ?? false,
@@ -650,6 +654,59 @@ describe("EditorCanvas page memoization", () => {
 
     expect(pageViewScopedEditPropsAffectPage(sourcePage, props)).toBe(true)
     expect(pageViewScopedEditPropsAffectPage(previewPage, props)).toBe(true)
+  })
+})
+
+describe("EditorCanvas rich draft visual preview", () => {
+  it("builds local preview lines from a dirty draft paragraph when text is unchanged", () => {
+    const draftParagraph = {
+      ...paragraphNode("body-p", "Body text"),
+      children: [
+        { id: "body-p-red", type: "text", text: "Body", style: { textColor: "DC2626", textDecoration: "underline" } },
+        { id: "body-p-rest", type: "text", text: " text" },
+      ],
+    } as ParagraphNode
+
+    const preview = buildWysiwygDraftVisualPreview({
+      paginated: makePaginated(),
+      doc: makeDoc(),
+      nodeId: "body-p",
+      draftText: "Body text",
+      draftParagraph,
+      caretOffset: 4,
+      textMeasurer: defaultTextMeasurer,
+    })
+    const runs = preview?.fragments[0]?.lines?.flatMap((line) => line.runs ?? []) ?? []
+
+    expect(runs.some((run) =>
+      run.text === "Body" &&
+      run.style.textColor === "DC2626" &&
+      run.style.textDecoration === "underline",
+    )).toBe(true)
+  })
+
+  it("renders a style-only rich draft through the local visual preview", () => {
+    const draftParagraph = {
+      ...paragraphNode("body-p", "Body text"),
+      children: [
+        { id: "body-p-red", type: "text", text: "Body", style: { textColor: "DC2626" } },
+        { id: "body-p-rest", type: "text", text: " text" },
+      ],
+    } as ParagraphNode
+
+    const markup = renderCanvas(makePaginated(), makeDoc(), null, {
+      inlineEditNodeId: "body-p",
+      inlineEditVisualFresh: true,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftNodeId: "body-p",
+      wysiwygTextDraftText: "Body text",
+      wysiwygTextDraftParagraph: draftParagraph,
+      wysiwygTextDraftDirtyVersion: 1,
+      wysiwygTextCaretOffset: 4,
+    })
+
+    expect(markup).toContain("fill=\"#DC2626\"")
+    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
   })
 })
 

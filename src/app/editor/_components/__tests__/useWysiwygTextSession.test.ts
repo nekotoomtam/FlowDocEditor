@@ -4,6 +4,7 @@ import {
   applyWysiwygTextClipboardCut,
   applyWysiwygTextInputKey,
   applyWysiwygTextInputText,
+  areWysiwygTextSelectionsEqual,
   changeWysiwygTextSessionDraft,
   clampWysiwygTextOffset,
   describeWysiwygTextSessionAccessibility,
@@ -12,6 +13,7 @@ import {
   markWysiwygTextLayoutFresh,
   moveWysiwygTextSessionCaret,
   normalizeWysiwygPlainTextInput,
+  normalizeWysiwygTextInputKey,
   startWysiwygTextSessionState,
 } from "../useWysiwygTextSession"
 
@@ -21,6 +23,14 @@ describe("clampWysiwygTextOffset", () => {
     expect(clampWysiwygTextOffset("abc", 99)).toBe(3)
     expect(clampWysiwygTextOffset("abc", 1.8)).toBe(1)
     expect(clampWysiwygTextOffset("abc", null)).toBeNull()
+  })
+})
+
+describe("areWysiwygTextSelectionsEqual", () => {
+  it("compares nullable WYSIWYG text selections by offsets", () => {
+    expect(areWysiwygTextSelectionsEqual(null, null)).toBe(true)
+    expect(areWysiwygTextSelectionsEqual({ anchorOffset: 1, focusOffset: 3 }, { anchorOffset: 1, focusOffset: 3 })).toBe(true)
+    expect(areWysiwygTextSelectionsEqual({ anchorOffset: 1, focusOffset: 3 }, { anchorOffset: 3, focusOffset: 1 })).toBe(false)
   })
 })
 
@@ -203,9 +213,35 @@ describe("WYSIWYG text session state", () => {
     expect(moved.dirtyVersion).toBe(0)
     expect(moved.layoutVersion).toBe(0)
   })
+
+  it("keeps the same object for duplicate caret or selection moves", () => {
+    const active = startWysiwygTextSessionState(INACTIVE_WYSIWYG_TEXT_SESSION, {
+      nodeId: "p1",
+      text: "Alpha",
+      caretOffset: 2,
+    })
+
+    expect(moveWysiwygTextSessionCaret(active, 2)).toBe(active)
+    expect(moveWysiwygTextSessionCaret(active, 2, { anchorOffset: 2, focusOffset: 2 })).toBe(active)
+  })
 })
 
 describe("applyWysiwygTextInputKey", () => {
+  it("normalizes legacy space key names and inserts spaces", () => {
+    expect(normalizeWysiwygTextInputKey("Space")).toBe(" ")
+    expect(normalizeWysiwygTextInputKey("Spacebar")).toBe(" ")
+    expect(applyWysiwygTextInputKey("Alpha", 5, { key: " " })).toEqual({
+      text: "Alpha ",
+      caretOffset: 6,
+      selection: { anchorOffset: 6, focusOffset: 6 },
+    })
+    expect(applyWysiwygTextInputKey("Alpha", 5, { key: "Space" })).toEqual({
+      text: "Alpha ",
+      caretOffset: 6,
+      selection: { anchorOffset: 6, focusOffset: 6 },
+    })
+  })
+
   it("inserts printable text and newlines at the collapsed caret", () => {
     expect(applyWysiwygTextInputKey("Alpha", 5, { key: "!" })).toEqual({
       text: "Alpha!",

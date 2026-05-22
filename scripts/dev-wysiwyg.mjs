@@ -8,6 +8,7 @@ const env = {
   PATH: `${nodeBin};${process.env.PATH ?? ""}`,
   NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE: "1",
   NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT: "1",
+  NEXT_PUBLIC_FLOWDOC_WYSIWYG_RICH_TEXT_DRAFT: "1",
 }
 
 function resolveNpmInvocation() {
@@ -29,6 +30,7 @@ function resolveNpmInvocation() {
 console.log("Starting dev server with WYSIWYG text engine enabled")
 console.log("NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1")
 console.log("NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1")
+console.log("NEXT_PUBLIC_FLOWDOC_WYSIWYG_RICH_TEXT_DRAFT=1")
 
 const npmInvocation = resolveNpmInvocation()
 const child = spawn(npmInvocation.command, npmInvocation.args, {

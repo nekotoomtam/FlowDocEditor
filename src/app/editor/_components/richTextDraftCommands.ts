@@ -37,6 +37,12 @@ export interface RichTextDraftSessionCommandState {
   strikethrough: RichTextDraftSessionCommandToggleState
 }
 
+const NON_LAYOUT_STYLE_PATCH_KEYS = new Set<keyof TextRunStylePatch>([
+  "textColor",
+  "textDecoration",
+  "strikethrough",
+])
+
 type StyleFieldState<T> = { value: T; mixed: boolean }
 
 function hasPendingStyleField<K extends keyof TextRunStyle>(
@@ -155,6 +161,12 @@ export function getRichTextDraftSessionCommandPatch(
     case "toggleStrikethrough":
       return { strikethrough: commandState?.strikethrough.active ? false : true }
   }
+}
+
+export function isRichTextDraftStylePatchLayoutAffecting(patch: TextRunStylePatch): boolean {
+  return (Object.keys(patch) as Array<keyof TextRunStylePatch>).some((key) => (
+    !NON_LAYOUT_STYLE_PATCH_KEYS.has(key)
+  ))
 }
 
 export function applyRichTextDraftSessionCommand(

@@ -65,6 +65,34 @@ export function isParagraphInsideFlowStack(
   return false
 }
 
+function isStackInsideRow(doc: DocumentNode, stackId: string | null | undefined): boolean {
+  if (!stackId) return false
+  for (const section of doc.document.sections) {
+    const stack = section.nodes[stackId]
+    if (stack?.type !== "stack") continue
+    if (Object.values(section.nodes).some((node) => (
+      node.type === "row" && node.childIds.includes(stackId)
+    ))) return true
+  }
+  return false
+}
+
+export function isParagraphInsideRowStack(
+  doc: DocumentNode,
+  nodeId: string | null | undefined,
+): boolean {
+  if (!nodeId) return false
+  for (const section of doc.document.sections) {
+    const paragraph = section.nodes[nodeId]
+    if (paragraph?.type !== "paragraph") continue
+    const stack = Object.values(section.nodes).find((node) => (
+      node.type === "stack" && node.childIds.includes(nodeId)
+    ))
+    if (stack && isStackInsideRow(doc, stack.id)) return true
+  }
+  return false
+}
+
 export function findWysiwygTextEngineFragment(
   paginated: PaginatedDocument,
   nodeId: string,

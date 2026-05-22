@@ -16,6 +16,7 @@ interface RichTextToolbarProps {
   doc: DocumentNode
   selectedNodeId: string | null
   textSelection?: RichTextToolbarSelection | null
+  commandTextSelection?: RichTextToolbarSelection | null
   draftParagraph?: ParagraphNode | null
   pendingStyle?: TextRunStyle | null
   editable: boolean
@@ -35,10 +36,13 @@ export interface RichTextToolbarRange {
   mode: "paragraph" | "range"
 }
 
+export type RichTextToolbarScope = "inactive" | "paragraph" | "caret" | "range"
+
 export function RichTextToolbar({
   doc,
   selectedNodeId,
   textSelection = null,
+  commandTextSelection,
   draftParagraph = null,
   pendingStyle = null,
   editable,
@@ -52,6 +56,15 @@ export function RichTextToolbar({
   const activeRange = paragraph && text !== null
     ? resolveRichTextToolbarRange(paragraph.id, text.length, textSelection)
     : null
+  const commandRange = paragraph && text !== null
+    ? resolveRichTextToolbarCommandRange(paragraph.id, text.length, textSelection, commandTextSelection)
+    : null
+  const activeScope = resolveRichTextToolbarScope({
+    canStyleText,
+    mode: activeRange?.mode ?? "paragraph",
+    hasActiveRichDraft: Boolean(draftParagraph && paragraph && draftParagraph.id === paragraph.id),
+    hasCollapsedSelection: Boolean(paragraph && text !== null && isCollapsedToolbarSelection(paragraph.id, text.length, textSelection)),
+  })
   const styleStateRange = paragraph && text !== null
     ? resolveRichTextToolbarStyleStateRange(paragraph.id, text.length, textSelection)
     : null
@@ -89,9 +102,10 @@ export function RichTextToolbar({
   const hasItalicVariant = Boolean(currentFont.variants.italic || currentFont.variants.boldItalic)
 
   function updateTextStyle(changes: ParagraphTextStyleChanges) {
-    if (!paragraph || !canStyleText || !activeRange) return
-    if (activeRange.mode === "range" && onUpdateTextRunStyleRange) {
-      onUpdateTextRunStyleRange(paragraph.id, activeRange.start, activeRange.end, changes)
+    const targetRange = commandRange ?? activeRange
+    if (!paragraph || !canStyleText || !targetRange) return
+    if (targetRange.mode === "range" && onUpdateTextRunStyleRange) {
+      onUpdateTextRunStyleRange(paragraph.id, targetRange.start, targetRange.end, changes)
       return
     }
     onUpdateParagraphTextStyle(paragraph.id, changes)
@@ -152,6 +166,14 @@ export function RichTextToolbar({
       style={toolbarStyle}
     >
       <span style={toolbarLabel}>Text</span>
+      <span
+        data-testid="rich-text-toolbar-scope"
+        data-scope={activeScope}
+        title={scopeTitleByMode[activeScope]}
+        style={scopeChipStyle(activeScope)}
+      >
+        {scopeLabelByMode[activeScope]}
+      </span>
       <div style={fontControlStyle}>
         <FontFamilyCombobox
           value={currentFontKey}
@@ -249,6 +271,19 @@ export function resolveRichTextToolbarRange(
   return { start, end, mode: "range" }
 }
 
+export function resolveRichTextToolbarCommandRange(
+  paragraphId: string,
+  textLength: number,
+  displaySelection?: RichTextToolbarSelection | null,
+  commandSelection?: RichTextToolbarSelection | null,
+): RichTextToolbarRange {
+  return resolveRichTextToolbarRange(
+    paragraphId,
+    textLength,
+    commandSelection === undefined ? displaySelection : commandSelection,
+  )
+}
+
 export function resolveRichTextToolbarStyleStateRange(
   paragraphId: string,
   textLength: number,
@@ -262,6 +297,18 @@ export function resolveRichTextToolbarStyleStateRange(
     start: Math.min(anchor, focus),
     end: Math.max(anchor, focus),
   }
+}
+
+export function resolveRichTextToolbarScope(input: {
+  canStyleText: boolean
+  mode: RichTextToolbarRange["mode"]
+  hasActiveRichDraft: boolean
+  hasCollapsedSelection: boolean
+}): RichTextToolbarScope {
+  if (!input.canStyleText) return "inactive"
+  if (input.mode === "range") return "range"
+  if (input.hasActiveRichDraft && input.hasCollapsedSelection) return "caret"
+  return "paragraph"
 }
 
 function clampTextOffset(offset: number, textLength: number): number {
@@ -329,6 +376,64 @@ const toolbarLabel: CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: 0,
   marginRight: 2,
+}
+
+const scopeLabelByMode: Record<RichTextToolbarScope, string> = {
+  inactive: "No text",
+  paragraph: "Paragraph",
+  caret: "Next text",
+  range: "Selected text",
+}
+
+const scopeTitleByMode: Record<RichTextToolbarScope, string> = {
+  inactive: "No editable text is selected",
+  paragraph: "Style changes apply to the selected paragraph",
+  caret: "Style changes apply to the next typed text",
+  range: "Style changes apply only to the selected text",
+}
+
+const scopeChipBaseStyle: CSSProperties = {
+  height: 22,
+  borderWidth: 1,
+  borderStyle: "solid",
+  borderColor: "#e2e8f0",
+  borderRadius: 4,
+  padding: "3px 6px",
+  color: "#475569",
+  background: "#f8fafc",
+  fontSize: 10,
+  fontWeight: 700,
+  lineHeight: "14px",
+  boxSizing: "border-box",
+  whiteSpace: "nowrap",
+}
+
+function scopeChipStyle(scope: RichTextToolbarScope): CSSProperties {
+  if (scope === "range") {
+    return {
+      ...scopeChipBaseStyle,
+      color: "#1d4ed8",
+      background: "#eff6ff",
+      borderColor: "#bfdbfe",
+    }
+  }
+  if (scope === "caret") {
+    return {
+      ...scopeChipBaseStyle,
+      color: "#047857",
+      background: "#ecfdf5",
+      borderColor: "#bbf7d0",
+    }
+  }
+  if (scope === "inactive") {
+    return {
+      ...scopeChipBaseStyle,
+      color: "#94a3b8",
+      background: "#f8fafc",
+      borderColor: "#e2e8f0",
+    }
+  }
+  return scopeChipBaseStyle
 }
 
 const fontControlStyle: CSSProperties = {

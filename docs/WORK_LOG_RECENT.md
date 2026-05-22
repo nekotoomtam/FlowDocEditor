@@ -22,6 +22,664 @@ Each entry should include:
 
 ---
 
+## 2026-05-23
+
+### Coalesce WYSIWYG Draft Sync For Smooth Typing
+
+Goal: Make continuous typing, Space repeat, Backspace repeat, Enter/newline
+growth, and wrap typing feel smoother without changing document schema,
+pagination semantics, undo/redo, or export behavior.
+
+Completed:
+
+- Added latest-only WYSIWYG draft sync inside `WysiwygTextLayer` so text
+  changes keep the immediate SVG visual local and send the parent/session only
+  the latest pending draft per animation frame.
+- Kept caret-only and selection-only updates immediate, and kept pending text
+  sync flushed before Escape commit, blur commit, rich text shortcut handling,
+  and unmount cleanup.
+- Guarded prop-to-local draft synchronization so stale parent props do not
+  overwrite a newer local draft while the immediate visual state is active.
+- Extended the smoothness probe with `space-repeat`, `delete`, `enter`, and
+  `wrap-typing` modes in addition to the existing typing/selection coverage.
+- Updated the editor UX contract and probe docs for the coalesced draft-sync
+  lifecycle.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-rich-draft`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-smoothness`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='space-repeat'; $env:PROBE_BURST_LENGTH='120'; $env:PROBE_INTERVAL_MS='0'; npm.cmd run smoke:wysiwyg-smoothness`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='delete'; $env:PROBE_BURST_LENGTH='120'; $env:PROBE_INTERVAL_MS='0'; npm.cmd run smoke:wysiwyg-smoothness`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='enter'; $env:PROBE_BURST_LENGTH='30'; $env:PROBE_INTERVAL_MS='0'; npm.cmd run smoke:wysiwyg-smoothness`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='wrap-typing'; $env:PROBE_BURST_LENGTH='160'; $env:PROBE_INTERVAL_MS='0'; npm.cmd run smoke:wysiwyg-smoothness`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='selection'; $env:PROBE_SELECTION_MOVE_COUNT='70'; npm.cmd run smoke:wysiwyg-smoothness`
+
+Notes:
+
+- The probes now pass with zero console/page errors and zero >100ms jank
+  events, but typing/wrap p95 latency still shows remaining canvas commit cost.
+- This patch intentionally does not change paragraph model, pagination output,
+  DOCX/PDF export, or document history semantics.
+
+---
+
+## 2026-05-23
+
+### Bump WYSIWYG Space Hardening Baseline To 0.6.7
+
+Goal: Record the accepted WYSIWYG rich draft and Space/key-repeat hardening
+work as the next conservative patch baseline before starting larger typing
+smoothness design work.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.6` to `0.6.7`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.7`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.7`.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+- `git diff --check`
+
+Notes:
+
+- No git tag was created; project versions remain release-readiness markers.
+- This patch does not change `DocumentNode.version`, FlowDoc package version,
+  storage package version, pagination semantics, or export behavior.
+
+---
+
+## 2026-05-23
+
+### Harden WYSIWYG Space Key Repeat Hot Path
+
+Goal: Reduce risk of nested update loops and visible stutter when users hold
+Space in the FlowDoc-owned WYSIWYG text engine.
+
+Completed:
+
+- Added equality helpers for immediate text echo and immediate draft layout
+  state.
+- Added a no-op guard in `applyDraftChange` so identical text/caret/selection
+  changes do not call editor state again.
+- Tracked immediate draft layout in a ref and deduped immediate visual state
+  updates before calling React state setters.
+- Limited synchronous `flushSync` use to the moment the editor enters the
+  immediate visual lane instead of every repeated key event.
+- Expanded the rich draft browser smoke so the Space key path presses Space 48
+  times before committing.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-rich-draft-smoke.mjs`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/whitespaceParity.test.ts`
+- `node --check scripts/wysiwyg-rich-draft-smoke.mjs`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-rich-draft`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_TYPE_TEXT='          '; $env:PROBE_BURST_LENGTH='400'; npm.cmd run smoke:wysiwyg-smoothness`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-smoothness`
+- `git diff --check`
+
+Notes:
+
+- Space-heavy probe stayed error-free with no page errors. The longest event in
+  that run was an `editor-canvas-react-commit` around `34ms`; the remaining
+  feel issue is still canvas commit cost, not a document/pagination semantic
+  change.
+- Default typing probe also stayed error-free. It still reports an
+  `editor-canvas-react-commit` spike around `56ms` when crossing a page
+  boundary, so broader commit-scope optimization remains separate follow-up
+  work.
+
+---
+
+## 2026-05-23
+
+### Restore WYSIWYG Space Key Feedback
+
+Goal: Make Space work predictably in the FlowDoc-owned WYSIWYG text engine,
+including the visual feedback for repeated and trailing spaces.
+
+Completed:
+
+- Normalized legacy browser space key names (`Space` and `Spacebar`) to a
+  literal U+0020 before text-engine key handling.
+- Preserved whitespace in editor SVG text output so repeated interior spaces do
+  not collapse visually.
+- Added an editor-only trailing-whitespace caret overlay so pressing Space at
+  the end of a rendered line visibly advances the caret even though core layout
+  still trims line-edge spaces from measured line text.
+- Added browser smoke coverage that presses `Space` directly and confirms the
+  committed paragraph contains the expected spaces.
+
+Files changed:
+
+- `src/app/editor/_components/useWysiwygTextSession.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-rich-draft-smoke.mjs`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/whitespaceParity.test.ts`
+- `node --check scripts/wysiwyg-rich-draft-smoke.mjs`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-rich-draft`
+
+Notes:
+
+- This patch intentionally does not change core whitespace measurement,
+  pagination, DOCX/PDF export, or stored document schema. It only restores input
+  handling and active-editor visual feedback.
+
+---
+
+## 2026-05-23
+
+### Forward WYSIWYG Pointer Selection Wheel To Canvas
+
+Goal: Let users keep scrolling the editor canvas with the mouse wheel while a
+WYSIWYG pointer-selection overlay is active.
+
+Completed:
+
+- Added a small wheel-delta normalizer for pixel, line, and page wheel modes.
+- Forwarded wheel events from the fixed pointer-selection overlay to the
+  `editor-canvas` scroll container.
+- Kept the change editor-only; wheel forwarding does not touch document state,
+  pagination, export, or history.
+- Added focused unit coverage for wheel delta normalization.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='selection'; $env:PROBE_SELECTION_MOVE_COUNT='50'; npm.cmd run smoke:wysiwyg-smoothness`
+
+Notes:
+
+- Selection probe remained healthy after the wheel-forwarding change: overlay
+  visible on 50/50 moves, paint p95 about `28.5ms`, 1 final
+  `inline-edit-selection-update`, and no console/page errors.
+- Edge auto-scroll while dragging near the viewport boundary remains deferred.
+
+---
+
+## 2026-05-23
+
+### Add Local WYSIWYG Pointer Selection Preview
+
+Goal: Reduce range-selection drag lag by keeping pointer-move selection
+preview local to the active WYSIWYG text layer and syncing the authoritative
+editor session only at the end of the drag.
+
+Completed:
+
+- Added a tested pointer-selection resolver that clamps offsets and detects
+  duplicate selection/caret state.
+- Changed pointer-drag moves in `WysiwygTextLayer` to update a local selection
+  preview instead of calling `onDraftChange` on every move.
+- Kept click, double-click word selection, keyboard selection, text input, and
+  final pointerup sync on the existing editor-session path.
+- Rendered local preview rectangles from the same FlowDoc line geometry and
+  kept the preview editor-only.
+- Updated the WYSIWYG smoothness baseline and UX contract with the new local
+  preview rule.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='selection'; $env:PROBE_SELECTION_MOVE_COUNT='50'; npm.cmd run smoke:wysiwyg-smoothness`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-rich-draft`
+
+Notes:
+
+- Selection probe after local preview: overlay visible on 50/50 sampled moves,
+  paint p95 about `28.8ms`, `inline-edit-selection-update` reduced to 1 final
+  sync event, over-frame-budget events reduced to 2, and no console/page
+  errors.
+- `editor-canvas-react-commit` remains the longest event at about `42.6ms`, so
+  the remaining work is now active text-layer commit cost rather than session
+  state spam through `EditorShell`.
+- Deferred follow-up: do not continue optimizing this path immediately while
+  manual UX feels smooth. Reopen if selection drag regresses or the probe shows
+  repeated over-frame-budget canvas commits again.
+
+---
+
+## 2026-05-23
+
+### Add Editor Canvas React Commit Probe
+
+Goal: Measure whether the remaining range-selection micro-lag comes from the
+editor canvas React commit path before designing another optimization patch.
+
+Completed:
+
+- Wrapped the editor canvas subtree in a trace-gated React Profiler only when
+  WYSIWYG perf tracing is active.
+- Added a scalar `editor-canvas-react-commit` perf event with commit duration,
+  base duration, commit time, selection length, draft metadata, and paginated
+  summary counts.
+- Kept normal editor runtime inert when perf tracing is disabled; the Profiler
+  wrapper renders children directly outside trace mode.
+- Extended perf-event unit coverage for explicit canvas commit events.
+- Updated the smoothness probe baseline and UX contract to document the new
+  evidence.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='selection'; $env:PROBE_SELECTION_MOVE_COUNT='50'; npm.cmd run smoke:wysiwyg-smoothness`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-rich-draft`
+
+Notes:
+
+- Selection probe baseline after the Profiler hook: overlay visible on 50/50
+  sampled moves, paint p95 about `31.5ms`, and no console/page errors.
+- The longest measured FlowDoc-side event is now
+  `editor-canvas-react-commit` at about `59.8ms`, with 10 events over one
+  frame in the standard fixture.
+- Next optimization should be designed around active-page canvas commit scope
+  or a more local selection overlay layer. Pointer hit-test and overlay
+  rectangle math are not the current hot path in this fixture.
+
+---
+
+## 2026-05-23
+
+### Add WYSIWYG Selection Drag Perf Probe
+
+Goal: Identify the remaining subtle range-selection lag without changing
+document state, pagination, undo/redo, or rich text command semantics.
+
+Completed:
+
+- Added trace-gated perf event kinds for WYSIWYG pointer frame coalescing,
+  pointer hit-testing, pointer selection apply, and selection overlay geometry.
+- Kept the new hot-path instrumentation inert when WYSIWYG perf tracing is not
+  enabled; normal pointer moves do not append perf events.
+- Added a `PROBE_MODE=selection` path to `scripts/wysiwyg-smoothness-probe.mjs`
+  so selection drag can be measured with the same paint-latency report shape as
+  typing and resize probes.
+- Added focused tests that verify selection overlay perf metadata is scalar and
+  does not store paragraph text.
+- Documented the selection probe mode, current baseline, and interpretation.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; $env:PROBE_MODE='selection'; $env:PROBE_SELECTION_MOVE_COUNT='50'; npm.cmd run smoke:wysiwyg-smoothness`
+
+Notes:
+
+- Selection probe baseline: overlay visible on 50/50 sampled moves, no measured
+  FlowDoc hot-path event exceeded a frame budget, and the longest measured
+  FlowDoc event was `text-engine-pointer-frame` at about `1.1ms`.
+- This suggests the remaining subtle perceived lag is not currently explained
+  by hit-test or overlay geometry cost in the standard fixture. React/browser
+  scheduling, total page paint, or automation dispatch overhead remain the next
+  likely investigation area.
+
+---
+
+## 2026-05-23
+
+### Debounce Rich Toolbar Range Selection Display
+
+Goal: Reduce rich text range-selection drag lag by keeping toolbar display
+updates off every pointer-move frame while preserving accurate command targets.
+
+Completed:
+
+- Added a dedicated rich toolbar selection snapshot helper with equality and
+  debounce decision functions.
+- Debounced only non-collapsed rich toolbar display/scope selection state in
+  `EditorShell`; collapsed caret/no-selection states still update immediately.
+- Kept toolbar commands wired to the latest live text selection via a separate
+  `commandTextSelection` path so a click during or after drag does not apply to
+  a stale debounced display range.
+- Added focused unit coverage for toolbar snapshot helpers and command-range
+  precedence.
+- Documented that debounced toolbar display state must not weaken live command
+  selection accuracy.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/RichTextToolbar.tsx`
+- `src/app/editor/_components/richTextToolbarSelection.ts`
+- `src/app/editor/_components/__tests__/RichTextToolbar.test.ts`
+- `src/app/editor/_components/__tests__/richTextToolbarSelection.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/RichTextToolbar.test.ts src/app/editor/_components/__tests__/richTextToolbarSelection.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/richTextDraftSession.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-rich-draft`
+- In-app browser reload of `http://localhost:4000/editor` confirmed
+  `editor-canvas`, one `editor-page`, and no visible layout/error badges.
+
+Notes:
+
+- This does not change document schema, undo/redo, pagination, export, or rich
+  draft commit semantics.
+- This is the first toolbar-local performance patch. A deeper local-selection
+  architecture remains a separate decision if drag selection still feels heavy.
+
+---
+
+## 2026-05-22
+
+### Coalesce WYSIWYG Range Selection Updates
+
+Goal: Reduce lag while dragging or extending a WYSIWYG text selection.
+
+Completed:
+
+- Added nullable selection equality helpers and made plain/rich WYSIWYG session
+  selection moves return the same state object when caret and selection offsets
+  are unchanged.
+- Added an early duplicate-selection guard in `EditorShell` before refreshing
+  draft snapshots or emitting selection perf events.
+- Coalesced text-engine pointer selection move events to the latest client
+  position per animation frame, while keeping pointer down/up selection
+  immediate.
+- Kept selection-only changes as editor/session state. No document model,
+  undo/redo, export, or pagination semantics were changed.
+- Documented the selection coalescing contract.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/useWysiwygTextSession.ts`
+- `src/app/editor/_components/richTextDraftSession.ts`
+- `src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+- `src/app/editor/_components/__tests__/richTextDraftSession.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/richTextDraftSession.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-rich-draft`
+- In-app browser reload of `http://localhost:4000/editor` confirmed the editor
+  canvas and page rendered.
+
+Notes:
+
+- This is still a local interaction patch, not the deeper local-selection
+  architecture. Toolbar recomputation and active page rerender still happen
+  when the selected offsets actually change.
+
+---
+
+## 2026-05-22
+
+### Add Rich Draft Style Preview Perf Guard
+
+Goal: Reduce rich range-style lag without weakening document layout
+correctness.
+
+Completed:
+
+- Added a rich draft style-patch classifier so the editor can distinguish
+  layout-affecting run styles from color/underline/strikethrough changes.
+- Reused the active paragraph visual-preview path for dirty rich draft
+  paragraphs whose text is unchanged, allowing non-layout style edits on normal
+  body paragraphs to appear without immediate full document draft pagination.
+- Kept Flow Stack, row-stack, and Flow Table paragraphs on the full draft
+  pagination path because their layout/container behavior needs stronger
+  reconciliation.
+- Added perf trace events for rich draft style commands and selection-only
+  caret/range updates. Draft pagination perf events now mark whether the source
+  was rich draft.
+- Moved the row-stack paragraph eligibility helper into the WYSIWYG eligibility
+  module so EditorCanvas and EditorShell share the same guard.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/richTextDraftCommands.ts`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/wysiwygTextEligibility.ts`
+- `src/app/editor/_components/__tests__/richTextDraftCommands.test.ts`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/RichTextToolbar.test.ts src/app/editor/_components/__tests__/richTextDraftSession.test.ts src/app/editor/_components/__tests__/richTextDraftCommands.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run type-check`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-rich-draft`
+
+Notes:
+
+- The standalone rich draft smoke startup was blocked by an already-running
+  Next dev server on port `4000`, so the smoke was rerun successfully against
+  that existing flagged editor.
+- This does not solve all range-selection latency. The selection state still
+  flows through EditorShell; deeper local-selection architecture remains a
+  separate decision.
+
+---
+
+## 2026-05-22
+
+### Enable Rich Draft In WYSIWYG Dev Script
+
+Goal: Make the local `dev:wysiwyg` command start the same rich draft lane used
+by the rich text range-selection smoke.
+
+Completed:
+
+- Added `NEXT_PUBLIC_FLOWDOC_WYSIWYG_RICH_TEXT_DRAFT=1` to
+  `scripts/dev-wysiwyg.mjs`.
+- Updated the dev script console output so the enabled rich draft flag is
+  visible when the server starts.
+- Documented that `npm.cmd run dev:wysiwyg` now enables text engine, inline
+  edit, and rich draft together for local testing.
+
+Files changed:
+
+- `scripts/dev-wysiwyg.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `node --check scripts/dev-wysiwyg.mjs`
+
+Notes:
+
+- This changes only the local dev convenience command. Default app behavior and
+  production flags remain unchanged.
+
+---
+
+## 2026-05-22
+
+### Add Rich Toolbar Scope Affordance
+
+Goal: Make the rich text toolbar communicate whether style commands target the
+paragraph, the next typed text, or the selected range.
+
+Completed:
+
+- Added a compact rich toolbar scope chip with `Paragraph`, `Next text`, and
+  `Selected text` states.
+- Kept the scope chip editor-only; it does not write document data or create
+  history entries.
+- Marked collapsed active rich draft carets as `Next text` so the toolbar does
+  not imply a paragraph-level edit while pending style commands are staged for
+  future typing.
+- Extended toolbar unit coverage and the rich draft smoke assertions for the
+  new scope affordance.
+- Updated the editor UX contract and browser smoke checklist.
+
+Files changed:
+
+- `src/app/editor/_components/RichTextToolbar.tsx`
+- `src/app/editor/_components/__tests__/RichTextToolbar.test.ts`
+- `scripts/wysiwyg-rich-draft-smoke.mjs`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/RichTextToolbar.test.ts`
+- `node --check scripts/wysiwyg-rich-draft-smoke.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/RichTextToolbar.test.ts src/app/editor/_components/__tests__/richTextDraftCommands.test.ts src/app/editor/_components/__tests__/richTextDraftSession.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:wysiwyg-rich-draft`
+
+Notes:
+
+- This change does not alter document schema, rich draft command semantics,
+  pagination, undo/redo, or export behavior.
+- The first smoke run exposed a React style warning from mixing border
+  shorthand with `borderColor`; the scope chip now uses explicit border fields.
+- Further range-selection visual polish and cross-fragment rich selection are
+  still separate follow-up work.
+
+---
+
+## 2026-05-22
+
+### Guard Rich Draft Range Selection UX
+
+Goal: Lock the first browser-level rich draft range-selection UX path before
+adding more range editing polish.
+
+Completed:
+
+- Extended the rich draft browser smoke fixture with a dedicated range-selection
+  paragraph.
+- Added a browser smoke step that selects the `target` run with
+  `Shift+ArrowLeft`, verifies SVG selection overlay visibility, verifies the
+  rich text toolbar enters range mode, applies Bold from the toolbar, and
+  commits only the selected range as a bold text run.
+- Updated the browser smoke checklist so future editor reviews know the rich
+  draft smoke now covers selected-range toolbar styling.
+
+Files changed:
+
+- `scripts/wysiwyg-rich-draft-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `node --check scripts/wysiwyg-rich-draft-smoke.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/RichTextToolbar.test.ts src/app/editor/_components/__tests__/richTextDraftCommands.test.ts src/app/editor/_components/__tests__/richTextDraftSession.test.ts`
+- `npm.cmd run smoke:wysiwyg-rich-draft`
+
+Notes:
+
+- This change does not alter document schema, command semantics, pagination, or
+  export behavior. It locks the current browser UX path before visual polishing.
+- Cross-fragment rich range selection, rich paste, fieldRef/pageNumber direct
+  semantics, and broader toolbar affordance polish remain follow-up work.
+
+---
+
 ## 2026-05-22
 
 ### Bump Rich Draft Semantics Baseline To 0.6.6

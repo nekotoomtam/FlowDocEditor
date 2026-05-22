@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
   absoluteInlineEditIndex,
+  areWysiwygDraftSyncPayloadsEqual,
+  areWysiwygImmediateDraftLayoutStatesEqual,
+  areWysiwygImmediateTextEchoStatesEqual,
   buildContinuationBackspaceInput,
   buildInlineEditSliceKey,
   buildSplitEditInput,
@@ -19,14 +22,19 @@ import {
   inlineEditTextareaTextColor,
   hasWysiwygTextDraftChange,
   isWysiwygTextSessionFocusTarget,
+  resolvePointerSelectionWheelScrollDelta,
   resolveWysiwygLiveTextEcho,
+  resolveSelectionOverlayRectsInFragmentWithPerf,
+  resolveTrailingWhitespaceCaretOverlayInFragment,
   resolveWysiwygTextPointerOffsetFromFragmentTargets,
+  resolveWysiwygPointerSelectionState,
   resolveWysiwygWordSelectionRange,
   shouldUseInlineEditDocumentLayer,
   shouldUseInlineEditDocumentVisual,
   shouldUseNativeInlineEditEnter,
   shouldUseNativeTableCellBoundaryBackspace,
   shouldUseInlineEditSvgVisual,
+  shouldFlushWysiwygImmediateVisualState,
   shouldKeepWysiwygImmediateDraftLayout,
   shouldUseWysiwygTextEngineLayer,
   WysiwygTextLayer,
@@ -261,6 +269,10 @@ const fixedMeasurer: TextMeasurer = {
   measureText: (text) => ({ width: text.length * 10 }),
   measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => fontSize * lineHeightRatio,
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function makeCountingMeasurer(): {
   measurer: TextMeasurer
@@ -854,6 +866,47 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(shouldKeepWysiwygImmediateDraftLayout(immediate, "Other", false)).toBe(false)
   })
 
+  it("dedupes immediate visual state and flushes only when entering the immediate lane", () => {
+    const layout = { lines: [], height: 24 }
+    const firstEcho = { baseText: "Hello", draftText: "Hello " }
+    const sameEcho = { baseText: "Hello", draftText: "Hello " }
+    const nextEcho = { baseText: "Hello", draftText: "Hello  " }
+    const firstLayout = { baseText: "Hello", draftText: "Hello ", layout }
+    const sameLayout = { baseText: "Hello", draftText: "Hello ", layout: { lines: [], height: 24 } }
+    const nextLayout = { baseText: "Hello ", draftText: "Hello  ", layout }
+
+    expect(areWysiwygImmediateTextEchoStatesEqual(firstEcho, sameEcho)).toBe(true)
+    expect(areWysiwygImmediateTextEchoStatesEqual(firstEcho, nextEcho)).toBe(false)
+    expect(areWysiwygImmediateDraftLayoutStatesEqual(firstLayout, sameLayout)).toBe(true)
+    expect(areWysiwygImmediateDraftLayoutStatesEqual(firstLayout, nextLayout)).toBe(false)
+    expect(shouldFlushWysiwygImmediateVisualState({
+      previousTextEcho: null,
+      previousDraftLayout: null,
+      nextTextEcho: firstEcho,
+      nextDraftLayout: firstLayout,
+    })).toBe(true)
+    expect(shouldFlushWysiwygImmediateVisualState({
+      previousTextEcho: firstEcho,
+      previousDraftLayout: firstLayout,
+      nextTextEcho: nextEcho,
+      nextDraftLayout: nextLayout,
+    })).toBe(false)
+    expect(shouldFlushWysiwygImmediateVisualState({
+      previousTextEcho: firstEcho,
+      previousDraftLayout: firstLayout,
+      nextTextEcho: null,
+      nextDraftLayout: null,
+    })).toBe(false)
+    expect(areWysiwygDraftSyncPayloadsEqual(
+      { text: "Hello", caretOffset: 5, selection: { anchorOffset: 5, focusOffset: 5 } },
+      { text: "Hello", caretOffset: 5, selection: { anchorOffset: 5, focusOffset: 5 } },
+    )).toBe(true)
+    expect(areWysiwygDraftSyncPayloadsEqual(
+      { text: "Hello", caretOffset: 5, selection: { anchorOffset: 5, focusOffset: 5 } },
+      { text: "Hello ", caretOffset: 6, selection: { anchorOffset: 6, focusOffset: 6 } },
+    )).toBe(false)
+  })
+
   it("clips text-engine live echo to the active fragment", () => {
     const fragment = makeFragment({
       width: 40,
@@ -922,6 +975,42 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     })
   })
 
+  it("resolves pointer selection state with duplicate detection", () => {
+    const first = resolveWysiwygPointerSelectionState({
+      text: "Hello",
+      anchorOffset: 1,
+      focusOffset: 4,
+      currentCaretOffset: 1,
+      currentSelection: { anchorOffset: 1, focusOffset: 1 },
+    })
+
+    expect(first).toEqual({
+      caretOffset: 4,
+      selection: { anchorOffset: 1, focusOffset: 4 },
+      selectionRangeLength: 3,
+      changed: true,
+    })
+    expect(resolveWysiwygPointerSelectionState({
+      text: "Hello",
+      anchorOffset: 1,
+      focusOffset: 4,
+      currentCaretOffset: first.caretOffset,
+      currentSelection: first.selection,
+    }).changed).toBe(false)
+    expect(resolveWysiwygPointerSelectionState({
+      text: "Hello",
+      anchorOffset: -20,
+      focusOffset: 99,
+      currentCaretOffset: null,
+      currentSelection: null,
+    })).toMatchObject({
+      caretOffset: 5,
+      selection: { anchorOffset: 0, focusOffset: 5 },
+      selectionRangeLength: 5,
+      changed: true,
+    })
+  })
+
   it("renders the flagged text-engine edit lane from document lines without textarea markup", () => {
     const fragment = makeFragment({
       lines: [{
@@ -974,6 +1063,63 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).not.toContain("<textarea")
   })
 
+  it("preserves repeated spaces in SVG paragraph text", () => {
+    const fragment = makeFragment({
+      lines: [{
+        text: "A  B",
+        x: 10,
+        y: 20,
+        width: 40,
+        height: 14,
+        segments: [
+          { kind: "word", text: "A", start: 0, end: 1, x: 0, width: 10, breakableAfter: true },
+          { kind: "space", text: "  ", start: 1, end: 3, x: 10, width: 20, breakableAfter: true },
+          { kind: "word", text: "B", start: 3, end: 4, x: 30, width: 10, breakableAfter: false },
+        ],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("A  B"),
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "A  B",
+      wysiwygTextCaretOffset: 4,
+      showTextSegments: false,
+      initialCaretIndex: 4,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expect(markup).toContain("xml:space=\"preserve\"")
+    expect(markup).toContain("white-space:pre")
+    expect(markup).toContain("A  B")
+    expect(markup).not.toContain("<textarea")
+  })
+
   it("renders text-engine selection overlays from FlowDoc line geometry", () => {
     const fragment = makeFragment({
       lines: [{
@@ -1023,6 +1169,41 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("data-wysiwyg-selection=\"true\"")
     expect(markup).toContain("width=\"30\"")
     expect(markup).not.toContain("<textarea")
+  })
+
+  it("records scalar selection overlay perf metadata without paragraph content", () => {
+    vi.stubGlobal("window", { __flowDocWysiwygPerfTraceEnabled: true })
+    const fragment = makeFragment({
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+    })
+
+    const rects = resolveSelectionOverlayRectsInFragmentWithPerf({
+      fragment,
+      anchorOffset: 1,
+      focusOffset: 4,
+      textMeasurer: fixedMeasurer,
+      tracePerf: true,
+      source: "test",
+    })
+
+    expect(rects).toHaveLength(1)
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "text-engine-selection-overlay",
+      nodeId: "p1",
+      pageIndex: 0,
+      lineCount: 1,
+      selectionRangeLength: 3,
+      overlayRectCount: 1,
+      source: "test",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("Hello")
   })
 
   it("renders passive text-engine selection overlays on non-active continuation fragments", () => {
@@ -1127,6 +1308,71 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       getPageRect: (pageKey) => pageRects.get(pageKey),
       textMeasurer: fixedMeasurer,
     })).toBe(8)
+  })
+
+  it("moves the WYSIWYG caret across trailing spaces that layout trims from line text", () => {
+    const fragment = makeFragment({
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    expect(resolveTrailingWhitespaceCaretOverlayInFragment({
+      fragment,
+      caretIndex: 7,
+      draftText: "Hello  ",
+      textMeasurer: fixedMeasurer,
+    })).toMatchObject({
+      offset: 7,
+      x1: 80,
+      x2: 80,
+      y1: 20,
+      y2: 34,
+    })
+    expect(resolveTrailingWhitespaceCaretOverlayInFragment({
+      fragment,
+      caretIndex: 6,
+      draftText: "HelloX",
+      textMeasurer: fixedMeasurer,
+    })).toBeNull()
+  })
+
+  it("normalizes pointer-selection overlay wheel deltas for canvas scrolling", () => {
+    expect(resolvePointerSelectionWheelScrollDelta({
+      deltaX: 2,
+      deltaY: 3,
+      deltaMode: 0,
+    })).toEqual({ left: 2, top: 3 })
+
+    expect(resolvePointerSelectionWheelScrollDelta({
+      deltaX: 1,
+      deltaY: -2,
+      deltaMode: 1,
+      lineHeight: 18,
+    })).toEqual({ left: 18, top: -36 })
+
+    expect(resolvePointerSelectionWheelScrollDelta({
+      deltaX: 0,
+      deltaY: 1,
+      deltaMode: 2,
+      pageHeight: 640,
+    })).toEqual({ left: 0, top: 640 })
   })
 
   it("does not use the text-engine lane for continuation fragments", () => {

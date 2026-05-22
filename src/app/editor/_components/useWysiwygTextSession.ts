@@ -67,6 +67,15 @@ export function clampWysiwygTextOffset(text: string, offset: number | null | und
   return Math.max(0, Math.min(text.length, Math.trunc(offset)))
 }
 
+export function areWysiwygTextSelectionsEqual(
+  a: WysiwygTextSelection | null | undefined,
+  b: WysiwygTextSelection | null | undefined,
+): boolean {
+  if (!a && !b) return true
+  if (!a || !b) return false
+  return a.anchorOffset === b.anchorOffset && a.focusOffset === b.focusOffset
+}
+
 export function startWysiwygTextSessionState(
   _current: WysiwygTextSessionState,
   start: WysiwygTextSessionStart,
@@ -106,10 +115,15 @@ export function moveWysiwygTextSessionCaret(
 ): WysiwygTextSessionState {
   if (!current.nodeId) return current
   const safeCaret = clampWysiwygTextOffset(current.draftText, caretOffset)
+  const nextSelection = selection ?? (safeCaret == null ? null : { anchorOffset: safeCaret, focusOffset: safeCaret })
+  if (
+    current.caretOffset === safeCaret &&
+    areWysiwygTextSelectionsEqual(current.selection, nextSelection)
+  ) return current
   return {
     ...current,
     caretOffset: safeCaret,
-    selection: selection ?? (safeCaret == null ? null : { anchorOffset: safeCaret, focusOffset: safeCaret }),
+    selection: nextSelection,
   }
 }
 
@@ -157,6 +171,11 @@ export const WYSIWYG_TAB_REPLACEMENT = "   "
 
 export function normalizeWysiwygPlainTextInput(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(/\t/g, WYSIWYG_TAB_REPLACEMENT)
+}
+
+export function normalizeWysiwygTextInputKey(key: string): string {
+  if (key === "Space" || key === "Spacebar") return " "
+  return key
 }
 
 export function getWysiwygTextSelectedText(
@@ -232,32 +251,33 @@ export function applyWysiwygTextInputKey(
   selection?: WysiwygTextSelection | null,
 ): WysiwygTextSessionDraftChange | null {
   if (input.isComposing || input.altKey || input.ctrlKey || input.metaKey) return null
+  const key = normalizeWysiwygTextInputKey(input.key)
   const caret = clampWysiwygTextOffset(text, caretOffset) ?? text.length
   const range = selectedRange(text, caret, selection)
 
-  const movement = moveCaretByKey(text, caret, input.key, input.shiftKey === true, selection)
+  const movement = moveCaretByKey(text, caret, key, input.shiftKey === true, selection)
   if (movement) return movement
 
-  if (input.key === "Enter") {
+  if (key === "Enter") {
     return replaceRange(text, range.start, range.end, "\n")
   }
 
-  if (input.key === "Backspace") {
+  if (key === "Backspace") {
     if (!range.isCollapsed) return replaceRange(text, range.start, range.end, "")
     if (caret === 0) return { text, caretOffset: caret, selection: collapsedSelection(caret) }
     const start = previousGraphemeBoundary(text, caret)
     return replaceRange(text, start, caret, "")
   }
 
-  if (input.key === "Delete") {
+  if (key === "Delete") {
     if (!range.isCollapsed) return replaceRange(text, range.start, range.end, "")
     if (caret >= text.length) return { text, caretOffset: caret, selection: collapsedSelection(caret) }
     const end = nextGraphemeBoundary(text, caret)
     return replaceRange(text, caret, end, "")
   }
 
-  if (input.key.length === 1) {
-    return replaceRange(text, range.start, range.end, input.key)
+  if (key.length === 1) {
+    return replaceRange(text, range.start, range.end, key)
   }
 
   return null

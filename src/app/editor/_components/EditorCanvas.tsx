@@ -38,7 +38,7 @@ import {
   splitWysiwygDraftVisualFragments,
   type WysiwygDraftVisualPreview,
 } from "./wysiwygDraftVisualPreview"
-import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
+import { isParagraphInsideFlowStack, isParagraphInsideRowStack } from "./wysiwygTextEligibility"
 import { resolveActiveInlineEditPageIndex } from "./editorPageFollow"
 import { buildSelectionContext, type SelectionContextItem } from "./selectionContext"
 import type { WysiwygTextInputKey } from "./useWysiwygTextSession"
@@ -983,19 +983,6 @@ function isStackInsideRow(doc: DocumentNode, stackId: string | null | undefined)
     if (Object.values(section.nodes).some((node) => (
       node.type === "row" && node.childIds.includes(stackId)
     ))) return true
-  }
-  return false
-}
-
-function isParagraphInsideRowStack(doc: DocumentNode, nodeId: string | null | undefined): boolean {
-  if (!nodeId) return false
-  for (const section of doc.document.sections) {
-    const paragraph = section.nodes[nodeId]
-    if (paragraph?.type !== "paragraph") continue
-    const stack = Object.values(section.nodes).find((node) => (
-      node.type === "stack" && node.childIds.includes(nodeId)
-    ))
-    if (stack && isStackInsideRow(doc, stack.id)) return true
   }
   return false
 }
@@ -2079,6 +2066,8 @@ interface Props {
   wysiwygTextEngineEnabled: boolean
   wysiwygTextDraftNodeId: string | null
   wysiwygTextDraftText: string | null
+  wysiwygTextDraftParagraph?: ParagraphNode | null
+  wysiwygTextDraftDirtyVersion?: number
   wysiwygTextCaretOffset: number | null
   wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
   wysiwygTextDraftPaginationActive: boolean
@@ -2092,12 +2081,16 @@ export function buildWysiwygDraftVisualPreview(input: {
   doc: DocumentNode
   nodeId: string
   draftText: string
+  draftParagraph?: ParagraphNode | null
   caretOffset: number | null
   textMeasurer: TextMeasurer
   draftPaginationActive?: boolean
 }): WysiwygDraftVisualPreview | null {
-  const paragraph = findParagraphNode(input.doc, input.nodeId)
+  const paragraph = input.draftParagraph ?? findParagraphNode(input.doc, input.nodeId)
   if (!paragraph || !isTextRunOnlyParagraph(paragraph)) return null
+  const draftText = input.draftParagraph
+    ? getTextRunParagraphText(input.draftParagraph) ?? input.draftText
+    : input.draftText
   if (isParagraphInsideRowStack(input.doc, input.nodeId)) return null
   if (isParagraphInsideFlowStack(input.doc, input.nodeId)) return null
 
@@ -2125,7 +2118,7 @@ export function buildWysiwygDraftVisualPreview(input: {
     const draftLayout = buildWysiwygDraftParagraphLayout(
       sourceFragment,
       paragraph,
-      input.draftText,
+      draftText,
       input.textMeasurer,
       { allowContinuedFirstFragment: true },
     )
@@ -2179,6 +2172,8 @@ export function EditorCanvas({
   wysiwygTextEngineEnabled,
   wysiwygTextDraftNodeId,
   wysiwygTextDraftText,
+  wysiwygTextDraftParagraph,
+  wysiwygTextDraftDirtyVersion = 0,
   wysiwygTextCaretOffset,
   wysiwygTextSelection,
   wysiwygTextDraftPaginationActive,
@@ -2209,12 +2204,19 @@ export function EditorCanvas({
     if (!wysiwygTextEngineEnabled) return null
     if (!wysiwygTextDraftNodeId || wysiwygTextDraftText == null) return null
     if (inlineEditNodeId !== wysiwygTextDraftNodeId) return null
-    if (getEditableParagraphText(doc, wysiwygTextDraftNodeId) === wysiwygTextDraftText) return null
+    const hasDraftTextChange = getEditableParagraphText(doc, wysiwygTextDraftNodeId) !== wysiwygTextDraftText
+    const hasDraftParagraphChange = Boolean(
+      wysiwygTextDraftParagraph &&
+      wysiwygTextDraftDirtyVersion > 0 &&
+      getTextRunParagraphText(wysiwygTextDraftParagraph) !== null,
+    )
+    if (!hasDraftTextChange && !hasDraftParagraphChange) return null
     return buildWysiwygDraftVisualPreview({
       paginated,
       doc,
       nodeId: wysiwygTextDraftNodeId,
       draftText: wysiwygTextDraftText,
+      draftParagraph: hasDraftParagraphChange ? wysiwygTextDraftParagraph ?? null : null,
       caretOffset: wysiwygTextCaretOffset,
       textMeasurer,
       draftPaginationActive: wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive,
@@ -2225,8 +2227,10 @@ export function EditorCanvas({
     paginated,
     textMeasurer,
     wysiwygTextCaretOffset,
+    wysiwygTextDraftDirtyVersion,
     wysiwygTextDraftPaginationActive,
     wysiwygTextDraftNodeId,
+    wysiwygTextDraftParagraph,
     wysiwygTextDraftText,
     wysiwygTextEngineEnabled,
     wysiwygTextExistingSplitActive,

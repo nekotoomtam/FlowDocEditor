@@ -1,6 +1,6 @@
 "use client"
 
-import { useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent } from "react"
+import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
 import {
@@ -70,6 +70,8 @@ import {
 } from "./wysiwygInlineEditConfig"
 import {
   finishWysiwygPerfSpan,
+  isWysiwygPerfTraceRuntimeEnabled,
+  recordWysiwygPerfEvent,
   startWysiwygPerfSpan,
   summarizePaginatedForWysiwygPerf,
 } from "./wysiwygPerformance"
@@ -78,7 +80,7 @@ import {
   countWysiwygTextDraftFragments,
 } from "./wysiwygDraftPreview"
 import { resolveEditorTestScenarioFromLocation } from "./wysiwygStage3StressScenarios"
-import { isParagraphInsideFlowStack, isParagraphInsideTableCell, isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
+import { isParagraphInsideFlowStack, isParagraphInsideRowStack, isParagraphInsideTableCell, isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
 import {
   getEditableParagraphFromDocument,
   getEditableParagraphTextFromDocument,
@@ -87,18 +89,27 @@ import {
 } from "./wysiwygTextCommit"
 import { useInlineEditSession } from "./useInlineEditSession"
 import {
+  areWysiwygTextSelectionsEqual,
   describeWysiwygTextSessionAccessibility,
   useWysiwygTextSession,
   type WysiwygTextInputKey,
   WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
 import {
+  applyRichTextDraftSessionStyleCommand,
   projectRichTextDraftSessionToWysiwygTextSession,
   useWysiwygRichTextDraftSession,
 } from "./richTextDraftSession"
 import {
-  applyRichTextDraftSessionCommand,
+  RICH_TEXT_TOOLBAR_SELECTION_DEBOUNCE_MS,
+  areRichTextToolbarSelectionsEqual,
+  resolveRichTextToolbarSelectionSnapshot,
+  shouldDebounceRichTextToolbarSelection,
+  type RichTextToolbarSelectionSnapshot,
+} from "./richTextToolbarSelection"
+import {
   getRichTextDraftSessionCommandPatch,
+  isRichTextDraftStylePatchLayoutAffecting,
   resolveRichTextDraftKeyboardCommand,
   type RichTextDraftSessionCommand,
 } from "./richTextDraftCommands"
@@ -727,6 +738,23 @@ const rightRailBookmarkButton = (active: boolean, height = 28, fontSize = 11): R
   transition: "width 120ms ease, background 120ms ease, box-shadow 120ms ease, color 120ms ease",
 })
 
+function EditorCanvasPerfProfiler({
+  enabled,
+  onRender,
+  children,
+}: {
+  enabled: boolean
+  onRender: ProfilerOnRenderCallback
+  children: ReactNode
+}) {
+  if (!enabled) return <>{children}</>
+  return (
+    <Profiler id="editor-canvas" onRender={onRender}>
+      {children}
+    </Profiler>
+  )
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function EditorShell() {
@@ -1016,6 +1044,18 @@ export default function EditorShell() {
   )
   const wysiwygTextSessionStateRef = useRef(wysiwygTextSessionState)
   const richWysiwygDraftSessionStateRef = useRef(richWysiwygDraftSessionState)
+  const [wysiwygPerfTraceActive] = useState(() => (
+    isWysiwygPerfTraceRuntimeEnabled(WYSIWYG_PERF_TRACE_ENABLED)
+  ))
+  const richTextToolbarSelectionDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const richTextToolbarLiveSelection = useMemo(
+    () => resolveRichTextToolbarSelectionSnapshot(
+      wysiwygTextSessionState.nodeId,
+      wysiwygTextSessionState.selection,
+    ),
+    [wysiwygTextSessionState.nodeId, wysiwygTextSessionState.selection],
+  )
+  const [richTextToolbarSelection, setRichTextToolbarSelection] = useState<RichTextToolbarSelectionSnapshot | null>(richTextToolbarLiveSelection)
   const [wysiwygDraftPaginationNodeId, setWysiwygDraftPaginationNodeIdState] = useState<string | null>(null)
   const wysiwygDraftPaginationNodeIdRef = useRef<string | null>(null)
   const setWysiwygDraftPaginationNodeId = useCallback((nodeId: string | null) => {
@@ -1024,6 +1064,72 @@ export default function EditorShell() {
   }, [])
   useEffect(() => { wysiwygTextSessionStateRef.current = wysiwygTextSessionState }, [wysiwygTextSessionState])
   useEffect(() => { richWysiwygDraftSessionStateRef.current = richWysiwygDraftSessionState }, [richWysiwygDraftSessionState])
+  useEffect(() => {
+    if (richTextToolbarSelectionDebounceRef.current) {
+      clearTimeout(richTextToolbarSelectionDebounceRef.current)
+      richTextToolbarSelectionDebounceRef.current = null
+    }
+
+    const applySelection = () => {
+      setRichTextToolbarSelection((current) => (
+        areRichTextToolbarSelectionsEqual(current, richTextToolbarLiveSelection)
+          ? current
+          : richTextToolbarLiveSelection
+      ))
+    }
+
+    if (!shouldDebounceRichTextToolbarSelection(richTextToolbarLiveSelection)) {
+      applySelection()
+      return
+    }
+
+    richTextToolbarSelectionDebounceRef.current = setTimeout(() => {
+      richTextToolbarSelectionDebounceRef.current = null
+      applySelection()
+    }, RICH_TEXT_TOOLBAR_SELECTION_DEBOUNCE_MS)
+
+    return () => {
+      if (richTextToolbarSelectionDebounceRef.current) {
+        clearTimeout(richTextToolbarSelectionDebounceRef.current)
+        richTextToolbarSelectionDebounceRef.current = null
+      }
+    }
+  }, [richTextToolbarLiveSelection])
+  useEffect(() => () => {
+    if (richTextToolbarSelectionDebounceRef.current) {
+      clearTimeout(richTextToolbarSelectionDebounceRef.current)
+      richTextToolbarSelectionDebounceRef.current = null
+    }
+  }, [])
+  const handleEditorCanvasProfilerRender = useCallback<ProfilerOnRenderCallback>((
+    _id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    const session = wysiwygTextSessionStateRef.current
+    const selection = session.selection
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "editor-canvas-react-commit",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      source: phase,
+      ...(session.nodeId ? {
+        nodeId: session.nodeId,
+        draftVersion: session.dirtyVersion,
+        textLength: session.draftText.length,
+      } : {}),
+      ...(selection ? {
+        selectionCollapsed: selection.anchorOffset === selection.focusOffset,
+        selectionRangeLength: Math.abs(selection.focusOffset - selection.anchorOffset),
+      } : {}),
+      ...summarizePaginatedForWysiwygPerf(paginatedRef.current),
+    })
+  }, [])
 
   const getPersistableDocumentSnapshot = useCallback(() => {
     try {
@@ -1114,12 +1220,13 @@ export default function EditorShell() {
         latestSnapshot: wysiwygLatestDraftPaginationSnapshotRef.current,
       })
       if (!source) return
+      const richDraftActive = WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+        richWysiwygDraftSessionStateRef.current.nodeId === activeNodeId
       const draftDoc = buildWysiwygTextDraftPreviewDocument({
         doc: docRef.current,
         nodeId: activeNodeId,
         draftText: source.draftText,
-        draftParagraph: WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
-          richWysiwygDraftSessionStateRef.current.nodeId === activeNodeId
+        draftParagraph: richDraftActive
           ? richWysiwygDraftSessionStateRef.current.draft?.paragraph ?? null
           : null,
       })
@@ -1137,6 +1244,7 @@ export default function EditorShell() {
         requestedDelayMs: activeRequest.requestedDelayMs,
         scheduledDelayMs: activeScheduledDelayMs ?? undefined,
         source: "wysiwyg-draft",
+        richDraft: richDraftActive,
         ...summarizePaginatedForWysiwygPerf(paginated),
       })
       if (generation !== wysiwygDraftPaginationGenerationRef.current) return
@@ -1228,19 +1336,42 @@ export default function EditorShell() {
     setWysiwygDraftPaginationNodeId,
   ])
 
+  const canUseLocalRichTextDraftStylePreview = useCallback((nodeId: string): boolean => {
+    const doc = docRef.current
+    return !isParagraphInsideFlowStack(doc, nodeId) &&
+      !isParagraphInsideTableCell(doc, nodeId) &&
+      !isParagraphInsideRowStack(doc, nodeId)
+  }, [])
+
   const applyActiveRichTextDraftCommand = useCallback((nodeId: string, command: RichTextDraftSessionCommand): boolean => {
     if (!WYSIWYG_RICH_TEXT_DRAFT_ENABLED) return false
     const current = richWysiwygDraftSessionStateRef.current
     if (!current.nodeId || current.nodeId !== nodeId || !current.draft) return false
-    const next = applyRichTextDraftSessionCommand(current, command)
+    const patch = getRichTextDraftSessionCommandPatch(current, command)
+    const layoutAffecting = isRichTextDraftStylePatchLayoutAffecting(patch)
+    const canUseLocalStylePreview = !layoutAffecting && canUseLocalRichTextDraftStylePreview(nodeId)
+    const selection = current.draft.selection
+    const startedAt = startWysiwygPerfSpan()
+    const next = applyRichTextDraftSessionStyleCommand(current, patch)
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "rich-draft-style-command", startedAt, {
+      nodeId,
+      commandType: command.type,
+      styleFields: Object.keys(patch).sort().join(","),
+      layoutAffecting,
+      localStylePreview: canUseLocalStylePreview,
+      selectionCollapsed: selection.anchorOffset === selection.focusOffset,
+    })
     if (next === current) return false
-    applyRichWysiwygDraftStyleCommand(getRichTextDraftSessionCommandPatch(current, command))
+    applyRichWysiwygDraftStyleCommand(patch)
     if (next.dirtyVersion !== current.dirtyVersion) {
-      scheduleRichTextDraftStylePagination(nodeId)
+      if (!canUseLocalStylePreview) {
+        scheduleRichTextDraftStylePagination(nodeId)
+      }
     }
     return true
   }, [
     applyRichWysiwygDraftStyleCommand,
+    canUseLocalRichTextDraftStylePreview,
     scheduleRichTextDraftStylePagination,
   ])
 
@@ -1364,6 +1495,13 @@ export default function EditorShell() {
 
   const handleWysiwygTextDraftChange = useCallback((nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => {
     if (wysiwygTextSessionState.nodeId !== nodeId) return
+    const textChanged = text !== wysiwygTextSessionState.draftText
+    const nextSelection = selection ?? (caretIndex == null ? null : { anchorOffset: caretIndex, focusOffset: caretIndex })
+    if (
+      !textChanged &&
+      wysiwygTextSessionState.caretOffset === caretIndex &&
+      areWysiwygTextSelectionsEqual(wysiwygTextSessionState.selection, nextSelection)
+    ) return
     const nextSnapshotRevision = wysiwygDraftPaginationSnapshotRevisionRef.current + 1
     wysiwygDraftPaginationSnapshotRevisionRef.current = nextSnapshotRevision
     wysiwygLatestDraftPaginationSnapshotRef.current = {
@@ -1372,9 +1510,16 @@ export default function EditorShell() {
       caretOffset: caretIndex,
       revision: nextSnapshotRevision,
     }
-    const textChanged = text !== wysiwygTextSessionState.draftText
     if (!textChanged) {
-      moveWysiwygTextCaret(caretIndex, selection)
+      const startedAt = startWysiwygPerfSpan()
+      moveWysiwygTextCaret(caretIndex, nextSelection)
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-selection-update", startedAt, {
+        nodeId,
+        draftVersion: wysiwygTextSessionState.dirtyVersion,
+        textLength: text.length,
+        richDraft: WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionStateRef.current.nodeId === nodeId,
+        selectionCollapsed: !selection || selection.anchorOffset === selection.focusOffset,
+      })
     } else {
       const startedAt = startWysiwygPerfSpan()
       changeWysiwygTextDraft({ text, caretOffset: caretIndex, selection })
@@ -1412,8 +1557,10 @@ export default function EditorShell() {
     moveWysiwygTextCaret,
     scheduleWysiwygDraftPagination,
     setWysiwygDraftPaginationNodeId,
+    wysiwygTextSessionState.caretOffset,
     wysiwygTextSessionState.draftText,
     wysiwygTextSessionState.nodeId,
+    wysiwygTextSessionState.selection,
     wysiwygDraftPaginationNodeId,
   ])
 
@@ -2968,13 +3115,8 @@ export default function EditorShell() {
               richWysiwygDraftSessionState.nodeId === state.selectedNodeId
               ? richWysiwygDraftSessionState.draft?.pendingStyle ?? null
               : null}
-            textSelection={wysiwygTextSessionState.nodeId && wysiwygTextSessionState.selection
-              ? {
-                nodeId: wysiwygTextSessionState.nodeId,
-                anchorOffset: wysiwygTextSessionState.selection.anchorOffset,
-                focusOffset: wysiwygTextSessionState.selection.focusOffset,
-              }
-              : null}
+            textSelection={richTextToolbarSelection}
+            commandTextSelection={richTextToolbarLiveSelection}
             editable={isTemplateMode}
             onUpdateParagraphTextStyle={(nodeId, changes) => {
               if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
@@ -3059,57 +3201,67 @@ export default function EditorShell() {
             Preparing layout...
           </div>
         ) : (
-          <EditorCanvas
-            paginated={state.paginated}
-            doc={previewDoc}
-            drag={isTemplateMode ? state.drag : null}
-            scale={scale}
-            selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
-            selectionAnchorNodeId={isTemplateMode ? state.selectionAnchorNodeId : null}
-            isLayoutLoading={showLayoutLoadingOverlay}
-            textMeasurer={editorTextMeasurer}
-            inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
-            inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
-            inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
-            inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
-            inlineEditVisualLocked={isTemplateMode ? inlineEditVisualLocked : false}
-            onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
-            onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
-            onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
-            onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
-            onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightPreviewChange : () => undefined}
-            onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
-            onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
-            onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
-            setPageRef={setPageRef}
-            onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
-            onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
-            onSelectContextNode={isTemplateMode ? selectContextNode : () => undefined}
-            onDuplicateNode={isTemplateMode ? duplicateNodeFromCanvas : () => undefined}
-            onDeleteNode={isTemplateMode ? deleteNodeFromCanvas : () => undefined}
-            onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
-            onTableColumnResizeStart={isTemplateMode ? handleTableColumnResizeStart : () => undefined}
-            resizeDrag={isTemplateMode ? resizeDrag : null}
-            minHeightDrag={isTemplateMode ? minHeightDrag : null}
-            onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
-            marginDrag={isTemplateMode ? marginDrag : null}
-            onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
-            onScaleChange={handleCanvasScaleChange}
-            autoFitScale={zoomMode === "fit"}
-            showTextSegments={showTextSegments}
-            showDrift={showDrift}
-            driftMap={driftReport?.driftMap ?? null}
-            wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
-            wysiwygTextEngineEnabled={WYSIWYG_TEXT_ENGINE_ENABLED}
-            wysiwygTextDraftNodeId={wysiwygTextSessionState.nodeId}
-            wysiwygTextDraftText={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.draftText : null}
-            wysiwygTextCaretOffset={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.caretOffset : null}
-            wysiwygTextSelection={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
-            wysiwygTextDraftPaginationActive={wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
-            onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
-            onWysiwygRichTextShortcut={handleWysiwygRichTextShortcut}
-            onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
-          />
+          <EditorCanvasPerfProfiler
+            enabled={wysiwygPerfTraceActive}
+            onRender={handleEditorCanvasProfilerRender}
+          >
+            <EditorCanvas
+              paginated={state.paginated}
+              doc={previewDoc}
+              drag={isTemplateMode ? state.drag : null}
+              scale={scale}
+              selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
+              selectionAnchorNodeId={isTemplateMode ? state.selectionAnchorNodeId : null}
+              isLayoutLoading={showLayoutLoadingOverlay}
+              textMeasurer={editorTextMeasurer}
+              inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
+              inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
+              inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
+              inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
+              inlineEditVisualLocked={isTemplateMode ? inlineEditVisualLocked : false}
+              onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
+              onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
+              onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
+              onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
+              onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightPreviewChange : () => undefined}
+              onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
+              onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
+              onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
+              setPageRef={setPageRef}
+              onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
+              onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
+              onSelectContextNode={isTemplateMode ? selectContextNode : () => undefined}
+              onDuplicateNode={isTemplateMode ? duplicateNodeFromCanvas : () => undefined}
+              onDeleteNode={isTemplateMode ? deleteNodeFromCanvas : () => undefined}
+              onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
+              onTableColumnResizeStart={isTemplateMode ? handleTableColumnResizeStart : () => undefined}
+              resizeDrag={isTemplateMode ? resizeDrag : null}
+              minHeightDrag={isTemplateMode ? minHeightDrag : null}
+              onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
+              marginDrag={isTemplateMode ? marginDrag : null}
+              onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
+              onScaleChange={handleCanvasScaleChange}
+              autoFitScale={zoomMode === "fit"}
+              showTextSegments={showTextSegments}
+              showDrift={showDrift}
+              driftMap={driftReport?.driftMap ?? null}
+              wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
+              wysiwygTextEngineEnabled={WYSIWYG_TEXT_ENGINE_ENABLED}
+              wysiwygTextDraftNodeId={wysiwygTextSessionState.nodeId}
+              wysiwygTextDraftText={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.draftText : null}
+              wysiwygTextDraftParagraph={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+                richWysiwygDraftSessionState.nodeId === wysiwygTextSessionState.nodeId
+                ? richWysiwygDraftSessionState.draft?.paragraph ?? null
+                : null}
+              wysiwygTextDraftDirtyVersion={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.dirtyVersion : 0}
+              wysiwygTextCaretOffset={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.caretOffset : null}
+              wysiwygTextSelection={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
+              wysiwygTextDraftPaginationActive={wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
+              onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
+              onWysiwygRichTextShortcut={handleWysiwygRichTextShortcut}
+              onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
+            />
+          </EditorCanvasPerfProfiler>
         )}
         <div
           data-testid="editor-right-rail"

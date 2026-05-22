@@ -5,6 +5,7 @@ import {
   applyRichTextDraftSessionCommand,
   getRichTextDraftSessionCommandPatch,
   getRichTextDraftSessionCommandState,
+  isRichTextDraftStylePatchLayoutAffecting,
   resolveRichTextDraftKeyboardCommand,
 } from "../richTextDraftCommands"
 import {
@@ -187,6 +188,17 @@ describe("rich text draft command adapter", () => {
         style: { fontFamilyKey: "notoSansThai", textColor: "DC2626", fontSize: pt(16) },
       },
     ])
+  })
+
+  it("classifies style patches by whether they can change layout", () => {
+    expect(isRichTextDraftStylePatchLayoutAffecting({ textColor: "DC2626" })).toBe(false)
+    expect(isRichTextDraftStylePatchLayoutAffecting({ textDecoration: "underline" })).toBe(false)
+    expect(isRichTextDraftStylePatchLayoutAffecting({ strikethrough: true })).toBe(false)
+    expect(isRichTextDraftStylePatchLayoutAffecting({ fontSize: pt(16) })).toBe(true)
+    expect(isRichTextDraftStylePatchLayoutAffecting({ fontFamilyKey: "notoSansThai" })).toBe(true)
+    expect(isRichTextDraftStylePatchLayoutAffecting({ fontWeight: "bold" })).toBe(true)
+    expect(isRichTextDraftStylePatchLayoutAffecting({ fontStyle: "italic" })).toBe(true)
+    expect(isRichTextDraftStylePatchLayoutAffecting({ textColor: "DC2626", fontSize: pt(16) })).toBe(true)
   })
 
   it("maps only safe primary-key rich text shortcuts", () => {

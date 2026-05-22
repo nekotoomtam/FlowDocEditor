@@ -14,6 +14,7 @@ import type { ParagraphNode } from "@/schema"
 import {
   clampWysiwygTextOffset,
   INACTIVE_WYSIWYG_TEXT_SESSION,
+  areWysiwygTextSelectionsEqual,
   type WysiwygTextSelection,
   type WysiwygTextSessionDraftChange,
   type WysiwygTextSessionState,
@@ -162,11 +163,13 @@ export function moveWysiwygRichTextDraftSessionSelection(
 ): WysiwygRichTextDraftSessionState {
   if (!state.nodeId || !state.draft) return state
   const text = getRichTextDraftPlainText(state.draft)
+  const nextSelection = normalizeSelectionForText(text, caretOffset, selection)
+  if (areWysiwygTextSelectionsEqual(state.draft.selection, nextSelection)) return state
   return {
     ...state,
     draft: {
       ...state.draft,
-      selection: normalizeSelectionForText(text, caretOffset, selection),
+      selection: nextSelection,
     },
   }
 }

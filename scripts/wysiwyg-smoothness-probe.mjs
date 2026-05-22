@@ -17,8 +17,10 @@ const TYPE_BURST_LENGTH = Number(process.env.PROBE_BURST_LENGTH ?? 400)
 const TYPE_INTERVAL_MS = Number(process.env.PROBE_INTERVAL_MS ?? 30)
 const TYPE_TEXT_SEQUENCE = Array.from(process.env.PROBE_TYPE_TEXT ?? "")
 const PROBE_MODE = process.env.PROBE_MODE?.trim() || "typing"
+const KEY_INPUT_PROBE_MODES = new Set(["typing", "space-repeat", "delete", "enter", "wrap-typing"])
 const RESIZE_MOVE_COUNT = Number(process.env.PROBE_RESIZE_MOVE_COUNT ?? 70)
 const RESIZE_MOVE_DISTANCE_PX = Number(process.env.PROBE_RESIZE_DISTANCE_PX ?? 180)
+const SELECTION_MOVE_COUNT = Number(process.env.PROBE_SELECTION_MOVE_COUNT ?? 70)
 const CAPTURE_TYPING_LAYER_STATE = process.env.PROBE_CAPTURE_LINE_WRAP === "1"
 const FRAME_BUDGET_MS = 16
 const JANK_BUDGET_MS = 100
@@ -167,6 +169,50 @@ function summarizeTypingLayerSamples(samples) {
   }
 }
 
+function keyInputProbeCharacter(index) {
+  if (TYPE_TEXT_SEQUENCE.length) return TYPE_TEXT_SEQUENCE[index % TYPE_TEXT_SEQUENCE.length]
+  if (PROBE_MODE === "space-repeat") return " "
+  if (PROBE_MODE === "wrap-typing") {
+    const wrapPattern = Array.from(" wrap ")
+    return wrapPattern[index % wrapPattern.length]
+  }
+  return index % 13 === 12 ? " " : String.fromCharCode(97 + (index % 26))
+}
+
+async function pressCharacter(page, ch) {
+  if (ch === " ") {
+    await page.keyboard.press("Space")
+    return
+  }
+  if (ch === "\n") {
+    await page.keyboard.press("Enter")
+    return
+  }
+  await page.keyboard.type(ch)
+}
+
+async function prepareKeyInputProbe(page) {
+  await page.keyboard.press("End")
+  if (PROBE_MODE !== "delete") return
+  const unit = " delete-probe"
+  const repeat = Math.ceil((TYPE_BURST_LENGTH + 20) / unit.length)
+  await page.keyboard.type(unit.repeat(repeat))
+  await waitForDoubleAnimationFrame(page)
+  await page.keyboard.press("End")
+}
+
+async function dispatchKeyInputProbeStep(page, index) {
+  if (PROBE_MODE === "delete") {
+    await page.keyboard.press("Backspace")
+    return
+  }
+  if (PROBE_MODE === "enter") {
+    await page.keyboard.press("Enter")
+    return
+  }
+  await pressCharacter(page, keyInputProbeCharacter(index))
+}
+
 async function waitForDoubleAnimationFrame(page) {
   return await page.evaluate(() => new Promise((resolve) => {
     const start = performance.now()
@@ -209,6 +255,9 @@ function startNextDevServer() {
         NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT: "1",
         NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE: "1",
         NEXT_PUBLIC_FLOWDOC_WYSIWYG_PERF_TRACE: "1",
+        ...(PROBE_MODE === "selection"
+          ? { NEXT_PUBLIC_FLOWDOC_WYSIWYG_RICH_TEXT_DRAFT: "1" }
+          : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -238,10 +287,14 @@ async function runTypingProbe(page) {
   // Click into target paragraph to enter the text-engine bridge.
   await page.locator(fragmentSelector).first().click()
   await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
+  await prepareKeyInputProbe(page)
 
   // Reset perf events right before typing burst.
   await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
   const startFragmentCount = await page.locator(fragmentSelector).count()
+  const captureTypingLayerState = CAPTURE_TYPING_LAYER_STATE ||
+    PROBE_MODE === "wrap-typing" ||
+    PROBE_MODE === "enter"
 
   // Type burst with per-keystroke latency capture. Each keystroke records
   // (1) the time before press, (2) the time after the next animation frame
@@ -250,25 +303,18 @@ async function runTypingProbe(page) {
   const keystrokes = []
   const layerSamples = []
   for (let i = 0; i < TYPE_BURST_LENGTH; i += 1) {
-    const ch = TYPE_TEXT_SEQUENCE.length
-      ? TYPE_TEXT_SEQUENCE[i % TYPE_TEXT_SEQUENCE.length]
-      : i % 13 === 12 ? " " : String.fromCharCode(97 + (i % 26))
     const tBefore = await page.evaluate(() => performance.now())
-    if (TYPE_TEXT_SEQUENCE.length) {
-      await page.keyboard.type(ch)
-    } else {
-      await page.keyboard.press(ch === " " ? "Space" : ch.toUpperCase())
-    }
-    const afterPressState = CAPTURE_TYPING_LAYER_STATE
+    await dispatchKeyInputProbeStep(page, i)
+    const afterPressState = captureTypingLayerState
       ? await readTextEngineLayerState(page, layerSelector)
       : null
     const paintLatency = await waitForDoubleAnimationFrame(page)
-    const afterPaintState = CAPTURE_TYPING_LAYER_STATE
+    const afterPaintState = captureTypingLayerState
       ? await readTextEngineLayerState(page, layerSelector)
       : null
     const tAfter = await page.evaluate(() => performance.now())
     keystrokes.push({ index: i, paintLatencyMs: paintLatency, totalMs: tAfter - tBefore })
-    if (CAPTURE_TYPING_LAYER_STATE) {
+    if (captureTypingLayerState) {
       layerSamples.push({ index: i, afterPress: afterPressState, afterPaint: afterPaintState })
     }
     await page.waitForTimeout(TYPE_INTERVAL_MS)
@@ -282,7 +328,7 @@ async function runTypingProbe(page) {
   return {
     targetNodeId,
     action: {
-      mode: "typing",
+      mode: PROBE_MODE,
       burstLength: TYPE_BURST_LENGTH,
       intervalMs: TYPE_INTERVAL_MS,
       textPattern: TYPE_TEXT_SEQUENCE.length ? TYPE_TEXT_SEQUENCE.join("") : null,
@@ -390,6 +436,86 @@ async function runResizeProbe(page) {
   }
 }
 
+async function runSelectionProbe(page) {
+  const targetNodeId = await resolveTargetNodeId(page)
+  const fragmentSelector = fragmentSelectorForNode(targetNodeId)
+  const bridgeSelector = bridgeSelectorForNode(targetNodeId)
+  const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
+  const fragment = page.locator(fragmentSelector).first()
+  await fragment.waitFor({ state: "attached", timeout: 15000 })
+
+  await fragment.click()
+  await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
+  const layer = page.locator(layerSelector).first()
+  await layer.waitFor({ state: "attached", timeout: 10000 })
+  const box = await layer.boundingBox() ?? await fragment.boundingBox()
+  assert(box, "Could not resolve text-engine layer bounding box")
+
+  await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+  const inset = Math.max(8, Math.min(24, box.width * 0.12))
+  const startX = box.x + inset
+  const endX = box.x + Math.max(inset + 4, box.width - inset)
+  const y = box.y + Math.max(6, Math.min(box.height - 4, box.height * 0.5))
+  await page.mouse.move(startX, y)
+  await page.mouse.down()
+
+  const moves = []
+  let overlayVisibleCount = 0
+  for (let i = 1; i <= SELECTION_MOVE_COUNT; i += 1) {
+    const progress = i / SELECTION_MOVE_COUNT
+    const x = startX + (endX - startX) * progress
+    const tBefore = await page.evaluate(() => performance.now())
+    await page.mouse.move(x, y, { steps: 1 })
+    const tAfterDispatch = await page.evaluate(() => performance.now())
+    const paintLatency = await waitForDoubleAnimationFrame(page)
+    const tAfter = await page.evaluate(() => performance.now())
+    const overlayCount = await page.locator('[data-wysiwyg-selection="true"]').count()
+    if (overlayCount > 0) overlayVisibleCount += 1
+    moves.push({
+      index: i,
+      dispatchMs: tAfterDispatch - tBefore,
+      paintLatencyMs: paintLatency,
+      totalMs: tAfter - tBefore,
+      overlayCount,
+    })
+  }
+
+  await page.mouse.up()
+  const perfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
+
+  const paintLatencies = moves.map((move) => move.paintLatencyMs).sort((a, b) => a - b)
+  const dispatchLatencies = moves.map((move) => move.dispatchMs).sort((a, b) => a - b)
+  const totalLatencies = moves.map((move) => move.totalMs).sort((a, b) => a - b)
+  return {
+    targetNodeId,
+    action: {
+      mode: "selection",
+      moveCount: SELECTION_MOVE_COUNT,
+      overlayVisibleCount,
+    },
+    paintLatencyMs: {
+      p50: percentile(paintLatencies, 0.5),
+      p95: percentile(paintLatencies, 0.95),
+      p99: percentile(paintLatencies, 0.99),
+      max: paintLatencies[paintLatencies.length - 1] ?? null,
+    },
+    pointerMoveDispatchMs: {
+      p50: percentile(dispatchLatencies, 0.5),
+      p95: percentile(dispatchLatencies, 0.95),
+      p99: percentile(dispatchLatencies, 0.99),
+      max: dispatchLatencies[dispatchLatencies.length - 1] ?? null,
+    },
+    pointerMoveTotalMs: {
+      p50: percentile(totalLatencies, 0.5),
+      p95: percentile(totalLatencies, 0.95),
+      p99: percentile(totalLatencies, 0.99),
+      max: totalLatencies[totalLatencies.length - 1] ?? null,
+    },
+    perfEvents: summarizePerfEvents(perfEvents),
+    pageBoundary: null,
+  }
+}
+
 async function runProbe() {
   const server = shouldStartServer ? startNextDevServer() : null
   if (server) await waitForServer(baseEditorUrl, server)
@@ -411,7 +537,11 @@ async function runProbe() {
     await page.goto(scenarioUrl(), { waitUntil: "domcontentloaded" })
     const probeResult = PROBE_MODE === "resize"
       ? await runResizeProbe(page)
-      : await runTypingProbe(page)
+      : PROBE_MODE === "selection"
+        ? await runSelectionProbe(page)
+        : KEY_INPUT_PROBE_MODES.has(PROBE_MODE)
+          ? await runTypingProbe(page)
+          : (() => { throw new Error(`Unsupported PROBE_MODE: ${PROBE_MODE}`) })()
 
     const report = {
       ok: consoleErrors.length === 0 && pageErrors.length === 0,

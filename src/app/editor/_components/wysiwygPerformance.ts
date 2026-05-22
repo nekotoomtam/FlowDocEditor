@@ -2,6 +2,13 @@ import type { PaginatedDocument } from "@/pagination"
 
 export type WysiwygPerfEventKind =
   | "inline-edit-draft-update"
+  | "inline-edit-selection-update"
+  | "rich-draft-style-command"
+  | "text-engine-pointer-frame"
+  | "text-engine-pointer-hit-test"
+  | "text-engine-pointer-selection-apply"
+  | "text-engine-selection-overlay"
+  | "editor-canvas-react-commit"
   | "inline-edit-exit-pagination"
   | "active-paragraph-measure"
   | "text-engine-draft-measure"
@@ -21,6 +28,17 @@ export interface WysiwygPerfEvent {
   requestedDelayMs?: number
   scheduledDelayMs?: number
   source?: string
+  commandType?: string
+  styleFields?: string
+  layoutAffecting?: boolean
+  localStylePreview?: boolean
+  richDraft?: boolean
+  selectionCollapsed?: boolean
+  selectionRangeLength?: number
+  pointerTargetCount?: number
+  overlayRectCount?: number
+  baseDurationMs?: number
+  commitTime?: number
   pageCount?: number
   fragmentCount?: number
 }
@@ -105,12 +123,20 @@ export function finishWysiwygPerfSpan(
 ): void {
   if (!isWysiwygPerfTraceRuntimeEnabled(enabled)) return
   const endedAt = startWysiwygPerfSpan()
-  const event: WysiwygPerfEvent = {
+  recordWysiwygPerfEvent(enabled, {
     kind,
     startedAt,
     durationMs: Math.max(0, endedAt - startedAt),
     ...metadata,
-  }
+  })
+}
+
+export function recordWysiwygPerfEvent(
+  enabled: boolean,
+  event: WysiwygPerfEvent,
+): void {
+  if (!isWysiwygPerfTraceRuntimeEnabled(enabled)) return
+  if (typeof window === "undefined") return
   window.__flowDocWysiwygPerfEvents = appendWysiwygPerfEvent(
     window.__flowDocWysiwygPerfEvents ?? [],
     event,

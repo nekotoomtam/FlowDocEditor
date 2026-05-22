@@ -28,9 +28,25 @@ Adjust burst:
 $env:PROBE_BURST_LENGTH="200"; $env:PROBE_INTERVAL_MS="20"; npm.cmd run smoke:wysiwyg-smoothness
 ```
 
-The probe starts a Next dev server with the WYSIWYG text engine flag,
-opens the Stage 3 boundary scenario, clicks into the target paragraph, and
-types a controlled burst. It writes a JSON report to stdout.
+Run the range-selection drag probe:
+
+```powershell
+$env:PROBE_MODE="selection"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
+Run focused key-input probes:
+
+```powershell
+$env:PROBE_MODE="space-repeat"; $env:PROBE_BURST_LENGTH="120"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
+$env:PROBE_MODE="delete"; $env:PROBE_BURST_LENGTH="120"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
+$env:PROBE_MODE="enter"; $env:PROBE_BURST_LENGTH="30"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
+$env:PROBE_MODE="wrap-typing"; $env:PROBE_BURST_LENGTH="160"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
+The probe starts a Next dev server with the WYSIWYG text engine flag, opens the
+Stage 3 boundary scenario, clicks into the target paragraph, and runs the
+selected mode (`typing` by default, plus `space-repeat`, `delete`, `enter`,
+`wrap-typing`, `selection`, or `resize`). It writes a JSON report to stdout.
 
 ## What The Probe Measures
 
@@ -43,6 +59,10 @@ types a controlled burst. It writes a JSON report to stdout.
 | `keystrokeTotalMs.*` | total time per keystroke including network/idle | bounded by `PROBE_INTERVAL_MS` |
 | `perfEvents.countByKind.browser-preview-pagination` | full repagination triggered during typing | must be 0 in the immediate input lane |
 | `perfEvents.countByKind.active-paragraph-measure` | active-paragraph re-measure events | proportional to burst length; not bounded |
+| `perfEvents.countByKind.text-engine-pointer-frame` | selection drag move coalescing frame cost | should stay below one frame in `longestEvent` |
+| `perfEvents.countByKind.text-engine-pointer-hit-test` | pointer point-to-text-offset mapping cost | should stay below one frame |
+| `perfEvents.countByKind.text-engine-selection-overlay` | selection highlight rectangle geometry cost | should stay below one frame |
+| `perfEvents.countByKind.editor-canvas-react-commit` | React commit cost for the editor canvas subtree while tracing is enabled | investigate when it appears in `longestEvent` or exceeds one frame |
 | `perfEvents.overFrameBudget` | events whose `durationMs` exceeded 16ms | low single-digits OK; many = work over frame budget |
 | `perfEvents.jankCount` | events whose `durationMs` exceeded 100ms | should be 0 |
 | `perfEvents.longestEvent` | slowest event recorded | review the `kind` if `durationMs` > 100 |
@@ -63,12 +83,18 @@ needs a different gate.
 | Symptom | Where it shows in the report |
 |---|---|
 | Typing feels laggy / late paint | `paintLatencyMs.p95`, `paintLatencyMs.p99` |
+| Holding Space feels laggy or loops | `PROBE_MODE=space-repeat` with `paintLatencyMs.*`, console/page errors, and `perfEvents.jankCount` |
+| Holding Backspace/Delete feels laggy | `PROBE_MODE=delete` with `paintLatencyMs.*`, console/page errors, and `perfEvents.jankCount` |
+| Enter/newline growth feels laggy | `PROBE_MODE=enter` with `typingLayer.*`, page-boundary data, and latency metrics |
+| Word wrapping while typing feels laggy | `PROBE_MODE=wrap-typing` with `typingLayer.*`, page-boundary data, and latency metrics |
+| Range selection drag feels laggy / late paint | `PROBE_MODE=selection` with `paintLatencyMs.*` |
 | Big stutter / freeze | `paintLatencyMs.max`, `perfEvents.jankCount` |
 | Editor re-paginates the whole doc while typing | `perfEvents.countByKind.browser-preview-pagination` |
 | Some keystrokes take much longer than others | `paintLatencyMs.p99` vs `p50` |
 | Page-boundary crossing doesn't happen as expected | `pageBoundary.crossed`, `endFragmentCount` |
 | Errors / warnings during typing | `console.errors`, `console.pageErrors` |
 | A specific perf path is unexpectedly slow | `perfEvents.longestEvent.kind` |
+| Selection hit-test or overlay geometry is slow | selection probe `perfEvents.longestEvent.kind` |
 
 ### Not Covered (probe stays silent; needs a different gate)
 
@@ -81,7 +107,7 @@ needs a different gate.
 | Smoothness depends on real Chrome vs bundled Chromium | Probe uses bundled by default | Run with `SMOKE_BROWSER_CHANNEL=chrome` |
 | Focus moves unexpectedly to another element | Probe captures keys at page level; focus path is implicit | Add a focus-change listener (separate test) |
 | Real IME composition behaviour (Thai keyboard) | Probe uses raw `keyboard.press`, not composition | `WYSIWYG_STAGE4C_IME_MATRIX.md` manual |
-| Backspace at boundary feels different from forward delete | Probe only types forward | Add a backspace burst variant |
+| True structural Backspace-at-boundary behavior feels wrong | Delete burst covers repeat latency, not structural merge semantics | Dedicated boundary edit smoke/manual check |
 | Slow only on first run after fresh app load (font load) | Probe ignores the warmup before its burst start | Capture in a separate cold-start probe |
 | Layout shifts between first and second edit session on the same paragraph (wrap point moves on re-enter) | Probe types one burst; it does not exit + re-enter + diff snapshots | Covered by the separate `smoke:wysiwyg-reenter` diagnostic probe; see `docs/WYSIWYG_REENTER_DRIFT_PROBE.md` |
 
@@ -209,3 +235,47 @@ Reading:
 - `keystrokeTotalMs` includes the 30ms inter-keystroke sleep and Playwright
   round-trip cost; it is not a paint metric. The paint metric is
   `paintLatencyMs`.
+
+## Current Selection Baseline — 2026-05-23
+
+Bundled Chromium, headless, `SMOKE_BASE_URL=http://localhost:4000/editor`,
+50 drag moves against the Stage 3 boundary fixture with the rich draft editor
+server already running.
+
+```json
+{
+  "ok": true,
+  "probe": { "mode": "selection", "moveCount": 50, "overlayVisibleCount": 50 },
+  "paintLatencyMs": { "p50": 25.1, "p95": 28.8, "p99": 29.2, "max": 34.2 },
+  "perfEvents": {
+    "total": 200,
+    "countByKind": {
+      "text-engine-pointer-frame": 39,
+      "text-engine-selection-overlay": 54,
+      "editor-canvas-react-commit": 28,
+      "text-engine-pointer-hit-test": 39,
+      "text-engine-pointer-selection-apply": 39,
+      "inline-edit-selection-update": 1
+    },
+    "overFrameBudget": 2,
+    "jankCount": 0,
+    "longestEvent": { "kind": "editor-canvas-react-commit", "durationMs": 42.6 }
+  }
+}
+```
+
+Reading:
+
+- Selection overlay rendered for every sampled move.
+- Hit-testing, selection application, and overlay geometry stayed far below one
+  frame in this fixture.
+- Local pointer-selection preview reduced authoritative
+  `inline-edit-selection-update` events during the drag to 1 final sync event,
+  and reduced over-frame-budget events from 10 to 2 in the standard fixture.
+- `editor-canvas-react-commit` remains the longest measured FlowDoc-side event,
+  now at about 42.6ms. If selection still feels heavy, the next investigation
+  should focus on shrinking the active text-layer commit itself or moving the
+  overlay update even closer to an imperative/local paint path.
+- Deferred follow-up: this is not a blocker while manual UX feels smooth. Reopen
+  only if manual selection drag regresses or the selection probe shows repeated
+  over-frame-budget canvas commits again.
