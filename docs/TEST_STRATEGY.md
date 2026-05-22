@@ -41,18 +41,20 @@ convenience command `npm.cmd run review:browser:install`.
 
 Use `npm.cmd run review:archive -- --check` before preparing external review
 archives. The check verifies that the review package would include the root
-package/config files, `scripts/`, `public/fonts/THSarabun.ttf`, `src/`,
-`packages/`, and `docs/`, and that generated/cache paths such as
+package/config files, `scripts/`, the runtime fonts under `public/fonts/`,
+`src/`, `packages/`, and `docs/`, and that generated/cache paths such as
 `node_modules`, `.next`, `.vite`, and test result caches are excluded. Running
 `npm.cmd run review:archive` creates the actual `flowdoc-review-archive.zip`
 and verifies the ZIP entries after writing. A reviewer should be able to extract
 that archive, install dependencies, and run `review:gate` plus
 `review:browser` without relying on untracked workspace files.
 
-Missing `public/fonts/THSarabun.ttf` is not an allowed skip. The runtime font
-contract test and product export golden smoke must fail when the default runtime
-font asset is absent. Browser-based real-font drift coverage may still skip only
-when the local Playwright/Chromium runtime is unavailable.
+Missing `public/fonts/Sarabun/Sarabun-Regular.ttf` is not an allowed skip
+because it is the default runtime font. The runtime font contract test and
+product export golden smoke must fail when the default runtime font asset is
+absent. The font catalog contract also checks the first selectable catalog
+assets. Browser-based real-font drift coverage may still skip only when the
+local Playwright/Chromium runtime is unavailable.
 
 ## Test Levels
 
@@ -125,7 +127,7 @@ Protects:
 - rowspan and breakable-row policies
 - `assertPaginatedDocument` invariants
 - user-level report fixtures under both default measurement and the production
-  `fontkit + THSarabun + thaiWordBreaker` stack
+  `fontkit + Sarabun + thaiWordBreaker` stack
 
 Typical commands:
 
@@ -144,6 +146,11 @@ Protects:
 - PDF generation does not throw and emits a PDF header
 - product PDF page count matches the authoritative paginated output
 - DOCX generation does not throw and emits a ZIP header
+- DOCX server export embeds runtime font files and requested paragraph-style
+  variants when the renderer receives a font provider, while provider-less DOCX
+  rendering remains name-only
+- paragraph-level text style coverage checks bold, italic, underline,
+  strikethrough, text color, and requested export font variants
 - multi-section structure remains serializable
 - product DOCX table structure is present in generated XML
 - flow-row DOCX fixed-layout table projection preserves paginated stack widths,
@@ -211,7 +218,7 @@ Current fixture-to-test mapping lives in `docs/FIXTURE_CATALOG.md`.
 Protects:
 
 - customs-style dense tables
-- repeated headers
+- repeated headers, including the `repeatHeaderRows=false` no-repeat path
 - breakable uneven table rows
 - rowspan boundary behavior
 - government report sections, TOC, page numbering, and keep-with-next
@@ -288,6 +295,8 @@ Current strengths:
 - Table operation coverage protects row/column structural edits, subtree
   cleanup, total-width preservation, header-row clamping, and last-row/column
   deletion guards.
+- Flow Table layout coverage protects explicit fit-to-width column rewrites,
+  narrow-table alignment, and table-block top/bottom margins.
 - Flow Table editor entry coverage protects explicit 3x3 palette insertion,
   body/flow-stack placement law, palette visibility, and selection context for
   table/row/cell ancestry.
@@ -384,7 +393,7 @@ Current strengths:
   anchor/focus behavior, SVG selection overlay rendering, and selected-range
   deletion against the heavy Stage 3 page-boundary stress fixture.
 - Real-font Thai drift coverage compares Chromium canvas measurement and
-  fontkit measurement using the runtime `public/fonts/THSarabun.ttf` when the
+  fontkit measurement using the runtime `public/fonts/Sarabun/Sarabun-Regular.ttf` when the
   Playwright runtime is installed locally; otherwise the focused drift test
   skips while preserving type-check coverage. Missing runtime font is covered by
   a non-skipped API contract test and product export golden smoke.

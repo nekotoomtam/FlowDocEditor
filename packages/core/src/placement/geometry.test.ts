@@ -94,6 +94,32 @@ describe("placement geometry flow-stack targets", () => {
     })
   })
 
+  it("maps a dragged flow-stack over a flow-row column to an insertion edge", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] },
+      p1: makeParagraph("p1", "Left"),
+      p2: makeParagraph("p2", "Right"),
+    }, ["fr1"])
+
+    const target = detectPlacementTarget({
+      document: doc,
+      hoveredNodeId: "fr1",
+      hoveredNodeType: "flow-row",
+      localX: 80,
+      localY: 12,
+      width: 100,
+      height: 24,
+      source: { source: "document", nodeId: "fs1" },
+    })
+
+    expect(target).toEqual({
+      zone: "right",
+      target: { kind: "row-stack-inner", rowId: "fr1", stackId: "fs2" },
+    })
+  })
+
   it("keeps paragraph hits inside a flow-stack available for vertical insertion", () => {
     const doc = makeDoc({
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },

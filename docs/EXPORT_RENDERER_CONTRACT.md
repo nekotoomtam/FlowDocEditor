@@ -124,10 +124,10 @@ DOCX should:
 - merge computed paragraph fragments back toward one editable Word paragraph
   per logical paragraph where renderer metadata is sufficient, and avoid
   serializing FlowDoc soft-wrap boundaries as DOCX line breaks or extra spaces
-- prefer authored paragraph text from the validated source document when the
-  export API provides it, preserving hard newlines as Word line breaks while
-  keeping page-number paragraphs on the paginated fallback path until Word
-  fields are implemented
+- prefer authored paragraph text and inline text-run style from the validated
+  source document when the export API provides it, preserving hard newlines as
+  Word line breaks while keeping page-number paragraphs on the paginated
+  fallback path until Word fields are implemented
 - preserve editable paragraphs, headings, simple tables, headers, footers, and
   TOC text where possible
 - preserve paragraph box fill and border where possible, and approximate
@@ -143,6 +143,11 @@ DOCX should:
   projecting paginated row/cell fragments to fixed-layout Word tables, including
   repeated header fragments, minimum row heights, cell widths, fills, borders,
   and padding metadata
+- preserve authored Flow Table block alignment and top/bottom margins in DOCX
+  when the renderer receives the source document alongside paginated geometry
+- map repeated Flow Table headers to Word table header rows only when authored
+  header repetition is enabled; when `repeatHeaderRows=false`, DOCX must not
+  emit `w:tblHeader` for those authored header rows
 - preserve Flow Table span semantics where possible from renderer-facing
   pagination metadata, mapping `colspan` to Word `gridSpan` and `rowspan` to
   Word vertical merge metadata
@@ -151,6 +156,11 @@ DOCX should:
 - document where Word/LibreOffice may reflow content after opening
 - preserve explicit authored page-break nodes if the document model adds them
   in the future, while continuing to ignore computed pagination breaks
+- embed catalog font files through the DOCX font table when the server export
+  API provides a renderer `fontProvider`, including bold, italic, and
+  bold-italic variants when the catalog provides those files and the document
+  uses those paragraph or text-run styles; ad-hoc/browser DOCX rendering without
+  a provider remains name-only
 
 DOCX may differ from PDF/editor preview because the reader application owns
 final text reflow, font metrics, and page layout after the file is opened.
@@ -169,12 +179,33 @@ state must be visible.
 
 Current behavior:
 
-- authoritative runtime font file is `public/fonts/THSarabun.ttf`
+- authoritative runtime fonts live under `public/fonts/` and are resolved by
+  `packages/core/src/font-registry.ts`
+- the default font key resolves to `public/fonts/Sarabun/Sarabun-Regular.ttf`
+- the first selectable catalog contains `Sarabun` and `Noto Sans Thai`
+- legacy or unknown font keys are normalized by the registry fallback to
+  `Sarabun`; old TH Sarabun font files are no longer part of the active runtime
+  font contract
+- catalog font entries mark export support separately: PDF is embedded, while
+  DOCX is `embedded-variants` for server exports that receive a font provider
 - API routes load fonts from `process.cwd()/public/fonts/...` through the shared
-  API runtime font loader
-- browser font CSS loads from `/fonts/...`
-- `src/fonts/THSarabun.ttf` is not the runtime font source unless the project
-  intentionally changes the font loading contract
+  API runtime font loader and measure text with the requested paragraph
+  `fontFamilyKey` when that catalog font is available
+- `/api/export` passes the same runtime `fontProvider` to PDF and DOCX renderers;
+  DOCX exports therefore include `word/fonts/*.odttf` for regular and requested
+  style-variant catalog fonts used by paginated paragraph/header/footer
+  fragments
+- browser font CSS and browser fontkit measurement load from `/fonts/...` using
+  the same registry
+- paragraph-level bold and italic styles use catalog font variants for
+  browser/server measurement and PDF rendering when those variant files exist;
+  underline, strikethrough, and text color are renderer decoration/paint metadata
+  rather than separate font variants
+- DOCX exports serialize paragraph-level and text-run-level bold, italic,
+  underline, strikethrough, text color, font family, and font size run
+  properties, and embed matching catalog font variants where the selected font
+  family provides them; missing variants fall back to regular embedding plus
+  Word/LibreOffice style synthesis
 - the API logs the missing font path/error server-side
 - `/api/paginate` exposes `X-FlowDoc-Font: fallback` when it must use fallback
   metrics
@@ -220,13 +251,15 @@ Choose the smallest verification that protects the changed layer.
     core pagination/API before merging
 
 Current automated coverage includes API route contract smoke, PDF/DOCX smoke,
+source, paginated, multi-page body, Flow Table cell, header, and footer DOCX
+rich text run property checks, server DOCX font variant embedding checks,
 product PDF page-count parity smoke, product DOCX table-row structure smoke,
 multi-section DOCX structure tests, focused paragraph box PDF drawing primitive
 tests, and an opt-in PDF raster visual regression gate for paragraph box fill,
 solid/dashed/dotted border pixels, split paragraph box edge pixels, and
 flow-row/flow-stack fill, border, and gap pixels when a local PDF rasterizer is
 available. Missing coverage includes broad pixel-level PDF/editor parity and
-deeper DOCX semantic style checks.
+broader DOCX semantic style checks outside the representative rich-run fixtures.
 
 ## Deferred Work
 
@@ -235,3 +268,5 @@ deeper DOCX semantic style checks.
 - DOCX semantic heading/style assertions beyond current structural checks.
 - Clearer per-run font fallback reporting for mixed-font documents.
 - Richer export artifact inspection for table geometry and page count parity.
+- Broader DOCX semantic style inspection for more complex table mixed-run
+  fixtures.

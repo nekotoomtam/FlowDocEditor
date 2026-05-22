@@ -285,6 +285,7 @@ describe("PropertyPanel selection context", () => {
         removeRow: noop,
         addCol: noop,
         removeCol: noop,
+        fitToWidth: noop,
       },
       flowRowOps: {
         addCol: noop,
@@ -300,6 +301,16 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"paragraph-panel-tab-box\"")
     expect(markup).toContain("data-testid=\"paragraph-panel-text\"")
     expect(markup).toContain("data-testid=\"paragraph-panel-box\"")
+    expect(markup).toContain("data-testid=\"paragraph-font-family\"")
+    expect(markup).toContain("role=\"combobox\"")
+    expect(markup).toContain("Sarabun")
+    expect(markup).toContain("data-testid=\"paragraph-style-bold\"")
+    expect(markup).toContain("data-testid=\"paragraph-style-italic\"")
+    expect(markup).toContain("data-testid=\"paragraph-style-underline\"")
+    expect(markup).toContain("data-testid=\"paragraph-style-strikethrough\"")
+    expect(markup).toContain("data-testid=\"paragraph-text-color-palette-well\"")
+    expect(markup).toContain("data-testid=\"paragraph-text-color-palette-value\"")
+    expect(markup).toContain("data-testid=\"paragraph-text-color-palette-toggle\"")
     expect(markup).toContain("aria-selected=\"true\"")
   })
 
@@ -353,7 +364,9 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"paragraph-box-border-card\"")
     expect(markup).toContain("aria-expanded=\"true\"")
     expect(markup).toContain("data-testid=\"paragraph-box-fill-preview\"")
-    expect(markup).toContain("data-testid=\"paragraph-box-fill-input\"")
+    expect(markup).toContain("data-testid=\"paragraph-box-fill-palette-well\"")
+    expect(markup).toContain("data-testid=\"paragraph-box-fill-palette-value\"")
+    expect(markup).toContain("data-testid=\"paragraph-box-fill-palette-toggle\"")
     expect(markup).toContain("data-testid=\"paragraph-box-padding-compass\"")
     expect(markup).toContain("data-testid=\"paragraph-box-padding-top\"")
     expect(markup).toContain("data-testid=\"paragraph-box-padding-all\"")
@@ -373,7 +386,10 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("aria-label=\"Set border style solid\"")
     expect(markup).toContain("data-testid=\"paragraph-box-border-width-slider\"")
     expect(markup).toContain("data-testid=\"paragraph-box-border-width\"")
-    expect(markup).toContain("Apply")
+    expect(markup).toContain("data-testid=\"paragraph-box-border-color-palette-well\"")
+    expect(markup).toContain("data-testid=\"paragraph-box-border-color-palette-value\"")
+    expect(markup).toContain("data-testid=\"paragraph-box-border-color-palette-toggle\"")
+    expect(markup).not.toContain(">Apply</button>")
     expect(markup).toContain("Reset box style")
   })
 
@@ -515,6 +531,16 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("2 rows × 2 cols")
     expect(markup).toContain("data-testid=\"flow-table-header-rows-control\"")
     expect(markup).toContain("data-testid=\"flow-table-header-rows-control-input\"")
+    expect(markup).toContain("data-testid=\"flow-table-header-rows-control-repeat\"")
+    expect(markup).toContain("Repeat header on new pages")
+    expect(markup).toContain("First row")
+    expect(markup).toContain("Clear")
+    expect(markup).toContain("data-testid=\"flow-table-layout-control\"")
+    expect(markup).toContain("data-testid=\"flow-table-fit-width\"")
+    expect(markup).toContain("data-testid=\"flow-table-align-control\"")
+    expect(markup).toContain("data-testid=\"flow-table-align-left\"")
+    expect(markup).toContain("data-testid=\"flow-table-margin-top\"")
+    expect(markup).toContain("data-testid=\"flow-table-margin-bottom\"")
     expect(markup).toContain("+ Row")
     expect(markup).toContain("- Last")
     expect(markup).toContain("+ Col")
@@ -550,6 +576,7 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("Flow table cell")
     expect(markup).toContain("Row 1, Col 1")
     expect(markup).toContain("data-testid=\"flow-table-cell-header-rows-control\"")
+    expect(markup).toContain("data-testid=\"flow-table-cell-header-rows-control-repeat\"")
     expect(markup).toContain("Header through row 1")
     expect(markup).toContain("data-testid=\"flow-table-cell-rowspan-input\"")
     expect(markup).toContain("data-testid=\"flow-table-cell-colspan-input\"")
@@ -596,6 +623,7 @@ describe("PropertyPanel selection context", () => {
 
     expect(markup).toContain("Flow table cell")
     expect(markup).toContain("data-testid=\"flow-table-cell-header-rows-control\"")
+    expect(markup).toContain("data-testid=\"flow-table-cell-header-rows-control-repeat\"")
     expect(markup).toContain("Header through row 1")
     expect(markup).toContain("Delete column")
     expect(markup).toContain("Delete row")
@@ -651,7 +679,11 @@ describe("PropertyPanel selection context", () => {
 
     expect(rootMarkup).toContain("data-testid=\"flow-table-header-rows-control\"")
     expect(rootMarkup).toContain("data-testid=\"flow-table-header-rows-control-input\"")
+    expect(rootMarkup).toContain("data-testid=\"flow-table-header-rows-control-repeat\"")
+    expect(rootMarkup).toContain("First row")
+    expect(rootMarkup).toContain("Clear")
     expect(flowRowMarkup).toContain("data-testid=\"flow-table-row-header-rows-control\"")
+    expect(flowRowMarkup).toContain("data-testid=\"flow-table-row-header-rows-control-repeat\"")
     expect(flowRowMarkup).toContain("Header through row 2")
     expect(flowRowMarkup).toContain("Clear")
   })

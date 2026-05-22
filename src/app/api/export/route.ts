@@ -5,23 +5,24 @@ import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { PdfRenderer, DocxRenderer } from "@/renderer"
 import { assertDocument, DocumentAssertionError } from "@/document"
 import { DEFAULT_FONT_KEY } from "@/font-registry"
+import type { FontVariantKey } from "@/font-registry"
 import type { FontProvider } from "@/renderer"
-import { loadRuntimeFontSync, runtimeFontFallbackHeaders } from "../runtimeFont"
+import { loadRuntimeFontMapSync, loadRuntimeFontSync, runtimeFontFallbackHeaders } from "../runtimeFont"
 
-// Measurer cache — keyed to "default" font
+// Measurer cache — preloads the runtime font catalog for keyed paragraph metrics.
 let cachedMeasurer: ReturnType<typeof createFontkitMeasurer> | null = null
 
 function getMeasurer(fontBuffer: Uint8Array) {
   if (cachedMeasurer) return cachedMeasurer
-  cachedMeasurer = createFontkitMeasurer(fontBuffer)
+  cachedMeasurer = createFontkitMeasurer(fontBuffer, loadRuntimeFontMapSync())
   return cachedMeasurer
 }
 
 // ─── Font Provider (for PDF/DOCX renderer) ────────────────────────────────────
 
 const fontProvider: FontProvider = {
-  async getFont(key: string): Promise<Uint8Array | null> {
-    return loadRuntimeFontSync(key)
+  async getFont(key: string, variant: FontVariantKey = "regular"): Promise<Uint8Array | null> {
+    return loadRuntimeFontSync(key, variant)
   },
 }
 
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const renderer = format === "pdf" ? new PdfRenderer(fontProvider) : new DocxRenderer({ sourceDocument: doc })
+  const renderer = format === "pdf" ? new PdfRenderer(fontProvider) : new DocxRenderer({ sourceDocument: doc, fontProvider })
   const result = await renderer.render(paginated)
 
   return new NextResponse(Buffer.from(result.buffer), {

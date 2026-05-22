@@ -1,4 +1,5 @@
-import type { LineSegment, MeasuredLine, MeasuredParagraph, MeasuredParagraphBox } from "../../layout"
+import type { LineRun, LineSegment, MeasuredLine, MeasuredParagraph, MeasuredParagraphBox, TextRunLayoutStyle } from "../../layout"
+import { DEFAULT_FONT_KEY } from "../../font-registry"
 import {
   paragraphBoxBottomInset,
   paragraphBoxLeftInset,
@@ -25,7 +26,12 @@ export function buildParagraphBoxRenderProps(box: MeasuredParagraphBox | undefin
 export function buildRenderProps(node: ParagraphNode, lineHeight: number, box?: MeasuredParagraphBox): ParagraphRenderProps {
   return {
     fontSize: toAbstractUnit(node.props.fontSize.value, node.props.fontSize.unit),
-    fontFamilyKey: node.props.fontFamilyKey ?? "default",
+    fontFamilyKey: node.props.fontFamilyKey ?? DEFAULT_FONT_KEY,
+    textColor: node.props.textColor ?? "000000",
+    fontWeight: node.props.fontWeight ?? "normal",
+    fontStyle: node.props.fontStyle ?? "normal",
+    textDecoration: node.props.textDecoration ?? "none",
+    strikethrough: node.props.strikethrough ?? false,
     align: node.props.align,
     lineHeight,
     spacingBefore: toAbstractUnit(node.props.spacingBefore.value, node.props.spacingBefore.unit),
@@ -95,6 +101,55 @@ function justifySegments(
   })
 }
 
+function styleKey(style: TextRunLayoutStyle | undefined): string {
+  if (!style) return ""
+  return [
+    style.fontSize,
+    style.fontFamilyKey,
+    style.textColor,
+    style.fontWeight,
+    style.fontStyle,
+    style.textDecoration,
+    style.strikethrough,
+    style.fontVariant,
+    style.lineHeight,
+  ].join("|")
+}
+
+function buildRunsFromSegments(segments: LineSegment[] | undefined): LineRun[] | undefined {
+  if (!segments?.length) return undefined
+  const runs: LineRun[] = []
+  for (const segment of segments) {
+    if (!segment.style || !segment.sourceType) continue
+    const previous = runs.at(-1)
+    if (
+      previous &&
+      previous.sourceId === segment.sourceId &&
+      previous.sourceType === segment.sourceType &&
+      styleKey(previous.style) === styleKey(segment.style)
+    ) {
+      runs[runs.length - 1] = {
+        ...previous,
+        text: previous.text + segment.text,
+        end: segment.end,
+        width: (segment.x + segment.width) - previous.x,
+      }
+      continue
+    }
+    runs.push({
+      text: segment.text,
+      start: segment.start,
+      end: segment.end,
+      x: segment.x,
+      width: segment.width,
+      sourceId: segment.sourceId,
+      sourceType: segment.sourceType,
+      style: segment.style,
+    })
+  }
+  return runs.length > 0 ? runs : undefined
+}
+
 export function buildPaginatedLines(
   lines: MeasuredLine[],
   fragmentX: number,
@@ -109,12 +164,14 @@ export function buildPaginatedLines(
     const isLastLine = isLastFragment && lineIndex === lines.length - 1
     let x = fragmentX
     let segments = line.segments
+    let runs = line.runs
     if (align === "center") x = fragmentX + (fragmentWidth - line.width) / 2
     else if (align === "right") x = fragmentX + fragmentWidth - line.width
     else if (align === "justify" && !isLastLine && segments?.length) {
       segments = justifySegments(segments, line.width, fragmentWidth)
+      runs = buildRunsFromSegments(segments)
     }
-    const result: PaginatedLine = { text: line.text, x, y: lineY, width: line.width, height: line.height, segments }
+    const result: PaginatedLine = { text: line.text, x, y: lineY, width: line.width, height: line.height, segments, runs }
     lineY += line.height
     return result
   })
@@ -127,6 +184,9 @@ export function resolvePageNumbers(lines: PaginatedLine[], pageNumber: number): 
     const newSegments = line.segments.map((s) =>
       s.kind === "pageNumber" ? { ...s, text: pageStr } : s,
     )
-    return { ...line, text: newSegments.map((s) => s.text).join(""), segments: newSegments }
+    const newRuns = line.runs?.map((run) =>
+      run.sourceType === "pageNumber" ? { ...run, text: pageStr } : run
+    )
+    return { ...line, text: newSegments.map((s) => s.text).join(""), segments: newSegments, runs: newRuns }
   })
 }

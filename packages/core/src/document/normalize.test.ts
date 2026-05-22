@@ -47,6 +47,23 @@ function paragraph(id: string, text: string): ParagraphNode {
 }
 
 describe("normalizeDocument", () => {
+  it("normalizes old paragraph font keys to the active Sarabun default", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "Legacy default"),
+        props: { ...paragraph("p1", "Legacy default").props, fontFamilyKey: "default" },
+      },
+      p2: {
+        ...paragraph("p2", "Legacy TH"),
+        props: { ...paragraph("p2", "Legacy TH").props, fontFamilyKey: "thSarabun" },
+      },
+    }, ["p1", "p2"])
+
+    const nodes = normalizeDocument(doc).document.sections[0].nodes
+    expect((nodes.p1 as ParagraphNode).props.fontFamilyKey).toBe("sarabun")
+    expect((nodes.p2 as ParagraphNode).props.fontFamilyKey).toBe("sarabun")
+  })
+
   it("preserves paragraph heading and keep-with-next props", () => {
     const doc = makeDoc({
       p1: {
@@ -73,6 +90,155 @@ describe("normalizeDocument", () => {
     if (paragraph.type !== "paragraph") return
     expect(paragraph.props.headingLevel).toBe(2)
     expect(paragraph.props.keepWithNext).toBe(true)
+  })
+
+  it("normalizes paragraph-level font style props", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "Styled"),
+        props: {
+          ...paragraph("p1", "Styled").props,
+          textColor: "DC2626",
+          fontWeight: "bold",
+          fontStyle: "italic",
+          textDecoration: "underline",
+          strikethrough: true,
+        },
+      },
+      p2: {
+        ...paragraph("p2", "Unsafe"),
+        props: {
+          ...paragraph("p2", "Unsafe").props,
+          textColor: "red",
+          fontWeight: "heavy",
+          fontStyle: "slanted",
+          textDecoration: "wavy",
+          strikethrough: "yes",
+        },
+      } as unknown as ParagraphNode,
+    }, ["p1", "p2"])
+
+    const nodes = normalizeDocument(doc).document.sections[0].nodes
+    expect((nodes.p1 as ParagraphNode).props.textColor).toBe("DC2626")
+    expect((nodes.p1 as ParagraphNode).props.fontWeight).toBe("bold")
+    expect((nodes.p1 as ParagraphNode).props.fontStyle).toBe("italic")
+    expect((nodes.p1 as ParagraphNode).props.textDecoration).toBe("underline")
+    expect((nodes.p1 as ParagraphNode).props.strikethrough).toBe(true)
+    expect((nodes.p2 as ParagraphNode).props.textColor).toBe("000000")
+    expect((nodes.p2 as ParagraphNode).props.fontWeight).toBe("normal")
+    expect((nodes.p2 as ParagraphNode).props.fontStyle).toBe("normal")
+    expect((nodes.p2 as ParagraphNode).props.textDecoration).toBe("none")
+    expect((nodes.p2 as ParagraphNode).props.strikethrough).toBe(false)
+  })
+
+  it("normalizes text run style and preserves page-number inline nodes", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "Styled"),
+        children: [
+          {
+            id: "t1",
+            type: "text",
+            text: "Styled",
+            style: {
+              fontSize: pt(18),
+              fontFamilyKey: "default",
+              textColor: "2563EB",
+              fontWeight: "bold",
+              fontStyle: "italic",
+              textDecoration: "underline",
+              strikethrough: true,
+            },
+          },
+          { id: "pn1", type: "pageNumber" },
+        ],
+      },
+    }, ["p1"])
+
+    const normalized = normalizeDocument(doc).document.sections[0].nodes.p1
+    expect(normalized.type).toBe("paragraph")
+    if (normalized.type !== "paragraph") return
+    expect(normalized.children[0]).toEqual({
+      id: "t1",
+      type: "text",
+      text: "Styled",
+      style: {
+        fontSize: pt(18),
+        fontFamilyKey: "sarabun",
+        textColor: "2563EB",
+        fontWeight: "bold",
+        fontStyle: "italic",
+        textDecoration: "underline",
+        strikethrough: true,
+      },
+    })
+    expect(normalized.children[1]).toEqual({ id: "pn1", type: "pageNumber" })
+  })
+
+  it("drops malformed text run style fields instead of creating default overrides", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "Unsafe"),
+        children: [{
+          id: "t1",
+          type: "text",
+          text: "Unsafe",
+          style: {
+            fontSize: pt(0),
+            fontFamilyKey: "",
+            textColor: "blue",
+            fontWeight: "heavy",
+            fontStyle: "slanted",
+            textDecoration: "wavy",
+            strikethrough: "yes",
+          },
+        }],
+      } as unknown as ParagraphNode,
+    }, ["p1"])
+
+    const normalized = normalizeDocument(doc).document.sections[0].nodes.p1
+    expect(normalized.type).toBe("paragraph")
+    if (normalized.type !== "paragraph") return
+    expect(normalized.children[0]).toEqual({ id: "t1", type: "text", text: "Unsafe" })
+  })
+
+  it("merges adjacent text runs with identical style during normalization", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "A"),
+        children: [
+          { id: "t1", type: "text", text: "A", style: { fontWeight: "bold" } },
+          { id: "t2", type: "text", text: "B", style: { fontWeight: "bold" } },
+          { id: "t3", type: "text", text: "C", style: { fontStyle: "italic" } },
+        ],
+      },
+    }, ["p1"])
+
+    const normalized = normalizeDocument(doc).document.sections[0].nodes.p1
+    expect(normalized.type).toBe("paragraph")
+    if (normalized.type !== "paragraph") return
+    expect(normalized.children).toEqual([
+      { id: "t1", type: "text", text: "AB", style: { fontWeight: "bold" } },
+      { id: "t3", type: "text", text: "C", style: { fontStyle: "italic" } },
+    ])
+  })
+
+  it("keeps a single empty text run for empty paragraphs", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", ""),
+        children: [
+          { id: "empty-1", type: "text", text: "" },
+          { id: "empty-2", type: "text", text: "" },
+        ],
+      },
+    }, ["p1"])
+
+    const normalized = normalizeDocument(doc).document.sections[0].nodes.p1
+    expect(normalized.type).toBe("paragraph")
+    if (normalized.type !== "paragraph") return
+    expect(normalized.children).toHaveLength(1)
+    expect(normalized.children[0]).toEqual({ id: "empty-1", type: "text", text: "" })
   })
 
   it("preserves valid paragraph box style props", () => {
@@ -253,6 +419,66 @@ describe("normalizeDocument", () => {
     expect(normalizedCell.type).toBe("flow-table-cell")
     if (normalizedCell.type !== "flow-table-cell") return
     expect(normalizedCell.props.mergeMap).toEqual(cell.props.mergeMap)
+  })
+
+  it("preserves valid flow-table header repeat settings", () => {
+    const p1 = paragraph("p1", "A")
+    const cell: FlowTableCellNode = { id: "c1", type: "flow-table-cell", props: {}, childIds: [p1.id] }
+    const row: FlowTableRowNode = { id: "r1", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: { headerRowCount: 1, repeatHeaderRows: false },
+      columns: [{ width: pt(100) }],
+      rowIds: [row.id],
+      nodes: { [row.id]: row, [cell.id]: cell, [p1.id]: p1 },
+    }
+
+    const normalized = normalizeDocument(makeDoc({ [table.id]: table as unknown as LayoutNode }, [table.id]))
+    const normalizedTable = normalized.document.sections[0].nodes.ft1 as unknown as FlowTableNode
+
+    expect(normalizedTable.props).toMatchObject({ headerRowCount: 1, repeatHeaderRows: false })
+  })
+
+  it("drops stale non-boolean flow-table header repeat settings", () => {
+    const p1 = paragraph("p1", "A")
+    const cell: FlowTableCellNode = { id: "c1", type: "flow-table-cell", props: {}, childIds: [p1.id] }
+    const row: FlowTableRowNode = { id: "r1", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+    const table = {
+      id: "ft1",
+      type: "flow-table",
+      props: { headerRowCount: 1, repeatHeaderRows: "yes" },
+      columns: [{ width: pt(100) }],
+      rowIds: [row.id],
+      nodes: { [row.id]: row, [cell.id]: cell, [p1.id]: p1 },
+    } as unknown as FlowTableNode
+
+    const normalized = normalizeDocument(makeDoc({ [table.id]: table as unknown as LayoutNode }, [table.id]))
+    const normalizedTable = normalized.document.sections[0].nodes.ft1 as unknown as FlowTableNode
+
+    expect(normalizedTable.props.headerRowCount).toBe(1)
+    expect(normalizedTable.props.repeatHeaderRows).toBeUndefined()
+  })
+
+  it("normalizes flow-table layout props", () => {
+    const p1 = paragraph("p1", "A")
+    const cell: FlowTableCellNode = { id: "c1", type: "flow-table-cell", props: {}, childIds: [p1.id] }
+    const row: FlowTableRowNode = { id: "r1", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+    const table = {
+      id: "ft1",
+      type: "flow-table",
+      props: { align: "middle", marginTop: { value: -4, unit: "pt" }, marginBottom: { value: 6, unit: "pt" } },
+      columns: [{ width: pt(100) }],
+      rowIds: [row.id],
+      nodes: { [row.id]: row, [cell.id]: cell, [p1.id]: p1 },
+    } as unknown as FlowTableNode
+
+    const normalized = normalizeDocument(makeDoc({ [table.id]: table as unknown as LayoutNode }, [table.id]))
+    const normalizedTable = normalized.document.sections[0].nodes.ft1 as unknown as FlowTableNode
+
+    expect(normalizedTable.props.align).toBeUndefined()
+    expect(normalizedTable.props.marginTop).toEqual(pt(0))
+    expect(normalizedTable.props.marginBottom).toEqual(pt(6))
   })
 
   it("normalizes stale flow-table cell mergeMap entries", () => {

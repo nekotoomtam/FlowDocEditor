@@ -435,7 +435,7 @@ async function expectNoLayoutError(page) {
 
 async function expectRuntimeFontFetch(page) {
   const result = await page.evaluate(async () => {
-    const response = await fetch("/fonts/THSarabun.ttf")
+    const response = await fetch("/fonts/Sarabun/Sarabun-Regular.ttf")
     return {
       ok: response.ok,
       status: response.status,

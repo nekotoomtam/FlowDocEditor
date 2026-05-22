@@ -453,7 +453,7 @@ pagination status is presented.
 - For package export changes, confirm `Save JSON` writes the current package
   shape and preserves the active registry when the scenario uses fields.
 - Confirm any failure or fallback is visible and not silent.
-- Confirm `/fonts/THSarabun.ttf` is reachable from the browser when export or
+- Confirm `/fonts/Sarabun/Sarabun-Regular.ttf` is reachable from the browser when export or
   font status changes are in scope.
 - Confirm PDF/DOCX export buttons are disabled or blocked while authoritative
   layout, font, drift, or fill-readiness state is unsafe.

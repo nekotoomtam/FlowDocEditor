@@ -106,8 +106,8 @@ Before sending an external review archive, run
 checks the review archive manifest and then runs the non-browser review gate.
 For archive-only checks, run `npm.cmd run review:archive -- --check`. The
 review archive must include root package/config files, `scripts/`,
-`public/fonts/THSarabun.ttf`, `src/`, `packages/`, and `docs/` so reviewers can
-run the declared gates from the extracted package. In particular,
+`public/fonts/Sarabun/Sarabun-Regular.ttf`, `src/`, `packages/`, and `docs/` so
+reviewers can run the declared gates from the extracted package. In particular,
 `npm.cmd run review:gate` must use only archived sources/scripts/config, and
 `npm.cmd run review:browser` must work from the archive with bundled Chromium
 or a reviewer-provided system Chromium-family browser via
@@ -124,11 +124,10 @@ The root `tsconfig.json` defines `@/*` path aliases that resolve to
 `packages/core/src/*` and `src/*`. Do not rewrite aliased imports to long
 relative imports unless the alias config is intentionally changed.
 
-The authoritative runtime font location is `public/fonts/THSarabun.ttf`.
+The authoritative runtime font location is
+`public/fonts/Sarabun/Sarabun-Regular.ttf`.
 Server/API code loads it through `process.cwd()/public/fonts/...`; browser code
-loads it through `/fonts/...`. Do not import or depend on
-`src/fonts/THSarabun.ttf` unless the font loading contract is intentionally
-changed.
+loads it through `/fonts/...`.
 
 ## During Work
 

@@ -82,6 +82,40 @@ describe("isWysiwygTextEngineFragmentEligible", () => {
     })).toBe(true)
   })
 
+  it("allows styled text-run-only paragraphs", () => {
+    const styledParagraph: ParagraphNode = {
+      ...paragraph,
+      children: [
+        { id: "t1", type: "text", text: "Hello", style: { fontWeight: "bold" } },
+        { id: "t2", type: "text", text: " world", style: { fontStyle: "italic" } },
+      ],
+    }
+
+    expect(isWysiwygTextEngineFragmentEligible({
+      doc: makeDoc({ body: { id: "body", type: "body", props: {}, childIds: ["p1"] }, p1: styledParagraph }),
+      paginated: makePaginated(),
+      nodeId: "p1",
+      pageIndex: 0,
+    })).toBe(true)
+  })
+
+  it("rejects rich paragraphs that contain inline objects", () => {
+    const fieldParagraph: ParagraphNode = {
+      ...paragraph,
+      children: [
+        { id: "t1", type: "text", text: "Customer: " },
+        { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+      ],
+    }
+
+    expect(isWysiwygTextEngineFragmentEligible({
+      doc: makeDoc({ body: { id: "body", type: "body", props: {}, childIds: ["p1"] }, p1: fieldParagraph }),
+      paginated: makePaginated(),
+      nodeId: "p1",
+      pageIndex: 0,
+    })).toBe(false)
+  })
+
   it("allows the first fragment of a split body paragraph", () => {
     expect(isWysiwygTextEngineFragmentEligible({
       doc: makeDoc(),

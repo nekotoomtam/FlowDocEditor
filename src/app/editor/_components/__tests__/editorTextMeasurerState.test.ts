@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { TextMeasurer } from "@/layout"
+import { DEFAULT_FONT_KEY } from "@/font-registry"
 import {
   isEditorTextMeasurerReady,
   resolveBrowserEditorTextMeasurer,
@@ -25,7 +26,7 @@ describe("editor text measurer state", () => {
   it("resolves to the browser fontkit measurer when the font buffer is available", async () => {
     const state = await resolveBrowserEditorTextMeasurer(
       fallbackMeasurer,
-      async () => new Uint8Array([1, 2, 3]),
+      async () => ({ [DEFAULT_FONT_KEY]: new Uint8Array([4, 5, 6]) }),
       async () => fontkitMeasurer,
     )
 
@@ -36,12 +37,12 @@ describe("editor text measurer state", () => {
   it("settles to the existing fallback when font loading or fontkit setup fails", async () => {
     const missingFontState = await resolveBrowserEditorTextMeasurer(
       fallbackMeasurer,
-      async () => null,
+      async () => ({ [DEFAULT_FONT_KEY]: null }),
       async () => fontkitMeasurer,
     )
     const failedFontkitState = await resolveBrowserEditorTextMeasurer(
       fallbackMeasurer,
-      async () => new Uint8Array([1, 2, 3]),
+      async () => ({ [DEFAULT_FONT_KEY]: new Uint8Array([1, 2, 3]) }),
       async () => null,
     )
 

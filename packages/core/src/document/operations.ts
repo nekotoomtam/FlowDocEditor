@@ -5,6 +5,7 @@ import type {
   FlowTableNode,
   FlowTableRowNode,
   FlowStackNode,
+  InlineNode,
   LayoutNode,
   ParagraphBoxBorder,
   ParagraphBoxBorderSide,
@@ -15,6 +16,7 @@ import type {
   UnitValue,
 } from "../schema"
 import { pt } from "../schema"
+import { getPageMetrics } from "../pagination/metrics"
 import type { DragSource, PlacementOperation } from "../placement/types"
 import {
   createParagraphNode,
@@ -24,13 +26,43 @@ import {
   createFlowStackNode,
   createStackNode,
   getEqualWidthShares,
+  DEFAULT_PARAGRAPH_PROPS,
   DEFAULT_STACK_MIN_HEIGHT,
   createDefaultFlowTable,
+  createDefaultFlowTableCellBox,
   createFlowTableCellNode,
   createFlowTableRowNode,
   createFieldRefInline,
+  createId,
 } from "./defaults"
 import { tryResolveFlowTableGrid } from "./flowTableGrid"
+import {
+  applyTextRunStyleRangeToParagraph,
+  deleteTextRunRangeFromParagraph,
+  hasTextRunStyle,
+  hasTextRunStylePatch,
+  isTextRunOnlyParagraph,
+  mergeAdjacentTextRuns,
+  replaceTextRunParagraphTextInParagraph,
+  replaceTextRunRangeInParagraph,
+  splitTextRunsAtOffset,
+} from "./richText"
+import type {
+  ParagraphTextStyleChanges,
+  ReplaceTextRunRangeOptions,
+  TextRunStylePatch,
+} from "./richText"
+
+export {
+  replaceTextRunParagraphTextInParagraph,
+  resolveTextRunParagraphTextReplacement,
+} from "./richText"
+export type {
+  ParagraphTextStyleChanges,
+  ReplaceTextRunRangeOptions,
+  TextRunParagraphTextReplacement,
+  TextRunStylePatch,
+} from "./richText"
 
 // ─── Internal Types ────────────────────────────────────────────────────────────
 
@@ -95,7 +127,7 @@ function setChildIds(nodes: Nodes, parentId: string, childIds: string[]): Nodes 
 }
 
 export function isPlainTextParagraph(node: ParagraphNode): node is ParagraphNode & { children: TextRun[] } {
-  return node.children.length > 0 && node.children.every((child) => child.type === "text")
+  return node.children.length > 0 && node.children.every((child) => child.type === "text" && !hasTextRunStyle(child))
 }
 
 function getPlainText(node: ParagraphNode): string {
@@ -106,6 +138,89 @@ function replaceWithSingleTextRun(node: ParagraphNode, text: string): ParagraphN
   const firstRun = node.children.find((child) => child.type === "text")
   if (!firstRun) return node
   return { ...node, children: [{ ...firstRun, text }] }
+}
+
+function paragraphTextLength(node: ParagraphNode): number {
+  return node.children.reduce((sum, child) => sum + (child.type === "text" ? child.text.length : 0), 0)
+}
+
+function applyParagraphTextStyleProps(
+  node: ParagraphNode,
+  patch: ParagraphTextStyleChanges,
+): ParagraphNode | null {
+  if (!hasTextRunStylePatch(patch)) return null
+  let changed = false
+  const nextProps = clonePlainData(node.props)
+
+  if (Object.prototype.hasOwnProperty.call(patch, "fontSize")) {
+    const nextFontSize = patch.fontSize == null ? clonePlainData(DEFAULT_PARAGRAPH_PROPS.fontSize) : clonePlainData(patch.fontSize)
+    if (nextProps.fontSize.value !== nextFontSize.value || nextProps.fontSize.unit !== nextFontSize.unit) {
+      nextProps.fontSize = nextFontSize
+      changed = true
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "fontFamilyKey")) {
+    const nextFontFamilyKey = patch.fontFamilyKey ?? DEFAULT_PARAGRAPH_PROPS.fontFamilyKey
+    if (nextProps.fontFamilyKey !== nextFontFamilyKey) {
+      nextProps.fontFamilyKey = nextFontFamilyKey
+      changed = true
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "textColor")) {
+    const nextTextColor = patch.textColor ?? DEFAULT_PARAGRAPH_PROPS.textColor
+    if (nextProps.textColor !== nextTextColor) {
+      nextProps.textColor = nextTextColor
+      changed = true
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "fontWeight")) {
+    const nextFontWeight = patch.fontWeight ?? DEFAULT_PARAGRAPH_PROPS.fontWeight
+    if (nextProps.fontWeight !== nextFontWeight) {
+      nextProps.fontWeight = nextFontWeight
+      changed = true
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "fontStyle")) {
+    const nextFontStyle = patch.fontStyle ?? DEFAULT_PARAGRAPH_PROPS.fontStyle
+    if (nextProps.fontStyle !== nextFontStyle) {
+      nextProps.fontStyle = nextFontStyle
+      changed = true
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "textDecoration")) {
+    const nextTextDecoration = patch.textDecoration ?? DEFAULT_PARAGRAPH_PROPS.textDecoration
+    if (nextProps.textDecoration !== nextTextDecoration) {
+      nextProps.textDecoration = nextTextDecoration
+      changed = true
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "strikethrough")) {
+    const nextStrikethrough = patch.strikethrough ?? DEFAULT_PARAGRAPH_PROPS.strikethrough
+    if (nextProps.strikethrough !== nextStrikethrough) {
+      nextProps.strikethrough = nextStrikethrough
+      changed = true
+    }
+  }
+
+  return changed ? { ...node, props: nextProps } : null
+}
+
+function applyParagraphTextStyleToParagraph(
+  node: ParagraphNode,
+  patch: ParagraphTextStyleChanges,
+): ParagraphNode | null {
+  if (!hasTextRunStylePatch(patch)) return null
+  const withProps = applyParagraphTextStyleProps(node, patch) ?? node
+  const textLength = paragraphTextLength(withProps)
+  const runClearPatch: TextRunStylePatch = {}
+  for (const key of Object.keys(patch) as Array<keyof TextRunStylePatch>) {
+    runClearPatch[key] = null
+  }
+  const withRuns = textLength > 0
+    ? applyTextRunStyleRangeToParagraph(withProps, 0, textLength, runClearPatch)
+    : null
+  if (withRuns) return withRuns
+  return withProps === node ? null : withProps
 }
 
 function updateFieldRefInParagraph(
@@ -448,6 +563,77 @@ function doInsertStacksIntoRow(
   return setChildIds(result, rowId, rowChildIds)
 }
 
+function doMoveFlowStackIntoRow(
+  nodes: Nodes,
+  rowId: string,
+  targetStackId: string,
+  position: "before" | "after",
+  stackId: string,
+): Nodes {
+  const row = nodes[rowId]
+  const targetStack = nodes[targetStackId]
+  const movedStack = nodes[stackId]
+  if (row?.type !== "flow-row") return nodes
+  if (targetStack?.type !== "flow-stack") return nodes
+  if (movedStack?.type !== "flow-stack") return nodes
+  if (targetStackId === stackId) return nodes
+
+  const childIds = row.childIds.filter((id) => id !== stackId)
+  const targetIndex = childIds.indexOf(targetStackId)
+  if (targetIndex === -1) return nodes
+
+  const { original, inserted } = splitWidthPercent(targetStack.props.widthShare ?? 100)
+  let result: Nodes = {
+    ...nodes,
+    [targetStackId]: {
+      ...targetStack,
+      props: { ...targetStack.props, widthShare: original },
+    } as LayoutNode,
+    [stackId]: {
+      ...movedStack,
+      props: { ...movedStack.props, widthShare: inserted },
+    } as LayoutNode,
+  }
+
+  const insertAt = position === "before" ? targetIndex : targetIndex + 1
+  const nextChildIds = [...childIds]
+  nextChildIds.splice(insertAt, 0, stackId)
+  result = setChildIds(result, rowId, nextChildIds)
+  return result
+}
+
+function doMoveFlowStackToNewRow(
+  nodes: Nodes,
+  parentId: string,
+  rawIndex: number,
+  stackId: string,
+  removedRowIndexInParent: number | null,
+): Nodes {
+  const parent = nodes[parentId]
+  const movedStack = nodes[stackId]
+  if (parent?.type !== "body") return nodes
+  if (movedStack?.type !== "flow-stack") return nodes
+
+  const row = createFlowRowNode([stackId])
+  let result: Nodes = {
+    ...nodes,
+    [stackId]: {
+      ...movedStack,
+      props: { ...movedStack.props, widthShare: 100 },
+    } as LayoutNode,
+    [row.id]: row,
+  }
+
+  const idx = Math.min(
+    Math.max(0, shiftedIndex(rawIndex, removedRowIndexInParent)),
+    getChildIds(result, parentId).length,
+  )
+  const childIds = [...getChildIds(result, parentId)]
+  childIds.splice(idx, 0, row.id)
+  result = setChildIds(result, parentId, childIds)
+  return result
+}
+
 function doWrapInRow(
   nodes: Nodes,
   parentId: string,
@@ -499,6 +685,124 @@ function collectSubtreeIds(nodes: Nodes, rootId: string): string[] {
   return result
 }
 
+function clonePlainData<T>(value: T): T {
+  if (value == null) return value
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function cloneInlineNode(node: InlineNode): InlineNode {
+  if (node.type === "text") return { ...node, id: createId("text"), style: clonePlainData(node.style) }
+  if (node.type === "fieldRef") return { ...node, id: createId("field") }
+  return { ...node, id: createId("page-number") }
+}
+
+function cloneParagraphNode(node: ParagraphNode, id = createId("paragraph")): ParagraphNode {
+  return {
+    ...node,
+    id,
+    props: clonePlainData(node.props),
+    children: node.children.map(cloneInlineNode),
+  }
+}
+
+function cloneFlowTableNode(table: FlowTableNode, id = createId("flow-table")): FlowTableNode {
+  const idMap = new Map<string, string>([[table.id, id]])
+  Object.values(table.nodes).forEach((node) => {
+    idMap.set(node.id, createId(node.type))
+  })
+
+  const mapId = (nodeId: string) => idMap.get(nodeId) ?? nodeId
+  const nodes: FlowTableNode["nodes"] = {}
+  Object.values(table.nodes).forEach((node) => {
+    const nextId = mapId(node.id)
+    if (node.type === "paragraph") {
+      nodes[nextId] = cloneParagraphNode(node as ParagraphNode, nextId)
+      return
+    }
+    if (node.type === "spacer") {
+      nodes[nextId] = { ...node, id: nextId, props: clonePlainData(node.props) }
+      return
+    }
+    if (node.type === "flow-table-row") {
+      nodes[nextId] = {
+        ...node,
+        id: nextId,
+        props: clonePlainData(node.props),
+        cellIds: node.cellIds.map(mapId),
+      }
+      return
+    }
+    nodes[nextId] = {
+      ...node,
+      id: nextId,
+      props: {
+        ...clonePlainData(node.props),
+        mergeMap: node.props.mergeMap
+          ? {
+            ...node.props.mergeMap,
+            entries: node.props.mergeMap.entries.map((entry) => ({
+              ...entry,
+              childIds: entry.childIds.map(mapId),
+            })),
+          }
+          : undefined,
+      },
+      childIds: node.childIds.map(mapId),
+    }
+  })
+
+  return {
+    ...table,
+    id,
+    props: clonePlainData(table.props),
+    columns: clonePlainData(table.columns),
+    rowIds: table.rowIds.map(mapId),
+    nodes,
+  }
+}
+
+function cloneLayoutSubtree(nodes: Nodes, rootId: string): { rootId: string; nodes: Nodes } | null {
+  const node = nodes[rootId]
+  if (!node || node.type === "body") return null
+
+  if (node.type === "paragraph") {
+    const clone = cloneParagraphNode(node)
+    return { rootId: clone.id, nodes: { [clone.id]: clone } }
+  }
+
+  if (node.type === "spacer") {
+    const clone: LayoutNode = { ...node, id: createId("spacer"), props: clonePlainData(node.props) }
+    return { rootId: clone.id, nodes: { [clone.id]: clone } }
+  }
+
+  if (node.type === "toc") {
+    const clone: LayoutNode = { ...node, id: createId("toc"), props: clonePlainData(node.props) }
+    return { rootId: clone.id, nodes: { [clone.id]: clone } }
+  }
+
+  if (node.type === "flow-table") {
+    const clone = cloneFlowTableNode(node as unknown as FlowTableNode)
+    return { rootId: clone.id, nodes: { [clone.id]: clone as unknown as LayoutNode } }
+  }
+
+  const childIds: string[] = []
+  let clonedNodes: Nodes = {}
+  node.childIds.forEach((childId) => {
+    const cloned = cloneLayoutSubtree(nodes, childId)
+    if (!cloned) return
+    childIds.push(cloned.rootId)
+    clonedNodes = { ...clonedNodes, ...cloned.nodes }
+  })
+
+  const clone = {
+    ...node,
+    id: createId(node.type),
+    props: clonePlainData(node.props),
+    childIds,
+  } as LayoutNode
+  return { rootId: clone.id, nodes: { ...clonedNodes, [clone.id]: clone } }
+}
+
 // ─── Flow Table Helpers ───────────────────────────────────────────────────────
 
 function updateFlowTableInSection(
@@ -523,6 +827,35 @@ function updateFlowTableInSection(
 function unitWidthToPt(width: { value: number; unit: "pt" | "mm" } | undefined): number {
   if (!width) return 0
   return width.unit === "mm" ? width.value * 72 / 25.4 : width.value
+}
+
+function roundWidthPt(value: number): number {
+  return Math.round(Math.max(0, value) * 100) / 100
+}
+
+function fitFlowTableColumnsToWidth(table: FlowTableNode, targetWidthPt: number): FlowTableNode {
+  const safeTargetWidth = roundWidthPt(targetWidthPt)
+  if (table.columns.length === 0 || safeTargetWidth <= 0) return table
+
+  const currentWidths = table.columns.map((column) => unitWidthToPt(column.width))
+  const currentTotal = currentWidths.reduce((sum, width) => sum + width, 0)
+  let assigned = 0
+  const columns = table.columns.map((column, index) => {
+    const isLast = index === table.columns.length - 1
+    const rawWidth = currentTotal > 0
+      ? safeTargetWidth * ((currentWidths[index] ?? 0) / currentTotal)
+      : safeTargetWidth / table.columns.length
+    const nextWidth = isLast
+      ? roundWidthPt(safeTargetWidth - assigned)
+      : roundWidthPt(rawWidth)
+    if (!isLast) assigned += nextWidth
+    return { ...column, width: pt(nextWidth) }
+  })
+
+  const changed = columns.some((column, index) =>
+    Math.abs(unitWidthToPt(column.width) - unitWidthToPt(table.columns[index]?.width)) >= 0.01,
+  )
+  return changed ? { ...table, columns } : table
 }
 
 function resolveResizedColumnPair(
@@ -570,7 +903,7 @@ function createEmptyFlowTableCell(internalNodes: FlowTableNode["nodes"]): string
   const para = createParagraphNode("", { spacingBefore: pt(2), spacingAfter: pt(2) })
   const cell = createFlowTableCellNode([para.id])
   internalNodes[para.id] = para
-  internalNodes[cell.id] = cell
+  internalNodes[cell.id] = { ...cell, props: { ...cell.props, box: createDefaultFlowTableCellBox() } }
   return cell.id
 }
 
@@ -837,7 +1170,7 @@ function deleteFlowTableCellSubtree(nodes: FlowTableNode["nodes"], cellId: strin
 
 function createFlowTableCellWithChildren(internalNodes: FlowTableNode["nodes"], childIds: string[]): string {
   const cell = createFlowTableCellNode(childIds)
-  internalNodes[cell.id] = cell
+  internalNodes[cell.id] = { ...cell, props: { ...cell.props, box: createDefaultFlowTableCellBox() } }
   return cell.id
 }
 
@@ -1440,6 +1773,187 @@ export function updateParagraphText(
   return doc
 }
 
+export function applyTextRunStyleRange(
+  doc: DocumentNode,
+  nodeId: string,
+  start: number,
+  end: number,
+  patch: TextRunStylePatch,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type === "paragraph") {
+      const updated = applyTextRunStyleRangeToParagraph(node, start, end, patch)
+      if (!updated) continue
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [nodeId]: updated as LayoutNode } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
+      const inner = table.nodes[nodeId]
+      if (inner?.type !== "paragraph") continue
+      const updated = applyTextRunStyleRangeToParagraph(inner, start, end, patch)
+      if (!updated) continue
+      const newTable = { ...table, nodes: { ...table.nodes, [nodeId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
+export function applyParagraphTextStyle(
+  doc: DocumentNode,
+  nodeId: string,
+  patch: ParagraphTextStyleChanges,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type === "paragraph") {
+      const updated = applyParagraphTextStyleToParagraph(node, patch)
+      if (!updated) continue
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [nodeId]: updated as LayoutNode } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
+      const inner = table.nodes[nodeId]
+      if (inner?.type !== "paragraph") continue
+      const updated = applyParagraphTextStyleToParagraph(inner, patch)
+      if (!updated) continue
+      const newTable = { ...table, nodes: { ...table.nodes, [nodeId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
+export function deleteTextRunRange(
+  doc: DocumentNode,
+  nodeId: string,
+  start: number,
+  end: number,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type === "paragraph") {
+      const updated = deleteTextRunRangeFromParagraph(node, start, end)
+      if (!updated) continue
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [nodeId]: updated as LayoutNode } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
+      const inner = table.nodes[nodeId]
+      if (inner?.type !== "paragraph") continue
+      const updated = deleteTextRunRangeFromParagraph(inner, start, end)
+      if (!updated) continue
+      const newTable = { ...table, nodes: { ...table.nodes, [nodeId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
+export function replaceTextRunRange(
+  doc: DocumentNode,
+  nodeId: string,
+  start: number,
+  end: number,
+  text: string,
+  options: ReplaceTextRunRangeOptions = {},
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type === "paragraph") {
+      const updated = replaceTextRunRangeInParagraph(node, start, end, text, options)
+      if (!updated) continue
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [nodeId]: updated as LayoutNode } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
+      const inner = table.nodes[nodeId]
+      if (inner?.type !== "paragraph") continue
+      const updated = replaceTextRunRangeInParagraph(inner, start, end, text, options)
+      if (!updated) continue
+      const newTable = { ...table, nodes: { ...table.nodes, [nodeId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
+export function replaceTextRunParagraphText(
+  doc: DocumentNode,
+  nodeId: string,
+  text: string,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type === "paragraph") {
+      const updated = replaceTextRunParagraphTextInParagraph(node, text)
+      if (!updated) continue
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [nodeId]: updated as LayoutNode } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
+      const inner = table.nodes[nodeId]
+      if (inner?.type !== "paragraph") continue
+      const updated = replaceTextRunParagraphTextInParagraph(inner, text)
+      if (!updated) continue
+      const newTable = { ...table, nodes: { ...table.nodes, [nodeId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
 export function updateFieldRefInline(
   doc: DocumentNode,
   fieldRefId: string,
@@ -1560,6 +2074,95 @@ export function mergeParagraphWithPrevious(
     const updatedPrev: LayoutNode = {
       ...prevNode,
       children: [{ ...prevFirstRun, text: mergedText }],
+    }
+    const newChildIds = childIds.filter((id) => id !== nodeId)
+    let newNodes: Nodes = { ...section.nodes, [prevId]: updatedPrev }
+    delete newNodes[nodeId]
+    newNodes = setChildIds(newNodes, parentInfo.parentId, newChildIds)
+
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes: newNodes } : s,
+    )
+    return {
+      doc: { ...doc, document: { ...doc.document, sections: newSections } },
+      prevNodeId: prevId,
+      caretIndex,
+    }
+  }
+  return null
+}
+
+export function splitTextRunParagraphAtIndex(
+  doc: DocumentNode,
+  nodeId: string,
+  splitIndex: number,
+): { doc: DocumentNode; newNodeId: string } {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type !== "paragraph") continue
+    if (!isTextRunOnlyParagraph(node)) continue
+
+    const parentInfo = findParentInfo(section.nodes, nodeId)
+    if (!parentInfo) continue
+
+    const { before, after } = splitTextRunsAtOffset(node, splitIndex)
+    const updatedNode: LayoutNode = { ...node, children: before }
+    const newPara = createParagraphNode("", node.props)
+    const newParagraph: LayoutNode = {
+      ...newPara,
+      props: clonePlainData(node.props),
+      children: after,
+    }
+
+    let newNodes: Nodes = {
+      ...section.nodes,
+      [nodeId]: updatedNode,
+      [newPara.id]: newParagraph,
+    }
+    const childIds = getChildIds(newNodes, parentInfo.parentId)
+    newNodes = setChildIds(newNodes, parentInfo.parentId, [
+      ...childIds.slice(0, parentInfo.index + 1),
+      newPara.id,
+      ...childIds.slice(parentInfo.index + 1),
+    ])
+
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes: newNodes } : s,
+    )
+    return {
+      doc: { ...doc, document: { ...doc.document, sections: newSections } },
+      newNodeId: newPara.id,
+    }
+  }
+  return { doc, newNodeId: "" }
+}
+
+export function mergeTextRunParagraphWithPrevious(
+  doc: DocumentNode,
+  nodeId: string,
+): { doc: DocumentNode; prevNodeId: string; caretIndex: number } | null {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (node?.type !== "paragraph") continue
+    if (!isTextRunOnlyParagraph(node)) continue
+
+    const parentInfo = findParentInfo(section.nodes, nodeId)
+    if (!parentInfo || parentInfo.index === 0) return null
+
+    const childIds = getChildIds(section.nodes, parentInfo.parentId)
+    const prevId = childIds[parentInfo.index - 1]
+    if (!prevId) return null
+
+    const prevNode = section.nodes[prevId]
+    if (prevNode?.type !== "paragraph") return null
+    if (!isTextRunOnlyParagraph(prevNode)) return null
+
+    const caretIndex = paragraphTextLength(prevNode)
+    const updatedPrev: LayoutNode = {
+      ...prevNode,
+      children: mergeAdjacentTextRuns([...prevNode.children, ...node.children]),
     }
     const newChildIds = childIds.filter((id) => id !== nodeId)
     let newNodes: Nodes = { ...section.nodes, [prevId]: updatedPrev }
@@ -1824,6 +2427,22 @@ export function resizeFlowTableColumnPair(
   })
 }
 
+export function fitFlowTableToSectionWidth(doc: DocumentNode, tableId: string): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const tableNode = section.nodes[tableId]
+    if (tableNode?.type !== "flow-table") continue
+    const targetWidth = getPageMetrics(section.page).contentBox.width
+    const newTable = fitFlowTableColumnsToWidth(tableNode as unknown as FlowTableNode, targetWidth)
+    if (newTable === tableNode) return doc
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes: { ...s.nodes, [tableId]: newTable as unknown as LayoutNode } } : s,
+    )
+    return { ...doc, document: { ...doc.document, sections: newSections } }
+  }
+  return doc
+}
+
 export function updateFlowTableCellSpan(
   doc: DocumentNode,
   cellId: string,
@@ -2001,6 +2620,54 @@ export function deleteNode(doc: DocumentNode, nodeId: string): DocumentNode {
   return doc
 }
 
+export function duplicateNode(doc: DocumentNode, nodeId: string): { doc: DocumentNode; duplicatedNodeId: string | null } {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[nodeId]
+    if (!node || node.type === "body") continue
+
+    const parentInfo = findParentInfo(section.nodes, nodeId)
+    if (parentInfo == null) return { doc, duplicatedNodeId: null }
+
+    const cloned = cloneLayoutSubtree(section.nodes, nodeId)
+    if (!cloned) return { doc, duplicatedNodeId: null }
+
+    let nodes: Nodes = { ...section.nodes, ...cloned.nodes }
+    const nextChildIds = [...getChildIds(nodes, parentInfo.parentId)]
+    nextChildIds.splice(parentInfo.index + 1, 0, cloned.rootId)
+    nodes = setChildIds(nodes, parentInfo.parentId, nextChildIds)
+
+    const parent = nodes[parentInfo.parentId]
+    const clonedNode = nodes[cloned.rootId]
+    if (parent?.type === "row" && node.type === "stack" && clonedNode?.type === "stack") {
+      const split = splitWidthPercent(node.props.widthShare ?? 100)
+      nodes = {
+        ...nodes,
+        [nodeId]: { ...node, props: { ...node.props, widthShare: split.original } },
+        [cloned.rootId]: { ...clonedNode, props: { ...clonedNode.props, widthShare: split.inserted } },
+      }
+    }
+
+    if (parent?.type === "flow-row" && node.type === "flow-stack" && clonedNode?.type === "flow-stack") {
+      const split = splitWidthPercent(node.props.widthShare ?? 100)
+      nodes = {
+        ...nodes,
+        [nodeId]: { ...node, props: { ...node.props, widthShare: split.original } },
+        [cloned.rootId]: { ...clonedNode, props: { ...clonedNode.props, widthShare: split.inserted } },
+      }
+    }
+
+    const newSections = doc.document.sections.map((s, i) =>
+      i === si ? { ...s, nodes } : s,
+    )
+    return {
+      doc: { ...doc, document: { ...doc.document, sections: newSections } },
+      duplicatedNodeId: cloned.rootId,
+    }
+  }
+  return { doc, duplicatedNodeId: null }
+}
+
 // ─── Main Entry ───────────────────────────────────────────────────────────────
 
 export function applyPlacementOperation(
@@ -2022,6 +2689,19 @@ export function applyPlacementOperation(
 
   const section = doc.document.sections[sectionIndex]
   let nodes: Nodes = { ...section.nodes }
+  const sourceNodeBeforeRemoval = source.source === "document" ? section.nodes[source.nodeId] : null
+  const sourceParentInfoBeforeRemoval = source.source === "document"
+    ? findParentInfo(section.nodes, source.nodeId)
+    : null
+  const sourceParentBeforeRemoval = sourceParentInfoBeforeRemoval
+    ? section.nodes[sourceParentInfoBeforeRemoval.parentId]
+    : null
+  const sourceContainerParentInfoBeforeRemoval =
+    sourceNodeBeforeRemoval?.type === "flow-stack" && sourceParentBeforeRemoval?.type === "flow-row"
+      ? findParentInfo(section.nodes, sourceParentBeforeRemoval.id)
+      : null
+  let removedSourceRowParentId: string | null = null
+  let removedSourceRowIndex: number | null = null
 
   // Phase 1: merge new nodes (palette source)
   const { insertId, newNodes } = op.kind === "insert-stacks-into-row"
@@ -2038,7 +2718,21 @@ export function applyPlacementOperation(
     nodes = afterRemoval
     if (parentInfo != null) {
       srcIndexInParent = parentInfo.index
+      if (sourceNodeBeforeRemoval?.type === "flow-stack" && sourceParentBeforeRemoval?.type === "flow-row") {
+        const remaining = getChildIds(nodes, parentInfo.parentId)
+        if (remaining.length > 0) {
+          nodes = transferDeletedFlowStackWidth(nodes, parentInfo.parentId, source.nodeId, parentInfo.index)
+        }
+      }
       nodes = cleanupAfterRemoval(nodes, parentInfo.parentId)
+      if (
+        sourceParentBeforeRemoval?.type === "flow-row" &&
+        sourceContainerParentInfoBeforeRemoval != null &&
+        nodes[sourceParentBeforeRemoval.id] == null
+      ) {
+        removedSourceRowParentId = sourceContainerParentInfoBeforeRemoval.parentId
+        removedSourceRowIndex = sourceContainerParentInfoBeforeRemoval.index
+      }
     }
   }
 
@@ -2072,6 +2766,18 @@ export function applyPlacementOperation(
     case "insert-stacks-into-row":
       nodes = doInsertStacksIntoRow(nodes, op.rowId, op.targetStackId, op.index, op.count)
       break
+    case "move-flow-stack-into-row":
+      if (source.source === "document") {
+        nodes = doMoveFlowStackIntoRow(nodes, op.rowId, op.targetStackId, op.position, insertId)
+      }
+      break
+    case "move-flow-stack-to-new-row": {
+      if (source.source === "document") {
+        const removedIndex = removedSourceRowParentId === op.parentId ? removedSourceRowIndex : null
+        nodes = doMoveFlowStackToNewRow(nodes, op.parentId, op.index, insertId, removedIndex)
+      }
+      break
+    }
     case "wrap-in-row-left":
       nodes = doWrapInRow(nodes, op.parentId, op.targetNodeId, insertId, true)
       break

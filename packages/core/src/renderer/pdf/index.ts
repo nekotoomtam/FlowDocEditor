@@ -1,8 +1,10 @@
 import { LineCapStyle, PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import type { PDFFont, PDFPage } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
-import type { PaginatedDocument, PaginatedPage, PageFragment, ResolvedBorderSide } from "../../pagination"
+import type { PaginatedDocument, PaginatedLine, PaginatedPage, PageFragment, ResolvedBorderSide } from "../../pagination"
 import { resolveFragmentBoxLayoutPrimitives, resolveParagraphBoxLayoutPrimitives } from "../../pagination"
+import { resolveFontVariantCacheKey, resolveFontVariantKeyForStyle } from "../../font-registry"
+import type { FontVariantKey } from "../../font-registry"
 import type { RenderResult, Renderer, FontProvider } from "../shared"
 
 /**
@@ -19,6 +21,8 @@ import type { RenderResult, Renderer, FontProvider } from "../shared"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const PDF_TEXT_COLOR = rgb(0, 0, 0)
+
 function flipY(layoutY: number, elementHeight: number, pageHeight: number): number {
   return pageHeight - layoutY - elementHeight
 }
@@ -28,6 +32,47 @@ function hexToRgb(hex: string) {
   const g = parseInt(hex.slice(2, 4), 16) / 255
   const b = parseInt(hex.slice(4, 6), 16) / 255
   return rgb(r, g, b)
+}
+
+function resolvePdfUnderlineSpan(line: NonNullable<PageFragment["lines"]>[number]): { x: number; width: number } {
+  if (!line.segments?.length) return { x: line.x, width: line.width }
+  const start = Math.min(...line.segments.map((segment) => line.x + segment.x))
+  const end = Math.max(...line.segments.map((segment) => line.x + segment.x + segment.width))
+  return { x: start, width: Math.max(0, end - start) }
+}
+
+function drawTextDecorations(
+  pdfPage: PDFPage,
+  input: {
+    x: number
+    width: number
+    y: number
+    fontSize: number
+    color: ReturnType<typeof rgb>
+    underline?: boolean
+    strikethrough?: boolean
+  },
+): void {
+  if (!input.underline && !input.strikethrough) return
+  const thickness = Math.max(0.4, input.fontSize * 0.045)
+  if (input.strikethrough) {
+    const strikeY = input.y + input.fontSize * 0.32
+    pdfPage.drawLine({
+      start: { x: input.x, y: strikeY },
+      end: { x: input.x + input.width, y: strikeY },
+      thickness,
+      color: input.color,
+    })
+  }
+  if (input.underline) {
+    const underlineY = input.y - Math.max(0.6, input.fontSize * 0.08)
+    pdfPage.drawLine({
+      start: { x: input.x, y: underlineY },
+      end: { x: input.x + input.width, y: underlineY },
+      thickness,
+      color: input.color,
+    })
+  }
 }
 
 // ─── Border Drawing ───────────────────────────────────────────────────────────
@@ -191,24 +236,75 @@ export class PdfRenderer implements Renderer {
       if (!fragment.lines?.length || !fragment.renderProps) continue
       if (fragment.nodeType === "paragraph") drawFragmentBox(pdfPage, fragment, page.height)
 
-      const font = await this.resolveFont(pdfDoc, fontCache, fragment.renderProps.fontFamilyKey)
+      const fontVariant = resolveFontVariantKeyForStyle(fragment.renderProps.fontWeight, fragment.renderProps.fontStyle)
       const defaultFontSize = fragment.renderProps.fontSize
+      const shouldUnderline = fragment.renderProps.textDecoration === "underline"
+      const shouldStrike = fragment.renderProps.strikethrough === true
+      const textColor = fragment.renderProps.textColor ? hexToRgb(fragment.renderProps.textColor) : PDF_TEXT_COLOR
 
       const isJustify = fragment.renderProps.align === "justify"
       for (const line of fragment.lines) {
         if (line.text.trim() === "") continue
         const lineY = flipY(line.y, line.height, page.height)
         const fontSize = line.fontSize ?? defaultFontSize
-        if (isJustify && line.segments?.length) {
-          // Draw word segments individually at their adjusted x positions
-          for (const seg of line.segments) {
-            if (seg.kind === "space" || seg.text.trim() === "") continue
-            pdfPage.drawText(seg.text, { x: line.x + seg.x, y: lineY, size: fontSize, font })
-          }
+        if (line.runs?.length) {
+          await this.drawRichTextRuns(pdfDoc, fontCache, pdfPage, line, lineY)
         } else {
-          pdfPage.drawText(line.text, { x: line.x, y: lineY, size: fontSize, font })
+          const font = await this.resolveFont(pdfDoc, fontCache, fragment.renderProps.fontFamilyKey, fontVariant)
+          if (isJustify && line.segments?.length) {
+            // Draw word segments individually at their adjusted x positions
+            for (const seg of line.segments) {
+              if (seg.kind === "space" || seg.text.trim() === "") continue
+              pdfPage.drawText(seg.text, { x: line.x + seg.x, y: lineY, size: fontSize, font, color: textColor })
+            }
+          } else {
+            pdfPage.drawText(line.text, { x: line.x, y: lineY, size: fontSize, font, color: textColor })
+          }
+          if (shouldUnderline || shouldStrike) {
+            const span = resolvePdfUnderlineSpan(line)
+            drawTextDecorations(pdfPage, {
+              x: span.x,
+              width: span.width,
+              y: lineY,
+              fontSize,
+              color: textColor,
+              underline: shouldUnderline,
+              strikethrough: shouldStrike,
+            })
+          }
         }
       }
+    }
+  }
+
+  private async drawRichTextRuns(
+    pdfDoc: PDFDocument,
+    fontCache: Map<string, PDFFont>,
+    pdfPage: PDFPage,
+    line: PaginatedLine,
+    lineY: number,
+  ): Promise<void> {
+    for (const run of line.runs ?? []) {
+      if (run.text.trim() === "") continue
+      const color = hexToRgb(run.style.textColor)
+      const font = await this.resolveFont(pdfDoc, fontCache, run.style.fontFamilyKey, run.style.fontVariant)
+      const x = line.x + run.x
+      pdfPage.drawText(run.text, {
+        x,
+        y: lineY,
+        size: run.style.fontSize,
+        font,
+        color,
+      })
+      drawTextDecorations(pdfPage, {
+        x,
+        width: run.width,
+        y: lineY,
+        fontSize: run.style.fontSize,
+        color,
+        underline: run.style.textDecoration === "underline",
+        strikethrough: run.style.strikethrough,
+      })
     }
   }
 
@@ -216,13 +312,15 @@ export class PdfRenderer implements Renderer {
     pdfDoc: PDFDocument,
     cache: Map<string, PDFFont>,
     key: string,
+    variant: FontVariantKey = "regular",
   ): Promise<PDFFont> {
-    if (cache.has(key)) return cache.get(key)!
-    const buffer = (await this.fontProvider?.getFont(key)) ?? null
+    const cacheKey = resolveFontVariantCacheKey(key, variant)
+    if (cache.has(cacheKey)) return cache.get(cacheKey)!
+    const buffer = (await this.fontProvider?.getFont(key, variant)) ?? null
     const font = buffer != null
       ? await pdfDoc.embedFont(buffer)
       : await pdfDoc.embedFont(StandardFonts.Helvetica)
-    cache.set(key, font)
+    cache.set(cacheKey, font)
     return font
   }
 }

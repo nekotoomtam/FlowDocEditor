@@ -11,6 +11,8 @@ import { pt } from "../schema"
 import { assertDocument } from "./assert"
 import { resolveFlowTableGrid } from "./flowTableGrid"
 import {
+  applyTextRunStyleRange,
+  applyParagraphTextStyle,
   applyPlacementOperation,
   addFlowTableColumn,
   addFlowTableRow,
@@ -18,14 +20,24 @@ import {
   canUpdateFlowTableCellSpan,
   canRemoveFlowTableColumn,
   canRemoveFlowTableRow,
+  deleteTextRunRange,
   deleteNode,
+  duplicateNode,
+  fitFlowTableToSectionWidth,
+  isPlainTextParagraph,
   mergeParagraphWithPrevious,
+  mergeTextRunParagraphWithPrevious,
   removeFlowTableColumn,
   removeFlowTableRow,
+  replaceTextRunParagraphText,
+  replaceTextRunParagraphTextInParagraph,
+  replaceTextRunRange,
+  resolveTextRunParagraphTextReplacement,
   reorderBodyChild,
   resizeFlowTableColumnPair,
   resolveFlowTableCellMergeTarget,
   splitParagraphAtIndex,
+  splitTextRunParagraphAtIndex,
   updateFlowTableCellSpan,
   updateFieldRefInline,
   updateFlowStackBoxStyle,
@@ -181,6 +193,14 @@ function paragraphText(node: ParagraphNode): string {
   return node.children.filter((child) => child.type === "text").map((child) => child.text).join("")
 }
 
+function textRunSummary(node: ParagraphNode) {
+  return node.children.map((child) =>
+    child.type === "text"
+      ? { type: child.type, text: child.text, style: child.style }
+      : child,
+  )
+}
+
 function flowTableCellParagraphTexts(table: FlowTableNode, cellId: string): string[] {
   const cell = table.nodes[cellId]
   if (cell?.type !== "flow-table-cell") return []
@@ -275,6 +295,502 @@ describe("paragraph text operations", () => {
     expect(paragraphText(updated)).toBe("Updated flow cell")
   })
 
+  it("applies text run style to a range inside one run", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello" }])
+    const result = applyTextRunStyleRange(makeDoc({ p1: p }, ["p1"]), "p1", 1, 4, {
+      fontWeight: "bold",
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "H", style: undefined },
+      { type: "text", text: "ell", style: { fontWeight: "bold" } },
+      { type: "text", text: "o", style: undefined },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("applies style across existing text runs while preserving existing overrides", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello " },
+      { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+    ])
+    const result = applyTextRunStyleRange(makeDoc({ p1: p }, ["p1"]), "p1", 3, 8, {
+      fontWeight: "bold",
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Hel", style: undefined },
+      { type: "text", text: "lo ", style: { fontWeight: "bold" } },
+      { type: "text", text: "wo", style: { fontStyle: "italic", fontWeight: "bold" } },
+      { type: "text", text: "rld", style: { fontStyle: "italic" } },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("clears a run style field with null and keeps other overrides", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Styled",
+      style: { fontWeight: "bold", textColor: "DC2626" },
+    }])
+    const result = applyTextRunStyleRange(makeDoc({ p1: p }, ["p1"]), "p1", 0, 6, {
+      fontWeight: null,
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Styled", style: { textColor: "DC2626" } },
+    ])
+  })
+
+  it("merges adjacent text runs after a range style creates matching authored style", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "A", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "B" },
+      { id: "t3", type: "text", text: "C", style: { fontWeight: "bold" } },
+    ])
+    const result = applyTextRunStyleRange(makeDoc({ p1: p }, ["p1"]), "p1", 1, 2, {
+      fontWeight: "bold",
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "ABC", style: { fontWeight: "bold" } },
+    ])
+  })
+
+  it("does not split or replace runs when the patch is already applied", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Hello",
+      style: { fontWeight: "bold" },
+    }])
+    const doc = makeDoc({ p1: p }, ["p1"])
+
+    expect(applyTextRunStyleRange(doc, "p1", 1, 4, { fontWeight: "bold" })).toBe(doc)
+  })
+
+  it("styles text around inline objects without mutating the inline object", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "A" },
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+      { id: "t2", type: "text", text: "B" },
+    ])
+    const result = applyTextRunStyleRange(makeDoc({ p1: p }, ["p1"]), "p1", 0, 2, {
+      textDecoration: "underline",
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "A", style: { textDecoration: "underline" } },
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+      { type: "text", text: "B", style: { textDecoration: "underline" } },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("applies text run style to a paragraph inside a flow-table cell", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Flow cell text" }])
+    const result = applyTextRunStyleRange(makeFlowTableDoc(p), "p1", 5, 9, {
+      textColor: "2563EB",
+    })
+    const table = result.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const updated = table.nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Flow ", style: undefined },
+      { type: "text", text: "cell", style: { textColor: "2563EB" } },
+      { type: "text", text: " text", style: undefined },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("applies paragraph text style to paragraph defaults and every text run", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello ", style: { fontStyle: "italic" } },
+      { id: "t2", type: "text", text: "world" },
+    ])
+    const result = applyParagraphTextStyle(makeDoc({ p1: p }, ["p1"]), "p1", {
+      fontWeight: "bold",
+      textColor: "2563EB",
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.props.fontWeight).toBe("bold")
+    expect(updated.props.textColor).toBe("2563EB")
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Hello ", style: { fontStyle: "italic" } },
+      { type: "text", text: "world", style: undefined },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("applies paragraph text style around inline objects without mutating the inline object", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "A" },
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+      { id: "t2", type: "text", text: "B" },
+    ])
+    const result = applyParagraphTextStyle(makeDoc({ p1: p }, ["p1"]), "p1", {
+      textDecoration: "underline",
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.props.textDecoration).toBe("underline")
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "A", style: undefined },
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+      { type: "text", text: "B", style: undefined },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("clears matching run overrides when paragraph text style becomes the default", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Bold",
+      style: { fontWeight: "bold", fontStyle: "italic" },
+    }])
+    const result = applyParagraphTextStyle(makeDoc({ p1: p }, ["p1"]), "p1", {
+      fontWeight: "normal",
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.props.fontWeight).toBe("normal")
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Bold", style: { fontStyle: "italic" } },
+    ])
+  })
+
+  it("applies paragraph text style inside a flow-table cell", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Flow cell text" }])
+    const result = applyParagraphTextStyle(makeFlowTableDoc(p), "p1", {
+      fontFamilyKey: "notoSansThai",
+      fontSize: pt(16),
+    })
+    const table = result.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const updated = table.nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.props.fontFamilyKey).toBe("notoSansThai")
+    expect(updated.props.fontSize).toEqual(pt(16))
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Flow cell text", style: undefined },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("deletes text inside one styled run without losing the remaining style", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Hello",
+      style: { fontWeight: "bold" },
+    }])
+    const result = deleteTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 1, 4)
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Ho", style: { fontWeight: "bold" } },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("deletes text across runs and merges adjacent matching styles", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "A", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "B" },
+      { id: "t3", type: "text", text: "C", style: { fontWeight: "bold" } },
+    ])
+    const result = deleteTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 1, 2)
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "AC", style: { fontWeight: "bold" } },
+    ])
+  })
+
+  it("leaves one empty text run when deleting all text from a text-only paragraph", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Styled",
+      style: { textColor: "DC2626" },
+    }])
+    const result = deleteTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 0, 6)
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "", style: { textColor: "DC2626" } },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("preserves inline objects while deleting surrounding text", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "A" },
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+      { id: "t2", type: "text", text: "B" },
+    ])
+    const result = deleteTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 0, 2)
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("deletes text range inside a flow-table cell paragraph", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Flow " },
+      { id: "t2", type: "text", text: "cell", style: { textColor: "2563EB" } },
+      { id: "t3", type: "text", text: " text" },
+    ])
+    const result = deleteTextRunRange(makeFlowTableDoc(p), "p1", 5, 9)
+    const table = result.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const updated = table.nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Flow  text", style: undefined },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("does not update the document for collapsed or out-of-range delete ranges", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello" }])
+    const doc = makeDoc({ p1: p }, ["p1"])
+
+    expect(deleteTextRunRange(doc, "p1", 2, 2)).toBe(doc)
+    expect(deleteTextRunRange(doc, "p1", 8, 12)).toBe(doc)
+  })
+
+  it("inserts text inside a styled run and inherits the run style", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Hello",
+      style: { fontWeight: "bold" },
+    }])
+    const result = replaceTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 2, 2, "X")
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "HeXllo", style: { fontWeight: "bold" } },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("replaces text across runs using the style at the replacement start", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "AB", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "CD", style: { fontStyle: "italic" } },
+    ])
+    const result = replaceTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 1, 3, "X")
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "AX", style: { fontWeight: "bold" } },
+      { type: "text", text: "D", style: { fontStyle: "italic" } },
+    ])
+  })
+
+  it("inserts at a run boundary using the previous run style", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "A", style: { textColor: "DC2626" } },
+      { id: "t2", type: "text", text: "B" },
+    ])
+    const result = replaceTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 1, 1, "x")
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Ax", style: { textColor: "DC2626" } },
+      { type: "text", text: "B", style: undefined },
+    ])
+  })
+
+  it("replaces text with an explicit authored style override", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello" }])
+    const result = replaceTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 1, 4, "EL", {
+      style: { fontStyle: "italic", textColor: "2563EB" },
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "H", style: undefined },
+      { type: "text", text: "EL", style: { fontStyle: "italic", textColor: "2563EB" } },
+      { type: "text", text: "o", style: undefined },
+    ])
+  })
+
+  it("can force inserted text to be plain by passing style null", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "AB",
+      style: { fontWeight: "bold" },
+    }])
+    const result = replaceTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 1, 1, "x", { style: null })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "A", style: { fontWeight: "bold" } },
+      { type: "text", text: "x", style: undefined },
+      { type: "text", text: "B", style: { fontWeight: "bold" } },
+    ])
+  })
+
+  it("preserves inline objects while replacing surrounding text", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "A" },
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+      { id: "t2", type: "text", text: "B" },
+    ])
+    const result = replaceTextRunRange(makeDoc({ p1: p }, ["p1"]), "p1", 0, 2, "X", {
+      style: { textDecoration: "underline" },
+    })
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "X", style: { textDecoration: "underline" } },
+      { id: "f1", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("replaces text range inside a flow-table cell paragraph", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Flow cell text",
+      style: { textColor: "2563EB" },
+    }])
+    const result = replaceTextRunRange(makeFlowTableDoc(p), "p1", 5, 9, "box")
+    const table = result.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const updated = table.nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Flow box text", style: { textColor: "2563EB" } },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("does not update the document for collapsed empty replacement", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello" }])
+    const doc = makeDoc({ p1: p }, ["p1"])
+
+    expect(replaceTextRunRange(doc, "p1", 2, 2, "")).toBe(doc)
+  })
+
+  it("computes the minimal whole-paragraph text replacement", () => {
+    expect(resolveTextRunParagraphTextReplacement("Hello world", "Hello bold world")).toEqual({
+      start: 6,
+      end: 6,
+      text: "bold ",
+    })
+    expect(resolveTextRunParagraphTextReplacement("Hello bold world", "Hello world")).toEqual({
+      start: 6,
+      end: 11,
+      text: "",
+    })
+    expect(resolveTextRunParagraphTextReplacement("Same", "Same")).toBeNull()
+  })
+
+  it("replaces whole paragraph text while preserving unchanged styled runs", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+    ])
+    const result = replaceTextRunParagraphText(makeDoc({ p1: p }, ["p1"]), "p1", "Hello wide world")
+    const updated = result.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Hello wide ", style: { fontWeight: "bold" } },
+      { type: "text", text: "world", style: { fontStyle: "italic" } },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("replaces whole paragraph text inside a flow-table cell without stripping run style", () => {
+    const p = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Flow base",
+      style: { textColor: "2563EB" },
+    }])
+    const result = replaceTextRunParagraphText(makeFlowTableDoc(p), "p1", "Flow draft")
+    const table = result.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const updated = table.nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Flow draft", style: { textColor: "2563EB" } },
+    ])
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("does not replace whole paragraph text when inline objects are present", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Page " },
+      { id: "pn", type: "pageNumber" },
+    ])
+    const doc = makeDoc({ p1: p }, ["p1"])
+
+    expect(replaceTextRunParagraphText(doc, "p1", "Page 1")).toBe(doc)
+    expect(replaceTextRunParagraphTextInParagraph(p, "Page 1")).toBeNull()
+  })
+
   it("splits plain text paragraph and preserves total text", () => {
     const p = makeParagraph("p1", [
       { id: "t1", type: "text", text: "Hello " },
@@ -331,6 +847,94 @@ describe("paragraph text operations", () => {
     const result = mergeParagraphWithPrevious(makeDoc({ p1, p2 }, ["p1", "p2"]), "p2")
 
     expect(result).toBeNull()
+  })
+
+  it("splits a styled text-run paragraph without stripping run styles", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+    ])
+    const result = splitTextRunParagraphAtIndex(makeDoc({ p1: p }, ["p1"]), "p1", 8)
+    const section = result.doc.document.sections[0]
+    const first = section.nodes.p1
+    const second = section.nodes[result.newNodeId]
+
+    expect(first.type).toBe("paragraph")
+    expect(second?.type).toBe("paragraph")
+    if (first.type !== "paragraph" || second?.type !== "paragraph") return
+    expect(textRunSummary(first)).toEqual([
+      { type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+      { type: "text", text: "wo", style: { fontStyle: "italic" } },
+    ])
+    expect(textRunSummary(second)).toEqual([
+      { type: "text", text: "rld", style: { fontStyle: "italic" } },
+    ])
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("keeps an empty styled anchor when splitting a text-run paragraph at the start", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Styled", style: { textColor: "DC2626" } },
+    ])
+    const result = splitTextRunParagraphAtIndex(makeDoc({ p1: p }, ["p1"]), "p1", 0)
+    const section = result.doc.document.sections[0]
+    const first = section.nodes.p1
+    const second = section.nodes[result.newNodeId]
+
+    expect(first.type).toBe("paragraph")
+    expect(second?.type).toBe("paragraph")
+    if (first.type !== "paragraph" || second?.type !== "paragraph") return
+    expect(textRunSummary(first)).toEqual([
+      { type: "text", text: "", style: { textColor: "DC2626" } },
+    ])
+    expect(textRunSummary(second)).toEqual([
+      { type: "text", text: "Styled", style: { textColor: "DC2626" } },
+    ])
+  })
+
+  it("does not split a rich paragraph that contains inline objects yet", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Page " },
+      { id: "pn", type: "pageNumber" },
+    ])
+    const doc = makeDoc({ p1: p }, ["p1"])
+    const result = splitTextRunParagraphAtIndex(doc, "p1", 3)
+
+    expect(result.doc).toBe(doc)
+    expect(result.newNodeId).toBe("")
+  })
+
+  it("merges styled text-run paragraphs and preserves caret position", () => {
+    const p1 = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+    ])
+    const p2 = makeParagraph("p2", [
+      { id: "t2", type: "text", text: "world", style: { fontWeight: "bold" } },
+      { id: "t3", type: "text", text: "!", style: { fontStyle: "italic" } },
+    ])
+    const result = mergeTextRunParagraphWithPrevious(makeDoc({ p1, p2 }, ["p1", "p2"]), "p2")
+
+    expect(result).not.toBeNull()
+    if (!result) return
+    const updated = result.doc.document.sections[0].nodes.p1
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(textRunSummary(updated)).toEqual([
+      { type: "text", text: "Hello world", style: { fontWeight: "bold" } },
+      { type: "text", text: "!", style: { fontStyle: "italic" } },
+    ])
+    expect(result.caretIndex).toBe("Hello ".length)
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("does not merge a text-run paragraph with a previous mixed-inline paragraph", () => {
+    const p1 = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Page " },
+      { id: "pn", type: "pageNumber" },
+    ])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "body", style: { fontWeight: "bold" } }])
+
+    expect(mergeTextRunParagraphWithPrevious(makeDoc({ p1, p2 }, ["p1", "p2"]), "p2")).toBeNull()
   })
 })
 
@@ -583,6 +1187,113 @@ describe("field reference operations", () => {
   })
 })
 
+describe("rich text guard operations", () => {
+  it("does not route styled text runs through the plain-text rewrite lane", () => {
+    const p1 = makeParagraph("p1", [{
+      id: "t1",
+      type: "text",
+      text: "Styled",
+      style: { fontWeight: "bold" },
+    }])
+    const doc = makeDoc({ p1 }, ["p1"])
+
+    const updated = updateParagraphText(doc, "p1", "Changed")
+    const paragraph = updated.document.sections[0].nodes.p1
+
+    expect(isPlainTextParagraph(p1)).toBe(false)
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.children).toEqual(p1.children)
+  })
+})
+
+describe("node duplication operations", () => {
+  it("duplicates a paragraph after the source with fresh node and inline ids", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Original" }])
+    const doc = makeDoc({ p1 }, ["p1"])
+
+    const result = duplicateNode(doc, "p1")
+    const updated = result.doc
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(result.duplicatedNodeId).not.toBeNull()
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body" || !result.duplicatedNodeId) return
+    expect(body.childIds).toEqual(["p1", result.duplicatedNodeId])
+
+    const clone = section.nodes[result.duplicatedNodeId]
+    expect(clone.type).toBe("paragraph")
+    if (clone.type !== "paragraph") return
+    expect(clone.children[0]?.id).not.toBe("t1")
+    expect(clone.children[0]).toMatchObject({ type: "text", text: "Original" })
+  })
+
+  it("duplicates a flow-stack inside a flow-row and preserves total width share", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1,
+    }, ["fr1"])
+
+    const result = duplicateNode(doc, "fs1")
+    const updated = result.doc
+    const section = updated.document.sections[0]
+    const row = section.nodes.fr1
+
+    expect(result.duplicatedNodeId).not.toBeNull()
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row" || !result.duplicatedNodeId) return
+    expect(row.childIds).toEqual(["fs1", result.duplicatedNodeId])
+
+    const source = section.nodes.fs1
+    const clone = section.nodes[result.duplicatedNodeId]
+    expect(source.type).toBe("flow-stack")
+    expect(clone.type).toBe("flow-stack")
+    if (source.type !== "flow-stack" || clone.type !== "flow-stack") return
+    expect(source.props.widthShare).toBe(50)
+    expect(clone.props.widthShare).toBe(50)
+    expect(clone.childIds).toHaveLength(1)
+    expect(clone.childIds[0]).not.toBe("p1")
+  })
+
+  it("duplicates a flow-table with fresh internal row, cell, paragraph, and text ids", () => {
+    const paragraph = makeParagraph("cell-p", [{ id: "cell-t", type: "text", text: "Cell" }])
+    const doc = makeFlowTableDoc(paragraph)
+
+    const result = duplicateNode(doc, "flow-table")
+    const updated = result.doc
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(result.duplicatedNodeId).not.toBeNull()
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body" || !result.duplicatedNodeId) return
+    expect(body.childIds).toEqual(["flow-table", result.duplicatedNodeId])
+
+    const clone = section.nodes[result.duplicatedNodeId] as unknown as FlowTableNode
+    expect(clone.type).toBe("flow-table")
+    expect(clone.rowIds).toHaveLength(1)
+    expect(clone.rowIds[0]).not.toBe("flow-row")
+    const clonedRow = clone.nodes[clone.rowIds[0]]
+    expect(clonedRow.type).toBe("flow-table-row")
+    if (clonedRow.type !== "flow-table-row") return
+    expect(clonedRow.cellIds[0]).not.toBe("flow-cell")
+    const clonedCell = clone.nodes[clonedRow.cellIds[0]]
+    expect(clonedCell.type).toBe("flow-table-cell")
+    if (clonedCell.type !== "flow-table-cell") return
+    expect(clonedCell.childIds[0]).not.toBe("cell-p")
+    const clonedParagraph = clone.nodes[clonedCell.childIds[0]]
+    expect(clonedParagraph.type).toBe("paragraph")
+    if (clonedParagraph.type !== "paragraph") return
+    expect(clonedParagraph.children[0]?.id).not.toBe("cell-t")
+  })
+})
+
 describe("flow-row / flow-stack operations", () => {
   it("maps the Row palette block to a single-stack flow-row", () => {
     const updated = applyPlacementOperation(
@@ -751,24 +1462,29 @@ describe("flow-row / flow-stack operations", () => {
 
     const table = section.nodes[body.childIds[0]] as unknown as FlowTableNode
     expect(table.type).toBe("flow-table")
+    expect(table.props.headerRowCount).toBe(1)
+    expect(table.props.repeatHeaderRows).toBe(true)
     expect(table.rowIds).toHaveLength(3)
     expect(table.columns).toHaveLength(3)
     expect(table.columns.map((column) => column.width)).toEqual([pt(150), pt(150), pt(150)])
 
-    table.rowIds.forEach((rowId) => {
+    table.rowIds.forEach((rowId, rowIndex) => {
       const row = table.nodes[rowId]
       expect(row.type).toBe("flow-table-row")
       if (row.type !== "flow-table-row") return
       expect(row.cellIds).toHaveLength(3)
-      row.cellIds.forEach((cellId) => {
+      row.cellIds.forEach((cellId, columnIndex) => {
         const cell = table.nodes[cellId]
         expect(cell.type).toBe("flow-table-cell")
         if (cell.type !== "flow-table-cell") return
+        expect(cell.props.box?.border?.top).toEqual({ style: "solid", width: pt(1), color: "000000" })
+        expect(cell.props.box?.fill).toBe(rowIndex === 0 ? "F3F4F6" : undefined)
         expect(cell.childIds).toHaveLength(1)
         const paragraph = table.nodes[cell.childIds[0]]
         expect(paragraph.type).toBe("paragraph")
         if (paragraph.type !== "paragraph") return
-        expect(paragraphText(paragraph)).toBe("")
+        expect(paragraph.props.fontWeight).toBe(rowIndex === 0 ? "bold" : "normal")
+        expect(paragraphText(paragraph)).toBe(rowIndex === 0 ? `Header ${columnIndex + 1}` : "")
       })
     })
   })
@@ -973,6 +1689,119 @@ describe("flow-row / flow-stack operations", () => {
     expect(rightStack.childIds).toEqual(["p2"])
   })
 
+  it("moves a flow-stack into another flow-row using the same local split rule", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Moved" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Target" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100, box: { fill: "E0F2FE" } }, childIds: ["p1"] },
+      fr2: { id: "fr2", type: "flow-row", props: {}, childIds: ["fs2"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p2"] },
+      p1,
+      p2,
+    }, ["fr1", "fr2"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "move-flow-stack-into-row", rowId: "fr2", targetStackId: "fs2", position: "before" },
+      { source: "document", nodeId: "fs1" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+    const row = section.nodes.fr2
+    const movedStack = section.nodes.fs1
+    const targetStack = section.nodes.fs2
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    expect(row.type).toBe("flow-row")
+    expect(movedStack.type).toBe("flow-stack")
+    expect(targetStack.type).toBe("flow-stack")
+    if (body.type !== "body" || row.type !== "flow-row" || movedStack.type !== "flow-stack" || targetStack.type !== "flow-stack") return
+    expect(body.childIds).toEqual(["fr2"])
+    expect(section.nodes.fr1).toBeUndefined()
+    expect(row.childIds).toEqual(["fs1", "fs2"])
+    expect(movedStack.props.widthShare).toBe(50)
+    expect(movedStack.props.box?.fill).toBe("E0F2FE")
+    expect(movedStack.childIds).toEqual(["p1"])
+    expect(targetStack.props.widthShare).toBe(50)
+    expect(targetStack.childIds).toEqual(["p2"])
+  })
+
+  it("moves a flow-stack to body space as a new full-width flow-row", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Moved" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Remaining" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 60, box: { fill: "DCFCE7" } }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 40 }, childIds: ["p2"] },
+      p1,
+      p2,
+    }, ["fr1"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "move-flow-stack-to-new-row", parentId: "body", parentType: "body", index: 1 },
+      { source: "document", nodeId: "fs1" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+    const sourceRow = section.nodes.fr1
+    const remainingStack = section.nodes.fs2
+    const movedStack = section.nodes.fs1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    expect(sourceRow.type).toBe("flow-row")
+    expect(remainingStack.type).toBe("flow-stack")
+    expect(movedStack.type).toBe("flow-stack")
+    if (body.type !== "body" || sourceRow.type !== "flow-row" || remainingStack.type !== "flow-stack" || movedStack.type !== "flow-stack") return
+
+    expect(body.childIds).toHaveLength(2)
+    expect(body.childIds[0]).toBe("fr1")
+    const movedRow = section.nodes[body.childIds[1]]
+    expect(movedRow.type).toBe("flow-row")
+    if (movedRow.type !== "flow-row") return
+    expect(sourceRow.childIds).toEqual(["fs2"])
+    expect(remainingStack.props.widthShare).toBe(100)
+    expect(movedRow.childIds).toEqual(["fs1"])
+    expect(movedStack.props.widthShare).toBe(100)
+    expect(movedStack.props.box?.fill).toBe("DCFCE7")
+    expect(movedStack.childIds).toEqual(["p1"])
+  })
+
+  it("keeps body insertion position stable when moving a single-stack row to body space", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Moved" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "After" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1,
+      p2,
+    }, ["fr1", "p2"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "move-flow-stack-to-new-row", parentId: "body", parentType: "body", index: 2 },
+      { source: "document", nodeId: "fs1" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+    expect(section.nodes.fr1).toBeUndefined()
+    expect(body.childIds[0]).toBe("p2")
+    const movedRow = section.nodes[body.childIds[1]]
+    expect(movedRow.type).toBe("flow-row")
+    if (movedRow.type !== "flow-row") return
+    expect(movedRow.childIds).toEqual(["fs1"])
+  })
+
   it("adds a balanced flow-stack column when the flow-row is selected", () => {
     const doc = makeDoc({
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2", "fs3"] },
@@ -1115,6 +1944,10 @@ describe("flow-table structural operations", () => {
       const cell = table.nodes[cellId]
       expect(cell.type).toBe("flow-table-cell")
       if (cell.type !== "flow-table-cell") return
+      expect(cell.props.box?.border?.top).toEqual({ style: "solid", width: pt(1), color: "000000" })
+      expect(cell.props.box?.border?.right).toEqual({ style: "solid", width: pt(1), color: "000000" })
+      expect(cell.props.box?.border?.bottom).toEqual({ style: "solid", width: pt(1), color: "000000" })
+      expect(cell.props.box?.border?.left).toEqual({ style: "solid", width: pt(1), color: "000000" })
       expect(cell.childIds).toHaveLength(1)
       const paragraph = table.nodes[cell.childIds[0]]
       expect(paragraph.type).toBe("paragraph")
@@ -1185,6 +2018,10 @@ describe("flow-table structural operations", () => {
     const insertedCell = table.nodes[firstRow.cellIds[0]]
     expect(insertedCell.type).toBe("flow-table-cell")
     if (insertedCell.type !== "flow-table-cell") return
+    expect(insertedCell.props.box?.border?.top).toEqual({ style: "solid", width: pt(1), color: "000000" })
+    expect(insertedCell.props.box?.border?.right).toEqual({ style: "solid", width: pt(1), color: "000000" })
+    expect(insertedCell.props.box?.border?.bottom).toEqual({ style: "solid", width: pt(1), color: "000000" })
+    expect(insertedCell.props.box?.border?.left).toEqual({ style: "solid", width: pt(1), color: "000000" })
     const insertedParagraph = table.nodes[insertedCell.childIds[0]]
     expect(insertedParagraph.type).toBe("paragraph")
     if (insertedParagraph.type !== "paragraph") return
@@ -1285,6 +2122,19 @@ describe("flow-table structural operations", () => {
       ["flow-cell-span", "flow-cell-span", "flow-cell-top-right"],
       ["flow-cell-span", "flow-cell-span", "flow-cell-bottom-right"],
     ])
+  })
+
+  it("fits a flow-table to the section content width while preserving column proportions", () => {
+    const doc = makeGridFlowTableDoc({
+      columnWidths: [100, 200],
+      rows: [["A", "B"]],
+    })
+    const updated = fitFlowTableToSectionWidth(doc, "flow-table")
+    const table = getFlowTable(updated)
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(table.columns.map((column) => column.width.value)).toEqual([150.33, 300.67])
+    expect(flowTableWidth(table)).toBe(451)
   })
 
   it("removes a row inside a flow-table rowspan by shrinking the covering cell", () => {

@@ -68,6 +68,15 @@ describe("page numbering", () => {
     expect(frag.lines![0].text).toBe("หน้า 1")
   })
 
+  it("pageNumber run slice resolves together with line text", () => {
+    const p = paraWithPageNumber("p1", "")
+    const result = paginate(makeDoc(["p1"], { p1: p }))
+    const frag = result.sections[0].pages[0].fragments.find((f) => f.nodeId === "p1")!
+    expect(frag.lines![0].runs).toEqual([
+      expect.objectContaining({ text: "1", sourceId: "p1-pn", sourceType: "pageNumber" }),
+    ])
+  })
+
   it("pageNumber segment has kind 'pageNumber' before resolution", () => {
     // Verify the segment is classified correctly by checking the resolved text
     const p = paraWithPageNumber("p1", "")

@@ -197,10 +197,97 @@ describe("text flow — alignment", () => {
     expect(lines[0].x).toBeCloseTo(CONTENT_X + (CONTENT_W - textWidth) / 2, 1)
   })
 
-  it("renderProps still carries alignment setting for renderers that need it", () => {
-    const result = paginate(makeDoc(["p"], { p: makePara("p", "Hi", { align: "right" }) }))
+  it("renderProps carries paragraph text style settings for renderers", () => {
+    const result = paginate(makeDoc(["p"], {
+      p: makePara("p", "Hi", {
+        align: "right",
+        textColor: "DC2626",
+        fontWeight: "bold",
+        fontStyle: "italic",
+        textDecoration: "underline",
+        strikethrough: true,
+      }),
+    }))
     const frag = result.sections[0].pages[0].fragments.find((f) => f.nodeId === "p")!
     expect(frag.renderProps?.align).toBe("right")
+    expect(frag.renderProps?.textColor).toBe("DC2626")
+    expect(frag.renderProps?.fontWeight).toBe("bold")
+    expect(frag.renderProps?.fontStyle).toBe("italic")
+    expect(frag.renderProps?.textDecoration).toBe("underline")
+    expect(frag.renderProps?.strikethrough).toBe(true)
+  })
+
+  it("paginated line runs carry per-run rich text style metadata", () => {
+    const p = makePara("p", "")
+    p.children = [
+      { id: "p-base", type: "text", text: "Base " },
+      { id: "p-bold", type: "text", text: "Bold", style: { fontWeight: "bold", textColor: "DC2626" } },
+      {
+        id: "p-marked",
+        type: "text",
+        text: " Marked",
+        style: {
+          fontSize: pt(16),
+          fontStyle: "italic",
+          textDecoration: "underline",
+          strikethrough: true,
+          textColor: "2563EB",
+        },
+      },
+    ]
+
+    const lines = getFragLines(makeDoc(["p"], { p }), "p")
+
+    expect(lines).toHaveLength(1)
+    expect(lines[0].runs?.map((run) => ({
+      text: run.text,
+      sourceId: run.sourceId,
+      start: run.start,
+      end: run.end,
+      fontSize: run.style.fontSize,
+      fontWeight: run.style.fontWeight,
+      fontStyle: run.style.fontStyle,
+      textDecoration: run.style.textDecoration,
+      strikethrough: run.style.strikethrough,
+      textColor: run.style.textColor,
+    }))).toEqual([
+      {
+        text: "Base ",
+        sourceId: "p-base",
+        start: 0,
+        end: 5,
+        fontSize: 10,
+        fontWeight: "normal",
+        fontStyle: "normal",
+        textDecoration: "none",
+        strikethrough: false,
+        textColor: "000000",
+      },
+      {
+        text: "Bold",
+        sourceId: "p-bold",
+        start: 5,
+        end: 9,
+        fontSize: 10,
+        fontWeight: "bold",
+        fontStyle: "normal",
+        textDecoration: "none",
+        strikethrough: false,
+        textColor: "DC2626",
+      },
+      {
+        text: " Marked",
+        sourceId: "p-marked",
+        start: 9,
+        end: 16,
+        fontSize: 16,
+        fontWeight: "normal",
+        fontStyle: "italic",
+        textDecoration: "underline",
+        strikethrough: true,
+        textColor: "2563EB",
+      },
+    ])
   })
 
   it("center and right aligned paragraphs pass assertPaginatedDocument", () => {

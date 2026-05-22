@@ -541,6 +541,7 @@ function makeSplitTableCellPaginated(kind: "short-ids" | "flow-table" = "short-i
 }
 
 interface RenderCanvasOptions {
+  selectionAnchorNodeId?: string | null
   inlineEditVisualFresh?: boolean
   inlineEditNodeId?: string | null
   inlineEditCaretIndex?: number | null
@@ -569,6 +570,7 @@ function renderCanvas(
     marginDrag: null,
     scale: 1,
     selectedNodeId,
+    selectionAnchorNodeId: options.selectionAnchorNodeId ?? selectedNodeId,
     isLayoutLoading: false,
     textMeasurer: defaultTextMeasurer,
     inlineEditVisualFresh: options.inlineEditVisualFresh ?? false,
@@ -587,6 +589,9 @@ function renderCanvas(
     setPageRef: noop,
     onNodePointerDown: noop,
     onBackgroundPointerDown: noop,
+    onSelectContextNode: noop,
+    onDuplicateNode: noop,
+    onDeleteNode: noop,
     onResizeStart: noop,
     onTableColumnResizeStart: noop,
     onMinHeightResizeStart: noop,
@@ -745,6 +750,73 @@ describe("EditorCanvas fragment identity", () => {
   })
 })
 
+describe("EditorCanvas canvas selection path", () => {
+  it("renders a clickable selected path from the stored selection context", () => {
+    const markup = renderCanvas(makeFlowPaginated(), makeFlowDoc(), "body-p")
+
+    expect(markup).toContain("data-testid=\"canvas-selected-path\"")
+    expect(markup).toContain("data-testid=\"canvas-path-item\"")
+    expect(markup).toContain(">ROW</text>")
+    expect(markup).toContain(">STACK</text>")
+    expect(markup).toContain(">PARAGRAPH</text>")
+    expect(markup).toContain("data-node-id=\"body-p\"")
+    expect(markup).toContain("data-active=\"true\"")
+  })
+
+  it("keeps the paragraph anchor visible when the selected node is its table cell parent", () => {
+    const markup = renderCanvas(makeTableCellPaginated(), makeTableCellDoc(), "tc1", {
+      selectionAnchorNodeId: "cell-p",
+    })
+
+    expect(markup).toContain("data-testid=\"canvas-selected-path\"")
+    expect(markup).toContain(">TABLE</text>")
+    expect(markup).toContain(">ROW</text>")
+    expect(markup).toContain(">CELL</text>")
+    expect(markup).toContain(">PARAGRAPH</text>")
+    expect(markup).toContain("data-node-id=\"tc1\"")
+    expect(markup).toContain("data-active=\"true\"")
+    expect(markup).toContain("data-node-id=\"cell-p\"")
+  })
+
+  it("renders a selected action rail for section layout nodes", () => {
+    const markup = renderCanvas(makeFlowPaginated(), makeFlowDoc(), "body-p")
+
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-drag\"")
+    expect(markup).toContain("data-testid=\"canvas-action-duplicate\"")
+    expect(markup).toContain("data-testid=\"canvas-action-delete\"")
+    expect(markup).toContain("aria-label=\"Duplicate block\"")
+    expect(markup).toContain("aria-label=\"Delete block\"")
+  })
+
+  it("renders a drag handle for selected flow-stack columns", () => {
+    const markup = renderCanvas(makeFlowPaginated(), makeFlowDoc(), "fs1")
+
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-drag\"")
+  })
+
+  it("does not render the action rail for internal flow-table cells", () => {
+    const markup = renderCanvas(makeTableCellPaginated(), makeTableCellDoc(), "tc1", {
+      selectionAnchorNodeId: "cell-p",
+    })
+
+    expect(markup).not.toContain("data-testid=\"canvas-action-rail\"")
+  })
+
+  it("keeps the selected action rail available while inline editing", () => {
+    const markup = renderCanvas(makeFlowPaginated(), makeFlowDoc(), "body-p", {
+      inlineEditNodeId: "body-p",
+      inlineEditPageIndex: 0,
+      inlineEditVisualFresh: true,
+      inlineEditCaretIndex: 0,
+    })
+
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-duplicate\"")
+  })
+})
+
 describe("EditorCanvas header/footer zones", () => {
   it("renders header and footer text as read-only preview content", () => {
     const markup = renderCanvas()
@@ -800,16 +872,18 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     })).toBe(true)
   })
 
-  it("keeps table and row structure chrome invisible while cell chrome remains visible", () => {
+  it("keeps table and row structure chrome invisible while cell hit chrome has no node-color fill", () => {
     const markup = renderCanvas(makeTableCellPaginated("flow-table"), makeFlowTableCellDoc())
     const structureGroups = markup.match(/<g[^>]*data-table-structure-chrome="true"[\s\S]*?<\/g>/g) ?? []
+    const cellGroup = markup.match(/<g[^>]*data-node-type="flow-table-cell"[^>]*>[\s\S]*?<\/g>/)?.[0] ?? ""
 
     expect(structureGroups).toHaveLength(2)
     expect(structureGroups.every((group) => group.includes("fill=\"transparent\""))).toBe(true)
     expect(structureGroups.every((group) => group.includes("stroke=\"transparent\""))).toBe(true)
     expect(structureGroups.every((group) => group.includes("opacity=\"0\""))).toBe(true)
     expect(markup).toContain("data-node-type=\"flow-table-cell\"")
-    expect(markup).toContain("fill=\"#fef9c3\"")
+    expect(cellGroup).toContain("fill=\"transparent\"")
+    expect(markup).not.toContain("fill=\"#fef9c3\"")
   })
 
   it("renders an internal table column resize handle for a selected table cell", () => {
@@ -1355,8 +1429,9 @@ describe("EditorCanvas paragraph box preview", () => {
     const markup = renderCanvas(paginated, doc, "ftc-merged")
     const continuationCellGroup = markup.match(/<g[^>]*data-node-id="ftc-merged"[^>]*data-page-index="1"[^>]*>/)?.[0] ?? ""
     const continuationRowGroup = markup.match(/<g[^>]*data-node-id="ftr2"[^>]*data-node-type="flow-table-row"[^>]*>/)?.[0] ?? ""
+    const mergedCellFragments = markup.match(/data-testid="editor-fragment"[^>]*data-node-id="ftc-merged"/g) ?? []
 
-    expect(markup.match(/data-node-id="ftc-merged"/g)).toHaveLength(2)
+    expect(mergedCellFragments).toHaveLength(2)
     expect(continuationCellGroup).toContain("data-parent-node-id=\"ftr2\"")
     expect(continuationCellGroup).not.toContain("pointer-events:none")
     expect(continuationRowGroup).toContain("pointer-events:none")

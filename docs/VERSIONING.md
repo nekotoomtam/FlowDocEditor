@@ -3,11 +3,19 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.5.18`: suitable for self-use with accepted
+The current baseline is `0.6.6`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
-WYSIWYG resize/typing smoothness hardening, and conservative editor/layout
-refactoring guardrails, but not yet a general-user `v1`.
+conservative editor/layout refactoring guardrails, and the first project-owned
+Thai font catalog with keyed measurement, paragraph-level text style controls,
+PDF/DOCX export style coverage, server DOCX font variant embedding, and Flow
+Table block layout controls for fit-to-width, alignment, top/bottom margin, and
+selected canvas structure actions including path, clone/delete, and flow-stack movement,
+plus the first run-level rich text model/render/export groundwork and fixed
+paragraph text toolbar shell, and the flag-gated rich draft editor bridge with
+basic toolbar/keyboard rich text commands, caret toolbar state hardening, and
+focused rich export semantic coverage,
+but not yet a general-user `v1`.
 
 ## Version Meaning
 
@@ -21,8 +29,16 @@ refactoring guardrails, but not yet a general-user `v1`.
 | `0.5.15` | Patch baseline for paragraph-like Flow Table rowspan continuation, WYSIWYG caret/split-fragment stability, and flow-stack drag/drop plus pair-resize UX polish. |
 | `0.5.17` | Patch baseline for editor resize/drag smoothness, WYSIWYG typing echo hardening, and focused performance probes without changing document or package schema versions. |
 | `0.5.18` | Patch baseline for paginator module extraction, conservative EditorShell decomposition, ID/binding guardrails, and focused version/test alignment without changing document or package schema versions. |
+| `0.6.0` | Minor pre-v1 milestone for the first runtime Thai font catalog, keyed server/browser font measurement, paragraph font selection, and server DOCX regular-font embedding without changing persisted document or package schema versions. |
+| `0.6.1` | Patch baseline for paragraph-level bold/italic/underline/strikethrough/text-color controls, PDF/DOCX style export parity, and DOCX font variant embedding without changing persisted document or package schema versions. |
+| `0.6.2` | Patch baseline for Flow Table fit-to-width, left/center/right alignment, table-block top/bottom margins, and DOCX alignment/margin preservation without changing persisted document or package schema versions. |
+| `0.6.3` | Patch baseline for selected-node canvas path/action rail UX, clone/delete actions, and flow-stack subtree movement using column-creation placement semantics without changing persisted document or package schema versions. |
+| `0.6.4` | Patch baseline for run-level rich text document operations, styled-run WYSIWYG text preservation, read-only render/export style coverage, and the fixed paragraph text toolbar shell without changing persisted document or package schema versions. |
+| `0.6.5` | Patch baseline for the flag-gated rich draft live editor bridge, basic toolbar/keyboard rich text commands, pending-style typed insertion, and rich draft browser smoke coverage without changing persisted document or package schema versions. |
+| `0.6.6` | Patch baseline for collapsed-caret rich toolbar state, rich draft smoke caret assertions, and DOCX rich-run semantic export coverage without changing persisted document or package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
-| `0.6.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |
+| `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
+| `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |
 | `1.0.0` | First version acceptable for real user workflows without expected workarounds in the main path. |
 
 ## Patch Versions

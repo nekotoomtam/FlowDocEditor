@@ -70,12 +70,18 @@ Responsibilities:
 
 Font loading contract:
 
-- authoritative runtime font file: `public/fonts/THSarabun.ttf`
-- server/API path: `process.cwd()/public/fonts/THSarabun.ttf`, resolved through
-  the shared API runtime font loader
-- browser path: `/fonts/THSarabun.ttf`
-- `src/fonts/THSarabun.ttf` is not the runtime source of truth unless the font
-  loading contract is intentionally changed
+- authoritative runtime fonts live under `public/fonts/` and are resolved by
+  `packages/core/src/font-registry.ts`
+- the default font key resolves to `public/fonts/Sarabun/Sarabun-Regular.ttf`
+- the first selectable catalog contains `Sarabun` and `Noto Sans Thai`
+- server/API paths are resolved through the shared API runtime font loader
+- browser paths are resolved through `/fonts/...` using the same registry
+- paragraph-level bold and italic measurement uses available catalog variants;
+  text color, underline, and strikethrough are carried as render metadata and
+  drawn/serialized by renderers
+- legacy or unknown font keys are normalized by the registry fallback to
+  `Sarabun`; old TH Sarabun font files are no longer part of the active runtime
+  font contract
 
 ### Core Document Model
 

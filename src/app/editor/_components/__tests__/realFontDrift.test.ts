@@ -215,7 +215,7 @@ describe.skipIf(!CAN_RUN_REAL_FONT_DRIFT)("real-font Thai browser/server drift",
     expect(maxDelta).toBeLessThan(0.05)
   })
 
-  it("reports no pagination drift for a representative Thai document when both sides use THSarabun", async () => {
+  it("reports no pagination drift for a representative Thai document when both sides use the runtime default font", async () => {
     const doc = makeDoc([
       makePara("thai-intro", "รายงานสรุปผลการดำเนินงานประจำเดือน พฤษภาคม 2569 สำหรับตรวจสอบการตัดบรรทัดภาษาไทย"),
       makePara("thai-mixed", "เลขที่เอกสาร FD-2569-0001 อ้างอิง API Export และ WYSIWYG preview ในระบบเดียวกัน"),

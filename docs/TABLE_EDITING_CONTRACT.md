@@ -26,7 +26,9 @@ primitive is the `flow-table` node family.
 - `flow-table-cell` nodes are the editable cell containers. Paragraphs inside
   cells remain normal authored paragraph nodes, but they are scoped to the
   table.
-- `headerRowCount` means the first N rows are header rows for pagination.
+- `headerRowCount` means the first N rows are authored header rows.
+- `repeatHeaderRows` controls whether authored header rows repeat on
+  continuation pages; omitted means `true`.
 - `allowBreak` belongs to table rows. Omitted means `true` for single-row groups.
 
 Computed values such as page index, rendered cell x/y, split line boundaries,
@@ -89,7 +91,8 @@ The canvas should make the table structure directly editable.
 
 The editor may expose these authored table props:
 
-- Table: `headerRowCount`
+- Table: `headerRowCount`, `repeatHeaderRows`, `align`, `marginTop`,
+  `marginBottom`
 - Row: `allowBreak`
 - Cell: text in the first paragraph child, `padding`, `background`,
   `verticalAlign`
@@ -97,6 +100,17 @@ The editor may expose these authored table props:
 Prop controls should clamp to values the schema accepts:
 
 - `headerRowCount` stays between 0 and the current row count.
+- Newly inserted multi-row Flow Tables default `headerRowCount` to `1`; users
+  may clear it when a table should not repeat a header row.
+- `repeatHeaderRows` defaults to `true`; turning it off keeps the rows authored
+  as headers but stops continuation-page header repetition.
+- `align` is one of `left`, `center`, or `right`; it only affects tables whose
+  resolved width is smaller than the available content width.
+- `marginTop` and `marginBottom` are non-negative table-block spacing values.
+  Cell padding remains cell styling, not table margin.
+- Newly inserted Flow Table cells default to authored black `1pt` borders.
+- Newly inserted multi-row Flow Tables label the first row `Header 1`,
+  `Header 2`, ... with light header fill and bold header paragraph text.
 - `padding` stays non-negative.
 - `background` stores only 6-digit hex without a leading `#`.
 - `verticalAlign` is one of `top`, `middle`, or `bottom`.
@@ -117,8 +131,10 @@ Table operations must preserve document validity.
   removed width to a neighboring column.
 - Adding or deleting columns is not an implicit table resize.
 - Explicit internal column-boundary resize updates only the adjacent authored
-  column widths and must preserve the total table width. Outer-edge table width
-  resize is a separate product decision and is not part of this contract slice.
+  column widths and must preserve the total table width.
+- `fitFlowTableToSectionWidth` is an explicit whole-table command. It rewrites
+  authored `columns[].width` values proportionally to the current section content
+  width; it is not an automatic stretch mode.
 - Operations that cannot preserve the table grid should no-op or fail clearly
   rather than leaving cleanup work for the UI.
 
@@ -194,8 +210,10 @@ Flow Table C2 foundation:
 
 These authored props directly affect cross-page behavior:
 
-- `headerRowCount`: header rows repeat on continuation pages where body rows
-  continue.
+- `headerRowCount`: first N rows are authored header rows.
+- `repeatHeaderRows`: when omitted or `true`, header rows repeat on
+  continuation pages where body rows continue; when `false`, headers remain
+  authored but only render at their original position.
 - `allowBreak=false`: a single-row group should move as a whole when possible.
 - `allowBreak=true` or omitted: a single-row group may split by
   `flow-table-cell` paragraph line boundaries.

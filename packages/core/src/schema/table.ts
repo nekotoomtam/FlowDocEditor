@@ -74,6 +74,10 @@ export const TableColumnDefSchema = z.object({
 export const FlowTablePropsSchema = z.object({
   border: CellBorderSchema.optional(),
   headerRowCount: z.number().int().nonnegative().optional(),
+  repeatHeaderRows: z.boolean().optional(),
+  align: z.enum(["left", "center", "right"]).optional(),
+  marginTop: NonNegativeUnitValueSchema.optional(),
+  marginBottom: NonNegativeUnitValueSchema.optional(),
 })
 
 export const FlowTableRowPropsSchema = z.object({

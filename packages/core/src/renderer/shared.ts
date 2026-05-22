@@ -1,4 +1,5 @@
 import type { PaginatedDocument } from "../pagination"
+import type { FontVariantKey } from "../font-registry"
 
 /**
  * Renderer interface — รับ PaginatedDocument แล้ว output format ที่ต้องการ
@@ -25,7 +26,7 @@ export interface Renderer {
 // รับ fontFamilyKey แล้วคืน TTF buffer
 // คืน null → renderer ใช้ standard font fallback (Latin only)
 export interface FontProvider {
-  getFont(fontFamilyKey: string): Promise<Uint8Array | null>
+  getFont(fontFamilyKey: string, variant?: FontVariantKey): Promise<Uint8Array | null>
 }
 
 // ─── Unit Conversion ──────────────────────────────────────────────────────────

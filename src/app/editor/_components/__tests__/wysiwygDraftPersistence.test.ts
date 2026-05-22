@@ -70,4 +70,28 @@ describe("resolvePersistableWysiwygDocument", () => {
     expect(resolvePersistableWysiwygDocument(doc, activeSession("Draft"), false)).toBe(doc)
     expect(resolvePersistableWysiwygDocument(doc, INACTIVE_WYSIWYG_TEXT_SESSION, true)).toBe(doc)
   })
+
+  it("persists styled text-run drafts without flattening unchanged styles", () => {
+    const doc = docWithParagraph("Base text")
+    const paragraph = doc.document.sections[0].nodes.p1
+    if (paragraph.type !== "paragraph") throw new Error("expected paragraph")
+    paragraph.children = [
+      { id: "t1", type: "text", text: "Base", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: " text", style: { fontStyle: "italic" } },
+    ]
+
+    const persisted = resolvePersistableWysiwygDocument(doc, activeSession("Base draft text"), true)
+    const updated = persisted.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.children.map((child) =>
+      child.type === "text"
+        ? { text: child.text, style: child.style }
+        : child,
+    )).toEqual([
+      { text: "Base draft", style: { fontWeight: "bold" } },
+      { text: " text", style: { fontStyle: "italic" } },
+    ])
+  })
 })

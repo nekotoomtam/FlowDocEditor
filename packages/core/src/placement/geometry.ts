@@ -176,8 +176,27 @@ function isRowLikeDragSource(document: DocumentNode, source?: DragSource | null)
   return false
 }
 
+function isFlowStackDragSource(document: DocumentNode, source?: DragSource | null): boolean {
+  if (source?.source !== "document") return false
+  for (const section of document.document.sections) {
+    const node = section.nodes[source.nodeId]
+    if (node != null) return node.type === "flow-stack"
+  }
+  return false
+}
+
 function isFieldDragSource(source?: DragSource | null): boolean {
   return source?.source === "field"
+}
+
+function resolveRowStackZoneForSource(
+  document: DocumentNode,
+  source: DragSource | null | undefined,
+  localX: number,
+  width: number,
+): "left" | "center" | "right" {
+  if (isFlowStackDragSource(document, source)) return localX < width / 2 ? "left" : "right"
+  return resolveStackZone(localX, width)
 }
 
 function shouldRejectCenterOnEmptyStack(
@@ -221,7 +240,7 @@ export function detectRowTarget(
   )
   if (stackRect == null) return null
 
-  const zone = resolveStackZone(localX - stackRect.left, stackRect.width)
+  const zone = resolveRowStackZoneForSource(document, source, localX - stackRect.left, stackRect.width)
   if (shouldRejectCenterOnEmptyStack(document, stackRect.stackId, zone, source)) return null
 
   return {
@@ -295,7 +314,7 @@ export function detectPlacementTarget(input: DetectTargetInput): { zone: Placeme
   // node ที่อยู่ใน row-stack → route ผ่าน row-stack semantics
   const rowStack = findNearestRowStack(document, hoveredNodeId)
   if (rowStack != null) {
-    const stackZone = resolveStackZone(localX, width)
+    const stackZone = resolveRowStackZoneForSource(document, source, localX, width)
     if (shouldRejectCenterOnEmptyStack(document, rowStack.stackId, stackZone, source)) return null
 
     if (stackZone === "left" || stackZone === "right") {

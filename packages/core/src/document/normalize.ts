@@ -17,9 +17,11 @@ import type {
   ParagraphNode,
   ParagraphProps,
   RowNode,
+  PageNumberInline,
   SpacerNode,
   StackNode,
   TextRun,
+  TextRunStyle,
   UnitValue,
 } from "../schema"
 import {
@@ -29,6 +31,8 @@ import {
   createId,
   getEqualWidthShares,
 } from "./defaults"
+import { normalizeFontFamilyKey } from "../font-registry"
+import { mergeAdjacentTextRuns } from "./richText"
 
 /**
  * Normalize ทำหน้าที่เดียวคือ
@@ -89,14 +93,47 @@ function normalizeHexColor(value: unknown, fallback?: string): string | undefine
   return fallback
 }
 
+function normalizeOptionalPositiveUnitValue(input: unknown): UnitValue | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const unit = raw["unit"]
+  const value = raw["value"]
+  if ((unit === "pt" || unit === "mm") && typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return { value, unit }
+  }
+  return undefined
+}
+
 // ─── Inline Nodes ─────────────────────────────────────────────────────────────
+
+function normalizeTextRunStyle(input: unknown): TextRunStyle | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const style: TextRunStyle = {}
+  const fontSize = normalizeOptionalPositiveUnitValue(raw["fontSize"])
+  const textColor = normalizeHexColor(raw["textColor"])
+
+  if (fontSize) style.fontSize = fontSize
+  if (typeof raw["fontFamilyKey"] === "string" && raw["fontFamilyKey"].length > 0) {
+    style.fontFamilyKey = normalizeFontFamilyKey(raw["fontFamilyKey"])
+  }
+  if (textColor) style.textColor = textColor
+  if (raw["fontWeight"] === "normal" || raw["fontWeight"] === "bold") style.fontWeight = raw["fontWeight"]
+  if (raw["fontStyle"] === "normal" || raw["fontStyle"] === "italic") style.fontStyle = raw["fontStyle"]
+  if (raw["textDecoration"] === "none" || raw["textDecoration"] === "underline") style.textDecoration = raw["textDecoration"]
+  if (typeof raw["strikethrough"] === "boolean") style.strikethrough = raw["strikethrough"]
+
+  return Object.keys(style).length > 0 ? style : undefined
+}
 
 function normalizeTextRun(input: unknown): TextRun {
   const raw = (typeof input === "object" && input != null ? input : {}) as Record<string, unknown>
+  const style = normalizeTextRunStyle(raw["style"])
   return {
     id: typeof raw["id"] === "string" && raw["id"].length > 0 ? raw["id"] : createId("text"),
     type: "text",
     text: normalizeString(raw["text"], ""),
+    ...(style ? { style } : {}),
   }
 }
 
@@ -111,10 +148,28 @@ function normalizeFieldRef(input: unknown): FieldRefInline {
   }
 }
 
+function normalizePageNumber(input: unknown): PageNumberInline {
+  const raw = (typeof input === "object" && input != null ? input : {}) as Record<string, unknown>
+  return {
+    id: typeof raw["id"] === "string" && raw["id"].length > 0 ? raw["id"] : createId("page-number"),
+    type: "pageNumber",
+  }
+}
+
 function normalizeInlineNode(input: unknown): InlineNode {
   const raw = (typeof input === "object" && input != null ? input : {}) as Record<string, unknown>
   if (raw["type"] === "fieldRef") return normalizeFieldRef(input)
+  if (raw["type"] === "pageNumber") return normalizePageNumber(input)
   return normalizeTextRun(input)
+}
+
+function normalizeInlineChildren(input: unknown): InlineNode[] {
+  const normalized = Array.isArray(input) ? input.map(normalizeInlineNode) : []
+  const children = normalized.filter((child) => child.type !== "text" || child.text.length > 0)
+  const merged = mergeAdjacentTextRuns(children)
+  if (merged.length > 0) return merged
+  const firstTextRun = normalized.find((child) => child.type === "text")
+  return firstTextRun ? [{ ...firstTextRun, text: "" }] : [normalizeTextRun({ text: "" })]
 }
 
 // ─── Paragraph ────────────────────────────────────────────────────────────────
@@ -181,7 +236,14 @@ function normalizeParagraphProps(input: unknown): ParagraphProps {
       ? align
       : DEFAULT_PARAGRAPH_PROPS.align,
     fontSize: normalizePositiveUnitValue(raw["fontSize"], DEFAULT_PARAGRAPH_PROPS.fontSize),
-    fontFamilyKey: typeof raw["fontFamilyKey"] === "string" ? raw["fontFamilyKey"] : DEFAULT_PARAGRAPH_PROPS.fontFamilyKey,
+    fontFamilyKey: typeof raw["fontFamilyKey"] === "string"
+      ? normalizeFontFamilyKey(raw["fontFamilyKey"])
+      : DEFAULT_PARAGRAPH_PROPS.fontFamilyKey,
+    textColor: normalizeHexColor(raw["textColor"], DEFAULT_PARAGRAPH_PROPS.textColor),
+    fontWeight: raw["fontWeight"] === "bold" ? "bold" : DEFAULT_PARAGRAPH_PROPS.fontWeight,
+    fontStyle: raw["fontStyle"] === "italic" ? "italic" : DEFAULT_PARAGRAPH_PROPS.fontStyle,
+    textDecoration: raw["textDecoration"] === "underline" ? "underline" : DEFAULT_PARAGRAPH_PROPS.textDecoration,
+    strikethrough: typeof raw["strikethrough"] === "boolean" ? raw["strikethrough"] : DEFAULT_PARAGRAPH_PROPS.strikethrough,
     lineHeight: normalizePositiveNumber(raw["lineHeight"], DEFAULT_PARAGRAPH_PROPS.lineHeight),
     spacingBefore: normalizeUnitValue(raw["spacingBefore"], DEFAULT_PARAGRAPH_PROPS.spacingBefore),
     spacingAfter: normalizeUnitValue(raw["spacingAfter"], DEFAULT_PARAGRAPH_PROPS.spacingAfter),
@@ -201,9 +263,7 @@ function normalizeParagraphNode(input: LayoutNode & { type: "paragraph" }): Para
     id: input.id,
     type: "paragraph",
     props: normalizeParagraphProps(input.props),
-    children: Array.isArray(input.children)
-      ? input.children.map(normalizeInlineNode)
-      : [],
+    children: normalizeInlineChildren(input.children),
   }
 }
 
@@ -431,7 +491,15 @@ function normalizeFlowTableNode(input: FlowTableNode): FlowTableNode {
   Object.entries(input.nodes).forEach(([id, node]) => {
     nodes[id] = node.type === "flow-table-cell" ? normalizeFlowTableCellNode(node) : node
   })
-  return { ...input, nodes }
+  const rawProps = (input.props ?? {}) as Record<string, unknown>
+  const props: FlowTableNode["props"] = { ...input.props }
+  if (typeof rawProps["repeatHeaderRows"] !== "boolean") delete props.repeatHeaderRows
+  if (rawProps["align"] !== "left" && rawProps["align"] !== "center" && rawProps["align"] !== "right") delete props.align
+  if (rawProps["marginTop"] != null) props.marginTop = normalizeNonNegativeUnitValue(rawProps["marginTop"], ZERO_PT)
+  else delete props.marginTop
+  if (rawProps["marginBottom"] != null) props.marginBottom = normalizeNonNegativeUnitValue(rawProps["marginBottom"], ZERO_PT)
+  else delete props.marginBottom
+  return { ...input, props, nodes }
 }
 
 // ─── Section ──────────────────────────────────────────────────────────────────

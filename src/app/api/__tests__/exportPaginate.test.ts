@@ -19,7 +19,7 @@ import {
 } from "@/pagination"
 import { pt, type DocumentNode, type FlowTableCellNode, type FlowTableNode, type FlowTableRowNode, type LayoutNode, type ParagraphNode } from "@/schema"
 
-function makePara(id: string, text: string): ParagraphNode {
+function makePara(id: string, text: string, overrides: Partial<ParagraphNode["props"]> = {}): ParagraphNode {
   return {
     id,
     type: "paragraph",
@@ -33,6 +33,7 @@ function makePara(id: string, text: string): ParagraphNode {
       textIndent: pt(0),
       indentLeft: pt(0),
       indentRight: pt(0),
+      ...overrides,
     },
     children: [{ id: `${id}-text`, type: "text", text }],
   }
@@ -289,8 +290,53 @@ describe("API route contract smoke", () => {
     expect(bytes[0]).toBe(0x50)
     expect(bytes[1]).toBe(0x4b)
 
+    const zip = await JSZip.loadAsync(bytes)
+    expect(zip.file("word/fonts/Sarabun.odttf")).not.toBeNull()
+
+    const fontTableXml = await readDocxXml(bytes, "word/fontTable.xml")
+    expect(fontTableXml).toContain('w:name="Sarabun"')
+    expect(fontTableXml).toContain("w:embedRegular")
+
     const xml = await readDocxXml(bytes, "word/document.xml")
     expect(xml).toContain("API route should validate")
+  })
+
+  it("/api/export renders DOCX paragraph styles with matching embedded font variant", async () => {
+    const doc = makeDoc()
+    const details = doc.document.sections[0].nodes.details
+    if (details.type !== "paragraph") throw new Error("details fixture must be a paragraph")
+    doc.document.sections[0].nodes.details = {
+      ...details,
+      props: {
+        ...details.props,
+        fontFamilyKey: "sarabun",
+        textColor: "DC2626",
+        fontWeight: "bold",
+        fontStyle: "italic",
+        textDecoration: "underline",
+        strikethrough: true,
+      },
+    }
+
+    const response = await exportPost(jsonRequest("http://localhost/api/export", {
+      doc,
+      format: "docx",
+    }) as never)
+
+    expect(response.status).toBe(200)
+    const bytes = await responseBytes(response)
+    const zip = await JSZip.loadAsync(bytes)
+    const fontTableXml = await readDocxXml(bytes, "word/fontTable.xml")
+    const documentXml = await readDocxXml(bytes, "word/document.xml")
+
+    expect(zip.file("word/fonts/Sarabun BoldItalic.odttf")).not.toBeNull()
+    expect(fontTableXml).toContain("w:embedBoldItalic")
+    expect(documentXml).toContain("<w:b/>")
+    expect(documentXml).toContain("<w:i/>")
+    expect(documentXml).toContain("<w:strike/>")
+    expect(documentXml).toContain('w:color w:val="DC2626"')
+    expect(documentXml).toContain("<w:u")
+    expect(documentXml).toContain('w:val="single"')
   })
 
   it("/api/export passes source paragraph hard newlines into DOCX output", async () => {

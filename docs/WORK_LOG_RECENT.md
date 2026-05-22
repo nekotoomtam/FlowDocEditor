@@ -22,7 +22,674 @@ Each entry should include:
 
 ---
 
+## 2026-05-22
+
+### Bump Rich Draft Semantics Baseline To 0.6.6
+
+Goal: Mark the collapsed-caret rich toolbar state hardening and richer
+DOCX/export semantic coverage as the next self-use patch baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.5` to `0.6.6`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.6`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.6`.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This is a project release-readiness marker only. It does not change
+  `DocumentNode.version`, FlowDoc package version, or storage package version.
+- FieldRef/pageNumber direct rich semantics, range-selection UX polish, and
+  full PDF rich-run export proof remain deferred follow-up work.
+
+---
+
+## 2026-05-22
+
+### Bump Rich Draft Editor Baseline To 0.6.5
+
+Goal: Mark the flag-gated rich draft live editor bridge and basic rich-text
+toolbar/keyboard command wiring as the next self-use patch baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.4` to `0.6.5`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.5`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.5`.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- This is a project release-readiness marker only. It does not change
+  `DocumentNode.version`, FlowDoc package version, or storage package version.
+- Rich paste, fieldRef/pageNumber direct semantics, IME-specific rich-command
+  proof, PDF export, and DOCX export remain deferred follow-up work.
+
+---
+
+## 2026-05-22
+
+### Wire Rich Draft Toolbar And Keyboard Commands
+
+Goal: Let the flag-gated rich draft bridge receive basic toolbar and keyboard
+style commands without replacing the existing plain WYSIWYG lane.
+
+Completed:
+
+- Routed toolbar style patches into the active rich draft session when
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_RICH_TEXT_DRAFT` is enabled and the selected
+  node is the active rich draft node.
+- Routed native WYSIWYG bridge shortcuts for Ctrl/Cmd+B, Ctrl/Cmd+I, and
+  Ctrl/Cmd+U through the rich draft command adapter.
+- Kept the existing document-operation toolbar path for inactive rich sessions
+  and for the default plain WYSIWYG lane.
+- Let the toolbar render from the active rich draft paragraph and collapsed
+  pending style so it does not read stale document state during an active rich
+  edit.
+- Added toolbar focus targeting so clicking toolbar controls does not close the
+  active WYSIWYG session before the command can apply.
+- Adapted provable plain bridge insertions through rich draft selection
+  replacement so pending style applies to newly typed text.
+- Let draft pagination build from the active rich draft paragraph for style-only
+  rich draft changes.
+- Extended the rich draft browser smoke to prove keyboard-created bold runs and
+  toolbar-created underline runs.
+
+Files changed:
+
+- `docs/RICH_TEXT_DRAFT_DECISION.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `scripts/wysiwyg-rich-draft-smoke.mjs`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/RichTextToolbar.tsx`
+- `src/app/editor/_components/richTextDraftCommands.ts`
+- `src/app/editor/_components/richTextDraftSession.ts`
+- `src/app/editor/_components/wysiwygDraftPreview.ts`
+- focused app tests
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/richTextDraftCommands.test.ts src/app/editor/_components/__tests__/richTextDraftSession.test.ts src/app/editor/_components/__tests__/RichTextToolbar.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run smoke:wysiwyg-rich-draft`
+
+Notes:
+
+- This remains flag-gated and does not change default WYSIWYG behavior.
+- Rich paste, fieldRef/pageNumber direct semantics, IME-specific rich-command
+  proof, PDF export, and DOCX export remain deferred.
+
+---
+
+## 2026-05-22
+
+### Add Rich Draft Browser Smoke Gate
+
+Goal: Add browser evidence for the flag-gated rich draft live bridge before
+toolbar or keyboard rich-text wiring.
+
+Completed:
+
+- Added `smoke:wysiwyg-rich-draft`, a Playwright smoke that starts the editor
+  with `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1` and
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_RICH_TEXT_DRAFT=1`.
+- Seeded a rich paragraph and a `flow-table` paragraph with existing styled
+  runs.
+- Verified the rich draft bridge mounts without the legacy textarea path.
+- Verified commit, undo, and redo preserve the existing bold run in the top
+  level paragraph.
+- Verified commit preserves the existing italic run inside the `flow-table`
+  paragraph.
+- Exposed the active rich draft flag on the editor shell for smoke assertions.
+
+Files changed:
+
+- `docs/DOCS_INDEX.md`
+- `docs/RICH_TEXT_DRAFT_DECISION.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `package.json`
+- `scripts/wysiwyg-rich-draft-smoke.mjs`
+- `src/app/editor/_components/EditorShell.tsx`
+
+Verification:
+
+- `npm.cmd run smoke:wysiwyg-rich-draft`
+
+Notes:
+
+- The smoke required stopping an existing local Next dev server that was
+  running without the rich draft flag.
+- This does not wire toolbar buttons, keyboard shortcuts, pending-style typing,
+  rich paste, IME-specific browser proof, PDF, or DOCX export behavior.
+
+---
+
+## 2026-05-22
+
+### Wire Flag-Gated Rich Draft Live Bridge
+
+Goal: Start the live editor bridge for rich draft state without changing the
+default WYSIWYG behavior.
+
+Completed:
+
+- Added `NEXT_PUBLIC_FLOWDOC_WYSIWYG_RICH_TEXT_DRAFT` as a separate opt-in flag
+  that only works when the base WYSIWYG text engine is enabled.
+- Added a rich draft session hook that can start from the current paragraph,
+  apply plain text bridge changes, move selection, project back to the legacy
+  text-session shape, and end cleanly.
+- Wired `EditorShell` so the rich draft session is used only when the new flag
+  is enabled; otherwise the existing plain `draftText` lane remains the active
+  path.
+- Kept canvas draft text, caret, selection, accessibility, and draft
+  pagination on the projected `WysiwygTextSessionState` shape.
+- Routed rich-session autosave snapshots through the rich paragraph replacement
+  path.
+- Routed rich-session finalize through `COMMIT_WYSIWYG_RICH_TEXT_EDIT`.
+- Added focused tests for the config gate and rich session plain-text bridge
+  behavior.
+
+Files changed:
+
+- `docs/RICH_TEXT_DRAFT_DECISION.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/editorReducer.ts`
+- `src/app/editor/_components/richTextDraftSession.ts`
+- `src/app/editor/_components/wysiwygInlineEditConfig.ts`
+- `src/app/editor/_components/wysiwygTextCommit.ts`
+- `src/app/editor/_components/__tests__/richTextDraftSession.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/richTextDraftSession.test.ts src/app/editor/_components/__tests__/wysiwygInlineEditConfig.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/richTextDraftCommands.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- The rich draft live bridge remains disabled by default.
+- Toolbar/keyboard rich commands, pending-style typing, rich paste, IME browser
+  smoke, and visual proof are still out of scope.
+
+---
+
+## 2026-05-22
+
+### Add Rich Draft Commit Planner Proof
+
+Goal: Prove the rich draft commit boundary without wiring it into the live
+editor bridge.
+
+Completed:
+
+- Added `commitWysiwygRichTextEditState` beside the existing plain
+  `commitWysiwygTextEditState` path.
+- Added `getEditableParagraphFromDocument` and
+  `replaceEditableParagraphInDocument` helpers so rich commit can replace a
+  complete `ParagraphNode`.
+- Kept the existing plain `draftText` commit path unchanged.
+- Covered style-only rich commits where the plain text does not change.
+- Covered no-op rich commits, nested `flow-table` paragraph replacement, and
+  stale draft paragraph ids.
+
+Files changed:
+
+- `docs/RICH_TEXT_DRAFT_DECISION.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `src/app/editor/_components/wysiwygTextCommit.ts`
+- `src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts`
+
+Notes:
+
+- This is still a proof boundary. No live toolbar, keyboard, WYSIWYG session,
+  pagination scheduling, or dispatch path uses rich commit yet.
+
+---
+
+## 2026-05-22
+
+### Add Rich Draft Command Adapter Proof
+
+Goal: Add a small command adapter over the sibling rich draft session before
+wiring toolbar or keyboard events into the live editor bridge.
+
+Completed:
+
+- Added `src/app/editor/_components/richTextDraftCommands.ts`, a pure
+  app-layer command adapter for rich draft style commands.
+- Added command-state derivation for bold, italic, underline, and
+  strikethrough, including collapsed pending-style overlays.
+- Matched existing toolbar/property-panel toggle semantics by using explicit
+  authored off values (`normal`, `none`, and `false`) instead of clearing run
+  style.
+- Added primary-key shortcut resolution for `B`, `I`, and `U`, while ignoring
+  composition and Alt-modified input.
+- Added focused app tests for collapsed pending style, mixed range toggles,
+  explicit underline off, direct style patches, shortcut resolution, and
+  inactive sessions.
+
+Files changed:
+
+- `docs/RICH_TEXT_DRAFT_DECISION.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `src/app/editor/_components/richTextDraftCommands.ts`
+- `src/app/editor/_components/__tests__/richTextDraftCommands.test.ts`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/richTextDraftCommands.test.ts`
+
+Notes:
+
+- No live editor runtime path uses these commands yet.
+- This keeps toolbar/keyboard wiring, focus lifecycle, IME behavior, and commit
+  integration out of scope for this slice.
+
+---
+
+## 2026-05-22
+
+### Prove Rich Draft Sibling Session Adapter
+
+Goal: Decide and prove the first editor-session integration shape for rich
+drafts without wiring it into the live WYSIWYG bridge.
+
+Completed:
+
+- Updated `docs/RICH_TEXT_DRAFT_DECISION.md` to accept a sibling rich draft
+  session for the first editor integration.
+- Exported the core rich draft proof module through `packages/core/src/document/index.ts`.
+- Added `src/app/editor/_components/richTextDraftSession.ts`, a pure app-layer
+  adapter that projects rich draft paragraph state into the existing
+  `WysiwygTextSessionState` shape.
+- Added app tests proving:
+  - sibling session start projects `baseText`, `draftText`, caret, selection,
+    and page index into the legacy text-session shape
+  - collapsed pending style does not dirty layout until text insertion
+  - selected-range style dirties layout even when projected plain text is
+    unchanged
+  - rich fragment replacement projects as plain `draftText` for legacy layout
+  - layout freshness remains version-counter based
+  - inactive rich draft session projects to the existing inactive text session
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/richTextDraftSession.test.ts`
+- `npm.cmd run test -w packages/core -- src/document/richTextDraft.test.ts src/document/richText.test.ts src/document/operations.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/richTextDraftSession.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+
+Notes:
+
+- No live editor runtime path uses the sibling rich draft session yet.
+- This slice keeps the existing WYSIWYG `draftText` session untouched and proves
+  the compatibility projection first.
+- Next gate: wire the sibling session behind a disabled/internal flag or keep
+  building pure command adapters for keyboard/toolbar commands first.
+
+---
+
+## 2026-05-22
+
+### Decide And Prove Rich Text Draft Lane
+
+Goal: Resolve the `draftText` vs rich draft state decision before pending
+style, rich paste, and inline-object editing touch the editor bridge.
+
+Completed:
+
+- Added `docs/RICH_TEXT_DRAFT_DECISION.md` documenting the accepted proof-lane
+  direction: keep the current `draftText` lane unchanged, then add a separate
+  rich draft paragraph lane where `draftText` is derived projection.
+- Linked the decision from `docs/RICH_TEXT_SPEC.md`.
+- Added a pure core proof module, `packages/core/src/document/richTextDraft.ts`.
+- Added proof tests for:
+  - plain-text projection from paragraph children
+  - collapsed pending style insertion
+  - boundary inheritance after pending style clears
+  - selected-range style command behavior
+  - sanitized rich fragment replacement
+  - inline-object preservation during rich fragment replacement
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/richTextDraft.test.ts`
+- `npm.cmd run test -w packages/core -- src/document/richTextDraft.test.ts src/document/richText.test.ts src/document/operations.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+
+Notes:
+
+- No editor UI, WYSIWYG bridge, pagination, PDF/DOCX, schema, or undo/redo
+  behavior changed in this slice.
+- The current WYSIWYG `draftText` path remains the active runtime path. The
+  rich draft module is a proof lane for future integration.
+- Next gate: decide where rich draft state will live in the editor session and
+  how it will derive `draftText` for existing layout/selection code.
+
+---
+
+## 2026-05-22
+
+### Harden Rich Text Engine Operation Contract
+
+Goal: Lock the low-level paragraph rich-text engine rules before moving into
+selection commands, pending caret style, paste, or inline-object editing.
+
+Completed:
+
+- Added focused tests for reversed and clamped ranges.
+- Added no-op coverage for collapsed deletes, collapsed empty replacements,
+  invalid offsets, already-applied style patches, and empty patches.
+- Added coverage for source id preservation on the first surviving split
+  segment.
+- Added coverage for collapsed insertion before inline objects at the current
+  text offset.
+- Added coverage for paragraph-boundary splits that create one editable empty
+  run on the empty side.
+- Documented the rich text engine operation contract in `docs/RICH_TEXT_SPEC.md`.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/richText.test.ts`
+- `npm.cmd run test -w packages/core -- src/document/richText.test.ts src/document/operations.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+
+Notes:
+
+- No implementation changes were needed; the existing extracted engine already
+  matched the accepted contract.
+- The next decision gate remains draft representation for pending style and
+  rich paste: keep `draftText` plus commands, or introduce richer draft inline
+  state.
+
+---
+
+## 2026-05-22
+
+### Extract Rich Text Paragraph Engine Primitives
+
+Goal: Move rich text edit primitives toward the FlowDoc-owned core engine path
+without changing editor, pagination, or export behavior.
+
+Completed:
+
+- Added focused rich text helper coverage for range styling, deletion,
+  replacement, whole-paragraph text replacement, and text-run splitting.
+- Moved pure paragraph text-run primitives into `packages/core/src/document/richText.ts`.
+- Kept `packages/core/src/document/operations.ts` as the document-tree wrapper
+  for body and Flow Table paragraphs.
+- Preserved the existing public exports from `operations.ts` for callers and
+  tests that still import those names from the operations module.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/document/richText.test.ts src/document/operations.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/RichTextToolbar.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts`
+- `npm.cmd test`
+
+Notes:
+
+- No `DocumentNode` schema, pagination, PDF, DOCX, or WYSIWYG input bridge
+  behavior changed in this slice.
+- Paste, pending caret style, and inline objects such as `fieldRef` /
+  `pageNumber` remain separate design gates.
+
+---
+
+## 2026-05-22
+
+### Bump Rich Text Toolbar Baseline To 0.6.4
+
+Goal: Mark the run-level rich text groundwork and fixed paragraph text toolbar
+shell as the next self-use patch baseline before continuing into range
+selection work.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.3` to `0.6.4`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.4`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.4`.
+- Kept persisted document/package schema versions unchanged.
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This is a project release-readiness marker only. It does not change
+  `DocumentNode.version`, FlowDoc package version, or storage package version.
+- Selection-range rich text, `fieldRef`, and `pageNumber` behavior remain
+  deferred to follow-up slices.
+
+---
+
+## 2026-05-22
+
+### Bump Canvas Structure UX Baseline To 0.6.3
+
+Goal: Mark the selected-node canvas path/action rail, clone/delete actions, and
+flow-stack subtree movement work as the next self-use patch baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.2` to `0.6.3`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.3`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.3`.
+- Kept persisted document/package schema versions unchanged.
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This is a project release-readiness marker only. It does not change
+  `DocumentNode.version`, FlowDoc package version, or storage package version.
+
+---
+
 ## 2026-05-21
+
+### Font Catalog Foundation
+
+Goal: Add a small Thai font catalog before rich text work and trial Sarabun as
+the whole-system default font.
+
+Completed:
+
+- Added a registry-backed first selectable font catalog with `Sarabun` and
+  `Noto Sans Thai`.
+- Switched the `default` font key to `sarabun`, backed by
+  `public/fonts/Sarabun/Sarabun-Regular.ttf`.
+- Removed the duplicate `Default (Sarabun)` registry entry so `Sarabun` is the
+  visible and stored default font key for new paragraph defaults.
+- Updated server and browser fontkit measurers to use the paragraph
+  `fontFamilyKey` when a catalog font is selected.
+- Loaded catalog fonts through the shared runtime/browser font registry and
+  exposed a paragraph font selector in the property panel.
+- Updated font-related architecture/export/test docs and synchronized the
+  project version marker test with `0.6.0`.
+
+Files changed:
+
+- `packages/core/src/font-registry.ts`
+- `packages/core/src/layout/font-measurer.ts`
+- `src/app/api/runtimeFont.ts`
+- `src/app/api/paginate/route.ts`
+- `src/app/api/export/route.ts`
+- `src/app/_components/DocTest.tsx`
+- `src/app/debug/_components/DebugView.tsx`
+- `src/app/editor/_components/browserFontkitMeasurer.ts`
+- `src/app/editor/_components/editorTextMeasurerState.ts`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/layout.tsx`
+- focused font/runtime/editor tests
+- `docs/ARCHITECTURE_OVERVIEW.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/TEST_STRATEGY.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- font-registry.test.ts`
+- `npm.cmd run test:app -- runtimeFont.test.ts editorTextMeasurerState.test.ts fontMeasurerParity.test.ts PropertyPanel.test.ts`
+- `npm.cmd test`
+- `git diff --check`
+
+Notes:
+
+- Unused legacy font assets are removed from the active runtime font set.
+- Run-level rich text and bold/italic editing remain deferred.
+
+### Bump Font/Export Milestone To 0.6.0
+
+Goal: Treat the font catalog, keyed measurement, paragraph font selection, and
+server DOCX regular-font embedding work as a meaningful pre-v1 minor milestone.
+
+Completed:
+
+- Bumped the root project version marker from `0.5.19` to `0.6.0`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.0`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.0`.
+- Kept persisted document/package schema versions unchanged.
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/productExportGolden.test.ts`
+- `npm.cmd test`
+
+Notes:
+
+- This is a project release-readiness marker only. It does not change
+  `DocumentNode.version`, FlowDoc package version, or storage package version.
+
+---
+
+### Bump Flow Table Layout Controls Baseline To 0.6.2
+
+Goal: Mark the Flow Table layout-control patch after fit-to-width, alignment,
+and table-block margin support landed.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.1` to `0.6.2`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.2`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.2`.
+- Kept persisted document/package schema versions unchanged.
+
+Notes:
+
+- This is a project release-readiness marker only. It does not change
+  `DocumentNode.version`, FlowDoc package version, or storage package version.
+- One full `npm.cmd test` attempt hit the default 5s timeout in a product export
+  golden test; the focused rerun passed, and the subsequent full suite passed.
+
+### Promote Sarabun As Stored Default And Prune Fonts
+
+Goal: Remove the duplicate `Default (Sarabun)` surface and keep only active
+runtime font assets.
+
+Completed:
+
+- Changed `DEFAULT_FONT_KEY` to `sarabun`.
+- Changed new paragraph defaults and TOC/pagination fallback props to store
+  `fontFamilyKey: "sarabun"` directly.
+- Kept old `default` and `thSarabun` keys as registry fallbacks to Sarabun
+  during resolution and normalization.
+- Removed the extra `Default (Sarabun)` entry from the paragraph font dropdown.
+- Removed unused TH Sarabun, Noto Serif Thai, and unused extra weight font
+  files from the active runtime font tree.
+- Updated review archive and browser smoke font checks to require
+  `public/fonts/Sarabun/Sarabun-Regular.ttf`.
+- Increased the slow product flow-row export golden timeout to match its actual
+  PDF/DOCX export cost.
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- font-registry.test.ts normalize.test.ts renderer.test.ts productExportGolden.test.ts`
+- `npm.cmd run test:app -- src/app/api/__tests__/runtimeFont.test.ts src/app/api/__tests__/exportPaginate.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts src/app/editor/_components/__tests__/fontMeasurerParity.test.ts src/app/editor/_components/__tests__/realFontDrift.test.ts`
+- `npm.cmd run review:archive -- --check`
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/productExportGolden.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorTextMeasurerState.test.ts`
+- `npm.cmd test`
+
+Notes:
+
+- Historical test fixtures may still contain `fontFamilyKey: "default"` as
+  legacy input, but normalization and registry resolution map it to `sarabun`.
 
 ### Layout Refactor Guardrails and 0.5.18 Baseline
 
@@ -5953,3 +6620,130 @@ Notes:
 - Production-stable WYSIWYG remains deferred; selection overlay, clipboard
   model, real OS IME stress, accessibility hardening, and missing-geometry
   browser mutation checks are not implemented in this slice.
+
+---
+
+### Add DOCX Font Embedding Evidence
+
+Goal: Make runtime font support explicit for DOCX exports before broader rich
+text/font work.
+
+Completed:
+
+- Verified that DOCX output with only run font names does not include embedded
+  font relationships or `word/fonts/*.odttf` files.
+- Added DOCX regular-font embedding when the server export path provides the
+  same runtime font provider used by PDF export.
+- Marked catalog export support separately for PDF and DOCX.
+- Added focused DOCX ZIP assertions for provider-less name-only output,
+  provider-backed embedded output, and `/api/export` server DOCX artifacts.
+
+Verification:
+
+- Direct DOCX ZIP probe comparing name-only vs `fonts` option.
+- `npm.cmd run test -w packages/core -- font-registry.test.ts renderer.test.ts`
+- `npm.cmd run test:app -- src/app/api/__tests__/exportPaginate.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd test`
+
+Notes:
+
+- DOCX remains an exchange format and can still reflow in Word/LibreOffice.
+- Bold, italic, and bold-italic DOCX font embedding was deferred in this slice
+  and handled later for paragraph-level styles.
+
+---
+
+### Add Paragraph-Level Text Style Controls
+
+Goal: Add the basic document text styles before rich text, without introducing
+range-level inline formatting.
+
+Completed:
+
+- Added paragraph-level `fontWeight`, `fontStyle`, and `textDecoration` props
+  with normalization defaults.
+- Routed bold/italic measurement through available catalog font variants for
+  browser/server pagination and PDF rendering.
+- Added paragraph property-panel `B`, `I`, and `U` controls; italic is blocked
+  from being newly enabled when the selected font has no italic variant.
+- Serialized DOCX bold, italic, and underline run properties; DOCX embedded
+  font files were still regular-only in that initial style slice.
+
+Verification:
+
+- Focused core/app tests and type-check for the style slice.
+
+Notes:
+
+- This is paragraph-level styling only. Range-level rich text was deferred;
+  text color and strikethrough were handled in a later paragraph-level slice.
+
+---
+
+### Embed DOCX Paragraph Font Variants
+
+Goal: Finish the export follow-up for paragraph-level font styles by making
+DOCX server exports embed the same catalog variants used by measurement and PDF
+rendering.
+
+Completed:
+
+- Replaced DOCX regular-only font embedding with a focused font-table ZIP
+  injection path for `embedRegular`, `embedBold`, `embedItalic`, and
+  `embedBoldItalic`.
+- Kept provider-less DOCX rendering name-only.
+- Added renderer and API route coverage for styled DOCX runs and matching
+  embedded font variant files.
+- Updated the font export support marker from `embedded-regular` to
+  `embedded-variants`.
+
+Notes:
+
+- This remained paragraph-level only. Range-level rich text was out of scope;
+  text color and strikethrough were handled in the next paragraph-level slice.
+
+---
+
+### Add Paragraph Text Color And Strikethrough
+
+Goal: Fill the next basic paragraph-style gap without introducing range-level
+rich text.
+
+Completed:
+
+- Added paragraph-level `textColor` and `strikethrough` props with defaults and
+  normalization.
+- Carried the props through pagination render metadata.
+- Rendered text color and combined underline/line-through decoration in the
+  editor SVG text layer.
+- Rendered PDF text, underline, and strikethrough using the paragraph text
+  color.
+- Serialized DOCX text color and strike run properties.
+- Added property-panel controls for text color swatches and strikethrough.
+
+Notes:
+
+- This is still paragraph-level styling. Range-level rich text and highlight
+  color remain out of scope.
+
+---
+
+### Bump Paragraph Style Export Baseline To 0.6.1
+
+Goal: Mark the font/export milestone patch after paragraph-level style controls
+and export coverage landed.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.0` to `0.6.1`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.1`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.1`.
+- Kept persisted document/package schema versions unchanged.
+
+Notes:
+
+- This is a project release-readiness marker only. It does not change
+  `DocumentNode.version`, FlowDoc package version, or storage package version.

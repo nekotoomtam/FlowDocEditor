@@ -7,6 +7,7 @@ import type {
   FlowRowProps,
   FlowStackNode,
   FlowStackProps,
+  FlowTableCellBoxStyle,
   FlowTableCellNode,
   FlowTableNode,
   FlowTableRowNode,
@@ -23,6 +24,7 @@ import type {
   TocNode,
   TocProps,
 } from "../schema"
+import { DEFAULT_FONT_KEY } from "../font-registry"
 import { pt } from "../schema"
 
 // ─── ID Factory ───────────────────────────────────────────────────────────────
@@ -58,7 +60,12 @@ export const DEFAULT_PAGE_SETTINGS: PageSettings = {
 export const DEFAULT_PARAGRAPH_PROPS: ParagraphProps = {
   align: "left",
   fontSize: pt(12),
-  fontFamilyKey: "default",
+  fontFamilyKey: DEFAULT_FONT_KEY,
+  textColor: "000000",
+  fontWeight: "normal",
+  fontStyle: "normal",
+  textDecoration: "none",
+  strikethrough: false,
   lineHeight: 1.5,
   spacingBefore: pt(0),
   spacingAfter: pt(8),
@@ -240,6 +247,23 @@ export function createFlowTableRowNode(cellIds: string[]): FlowTableRowNode {
   return { id: createId("ftrow"), type: "flow-table-row", props: {}, cellIds }
 }
 
+const DEFAULT_FLOW_TABLE_BORDER_COLOR = "000000"
+const DEFAULT_FLOW_TABLE_HEADER_FILL = "F3F4F6"
+
+export function createDefaultFlowTableCellBox(isHeader = false): FlowTableCellBoxStyle {
+  const side = () => ({ style: "solid" as const, width: pt(1), color: DEFAULT_FLOW_TABLE_BORDER_COLOR })
+  const box: FlowTableCellBoxStyle = {
+    border: {
+      top: side(),
+      right: side(),
+      bottom: side(),
+      left: side(),
+    },
+  }
+  if (isHeader) box.fill = DEFAULT_FLOW_TABLE_HEADER_FILL
+  return box
+}
+
 export function createDefaultFlowTable(rowCount = 3, colCount = 3): FlowTableNode {
   const colWidthPt = 150
   const internalNodes: FlowTableNode["nodes"] = {}
@@ -247,11 +271,23 @@ export function createDefaultFlowTable(rowCount = 3, colCount = 3): FlowTableNod
 
   for (let r = 0; r < rowCount; r++) {
     const cellIds: string[] = []
+    const isHeaderRow = rowCount > 1 && r === 0
     for (let c = 0; c < colCount; c++) {
-      const para = createParagraphNode("", { spacingBefore: pt(2), spacingAfter: pt(2) })
+      const para = createParagraphNode(isHeaderRow ? `Header ${c + 1}` : "", {
+        spacingBefore: pt(2),
+        spacingAfter: pt(2),
+        ...(isHeaderRow ? { fontWeight: "bold" as const } : {}),
+      })
       const cell = createFlowTableCellNode([para.id])
+      const styledCell: FlowTableCellNode = {
+        ...cell,
+        props: {
+          ...cell.props,
+          box: createDefaultFlowTableCellBox(isHeaderRow),
+        },
+      }
       internalNodes[para.id] = para
-      internalNodes[cell.id] = cell
+      internalNodes[styledCell.id] = styledCell
       cellIds.push(cell.id)
     }
     const row = createFlowTableRowNode(cellIds)
@@ -262,7 +298,7 @@ export function createDefaultFlowTable(rowCount = 3, colCount = 3): FlowTableNod
   return {
     id: createId("flow-table"),
     type: "flow-table",
-    props: {},
+    props: rowCount > 1 ? { headerRowCount: 1, repeatHeaderRows: true } : {},
     columns: Array.from({ length: colCount }, () => ({ width: pt(colWidthPt) })),
     rowIds,
     nodes: internalNodes,

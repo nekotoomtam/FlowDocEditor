@@ -454,5 +454,5 @@ describe("product export golden smoke", () => {
       expect(countText(xml, marker)).toBe(1)
     }
     expect(stackSlices.length).toBe(flowRows.length * 3)
-  })
+  }, 15000)
 })

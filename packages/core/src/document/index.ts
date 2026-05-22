@@ -1,4 +1,6 @@
 export * from "./defaults"
 export * from "./assert"
 export * from "./normalize"
+export * from "./richText"
+export * from "./richTextDraft"
 export * from "./operations"

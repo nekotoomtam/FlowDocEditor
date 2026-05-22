@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useRef, useEffect, useMemo } from "react"
+import { memo, useRef, useEffect, useMemo, useState } from "react"
 import type { TextMeasurer } from "@/layout"
 import {
   resolveFragmentBoxLayoutPrimitives,
@@ -11,7 +11,7 @@ import {
   type ParagraphRenderProps,
   type ResolvedBorderSide,
 } from "@/pagination"
-import { isPlainTextParagraph } from "@/document"
+import { getTextRunParagraphText, isPlainTextParagraph, isTextRunOnlyParagraph } from "@/document"
 import type { DocumentNode, FlowTableCellNode, FlowTableNode, LayoutNode, ParagraphNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
@@ -40,22 +40,13 @@ import {
 } from "./wysiwygDraftVisualPreview"
 import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 import { resolveActiveInlineEditPageIndex } from "./editorPageFollow"
+import { buildSelectionContext, type SelectionContextItem } from "./selectionContext"
+import type { WysiwygTextInputKey } from "./useWysiwygTextSession"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const NODE_COLORS: Record<string, string> = {
-  paragraph: "#c7ddf2",
-  spacer:    "#d1d5db",
-  row:       "#fed7aa",
-  stack:     "#e9d5ff",
-  "flow-row":   "#dbeafe",
-  "flow-stack": "#d7f4ef",
-  "flow-table": "#eef2ff",
-  "flow-table-row": "#e0e7ff",
-  "flow-table-cell": "#fef9c3",
-  body:      "#bbf7d0",
-  toc:       "#d1fae5",
-}
+const INLINE_EDIT_CHROME_FILL = "#dbeafe"
+const WYSIWYG_TABLE_CELL_DRAFT_CHROME_FILL = "#dbeafe"
 
 function displayFragmentNodeType(nodeType: PageFragment["nodeType"]): string {
   if (nodeType === "flow-row") return "row"
@@ -73,7 +64,7 @@ export function shouldStartInlineEditOnSingleClick(input: {
   return input.canInlineEditParagraph
 }
 
-const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "flow-table", "toc"])
+const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "flow-table", "toc"])
 const SELECTABLE_NODE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "flow-table", "flow-table-row", "flow-table-cell", "toc"])
 const PARAGRAPH_CHROME_Y = 3
 const FLOW_STACK_PARAGRAPH_CHROME_Y = 0
@@ -84,6 +75,28 @@ const DROP_INSERTION_STROKE = "#0d9488"
 const READ_ONLY_ZONE_FILL: Record<"header" | "footer", string> = {
   header: "#fef9c3",
   footer: "#fce7f3",
+}
+const CANVAS_PATH_HOVER_DELAY_MS = 240
+const CANVAS_PATH_BAR_HEIGHT = 18
+const CANVAS_PATH_BAR_GAP = 4
+const CANVAS_PATH_MIN_EDGE_GAP = 4
+const CANVAS_ACTION_RAIL_BUTTON_SIZE = 22
+const CANVAS_ACTION_RAIL_GAP = 4
+const CANVAS_ACTION_RAIL_PADDING = 4
+const CANVAS_ACTION_RAIL_OFFSET = 8
+
+const CANVAS_PATH_LABELS: Record<SelectionContextItem["type"], string> = {
+  body: "BODY",
+  paragraph: "PARAGRAPH",
+  spacer: "SPACER",
+  row: "ROW",
+  stack: "STACK",
+  "flow-row": "ROW",
+  "flow-stack": "STACK",
+  "flow-table": "TABLE",
+  "flow-table-row": "ROW",
+  "flow-table-cell": "CELL",
+  toc: "TOC",
 }
 
 function fragmentSliceIdentity(fragment: PageFragment): string {
@@ -257,6 +270,346 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
+function canvasPathLabel(item: SelectionContextItem): string {
+  return CANVAS_PATH_LABELS[item.type] ?? item.label.toUpperCase()
+}
+
+function canvasPathSegmentWidth(label: string): number {
+  return Math.max(32, label.length * 6 + 12)
+}
+
+function findCanvasPathFragment(
+  fragments: PageFragment[],
+  primaryNodeId: string | null | undefined,
+  fallbackNodeId?: string | null,
+): PageFragment | null {
+  const ids = [primaryNodeId, fallbackNodeId].filter((id): id is string => Boolean(id))
+  for (const nodeId of ids) {
+    const fragment = fragments.find((candidate) => candidate.nodeId === nodeId)
+    if (fragment) return fragment
+  }
+  return null
+}
+
+function CanvasNodePathOverlay({
+  items,
+  activeNodeId,
+  anchorFragment,
+  pageWidth,
+  pageHeight,
+  scale,
+  variant,
+  onSelectNode,
+}: {
+  items: SelectionContextItem[]
+  activeNodeId: string | null
+  anchorFragment: PageFragment
+  pageWidth: number
+  pageHeight: number
+  scale: number
+  variant: "selected" | "hover"
+  onSelectNode?: (nodeId: string) => void
+}) {
+  if (items.length === 0) return null
+
+  const labels = items.map(canvasPathLabel)
+  const segmentWidths = labels.map(canvasPathSegmentWidth)
+  const separatorWidth = 8
+  const innerPadding = 4
+  const totalWidth = segmentWidths.reduce((sum, width) => sum + width, innerPadding * 2) +
+    Math.max(0, items.length - 1) * separatorWidth
+  const maxX = Math.max(CANVAS_PATH_MIN_EDGE_GAP, pageWidth * scale - totalWidth - CANVAS_PATH_MIN_EDGE_GAP)
+  const x = clamp(anchorFragment.x * scale, CANVAS_PATH_MIN_EDGE_GAP, maxX)
+  const aboveY = anchorFragment.y * scale - CANVAS_PATH_BAR_HEIGHT - CANVAS_PATH_BAR_GAP
+  const belowY = (anchorFragment.y + anchorFragment.height) * scale + CANVAS_PATH_BAR_GAP
+  const maxY = Math.max(CANVAS_PATH_MIN_EDGE_GAP, pageHeight * scale - CANVAS_PATH_BAR_HEIGHT - CANVAS_PATH_MIN_EDGE_GAP)
+  const y = clamp(aboveY >= CANVAS_PATH_MIN_EDGE_GAP ? aboveY : belowY, CANVAS_PATH_MIN_EDGE_GAP, maxY)
+  const interactive = variant === "selected" && onSelectNode != null
+  const bg = variant === "selected" ? "#0f172a" : "#334155"
+  const textFill = variant === "selected" ? "#e5edf6" : "#e2e8f0"
+  let cursorX = x + innerPadding
+
+  return (
+    <g
+      data-testid={variant === "selected" ? "canvas-selected-path" : "canvas-hover-path"}
+      data-variant={variant}
+      opacity={variant === "selected" ? 1 : 0.78}
+      style={{ pointerEvents: interactive ? "auto" : "none" }}
+      onPointerDown={interactive ? (e) => {
+        e.stopPropagation()
+        e.preventDefault()
+      } : undefined}
+      onPointerUp={interactive ? (e) => {
+        e.stopPropagation()
+      } : undefined}
+    >
+      <rect
+        x={x}
+        y={y}
+        width={totalWidth}
+        height={CANVAS_PATH_BAR_HEIGHT}
+        rx={3}
+        fill={bg}
+        stroke={variant === "selected" ? "#38bdf8" : "#64748b"}
+        strokeWidth={0.75}
+      />
+      {items.map((item, index) => {
+        const label = labels[index]
+        const width = segmentWidths[index]
+        const segmentX = cursorX
+        const active = item.nodeId === activeNodeId
+        cursorX += width
+        const separatorX = cursorX + separatorWidth / 2
+        if (index < items.length - 1) cursorX += separatorWidth
+        return (
+          <g key={item.nodeId}>
+            <g
+              data-testid="canvas-path-item"
+              data-node-id={item.nodeId}
+              data-node-type={item.type}
+              data-active={active ? "true" : undefined}
+              role={interactive ? "button" : undefined}
+              aria-label={interactive ? `Select ${item.label}` : item.label}
+              style={{ cursor: interactive ? "pointer" : "default" }}
+              onPointerDown={interactive ? (e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                onSelectNode(item.nodeId)
+              } : undefined}
+            >
+              <title>{item.label}</title>
+              <rect
+                x={segmentX}
+                y={y + 3}
+                width={width}
+                height={CANVAS_PATH_BAR_HEIGHT - 6}
+                rx={2}
+                fill={active ? "#0ea5e9" : "transparent"}
+                opacity={active ? 1 : 0}
+              />
+              <text
+                x={segmentX + width / 2}
+                y={y + 12}
+                textAnchor="middle"
+                fontSize={9}
+                fontWeight={700}
+                fill={active ? "white" : textFill}
+                letterSpacing={0}
+                style={{ userSelect: "none", pointerEvents: "none" }}
+              >
+                {label}
+              </text>
+            </g>
+            {index < items.length - 1 && (
+              <text
+                x={separatorX}
+                y={y + 12}
+                textAnchor="middle"
+                fontSize={9}
+                fontWeight={700}
+                fill="#94a3b8"
+                style={{ userSelect: "none", pointerEvents: "none" }}
+              >
+                ·
+              </text>
+            )}
+          </g>
+        )
+      })}
+    </g>
+  )
+}
+
+function CanvasActionButton({
+  label,
+  testId,
+  x,
+  y,
+  cursor = "pointer",
+  onPointerDown,
+  children,
+}: {
+  label: string
+  testId: string
+  x: number
+  y: number
+  cursor?: string
+  onPointerDown: (e: React.PointerEvent<SVGGElement>) => void
+  children: React.ReactNode
+}) {
+  return (
+    <g
+      data-testid={testId}
+      role="button"
+      aria-label={label}
+      style={{ cursor }}
+      onPointerDown={(e) => {
+        e.stopPropagation()
+        e.preventDefault()
+        onPointerDown(e)
+      }}
+    >
+      <title>{label}</title>
+      <rect
+        x={x}
+        y={y}
+        width={CANVAS_ACTION_RAIL_BUTTON_SIZE}
+        height={CANVAS_ACTION_RAIL_BUTTON_SIZE}
+        rx={4}
+        fill="white"
+        stroke="#cbd5e1"
+        strokeWidth={0.75}
+      />
+      {children}
+    </g>
+  )
+}
+
+function DragHandleIcon({ x, y }: { x: number; y: number }) {
+  const dots = [0, 1, 2].flatMap((row) => [0, 1].map((col) => ({
+    cx: x + 8 + col * 6,
+    cy: y + 7 + row * 5,
+  })))
+  return (
+    <g fill="#475569" style={{ pointerEvents: "none" }}>
+      {dots.map((dot) => <circle key={`${dot.cx}-${dot.cy}`} cx={dot.cx} cy={dot.cy} r={1.15} />)}
+    </g>
+  )
+}
+
+function DuplicateIcon({ x, y }: { x: number; y: number }) {
+  return (
+    <g fill="none" stroke="#475569" strokeWidth={1.35} style={{ pointerEvents: "none" }}>
+      <rect x={x + 7} y={y + 6} width={8} height={8} rx={1.5} />
+      <path d={`M ${x + 10} ${y + 9} H ${x + 17} V ${y + 16} H ${x + 10} Z`} />
+    </g>
+  )
+}
+
+function DeleteIcon({ x, y }: { x: number; y: number }) {
+  return (
+    <g fill="none" stroke="#475569" strokeWidth={1.35} strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "none" }}>
+      <path d={`M ${x + 7} ${y + 8} H ${x + 15}`} />
+      <path d={`M ${x + 9} ${y + 8} V ${y + 6} H ${x + 13} V ${y + 8}`} />
+      <path d={`M ${x + 8} ${y + 10} L ${x + 9} ${y + 17} H ${x + 13} L ${x + 14} ${y + 10}`} />
+    </g>
+  )
+}
+
+function CanvasNodeActionRail({
+  nodeId,
+  anchorFragment,
+  pageWidth,
+  pageHeight,
+  scale,
+  canDrag,
+  canDuplicate,
+  canDelete,
+  onStartDrag,
+  onDuplicateNode,
+  onDeleteNode,
+}: {
+  nodeId: string
+  anchorFragment: PageFragment
+  pageWidth: number
+  pageHeight: number
+  scale: number
+  canDrag: boolean
+  canDuplicate: boolean
+  canDelete: boolean
+  onStartDrag: (nodeId: string, e: React.PointerEvent<SVGGElement>) => void
+  onDuplicateNode: (nodeId: string) => void
+  onDeleteNode: (nodeId: string) => void
+}) {
+  const actions = [
+    canDrag ? "drag" as const : null,
+    canDuplicate ? "duplicate" as const : null,
+    canDelete ? "delete" as const : null,
+  ].filter((action): action is "drag" | "duplicate" | "delete" => action !== null)
+  if (actions.length === 0) return null
+
+  const railWidth = CANVAS_ACTION_RAIL_BUTTON_SIZE + CANVAS_ACTION_RAIL_PADDING * 2
+  const railHeight = actions.length * CANVAS_ACTION_RAIL_BUTTON_SIZE +
+    Math.max(0, actions.length - 1) * CANVAS_ACTION_RAIL_GAP +
+    CANVAS_ACTION_RAIL_PADDING * 2
+  const preferredX = anchorFragment.x * scale - railWidth - CANVAS_ACTION_RAIL_OFFSET
+  const fallbackX = anchorFragment.x * scale + CANVAS_ACTION_RAIL_OFFSET
+  const maxX = Math.max(CANVAS_PATH_MIN_EDGE_GAP, pageWidth * scale - railWidth - CANVAS_PATH_MIN_EDGE_GAP)
+  const x = preferredX >= CANVAS_PATH_MIN_EDGE_GAP
+    ? preferredX
+    : clamp(fallbackX, CANVAS_PATH_MIN_EDGE_GAP, maxX)
+  const maxY = Math.max(CANVAS_PATH_MIN_EDGE_GAP, pageHeight * scale - railHeight - CANVAS_PATH_MIN_EDGE_GAP)
+  const y = clamp(anchorFragment.y * scale, CANVAS_PATH_MIN_EDGE_GAP, maxY)
+
+  return (
+    <g
+      data-testid="canvas-action-rail"
+      data-node-id={nodeId}
+      style={{ pointerEvents: "auto" }}
+      onPointerDown={(e) => {
+        e.stopPropagation()
+        e.preventDefault()
+      }}
+    >
+      <rect
+        x={x}
+        y={y}
+        width={railWidth}
+        height={railHeight}
+        rx={5}
+        fill="#f8fafc"
+        stroke="#cbd5e1"
+        strokeWidth={0.75}
+      />
+      {actions.map((action, index) => {
+        const buttonX = x + CANVAS_ACTION_RAIL_PADDING
+        const buttonY = y + CANVAS_ACTION_RAIL_PADDING + index * (CANVAS_ACTION_RAIL_BUTTON_SIZE + CANVAS_ACTION_RAIL_GAP)
+        if (action === "drag") {
+          return (
+            <CanvasActionButton
+              key={action}
+              label="Drag block"
+              testId="canvas-action-drag"
+              x={buttonX}
+              y={buttonY}
+              cursor="grab"
+              onPointerDown={(e) => onStartDrag(nodeId, e)}
+            >
+              <DragHandleIcon x={buttonX} y={buttonY} />
+            </CanvasActionButton>
+          )
+        }
+        if (action === "duplicate") {
+          return (
+            <CanvasActionButton
+              key={action}
+              label="Duplicate block"
+              testId="canvas-action-duplicate"
+              x={buttonX}
+              y={buttonY}
+              onPointerDown={() => onDuplicateNode(nodeId)}
+            >
+              <DuplicateIcon x={buttonX} y={buttonY} />
+            </CanvasActionButton>
+          )
+        }
+        return (
+          <CanvasActionButton
+            key={action}
+            label="Delete block"
+            testId="canvas-action-delete"
+            x={buttonX}
+            y={buttonY}
+            onPointerDown={() => onDeleteNode(nodeId)}
+          >
+            <DeleteIcon x={buttonX} y={buttonY} />
+          </CanvasActionButton>
+        )
+      })}
+    </g>
+  )
+}
+
 // line.x now contains the alignment offset (baked in by buildPaginatedLines).
 function lineVisualLeft(line: PaginatedLine): number {
   return line.x
@@ -382,6 +735,7 @@ function resolveTableColumnResizeHandles(input: {
 interface PageViewDocLookup {
   nodeById: Map<string, LayoutNode>
   plainTextParagraphIds: Set<string>
+  textRunParagraphIds: Set<string>
   tableCellIds: Set<string>
   flowStackParagraphIds: Set<string>
 }
@@ -389,6 +743,7 @@ interface PageViewDocLookup {
 function buildPageViewDocLookup(doc: DocumentNode): PageViewDocLookup {
   const nodeById = new Map<string, LayoutNode>()
   const plainTextParagraphIds = new Set<string>()
+  const textRunParagraphIds = new Set<string>()
   const tableCellIds = new Set<string>()
   const flowStackParagraphIds = new Set<string>()
 
@@ -397,6 +752,9 @@ function buildPageViewDocLookup(doc: DocumentNode): PageViewDocLookup {
       nodeById.set(node.id, node)
       if (node.type === "paragraph" && isPlainTextParagraph(node as ParagraphNode)) {
         plainTextParagraphIds.add(node.id)
+      }
+      if (node.type === "paragraph" && isTextRunOnlyParagraph(node as ParagraphNode)) {
+        textRunParagraphIds.add(node.id)
       }
       if (node.type === "flow-stack") {
         for (const childId of node.childIds) flowStackParagraphIds.add(childId)
@@ -407,11 +765,14 @@ function buildPageViewDocLookup(doc: DocumentNode): PageViewDocLookup {
         if (inner?.type === "paragraph" && isPlainTextParagraph(inner as ParagraphNode)) {
           plainTextParagraphIds.add(inner.id)
         }
+        if (inner?.type === "paragraph" && isTextRunOnlyParagraph(inner as ParagraphNode)) {
+          textRunParagraphIds.add(inner.id)
+        }
       }
     }
   }
 
-  return { nodeById, plainTextParagraphIds, tableCellIds, flowStackParagraphIds }
+  return { nodeById, plainTextParagraphIds, textRunParagraphIds, tableCellIds, flowStackParagraphIds }
 }
 
 function cssHex(hex: string): string {
@@ -547,7 +908,11 @@ function caretIndexFromPointer(
   return previousChars + lineOffset
 }
 
-function findFirstParagraphInCell(doc: DocumentNode, cellId: string): string | null {
+function isParagraphEditableForInlineText(paragraph: ParagraphNode, allowStyledTextRuns: boolean): boolean {
+  return allowStyledTextRuns ? isTextRunOnlyParagraph(paragraph) : isPlainTextParagraph(paragraph)
+}
+
+function findFirstParagraphInCell(doc: DocumentNode, cellId: string, allowStyledTextRuns: boolean): string | null {
   for (const section of doc.document.sections) {
     for (const node of Object.values(section.nodes)) {
       if (!isTableLikeNode(node)) continue
@@ -556,7 +921,8 @@ function findFirstParagraphInCell(doc: DocumentNode, cellId: string): string | n
       if (!isTableCellLikeNode(cell)) continue
       const paragraphId = cell.childIds.find((id) => {
         const paragraph = table.nodes[id]
-        return paragraph?.type === "paragraph" && isPlainTextParagraph(paragraph as ParagraphNode)
+        return paragraph?.type === "paragraph" &&
+          isParagraphEditableForInlineText(paragraph as ParagraphNode, allowStyledTextRuns)
       })
       if (paragraphId) return paragraphId
     }
@@ -577,17 +943,15 @@ function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | n
   return null
 }
 
-function canInlineEditParagraph(doc: DocumentNode, nodeId: string): boolean {
+function canInlineEditParagraph(doc: DocumentNode, nodeId: string, allowStyledTextRuns: boolean): boolean {
   const paragraph = findParagraphNode(doc, nodeId)
-  return paragraph !== null && isPlainTextParagraph(paragraph)
+  return paragraph !== null && isParagraphEditableForInlineText(paragraph, allowStyledTextRuns)
 }
 
-function getPlainParagraphText(doc: DocumentNode, nodeId: string): string | null {
+function getEditableParagraphText(doc: DocumentNode, nodeId: string): string | null {
   const paragraph = findParagraphNode(doc, nodeId)
-  if (!paragraph || !isPlainTextParagraph(paragraph)) return null
-  return paragraph.children
-    .map((child) => child.type === "text" ? child.text : "")
-    .join("")
+  if (!paragraph) return null
+  return getTextRunParagraphText(paragraph)
 }
 
 function countParagraphFragments(paginated: PaginatedDocument, nodeId: string): number {
@@ -776,15 +1140,15 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 // ─── Page View ────────────────────────────────────────────────────────────────
 
 function PageView({
-  page, doc, drag, scale, selectedNodeId, isLayoutLoading, inlineEditVisualFresh,
+  page, doc, drag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading, inlineEditVisualFresh,
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
-  pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown,
+  pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode,
   resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
-  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygTextReflowDecision,
+  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygRichTextShortcut, onWysiwygTextReflowDecision,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
-  scale: number; selectedNodeId: string | null; isLayoutLoading: boolean
+  scale: number; selectedNodeId: string | null; selectionAnchorNodeId: string | null; isLayoutLoading: boolean
   textMeasurer: TextMeasurer
   inlineEditVisualFresh: boolean
   showTextSegments: boolean
@@ -813,10 +1177,14 @@ function PageView({
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
   onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
+  onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
   pageKey: string; setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
+  onSelectContextNode: (nodeId: string) => void
+  onDuplicateNode: (nodeId: string) => void
+  onDeleteNode: (nodeId: string) => void
   resizeDrag: ResizeDrag | null
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, gapWidthPt: number, startClientX: number, pageKey: string, rowFragY: number, rowFragHeight: number) => void
   onTableColumnResizeStart: (tableId: string, leftColIndex: number, pairX: number, pairWidth: number, leftWidthOriginal: number, rightWidthOriginal: number, startClientX: number, pageKey: string, tableFragY: number, tableFragHeight: number) => void
@@ -828,10 +1196,42 @@ function PageView({
 }) {
   const W = page.width * scale
   const H = page.height * scale
-  const hoverNodeId = drag?.preview?.hoverNodeId ?? null
+  const dragHoverNodeId = drag?.preview?.hoverNodeId ?? null
+  const [hoverPathTarget, setHoverPathTarget] = useState<{ nodeId: string; pageKey: string } | null>(null)
+  const hoverPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const docLookup = useMemo(() => buildPageViewDocLookup(doc), [doc])
-  const { nodeById, plainTextParagraphIds, tableCellIds, flowStackParagraphIds } = docLookup
+  const { nodeById, plainTextParagraphIds, textRunParagraphIds, tableCellIds, flowStackParagraphIds } = docLookup
   const editFragmentRef = useRef<{ nodeId: string; pageKey: string; fragment: PageFragment } | null>(null)
+
+  function clearHoverPathTimer() {
+    if (hoverPathTimerRef.current == null) return
+    clearTimeout(hoverPathTimerRef.current)
+    hoverPathTimerRef.current = null
+  }
+
+  function queueHoverPath(nodeId: string) {
+    if (drag || resizeDrag || minHeightDrag || marginDrag) return
+    clearHoverPathTimer()
+    hoverPathTimerRef.current = setTimeout(() => {
+      setHoverPathTarget({ nodeId, pageKey })
+      hoverPathTimerRef.current = null
+    }, CANVAS_PATH_HOVER_DELAY_MS)
+  }
+
+  function clearHoverPath(nodeId?: string) {
+    clearHoverPathTimer()
+    setHoverPathTarget((current) => {
+      if (!current) return null
+      if (nodeId && current.nodeId !== nodeId) return current
+      return null
+    })
+  }
+
+  useEffect(() => () => clearHoverPathTimer(), [])
+  useEffect(() => {
+    if (!drag && !resizeDrag && !minHeightDrag && !marginDrag) return
+    clearHoverPath()
+  }, [drag, resizeDrag, minHeightDrag, marginDrag])
 
   useEffect(() => {
     if (inlineEditNodeId == null) editFragmentRef.current = null
@@ -939,6 +1339,33 @@ function PageView({
     selectedNodeId,
     fragments: renderFragments,
   })
+  const hoverPathNodeId = hoverPathTarget?.pageKey === pageKey ? hoverPathTarget.nodeId : null
+  const normalHoverNodeId = hoverPathNodeId
+  const selectedPathAnchorNodeId = selectionAnchorNodeId ?? selectedNodeId
+  const selectedPathItems = useMemo(
+    () => buildSelectionContext(doc, selectedPathAnchorNodeId),
+    [doc, selectedPathAnchorNodeId],
+  )
+  const hoverPathItems = useMemo(
+    () => buildSelectionContext(doc, hoverPathNodeId),
+    [doc, hoverPathNodeId],
+  )
+  const suppressPathOverlays = Boolean(drag || resizeDrag || minHeightDrag || marginDrag)
+  const selectedPathFragment = suppressPathOverlays ? null : findCanvasPathFragment(
+    renderFragments,
+    selectedNodeId,
+    selectedPathAnchorNodeId,
+  )
+  const hoverPathFragment = suppressPathOverlays || hoverPathNodeId === selectedPathAnchorNodeId
+    ? null
+    : findCanvasPathFragment(renderFragments, hoverPathNodeId)
+  const selectedActionNode = selectedNodeId ? nodeById.get(selectedNodeId) ?? null : null
+  const selectedActionFragment = suppressPathOverlays || !selectedActionNode
+    ? null
+    : findCanvasPathFragment(renderFragments, selectedNodeId)
+  const selectedActionCanDrag = Boolean(selectedActionNode && DRAGGABLE_TYPES.has(selectedActionNode.type))
+  const selectedActionCanDuplicate = Boolean(selectedActionNode && selectedActionNode.type !== "body")
+  const selectedActionCanDelete = selectedActionCanDuplicate
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
     <svg
@@ -1036,12 +1463,11 @@ function PageView({
 
       {/* fragments */}
       {renderFragments.map((f, i) => {
-        const color = NODE_COLORS[f.nodeType] ?? "#f3f4f6"
         const isWysiwygTableCellDraftVisualChrome = tableCellDraftVisualChromeSet.has(f) ||
           sourceTableCellDraftVisualChromeByKey.has(tableCellDraftVisualChromeKey(f))
         const isWysiwygTableCellDraftStructureChrome = isWysiwygTableCellDraftVisualChrome && !isTableCellFragment(f)
         const isTableStructureChrome = isTableStructureFragment(f, renderFragments)
-        const isHovered = f.nodeId === hoverNodeId
+        const isHovered = f.nodeId === dragHoverNodeId || f.nodeId === normalHoverNodeId
         const isFlowTableRowVisualOnly = f.nodeType === "flow-table-row"
         const isLayoutNode = nodeById.has(f.nodeId)
         const isDraggable = DRAGGABLE_TYPES.has(f.nodeType) && isLayoutNode
@@ -1049,7 +1475,8 @@ function PageView({
         const selectNodeId = f.nodeId
         const isSelected = f.nodeId === selectedNodeId
         const isTableCellParagraph = f.nodeType === "paragraph" && tableCellIds.has(f.parentNodeId ?? "")
-        const canInlineEditThisParagraph = f.nodeType === "paragraph" && plainTextParagraphIds.has(f.nodeId)
+        const editableParagraphIds = wysiwygTextEngineEnabled ? textRunParagraphIds : plainTextParagraphIds
+        const canInlineEditThisParagraph = f.nodeType === "paragraph" && editableParagraphIds.has(f.nodeId)
         const visualDisplayFragment = resolveDisplayFragment(f)
         // For split paragraphs: only the active fragment slice enters edit mode.
         // Otherwise same-node continuation fragments can render duplicate editors.
@@ -1110,8 +1537,8 @@ function PageView({
           ? "transparent"
           : isTableStructureChrome ? "transparent"
           : isWysiwygTableCellDraftStructureChrome ? "transparent"
-          : isWysiwygTableCellDraftVisualChrome ? color
-          : hasAuthoredFragmentBox && !isInlineEditing ? "transparent" : isInlineEditing ? "#dbeafe" : color
+          : isWysiwygTableCellDraftVisualChrome ? WYSIWYG_TABLE_CELL_DRAFT_CHROME_FILL
+          : hasAuthoredFragmentBox && !isInlineEditing ? "transparent" : isInlineEditing ? INLINE_EDIT_CHROME_FILL : "transparent"
         const chromeStroke = isFlowTableRowVisualOnly || (hasAuthoredFragmentBox && !isInlineEditing && !isHovered)
           ? "transparent"
           : isTableStructureChrome ? "transparent"
@@ -1142,6 +1569,12 @@ function PageView({
             data-table-structure-chrome={isTableStructureChrome ? "true" : undefined}
             data-wysiwyg-table-cell-visual-chrome={isWysiwygTableCellDraftVisualChrome ? "true" : undefined}
             data-wysiwyg-table-cell-structure-chrome={isWysiwygTableCellDraftStructureChrome ? "true" : undefined}
+            onPointerEnter={!isFlowTableRowVisualOnly && !drag && !resizeDrag && !minHeightDrag && !marginDrag && !isInlineEditing
+              ? () => queueHoverPath(f.nodeId)
+              : undefined}
+            onPointerLeave={!isFlowTableRowVisualOnly
+              ? () => clearHoverPath(f.nodeId)
+              : undefined}
             onPointerDown={!isFlowTableRowVisualOnly && (isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
@@ -1167,9 +1600,9 @@ function PageView({
               ? (e) => {
                 e.stopPropagation()
                 const paragraphId = f.nodeType === "flow-table-cell"
-                  ? findFirstParagraphInCell(doc, f.nodeId)
+                  ? findFirstParagraphInCell(doc, f.nodeId, wysiwygTextEngineEnabled)
                   : f.nodeId
-                if (!paragraphId || !canInlineEditParagraph(doc, paragraphId)) return
+                if (!paragraphId || !canInlineEditParagraph(doc, paragraphId, wysiwygTextEngineEnabled)) return
                 onInlineEditStart(
                   paragraphId,
                   f.nodeType === "paragraph" && wysiwygCaretMappingEnabled
@@ -1282,6 +1715,7 @@ function PageView({
                 onSplitParagraph={onSplitParagraph}
                 onMergeParagraph={onMergeParagraph}
                 onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+                onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
                 onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
               />
             )}
@@ -1440,6 +1874,45 @@ function PageView({
         )
       })}
 
+      {selectedNodeId && selectedActionFragment && (
+        <CanvasNodeActionRail
+          nodeId={selectedNodeId}
+          anchorFragment={resolveDisplayFragment(selectedActionFragment)}
+          pageWidth={page.width}
+          pageHeight={page.height}
+          scale={scale}
+          canDrag={selectedActionCanDrag}
+          canDuplicate={selectedActionCanDuplicate}
+          canDelete={selectedActionCanDelete}
+          onStartDrag={(nodeId, e) => onNodePointerDown({ source: "document", nodeId }, e)}
+          onDuplicateNode={onDuplicateNode}
+          onDeleteNode={onDeleteNode}
+        />
+      )}
+      {selectedPathFragment && selectedPathItems.length > 0 && (
+        <CanvasNodePathOverlay
+          items={selectedPathItems}
+          activeNodeId={selectedNodeId}
+          anchorFragment={resolveDisplayFragment(selectedPathFragment)}
+          pageWidth={page.width}
+          pageHeight={page.height}
+          scale={scale}
+          variant="selected"
+          onSelectNode={onSelectContextNode}
+        />
+      )}
+      {hoverPathFragment && hoverPathItems.length > 0 && (
+        <CanvasNodePathOverlay
+          items={hoverPathItems}
+          activeNodeId={null}
+          anchorFragment={resolveDisplayFragment(hoverPathFragment)}
+          pageWidth={page.width}
+          pageHeight={page.height}
+          scale={scale}
+          variant="hover"
+        />
+      )}
+
       <DropHighlight doc={doc} drag={drag} fragments={page.fragments} scale={scale} contentBox={page.contentBox} />
 
       {isLayoutLoading && !inlineEditNodeId && !drag && !resizeDrag?.committed && !minHeightDrag?.committed && (
@@ -1570,6 +2043,7 @@ interface Props {
   minHeightDrag: MinHeightDrag | null
   scale: number
   selectedNodeId: string | null
+  selectionAnchorNodeId: string | null
   isLayoutLoading: boolean
   textMeasurer: TextMeasurer
   inlineEditVisualFresh: boolean
@@ -1588,6 +2062,9 @@ interface Props {
   setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
+  onSelectContextNode: (nodeId: string) => void
+  onDuplicateNode: (nodeId: string) => void
+  onDeleteNode: (nodeId: string) => void
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, gapWidthPt: number, startClientX: number, pageKey: string, rowFragY: number, rowFragHeight: number) => void
   onTableColumnResizeStart: (tableId: string, leftColIndex: number, pairX: number, pairWidth: number, leftWidthOriginal: number, rightWidthOriginal: number, startClientX: number, pageKey: string, tableFragY: number, tableFragHeight: number) => void
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
@@ -1606,6 +2083,7 @@ interface Props {
   wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
   wysiwygTextDraftPaginationActive: boolean
   onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
+  onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
 }
 
@@ -1619,7 +2097,7 @@ export function buildWysiwygDraftVisualPreview(input: {
   draftPaginationActive?: boolean
 }): WysiwygDraftVisualPreview | null {
   const paragraph = findParagraphNode(input.doc, input.nodeId)
-  if (!paragraph || !isPlainTextParagraph(paragraph)) return null
+  if (!paragraph || !isTextRunOnlyParagraph(paragraph)) return null
   if (isParagraphInsideRowStack(input.doc, input.nodeId)) return null
   if (isParagraphInsideFlowStack(input.doc, input.nodeId)) return null
 
@@ -1692,10 +2170,10 @@ export function buildWysiwygDraftVisualPreview(input: {
 }
 
 export function EditorCanvas({
-  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, isLayoutLoading,
+  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
   textMeasurer,
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
-  setPageRef, onNodePointerDown, onBackgroundPointerDown, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
+  setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled,
@@ -1705,6 +2183,7 @@ export function EditorCanvas({
   wysiwygTextSelection,
   wysiwygTextDraftPaginationActive,
   onWysiwygTextDraftChange,
+  onWysiwygRichTextShortcut,
   onWysiwygTextReflowDecision,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1730,7 +2209,7 @@ export function EditorCanvas({
     if (!wysiwygTextEngineEnabled) return null
     if (!wysiwygTextDraftNodeId || wysiwygTextDraftText == null) return null
     if (inlineEditNodeId !== wysiwygTextDraftNodeId) return null
-    if (getPlainParagraphText(doc, wysiwygTextDraftNodeId) === wysiwygTextDraftText) return null
+    if (getEditableParagraphText(doc, wysiwygTextDraftNodeId) === wysiwygTextDraftText) return null
     return buildWysiwygDraftVisualPreview({
       paginated,
       doc,
@@ -1839,7 +2318,7 @@ export function EditorCanvas({
                 <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>Page {page.index + 1}</div>
                 <MemoizedPageView
                   page={page} doc={doc} drag={drag} scale={scale}
-                  selectedNodeId={selectedNodeId} isLayoutLoading={isLayoutLoading}
+                  selectedNodeId={selectedNodeId} selectionAnchorNodeId={selectionAnchorNodeId} isLayoutLoading={isLayoutLoading}
                   textMeasurer={textMeasurer}
                   inlineEditVisualFresh={inlineEditVisualFresh}
                   inlineEditNodeId={inlineEditNodeId}
@@ -1858,6 +2337,9 @@ export function EditorCanvas({
                   setPageRef={setPageRef}
                   onNodePointerDown={onNodePointerDown}
                   onBackgroundPointerDown={onBackgroundPointerDown}
+                  onSelectContextNode={onSelectContextNode}
+                  onDuplicateNode={onDuplicateNode}
+                  onDeleteNode={onDeleteNode}
                   resizeDrag={resizeDrag}
                   onResizeStart={onResizeStart}
                   onTableColumnResizeStart={onTableColumnResizeStart}
@@ -1880,6 +2362,7 @@ export function EditorCanvas({
                   wysiwygTableCellDraftVisualChromeByPageIndex={wysiwygTableCellDraftVisualChromeByPageIndex}
                   wysiwygTextPointerFragments={wysiwygTextPointerFragments}
                   onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+                  onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
                   onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
                 />
               </div>

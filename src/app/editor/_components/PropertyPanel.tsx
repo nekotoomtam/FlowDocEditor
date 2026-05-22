@@ -10,12 +10,22 @@ import type {
   ParagraphBoxStyle,
   ParagraphNode,
   TocNode,
+  UnitValue,
 } from "@/schema"
 import { pt } from "@/schema"
-import { canRemoveFlowTableColumn, canRemoveFlowTableRow, canUpdateFlowTableCellSpan, isPlainTextParagraph, resolveFlowTableCellMergeTarget } from "@/document"
-import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges } from "@/document"
+import { DEFAULT_FONT_KEY, listSelectableFontEntries, resolveFontEntry } from "@/font-registry"
+import {
+  canRemoveFlowTableColumn,
+  canRemoveFlowTableRow,
+  canUpdateFlowTableCellSpan,
+  getTextRunStyleRangeState,
+  isTextRunOnlyParagraph,
+  resolveFlowTableCellMergeTarget,
+} from "@/document"
+import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
+import { FontFamilyCombobox } from "./FontFamilyCombobox"
 import { resolveFlowStackResizePairShares } from "./flowStackResize"
 import { InfoHint } from "./InfoHint"
 import { buildSelectionContext } from "./selectionContext"
@@ -30,6 +40,7 @@ interface TableOps {
   removeRow: (tableId: string, rowIndex: number) => void
   addCol: (tableId: string, afterIndex?: number) => void
   removeCol: (tableId: string, colIndex: number) => void
+  fitToWidth?: (tableId: string) => void
 }
 
 interface FlowRowOps {
@@ -44,6 +55,7 @@ interface Props {
   selectionAnchorNodeId: string | null
   onUpdateProps: (nodeId: string, changes: Record<string, unknown>) => void
   onUpdateText: (nodeId: string, text: string) => void
+  onUpdateParagraphTextStyle?: (nodeId: string, changes: ParagraphTextStyleChanges) => void
   onUpdateFieldRef: (fieldRefId: string, changes: FieldRefInlineChanges) => void
   onUpdateParagraphBoxStyle: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
   onUpdateFlowStackBoxStyle?: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
@@ -161,13 +173,18 @@ const PARAGRAPH_BOX_EDGES = ["top", "right", "bottom", "left"] as const
 type ParagraphBoxEdge = typeof PARAGRAPH_BOX_EDGES[number]
 type ParagraphBoxBorderStyle = ParagraphBoxBorderSide["style"]
 
-const DEFAULT_BOX_FILL = "E0F2FE"
 const DEFAULT_BOX_BORDER_COLOR = "1F2937"
 const DEFAULT_BOX_BORDER_WIDTH = 1
 const BOX_BORDER_WIDTH_MAX = 5
 const BOX_BORDER_WIDTH_STEP = 0.25
-const BOX_FILL_SWATCHES = ["F8FAFC", "E0F2FE", "DCFCE7", "FEF3C7", "FCE7F3"]
+const DOCUMENT_COLOR_PALETTE = [
+  "F8FAFC", "DBEAFE", "DCFCE7", "FEF3C7", "FCE7F3",
+  "E2E8F0", "BFDBFE", "BBF7D0", "FDE68A", "FBCFE8",
+  "64748B", "2563EB", "16A34A", "D97706", "DB2777",
+  "111827", "1E3A8A", "166534", "92400E", "831843",
+] as const
 const BOX_BORDER_STYLE_OPTIONS: ParagraphBoxBorderStyle[] = ["none", "solid", "dashed", "dotted"]
+const PARAGRAPH_FONT_OPTIONS = listSelectableFontEntries()
 
 function sanitizeHexColorInput(value: string): string {
   return value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6).toUpperCase()
@@ -355,6 +372,109 @@ function BorderStyleIcon({ style }: { style: ParagraphBoxBorderStyle }) {
   )
 }
 
+function ColorPaletteTray({
+  colors,
+  selectedColor,
+  displayValue,
+  onSelectColor,
+  testIdPrefix,
+  labelPrefix,
+  wellStyle,
+  wellContent,
+  actionControl,
+  customControls,
+  swatchWidth = 22,
+  swatchHeight = 20,
+}: {
+  colors: readonly string[]
+  selectedColor: string | null
+  displayValue: string
+  onSelectColor: (color: string) => void
+  testIdPrefix: string
+  labelPrefix: string
+  wellStyle: React.CSSProperties
+  wellContent?: React.ReactNode
+  actionControl?: React.ReactNode
+  customControls?: React.ReactNode
+  swatchWidth?: number
+  swatchHeight?: number
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={colorControlRow}>
+        <button
+          type="button"
+          data-testid={`${testIdPrefix}-well`}
+          aria-label={`Open ${labelPrefix.toLowerCase()} color palette`}
+          aria-expanded={open}
+          aria-controls={`${testIdPrefix}-tray`}
+          onClick={() => setOpen((value) => !value)}
+          style={{ ...colorWellButton, ...wellStyle }}
+        >
+          {wellContent}
+        </button>
+        <span data-testid={`${testIdPrefix}-value`} style={colorValueLabel}>{displayValue}</span>
+        <button
+          type="button"
+          data-testid={`${testIdPrefix}-toggle`}
+          aria-expanded={open}
+          aria-controls={`${testIdPrefix}-tray`}
+          onClick={() => setOpen((value) => !value)}
+          style={colorMoreButton}
+        >
+          More
+        </button>
+      </div>
+      {open && (
+        <div
+          id={`${testIdPrefix}-tray`}
+          data-testid={`${testIdPrefix}-tray`}
+          style={colorTray}
+        >
+          <div style={colorTrayHeader}>
+            <span style={{ fontSize: 9, color: "#6b7280" }}>Document colors</span>
+            <button
+              type="button"
+              data-testid={`${testIdPrefix}-close`}
+              aria-label={`Close ${labelPrefix.toLowerCase()} color palette`}
+              onClick={() => setOpen(false)}
+              style={colorTrayCloseButton}
+            >
+              Close
+            </button>
+          </div>
+          {actionControl}
+          <div
+            data-testid={`${testIdPrefix}-grid`}
+            style={{ ...colorPaletteGrid, gridTemplateColumns: `repeat(5, ${swatchWidth}px)` }}
+          >
+            {colors.map((color) => (
+              <button
+                key={color}
+                type="button"
+                data-testid={`${testIdPrefix}-swatch`}
+                aria-label={`Set ${labelPrefix.toLowerCase()} palette color ${color}`}
+                onClick={() => onSelectColor(color)}
+                style={{
+                  width: swatchWidth,
+                  height: swatchHeight,
+                  border: selectedColor === color ? "2px solid #2563eb" : "1px solid #d1d5db",
+                  borderRadius: 4,
+                  background: `#${color}`,
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              />
+            ))}
+          </div>
+          {customControls && <div style={colorTrayCustom}>{customControls}</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function BoxControls({
   nodeId,
   box,
@@ -382,22 +502,18 @@ function BoxControls({
   const paddingSummary = paddingValues.join("/")
   const borderSummary = activeEdges.length > 0 ? `${activeEdges.length}/4 sides` : "none"
   const allBordersActive = activeEdges.length === PARAGRAPH_BOX_EDGES.length
-  const allBorderActionLabel = allBordersActive ? "Clear all borders" : "Apply border to all sides"
+  const allBorderActionLabel = allBordersActive ? "Clear all borders" : "Set border on all sides"
   const [fillDraft, setFillDraft] = useState(fill)
-  const [fillDraftDirty, setFillDraftDirty] = useState(false)
   const [borderColorDraft, setBorderColorDraft] = useState(borderColor ?? "")
-  const [borderColorDraftDirty, setBorderColorDraftDirty] = useState(false)
   const [borderWidthDraft, setBorderWidthDraft] = useState(borderWidth ?? DEFAULT_BOX_BORDER_WIDTH)
   const [borderWidthDraftDirty, setBorderWidthDraftDirty] = useState(false)
 
   useEffect(() => {
     setFillDraft(fill)
-    setFillDraftDirty(false)
   }, [fill, nodeId])
 
   useEffect(() => {
     setBorderColorDraft(borderColor ?? "")
-    setBorderColorDraftDirty(false)
   }, [borderColor, nodeId])
 
   useEffect(() => {
@@ -427,7 +543,6 @@ function BoxControls({
     const hex = sanitizeHexColorInput(nextFill)
     onUpdateBoxStyle(nodeId, { fill: hex.length === 6 ? hex : null })
     setFillDraft(hex.length === 6 ? hex : "")
-    setFillDraftDirty(false)
   }
 
   const commitFillDraft = () => {
@@ -435,29 +550,30 @@ function BoxControls({
     if (hex.length === 0) {
       if (fill !== "") onUpdateBoxStyle(nodeId, { fill: null })
       setFillDraft("")
-      setFillDraftDirty(false)
       return
     }
     if (!isCompleteHexColor(hex)) {
       setFillDraft(fill)
-      setFillDraftDirty(false)
       return
     }
     if (hex !== fill) onUpdateBoxStyle(nodeId, { fill: hex })
     setFillDraft(hex)
-    setFillDraftDirty(false)
+  }
+
+  const commitBorderColor = (nextColor: string) => {
+    const hex = sanitizeHexColorInput(nextColor)
+    if (!isCompleteHexColor(hex)) return
+    if (hex !== borderColor || activeEdges.length === 0) updateBorderEdges(targetEdges, makeBorderSide({ color: hex }))
+    setBorderColorDraft(hex)
   }
 
   const commitBorderColorDraft = () => {
     const hex = sanitizeHexColorInput(borderColorDraft)
     if (!isCompleteHexColor(hex)) {
       setBorderColorDraft(borderColor ?? "")
-      setBorderColorDraftDirty(false)
       return
     }
-    if (hex !== borderColor) updateBorderEdges(targetEdges, makeBorderSide({ color: hex }))
-    setBorderColorDraft(hex)
-    setBorderColorDraftDirty(false)
+    commitBorderColor(hex)
   }
 
   const setBorderWidthDraftValue = (value: string | number) => {
@@ -551,8 +667,12 @@ function BoxControls({
       </button>
     )
   }
-  const fillPreviewColor = isCompleteHexColor(fillDraft) ? fillDraft : fill || DEFAULT_BOX_FILL
+  const draftFillColor = isCompleteHexColor(fillDraft) ? fillDraft : ""
+  const previewFillColor = draftFillColor || fill
+  const fillPickerColor = previewFillColor || "FFFFFF"
+  const fillPreviewBackground = previewFillColor ? { background: `#${previewFillColor}` } : noneFillBackground
   const borderPreviewColor = isCompleteHexColor(borderColorDraft) ? borderColorDraft : borderColor ?? DEFAULT_BOX_BORDER_COLOR
+  const borderDisplayValue = borderColor ? `#${borderColor}` : activeEdges.length > 0 ? "mixed" : "default"
   const borderPreviewStyle = concreteBorderStyle(borderStyle)
   const borderPreviewWidth = Math.max(1, borderWidthDraft)
 
@@ -565,73 +685,92 @@ function BoxControls({
             height: 22,
             border: "1px solid #e5e7eb",
             borderRadius: 4,
-            background: `#${fillPreviewColor}`,
+            ...fillPreviewBackground,
             marginBottom: 6,
+            overflow: "hidden",
+            position: "relative",
           }}
         />
-        <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 44px", gap: 6, alignItems: "center" }}>
-          <input
-            type="color"
-            aria-label={`${labelPrefix} fill color`}
-            value={`#${fillPreviewColor}`}
-            onChange={(e) => {
-              setFillDraft(sanitizeHexColorInput(e.target.value))
-              setFillDraftDirty(true)
-            }}
-            onBlur={commitFillDraft}
-            style={{ width: 28, height: 24, padding: 0, border: "1px solid #e5e7eb", borderRadius: 4, background: "white" }}
-          />
-          <input
-            data-testid={`${testIdPrefix}-fill-input`}
-            value={fillDraft}
-            placeholder="none"
-            maxLength={6}
-            onChange={(e) => {
-              const hex = sanitizeHexColorInput(e.target.value)
-              setFillDraft(hex)
-              setFillDraftDirty(hex !== fill)
-            }}
-            onBlur={commitFillDraft}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitFillDraft()
-              if (e.key === "Escape") {
-                setFillDraft(fill)
-                setFillDraftDirty(false)
-              }
-            }}
-            style={input}
-          />
-          <button
-            type="button"
-            disabled={!fillDraftDirty}
-            onClick={commitFillDraft}
-            style={{ ...btn, padding: "4px 0", opacity: fillDraftDirty ? 1 : 0.45, cursor: fillDraftDirty ? "pointer" : "default" }}
-          >
-            Apply
-          </button>
-        </div>
-        <div style={{ display: "flex", gap: 4, marginTop: 5 }}>
-          {BOX_FILL_SWATCHES.map((swatch) => (
-            <button
-              key={swatch}
-              type="button"
-              data-testid={`${testIdPrefix}-fill-swatch`}
-              aria-label={`Set ${labelPrefix.toLowerCase()} fill ${swatch}`}
-              onClick={() => commitFill(swatch)}
+        <ColorPaletteTray
+          colors={DOCUMENT_COLOR_PALETTE}
+          selectedColor={fill || null}
+          displayValue={fill ? `#${fill}` : "none"}
+          onSelectColor={commitFill}
+          testIdPrefix={`${testIdPrefix}-fill-palette`}
+          labelPrefix={`${labelPrefix} fill`}
+          wellStyle={fill ? { background: `#${fill}` } : noneFillBackground}
+          wellContent={!fill && (
+            <span
+              aria-hidden="true"
               style={{
-                width: 20,
-                height: 18,
-                border: fill === swatch ? "2px solid #2563eb" : "1px solid #d1d5db",
-                borderRadius: 4,
-                background: `#${swatch}`,
-                cursor: "pointer",
+                position: "absolute",
+                left: -4,
+                right: -4,
+                top: 11,
+                height: 2,
+                background: "#64748b",
+                transform: "rotate(-35deg)",
               }}
             />
-          ))}
-          <button type="button" onClick={() => commitFill("")} style={{ ...btn, flex: 1, padding: "2px 0" }}>
-            Clear fill
-          </button>
-        </div>
+          )}
+          actionControl={(
+            <button
+              type="button"
+              data-testid={`${testIdPrefix}-fill-none`}
+              aria-label={`Set ${labelPrefix.toLowerCase()} fill none`}
+              onClick={() => commitFill("")}
+              style={paletteActionButton}
+            >
+              <span style={{ ...paletteActionSwatch, ...noneFillBackground }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    left: -3,
+                    right: -3,
+                    top: 8,
+                    height: 2,
+                    background: "#64748b",
+                    transform: "rotate(-35deg)",
+                  }}
+                />
+              </span>
+              None
+            </button>
+          )}
+          customControls={(
+            <div style={customColorRow}>
+              <input
+                type="color"
+                aria-label={`${labelPrefix} fill color`}
+                value={`#${fillPickerColor}`}
+                onChange={(e) => {
+                  setFillDraft(sanitizeHexColorInput(e.target.value))
+                }}
+                onBlur={commitFillDraft}
+                style={{ width: 28, height: 24, padding: 0, border: "1px solid #e5e7eb", borderRadius: 4, background: "white" }}
+              />
+              <input
+                data-testid={`${testIdPrefix}-fill-input`}
+                value={fillDraft}
+                placeholder="none"
+                maxLength={6}
+                onChange={(e) => {
+                  const hex = sanitizeHexColorInput(e.target.value)
+                  setFillDraft(hex)
+                }}
+                onBlur={commitFillDraft}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitFillDraft()
+                  if (e.key === "Escape") {
+                    setFillDraft(fill)
+                  }
+                }}
+                style={input}
+              />
+            </div>
+          )}
+        />
       </CollapsibleCard>
 
       <CollapsibleCard title="Padding" summary={`${paddingSummary} pt`} testId={`${testIdPrefix}-padding-card`}>
@@ -773,48 +912,62 @@ function BoxControls({
             }}
           />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 44px", gap: 6, alignItems: "center", marginTop: 6 }}>
-          <input
-            type="color"
-            aria-label={`${labelPrefix} border color`}
-            value={`#${borderPreviewColor}`}
-            onChange={(e) => {
-              const hex = sanitizeHexColorInput(e.target.value)
-              setBorderColorDraft(hex)
-              setBorderColorDraftDirty(true)
-            }}
-            onBlur={commitBorderColorDraft}
-            style={{ width: 28, height: 24, padding: 0, border: "1px solid #e5e7eb", borderRadius: 4, background: "white" }}
-          />
-          <input
-            data-testid={`${testIdPrefix}-border-color`}
-            value={borderColorDraft}
-            placeholder="mixed"
-            maxLength={6}
-            onChange={(e) => {
-              const hex = sanitizeHexColorInput(e.target.value)
-              setBorderColorDraft(hex)
-              setBorderColorDraftDirty(hex !== (borderColor ?? ""))
-            }}
-            onBlur={commitBorderColorDraft}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitBorderColorDraft()
-              if (e.key === "Escape") {
-                setBorderColorDraft(borderColor ?? "")
-                setBorderColorDraftDirty(false)
-              }
-            }}
-            style={input}
-          />
-          <button
-            type="button"
-            disabled={!borderColorDraftDirty}
-            onClick={commitBorderColorDraft}
-            style={{ ...btn, padding: "4px 0", opacity: borderColorDraftDirty ? 1 : 0.45, cursor: borderColorDraftDirty ? "pointer" : "default" }}
-          >
-            Apply
-          </button>
-        </div>
+        <ColorPaletteTray
+          colors={DOCUMENT_COLOR_PALETTE}
+          selectedColor={borderColor}
+          displayValue={borderDisplayValue}
+          onSelectColor={commitBorderColor}
+          testIdPrefix={`${testIdPrefix}-border-color-palette`}
+          labelPrefix={`${labelPrefix} border`}
+          wellStyle={{ background: `#${borderPreviewColor}` }}
+          actionControl={(
+            <button
+              type="button"
+              data-testid={`${testIdPrefix}-border-color-default`}
+              aria-label={`Set ${labelPrefix.toLowerCase()} border default color`}
+              onClick={() => commitBorderColor(DEFAULT_BOX_BORDER_COLOR)}
+              style={paletteActionButton}
+            >
+              <span style={{ ...paletteActionSwatch, background: `#${DEFAULT_BOX_BORDER_COLOR}` }} />
+              Default
+            </button>
+          )}
+          customControls={(
+            <div style={customColorRow}>
+              <input
+                type="color"
+                aria-label={`${labelPrefix} border color`}
+                value={`#${borderPreviewColor}`}
+                onChange={(e) => {
+                  const hex = sanitizeHexColorInput(e.target.value)
+                  setBorderColorDraft(hex)
+                }}
+                onBlur={commitBorderColorDraft}
+                style={{ width: 28, height: 24, padding: 0, border: "1px solid #e5e7eb", borderRadius: 4, background: "white" }}
+              />
+              <input
+                data-testid={`${testIdPrefix}-border-color`}
+                value={borderColorDraft}
+                placeholder="mixed"
+                maxLength={6}
+                onChange={(e) => {
+                  const hex = sanitizeHexColorInput(e.target.value)
+                  setBorderColorDraft(hex)
+                }}
+                onBlur={commitBorderColorDraft}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitBorderColorDraft()
+                  if (e.key === "Escape") {
+                    setBorderColorDraft(borderColor ?? "")
+                  }
+                }}
+                style={input}
+              />
+            </div>
+          )}
+          swatchWidth={20}
+          swatchHeight={18}
+        />
         <button type="button" onClick={() => onUpdateBoxStyle(nodeId, { border: null })} style={{ ...btn, width: "100%", marginTop: 5 }}>
           Clear border
         </button>
@@ -931,6 +1084,128 @@ const btn: React.CSSProperties = {
 }
 const btnDanger: React.CSSProperties = {
   ...btn, border: "1px solid #fca5a5", background: "#fff5f5", color: "#ef4444",
+}
+const colorInput: React.CSSProperties = {
+  width: 30,
+  height: 26,
+  border: "1px solid #d1d5db",
+  borderRadius: 4,
+  padding: 1,
+  background: "#fff",
+  cursor: "pointer",
+}
+const colorControlRow: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "28px 1fr 58px",
+  gap: 6,
+  alignItems: "center",
+}
+const colorWellButton: React.CSSProperties = {
+  width: 28,
+  height: 24,
+  border: "1px solid #d1d5db",
+  borderRadius: 4,
+  padding: 0,
+  cursor: "pointer",
+  position: "relative",
+  overflow: "hidden",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+}
+const colorValueLabel: React.CSSProperties = {
+  minWidth: 0,
+  height: 24,
+  border: "1px solid #e5e7eb",
+  borderRadius: 4,
+  padding: "4px 7px",
+  boxSizing: "border-box",
+  fontFamily: "monospace",
+  fontSize: 11,
+  color: "#6b7280",
+  background: "#fff",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+}
+const colorMoreButton: React.CSSProperties = {
+  ...btn,
+  flex: "0 0 auto",
+  height: 24,
+  padding: "2px 0",
+}
+const colorTray: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 5,
+  padding: 6,
+  background: "#f8fafc",
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+}
+const colorTrayHeader: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 6,
+}
+const colorTrayCloseButton: React.CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: "#64748b",
+  cursor: "pointer",
+  fontSize: 9,
+  padding: 0,
+}
+const paletteActionButton: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 4,
+  background: "#fff",
+  color: "#374151",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "3px 6px",
+  fontSize: 10,
+  alignSelf: "flex-start",
+}
+const paletteActionSwatch: React.CSSProperties = {
+  width: 18,
+  height: 16,
+  border: "1px solid #d1d5db",
+  borderRadius: 3,
+  position: "relative",
+  overflow: "hidden",
+  flexShrink: 0,
+}
+const colorTrayCustom: React.CSSProperties = {
+  borderTop: "1px solid #e5e7eb",
+  paddingTop: 6,
+}
+const customColorRow: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "28px 1fr",
+  gap: 6,
+  alignItems: "center",
+}
+const customColorHint: React.CSSProperties = {
+  fontSize: 10,
+  color: "#6b7280",
+}
+const noneFillBackground: React.CSSProperties = {
+  backgroundColor: "#fff",
+  backgroundImage: "repeating-conic-gradient(#f8fafc 0% 25%, #ffffff 0% 50%)",
+  backgroundSize: "8px 8px",
+}
+const colorPaletteGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(5, min-content)",
+  gap: 4,
+  padding: 5,
+  border: "1px solid #e5e7eb",
+  borderRadius: 5,
+  background: "#fff",
 }
 const sectionBox: React.CSSProperties = {
   border: "none",
@@ -1056,10 +1331,116 @@ function headerRowCountChanges(value: number): Record<string, unknown> {
   return { headerRowCount: value > 0 ? value : undefined }
 }
 
+type FlowTableAlign = NonNullable<FlowTableNode["props"]["align"]>
+
+function unitValueToPtNumber(value: UnitValue | undefined): number {
+  if (!value) return 0
+  return value.unit === "mm" ? value.value * 72 / 25.4 : value.value
+}
+
+function flowTableMarginChange(key: "marginTop" | "marginBottom", value: number): Record<string, unknown> {
+  const next = Math.max(0, Number.isFinite(value) ? value : 0)
+  return { [key]: next > 0 ? pt(next) : undefined }
+}
+
+function TableLayoutControl({
+  tableId,
+  table,
+  onUpdateProps,
+  onFitToWidth,
+}: {
+  tableId: string
+  table: FlowTableNode
+  onUpdateProps: Props["onUpdateProps"]
+  onFitToWidth?: (tableId: string) => void
+}) {
+  const currentAlign: FlowTableAlign = table.props.align ?? "left"
+  const totalWidth = table.columns.reduce((sum, column) => sum + unitValueToPtNumber(column.width), 0)
+  return (
+    <div data-testid="flow-table-layout-control" style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+      <div>
+        <div style={labelWithInfo}>
+          <label style={inlineLabel}>Table width</label>
+          <InfoHint text="Fit to width rewrites authored column widths to the current section content width. Manual column resize remains the source of truth after fitting." />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, alignItems: "center" }}>
+          <input
+            type="text"
+            readOnly
+            value={`${Math.round(totalWidth * 100) / 100} pt`}
+            style={{ ...input, background: "#f9fafb", color: "#6b7280" }}
+            aria-label="Authored table width"
+          />
+          <button
+            type="button"
+            data-testid="flow-table-fit-width"
+            style={{ ...btn, whiteSpace: "nowrap", opacity: onFitToWidth ? 1 : 0.45 }}
+            disabled={!onFitToWidth}
+            onClick={() => onFitToWidth?.(tableId)}
+          >
+            Fit
+          </button>
+        </div>
+      </div>
+      <div>
+        <label style={label}>Align</label>
+        <div data-testid="flow-table-align-control" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4 }}>
+          {(["left", "center", "right"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              data-testid={`flow-table-align-${value}`}
+              onClick={() => onUpdateProps(tableId, { align: value === "left" ? undefined : value })}
+              style={{
+                ...btn,
+                background: currentAlign === value ? "#dbeafe" : "#fafafa",
+                color: currentAlign === value ? "#1d4ed8" : "#6b7280",
+                fontWeight: currentAlign === value ? "bold" : "normal",
+              }}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label style={label}>Margin (pt)</label>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, color: "#6b7280" }}>
+            Top
+            <input
+              data-testid="flow-table-margin-top"
+              type="number"
+              min={0}
+              step={1}
+              value={Math.round(unitValueToPtNumber(table.props.marginTop) * 100) / 100}
+              onChange={(e) => onUpdateProps(tableId, flowTableMarginChange("marginTop", Number(e.target.value)))}
+              style={input}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, color: "#6b7280" }}>
+            Bottom
+            <input
+              data-testid="flow-table-margin-bottom"
+              type="number"
+              min={0}
+              step={1}
+              value={Math.round(unitValueToPtNumber(table.props.marginBottom) * 100) / 100}
+              onChange={(e) => onUpdateProps(tableId, flowTableMarginChange("marginBottom", Number(e.target.value)))}
+              style={input}
+            />
+          </label>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function TableHeaderRowsControl({
   tableId,
   rowCount,
   headerRowCount,
+  repeatHeaderRows,
   selectedRowIndex,
   testId,
   onUpdateProps,
@@ -1067,6 +1448,7 @@ function TableHeaderRowsControl({
   tableId: string
   rowCount: number
   headerRowCount: number
+  repeatHeaderRows: boolean
   selectedRowIndex?: number
   testId: string
   onUpdateProps: (nodeId: string, changes: Record<string, unknown>) => void
@@ -1084,7 +1466,7 @@ function TableHeaderRowsControl({
     <div data-testid={testId} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={labelWithInfo}>
         <label style={inlineLabel}>Header rows</label>
-        <InfoHint text="The first N authored rows repeat on continuation pages." />
+        <InfoHint text="The first N authored rows are table headers. Repeating them on continuation pages is controlled separately." />
       </div>
       <input
         data-testid={`${testId}-input`}
@@ -1095,6 +1477,26 @@ function TableHeaderRowsControl({
         onChange={(e) => updateHeaderRows(Number(e.target.value) || 0)}
         style={input}
       />
+      {selectedThroughRowCount == null && rowCount > 0 && (
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            data-testid={`${testId}-first-row`}
+            style={{ ...btn, opacity: safeHeaderRowCount === 1 ? 0.55 : 1 }}
+            disabled={safeHeaderRowCount === 1}
+            onClick={() => updateHeaderRows(1)}
+          >
+            First row
+          </button>
+          <button
+            data-testid={`${testId}-clear`}
+            style={{ ...btn, opacity: safeHeaderRowCount > 0 ? 1 : 0.4 }}
+            disabled={safeHeaderRowCount <= 0}
+            onClick={() => updateHeaderRows(0)}
+          >
+            Clear
+          </button>
+        </div>
+      )}
       {selectedThroughRowCount != null && (
         <div style={{ display: "flex", gap: 4 }}>
           <button
@@ -1115,13 +1517,23 @@ function TableHeaderRowsControl({
           </button>
         </div>
       )}
+      <label style={{ ...label, display: "flex", alignItems: "center", gap: 6, marginBottom: 0 }}>
+        <input
+          data-testid={`${testId}-repeat`}
+          type="checkbox"
+          checked={repeatHeaderRows}
+          disabled={safeHeaderRowCount <= 0}
+          onChange={(e) => onUpdateProps(tableId, { repeatHeaderRows: e.target.checked })}
+        />
+        Repeat header on new pages
+      </label>
     </div>
   )
 }
 
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
-export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectNode, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
+export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateParagraphTextStyle, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectNode, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
   const [contextOpen, setContextOpen] = useState(false)
   const [paragraphPanelTab, setParagraphPanelTab] = useState<ParagraphPanelTab>("text")
   const [flowContainerPanelTab, setFlowContainerPanelTab] = useState<FlowContainerPanelTab>("layout")
@@ -1331,8 +1743,75 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
         {/* ── Paragraph ── */}
         {node.type === "paragraph" && (() => {
           const text = getParagraphText(node)
-          const canEditText = isPlainTextParagraph(node)
+          const canEditText = isTextRunOnlyParagraph(node)
           const fieldRefs = getParagraphFieldRefs(node)
+          const textStyleState = getTextRunStyleRangeState(node, 0, text.length)
+          const updateTextStyle = (changes: ParagraphTextStyleChanges) => {
+            if (onUpdateParagraphTextStyle) onUpdateParagraphTextStyle(selectedNodeId, changes)
+            else onUpdateProps(selectedNodeId, { ...changes })
+          }
+          const fontFamilyMixed = textStyleState?.fontFamilyKey.mixed === true
+          const fontSizeMixed = textStyleState?.fontSize.mixed === true
+          const textColorMixed = textStyleState?.textColor.mixed === true
+          const fontWeightMixed = textStyleState?.fontWeight.mixed === true
+          const fontStyleMixed = textStyleState?.fontStyle.mixed === true
+          const textDecorationMixed = textStyleState?.textDecoration.mixed === true
+          const strikethroughMixed = textStyleState?.strikethrough.mixed === true
+          const currentFontKey = resolveFontEntry(
+            fontFamilyMixed
+              ? node.props.fontFamilyKey ?? DEFAULT_FONT_KEY
+              : textStyleState?.fontFamilyKey.value ?? node.props.fontFamilyKey ?? DEFAULT_FONT_KEY,
+          ).key
+          const currentFont = resolveFontEntry(currentFontKey)
+          const fontWeight = fontWeightMixed ? "normal" : textStyleState?.fontWeight.value ?? node.props.fontWeight ?? "normal"
+          const fontStyle = fontStyleMixed ? "normal" : textStyleState?.fontStyle.value ?? node.props.fontStyle ?? "normal"
+          const textDecoration = textDecorationMixed ? "none" : textStyleState?.textDecoration.value ?? node.props.textDecoration ?? "none"
+          const strikethrough = strikethroughMixed ? false : textStyleState?.strikethrough.value ?? node.props.strikethrough ?? false
+          const rawTextColor = textColorMixed ? node.props.textColor ?? "000000" : textStyleState?.textColor.value ?? node.props.textColor ?? "000000"
+          const textColor = sanitizeHexColorInput(rawTextColor) || "000000"
+          const fontSizeValue = fontSizeMixed
+            ? ""
+            : String(textStyleState?.fontSize.value.value ?? node.props.fontSize.value)
+          const hasBoldVariant = Boolean(currentFont.variants.bold || currentFont.variants.boldItalic)
+          const hasItalicVariant = Boolean(currentFont.variants.italic || currentFont.variants.boldItalic)
+          const textStyleOptions = [
+            {
+              key: "bold",
+              label: "B",
+              active: !fontWeightMixed && fontWeight === "bold",
+              disabled: !hasBoldVariant && fontWeight !== "bold",
+              title: fontWeightMixed ? "Bold (mixed)" : hasBoldVariant ? "Bold" : "Bold variant is unavailable for this font",
+              style: { fontWeight: 800 },
+              changes: { fontWeight: fontWeightMixed ? "bold" : fontWeight === "bold" ? "normal" : "bold" },
+            },
+            {
+              key: "italic",
+              label: "I",
+              active: !fontStyleMixed && fontStyle === "italic",
+              disabled: !hasItalicVariant && fontStyle !== "italic",
+              title: fontStyleMixed ? "Italic (mixed)" : hasItalicVariant ? "Italic" : "Italic variant is unavailable for this font",
+              style: { fontStyle: "italic" },
+              changes: { fontStyle: fontStyleMixed ? "italic" : fontStyle === "italic" ? "normal" : "italic" },
+            },
+            {
+              key: "underline",
+              label: "U",
+              active: !textDecorationMixed && textDecoration === "underline",
+              disabled: false,
+              title: textDecorationMixed ? "Underline (mixed)" : "Underline",
+              style: { textDecoration: "underline" },
+              changes: { textDecoration: textDecorationMixed ? "underline" : textDecoration === "underline" ? "none" : "underline" },
+            },
+            {
+              key: "strikethrough",
+              label: "S",
+              active: !strikethroughMixed && strikethrough,
+              disabled: false,
+              title: strikethroughMixed ? "Strikethrough (mixed)" : "Strikethrough",
+              style: { textDecoration: "line-through" },
+              changes: { strikethrough: strikethroughMixed ? true : !strikethrough },
+            },
+          ] as const
           return (
             <>
               <section
@@ -1361,12 +1840,91 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   />
                 </div>
                 <FieldReferenceList refs={fieldRefs} registry={registry} onUpdateFieldRef={onUpdateFieldRef} />
+                <div>
+                  <label style={label}>Font</label>
+                  <FontFamilyCombobox
+                    value={currentFontKey}
+                    options={PARAGRAPH_FONT_OPTIONS}
+                    onChange={(fontFamilyKey) => updateTextStyle({ fontFamilyKey })}
+                    testId="paragraph-font-family"
+                  />
+                  {fontFamilyMixed && <div style={{ marginTop: 4, fontSize: 9, color: "#9ca3af" }}>mixed</div>}
+                </div>
+                <div>
+                  <label style={label}>Style</label>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {textStyleOptions.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        data-testid={`paragraph-style-${option.key}`}
+                        aria-pressed={option.active}
+                        disabled={option.disabled}
+                        title={option.title}
+                        onClick={() => {
+                          if (!option.disabled) updateTextStyle(option.changes)
+                        }}
+                        style={{
+                          ...btn,
+                          ...option.style,
+                          background: option.active ? "#dbeafe" : option.disabled ? "#f9fafb" : "#fafafa",
+                          color: option.active ? "#1d4ed8" : option.disabled ? "#d1d5db" : "#374151",
+                          cursor: option.disabled ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={label}>Text color</label>
+                  <ColorPaletteTray
+                    colors={DOCUMENT_COLOR_PALETTE}
+                    selectedColor={textColor}
+                    displayValue={textColorMixed ? "Mixed" : textColor === "000000" ? "Default" : `#${textColor}`}
+                    onSelectColor={(color) => updateTextStyle({ textColor: color })}
+                    testIdPrefix="paragraph-text-color-palette"
+                    labelPrefix="Text"
+                    wellStyle={{ background: textColor === "000000" ? "#fff" : `#${textColor}` }}
+                    wellContent={textColor === "000000" ? (
+                      <span style={{ color: "#111827", fontSize: 11, fontWeight: 700 }}>A</span>
+                    ) : undefined}
+                    actionControl={(
+                      <button
+                        type="button"
+                        aria-label="Default text color"
+                        data-testid="paragraph-text-color-default"
+                        onClick={() => updateTextStyle({ textColor: "000000" })}
+                        style={paletteActionButton}
+                      >
+                        <span style={{ ...paletteActionSwatch, background: "#fff", color: "#111827", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>A</span>
+                        Default
+                      </button>
+                    )}
+                    customControls={(
+                      <div style={{ ...customColorRow, gridTemplateColumns: "28px 1fr" }}>
+                        <input
+                          type="color"
+                          aria-label="Text color"
+                          value={`#${textColor}`}
+                          onChange={(e) => updateTextStyle({ textColor: sanitizeHexColorInput(e.target.value) })}
+                          style={{ ...colorInput, flex: "0 0 auto" }}
+                        />
+                        <span style={customColorHint}>Custom color</span>
+                      </div>
+                    )}
+                    swatchWidth={22}
+                    swatchHeight={22}
+                  />
+                </div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <div style={{ flex: 1 }}>
                     <label style={label}>Font size (pt)</label>
                     <input type="number" min={4} max={200}
-                      value={node.props.fontSize.value}
-                      onChange={(e) => onUpdateProps(selectedNodeId, { fontSize: pt(Number(e.target.value)) })}
+                      value={fontSizeValue}
+                      placeholder={fontSizeMixed ? "mixed" : undefined}
+                      onChange={(e) => updateTextStyle({ fontSize: pt(Number(e.target.value)) })}
                       style={input} />
                   </div>
                   <div style={{ flex: 1 }}>
@@ -1825,6 +2383,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           const rows = table.rowIds.length
           const cols = table.columns.length
           const headerRowCount = table.props.headerRowCount ?? 0
+          const repeatHeaderRows = table.props.repeatHeaderRows ?? true
           const canAddGrid = canAddFlowTableGrid(table)
           const canRemoveLastRow = canRemoveFlowTableRow(table, rows - 1)
           const canRemoveLastCol = canRemoveFlowTableColumn(table, cols - 1)
@@ -1835,8 +2394,15 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                 tableId={selectedNodeId}
                 rowCount={rows}
                 headerRowCount={headerRowCount}
+                repeatHeaderRows={repeatHeaderRows}
                 testId="flow-table-header-rows-control"
                 onUpdateProps={onUpdateProps}
+              />
+              <TableLayoutControl
+                tableId={selectedNodeId}
+                table={table}
+                onUpdateProps={onUpdateProps}
+                onFitToWidth={tableOps.fitToWidth}
               />
               <div>
                 <label style={label}>Rows</label>
@@ -1890,6 +2456,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           const { table, tableId } = info
           const ri = rowIndexOfFlowTable(table, selectedNodeId)
           const headerRowCount = table.props.headerRowCount ?? 0
+          const repeatHeaderRows = table.props.repeatHeaderRows ?? true
           const canAddGrid = canAddFlowTableGrid(table)
           const canRemoveRow = canRemoveFlowTableRow(table, ri)
           return (
@@ -1899,6 +2466,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                 tableId={tableId}
                 rowCount={table.rowIds.length}
                 headerRowCount={headerRowCount}
+                repeatHeaderRows={repeatHeaderRows}
                 selectedRowIndex={ri}
                 testId="flow-table-row-header-rows-control"
                 onUpdateProps={onUpdateProps}
@@ -1956,7 +2524,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
             return [{
               id: paragraphId,
               text: getParagraphText(paraNode),
-              canEditText: isPlainTextParagraph(paraNode),
+              canEditText: isTextRunOnlyParagraph(paraNode),
               fieldRefs: getParagraphFieldRefs(paraNode),
             }]
           })
@@ -1964,6 +2532,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           const table = info?.table ?? null
           const pos = table ? rowOfFlowTableCell(table, selectedNodeId) : null
           const headerRowCount = table?.props.headerRowCount ?? 0
+          const repeatHeaderRows = table?.props.repeatHeaderRows ?? true
           const canAddGrid = table ? canAddFlowTableGrid(table) : false
           const canRemoveCol = table && pos ? canRemoveFlowTableColumn(table, pos.colIndex) : false
           const canRemoveRow = table && pos ? canRemoveFlowTableRow(table, pos.rowIndex) : false
@@ -1991,6 +2560,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   tableId={info.tableId}
                   rowCount={table.rowIds.length}
                   headerRowCount={headerRowCount}
+                  repeatHeaderRows={repeatHeaderRows}
                   selectedRowIndex={pos.rowIndex}
                   testId="flow-table-cell-header-rows-control"
                   onUpdateProps={onUpdateProps}

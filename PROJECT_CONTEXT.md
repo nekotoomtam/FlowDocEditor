@@ -68,7 +68,7 @@ Near-term direction:
 
 - use `Intl.Segmenter` for word segmentation during the current phase
 - use project-controlled TTF font bytes and fontkit-based measurement where possible
-- treat `public/fonts/THSarabun.ttf` as the current default font through the shared font registry
+- treat `public/fonts/Sarabun/Sarabun-Regular.ttf` as the current default font through the shared font registry
 - keep `TextMeasurer` and `WordBreaker` as injectable contracts
 - make server/export output authoritative
 - move browser/editor layout toward the same measurement path, preferably through a Web Worker

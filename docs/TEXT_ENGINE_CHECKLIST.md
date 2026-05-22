@@ -14,11 +14,11 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
 - [x] Server/API pagination path uses fontkit measurement.
 - [x] Server/API pagination path uses `Intl.Segmenter` through `thaiWordBreaker`.
 - [x] Default project font is routed through the shared font registry.
-  - Runtime source of truth: `public/fonts/THSarabun.ttf`.
+  - Runtime source of truth: `public/fonts/Sarabun/Sarabun-Regular.ttf`.
   - Server/API loads from `process.cwd()/public/fonts/...`; browser CSS loads
     from `/fonts/...`.
-  - Do not depend on `src/fonts/THSarabun.ttf` unless the font loading contract
-    is intentionally changed.
+  - Legacy or unknown font keys fall back to `Sarabun`; old TH Sarabun font
+    files are no longer part of the active runtime font contract.
 - [x] Paragraph measurement returns measured lines.
 - [x] Pagination returns renderer-facing `PaginatedLine` output.
 - [x] Editor preview renders from `PaginatedDocument` instead of CSS flow.
@@ -98,7 +98,7 @@ QA level guidance, see `docs/TEST_STRATEGY.md`.
     No real font needed; all cases are deterministic.
   - Level 2 real-font coverage is now covered by
     `src/app/editor/_components/__tests__/realFontDrift.test.ts`:
-    - loads runtime `public/fonts/THSarabun.ttf` into Chromium canvas and
+    - loads runtime `public/fonts/Sarabun/Sarabun-Regular.ttf` into Chromium canvas and
       fontkit from the same font bytes.
     - checks representative Thai/mixed/long-token width parity within a
       sub-point tolerance.

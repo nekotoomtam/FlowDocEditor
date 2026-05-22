@@ -1,5 +1,6 @@
 import type { TextMeasurer } from "@/layout"
-import { DEFAULT_FONT_KEY, resolveFontFileName } from "@/font-registry"
+import type { FontVariantKey } from "@/font-registry"
+import { DEFAULT_FONT_KEY, listRuntimeFontVariantRequests, resolveFontFileName, resolveFontVariantCacheKey } from "@/font-registry"
 
 // Browser-side fontkit measurer. Mirrors the server-side createFontkitMeasurer
 // in packages/core/src/layout/font-measurer.ts so that editor preview and
@@ -7,8 +8,15 @@ import { DEFAULT_FONT_KEY, resolveFontFileName } from "@/font-registry"
 
 const WIDTH_CACHE_LIMIT = 8000
 
-export function resolveBrowserFontUrl(key: string = DEFAULT_FONT_KEY): string {
-  return `/fonts/${resolveFontFileName(key)}`
+type BrowserFont = {
+  layout(text: string): { advanceWidth: number }
+  unitsPerEm: number
+}
+
+export type BrowserFontBufferMap = Record<string, Uint8Array | null | undefined>
+
+export function resolveBrowserFontUrl(key: string = DEFAULT_FONT_KEY, variant: FontVariantKey = "regular"): string {
+  return `/fonts/${resolveFontFileName(key, variant)}`
 }
 
 export async function loadBrowserFontBuffer(
@@ -25,12 +33,18 @@ export async function loadBrowserFontBuffer(
   }
 }
 
-export async function createBrowserFontkitMeasurer(
-  fontBuffer: Uint8Array | null,
-): Promise<TextMeasurer | null> {
-  if (!fontBuffer) return null
+export async function loadBrowserFontBuffers(): Promise<BrowserFontBufferMap> {
+  const entries = await Promise.all(
+    listRuntimeFontVariantRequests().map(async (request) => [
+      request.cacheKey,
+      await loadBrowserFontBuffer(resolveBrowserFontUrl(request.fontFamilyKey, request.variant)),
+    ] as const),
+  )
+  return Object.fromEntries(entries)
+}
 
-  let font: unknown
+async function createBrowserFont(fontBuffer: Uint8Array | null | undefined): Promise<BrowserFont | null> {
+  if (!fontBuffer) return null
   try {
     const mod = await import("@pdf-lib/fontkit")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -39,27 +53,42 @@ export async function createBrowserFontkitMeasurer(
     const BufferCtor = (globalThis as any).Buffer
     const bufferLike = BufferCtor ? BufferCtor.from(fontBuffer) : fontBuffer
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    font = (fontkit as any).create(bufferLike)
+    return (fontkit as any).create(bufferLike) as BrowserFont
   } catch {
     return null
   }
+}
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const layoutFn: (text: string) => { advanceWidth: number } = (font as any).layout.bind(font)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const unitsPerEm: number = (font as any).unitsPerEm
+export async function createBrowserFontkitMeasurer(
+  fontBuffer: Uint8Array | null,
+  fontBuffersByKey: BrowserFontBufferMap = {},
+): Promise<TextMeasurer | null> {
+  const defaultFont = await createBrowserFont(fontBuffer)
+  const fontsByKey = new Map<string, BrowserFont>()
+
+  if (defaultFont) fontsByKey.set(DEFAULT_FONT_KEY, defaultFont)
+  for (const [key, buffer] of Object.entries(fontBuffersByKey)) {
+    const font = await createBrowserFont(buffer)
+    if (font) fontsByKey.set(key, font)
+  }
+
+  if (!defaultFont && fontsByKey.size === 0) return null
 
   const widthCache = new Map<string, number>()
 
   return {
-    measureText(text, _fontFamilyKey, fontSize) {
+    measureText(text, fontFamilyKey, fontSize, fontVariant = "regular") {
       if (!text) return { width: 0 }
-      const cacheKey = JSON.stringify([fontSize, text])
+      const variantKey = resolveFontVariantCacheKey(fontFamilyKey, fontVariant)
+      const regularKey = resolveFontVariantCacheKey(fontFamilyKey, "regular")
+      const cacheKey = JSON.stringify([variantKey, fontSize, text])
       const cached = widthCache.get(cacheKey)
       if (cached !== undefined) return { width: cached }
+      const font = fontsByKey.get(variantKey) ?? fontsByKey.get(regularKey) ?? defaultFont ?? fontsByKey.get(DEFAULT_FONT_KEY)
+      if (!font) return { width: text.length * fontSize * 0.5 }
       try {
-        const run = layoutFn(text)
-        const width = (run.advanceWidth / unitsPerEm) * fontSize
+        const run = font.layout(text)
+        const width = (run.advanceWidth / font.unitsPerEm) * fontSize
         if (widthCache.size < WIDTH_CACHE_LIMIT) widthCache.set(cacheKey, width)
         return { width }
       } catch {

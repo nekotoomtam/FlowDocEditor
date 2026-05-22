@@ -1,4 +1,4 @@
-import { isPlainTextParagraph } from "@/document"
+import { isTextRunOnlyParagraph } from "@/document"
 import type { DocumentNode, FlowTableNode, ParagraphNode } from "@/schema"
 import type { PaginatedDocument, PageFragment } from "@/pagination"
 
@@ -92,5 +92,5 @@ export function isWysiwygTextEngineFragmentEligible(input: {
   const fragment = findWysiwygTextEngineFragment(input.paginated, input.nodeId, input.pageIndex)
   if (!fragment) return false
   const paragraph = findParagraphNode(input.doc, input.nodeId)
-  return paragraph !== null && isPlainTextParagraph(paragraph)
+  return paragraph !== null && isTextRunOnlyParagraph(paragraph)
 }

@@ -14,7 +14,7 @@ import {
   shouldMoveBlockToNextPage,
   shouldMoveToNextPage,
 } from "./cursor"
-import { resolveFlowTableColumnWidths } from "./tableRenderProps"
+import { resolveFlowTableBlockMargins, resolveFlowTableColumnWidths } from "./tableRenderProps"
 import { MINIMUM_ROW_SPLIT_HEIGHT } from "./constants"
 import {
   paginateFlowTableRowFull,
@@ -47,9 +47,12 @@ export function paginateFlowTable(
 
   let current = cursor
   const groups = planFlowTableRowspanGroups(tableNode, box.children)
+  const blockMargins = resolveFlowTableBlockMargins(tableNode)
   const headerRowCount = tableNode.props.headerRowCount ?? 0
-  const headerBoxes = box.children.slice(0, headerRowCount)
+  const shouldRepeatHeaders = headerRowCount > 0 && (tableNode.props.repeatHeaderRows ?? true)
+  const headerBoxes = shouldRepeatHeaders ? box.children.slice(0, headerRowCount) : []
   const headerHeight = headerBoxes.reduce((sum, rowBox) => sum + rowBox.height, 0)
+  const tableContentHeight = box.children.reduce((sum, rowBox) => sum + rowBox.height, 0)
   const flowTableGridProps: FlowTableGridRenderProps = {
     columnWidths: resolveFlowTableColumnWidths(tableNode, box.width),
   }
@@ -84,6 +87,7 @@ export function paginateFlowTable(
 
   const firstGroup = groups[0]
   if (firstGroup) {
+    const firstRowStartY = current.cursorY + blockMargins.top
     const firstRowBox = box.children[firstGroup.rowIndices[0]]
     const firstRowNode = firstRowBox ? tableNode.nodes[firstRowBox.nodeId] : undefined
     const firstRowAllowBreak = firstRowNode?.type === "flow-table-row"
@@ -94,13 +98,17 @@ export function paginateFlowTable(
       (firstGroup.rowIndices.length > 1 && !flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, firstGroup)) ||
       (firstGroup.rowIndices.length === 1 && !firstRowAllowBreak)
     const firstGroupNeedsCleanSplitStart = !firstGroupIsAtomic &&
-      current.cursorY > contentTop &&
-      contentBottom - current.cursorY < MINIMUM_ROW_SPLIT_HEIGHT
-    if (shouldMoveToNextPage(current.cursorY, contentBottom) ||
+      firstRowStartY > contentTop &&
+      contentBottom - firstRowStartY < MINIMUM_ROW_SPLIT_HEIGHT
+    if (shouldMoveToNextPage(firstRowStartY, contentBottom) ||
       firstGroupNeedsCleanSplitStart ||
-      (firstGroupIsAtomic && shouldMoveBlockToNextPage(current.cursorY, firstGroup.totalHeight, contentTop, contentBottom))) {
+      (firstGroupIsAtomic && shouldMoveBlockToNextPage(firstRowStartY, firstGroup.totalHeight, contentTop, contentBottom))) {
       current = advancePage(current, contentTop)
     }
+  }
+
+  if (blockMargins.top > 0) {
+    current = { ...current, cursorY: current.cursorY + blockMargins.top }
   }
 
   pushFragment(pages, template, {
@@ -111,7 +119,7 @@ export function paginateFlowTable(
     x: box.x,
     y: current.cursorY,
     width: box.width,
-    height: box.height,
+    height: tableContentHeight,
     flowTableGridProps,
   })
 
@@ -120,7 +128,7 @@ export function paginateFlowTable(
 
     if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
       current = advancePage(current, contentTop)
-      if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
+      if (!isHeaderGroup && shouldRepeatHeaders) current = placeHeaders(current)
     }
 
     if (rowIndices.length > 1) {
@@ -142,21 +150,21 @@ export function paginateFlowTable(
           wordBreaker,
           flowTableGridProps,
           flowTableCellGridPropsById,
-          headerRowCount > 0 ? placeHeaders : undefined,
+          shouldRepeatHeaders ? placeHeaders : undefined,
         )
         continue
       }
 
       if (shouldMoveBlockToNextPage(current.cursorY, totalHeight, contentTop, contentBottom)) {
         current = advancePage(current, contentTop)
-        if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
+        if (!isHeaderGroup && shouldRepeatHeaders) current = placeHeaders(current)
       }
       for (const rowIndex of rowIndices) {
         const rowBox = box.children[rowIndex]
         if (!rowBox) continue
         if (shouldMoveToNextPage(current.cursorY, contentBottom)) {
           current = advancePage(current, contentTop)
-          if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
+          if (!isHeaderGroup && shouldRepeatHeaders) current = placeHeaders(current)
         }
         current = paginateFlowTableRowFull(
           rowBox,
@@ -209,15 +217,15 @@ export function paginateFlowTable(
         wordBreaker,
         flowTableGridProps,
         flowTableCellGridPropsById,
-        headerRowCount > 0 ? placeHeaders : undefined,
-        headerRowCount > 0 ? headerHeight : 0,
+        shouldRepeatHeaders ? placeHeaders : undefined,
+        shouldRepeatHeaders ? headerHeight : 0,
       )
     } else {
       const nextPage = advancePage(current, contentTop)
       const reservedForHeaders = isHeaderGroup ? 0 : headerHeight
       if (nextPage.cursorY + reservedForHeaders + rowBox.height <= contentBottom) {
         current = nextPage
-        if (!isHeaderGroup && headerRowCount > 0) current = placeHeaders(current)
+        if (!isHeaderGroup && shouldRepeatHeaders) current = placeHeaders(current)
       }
       current = paginateFlowTableRowFull(
         rowBox,
@@ -234,6 +242,8 @@ export function paginateFlowTable(
     }
   }
 
-  return current
+  return blockMargins.bottom > 0
+    ? { ...current, cursorY: current.cursorY + blockMargins.bottom }
+    : current
 }
 

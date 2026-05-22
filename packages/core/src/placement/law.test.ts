@@ -170,7 +170,7 @@ describe("placement law flow-row / flow-stack sources", () => {
     expect(result.error.code).toBe("invalid-zone")
   })
 
-  it("treats flow-stack nodes as structural drag sources", () => {
+  it("moves a flow-stack dropped on body space as a new full-width row", () => {
     const doc = makeDoc({
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
       fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: [] },
@@ -186,9 +186,14 @@ describe("placement law flow-row / flow-stack sources", () => {
       { source: "document", nodeId: "fs1" },
     )
 
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.error.code).toBe("invalid-source")
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.operation).toEqual({
+      kind: "move-flow-stack-to-new-row",
+      parentId: "body",
+      parentType: "body",
+      index: 1,
+    })
   })
 
   it("allows paragraph insertion into a flow-stack center", () => {
@@ -336,6 +341,34 @@ describe("placement law flow-row / flow-stack sources", () => {
     expect(result.value.operation).toEqual({
       kind: "add-flow-stack-column",
       rowId: "fr1",
+      targetStackId: "fs2",
+      position: "before",
+    })
+  })
+
+  it("maps a flow-stack drag on a flow-row edge to moving the stack into that row", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: [] },
+      fr2: { id: "fr2", type: "flow-row", props: {}, childIds: ["fs2"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 100 }, childIds: [] },
+    }, ["fr1", "fr2"])
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "left",
+        intent: "insertLeft",
+        target: { kind: "row-stack-inner", rowId: "fr2", stackId: "fs2" },
+      },
+      { source: "document", nodeId: "fs1" },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.operation).toEqual({
+      kind: "move-flow-stack-into-row",
+      rowId: "fr2",
       targetStackId: "fs2",
       position: "before",
     })

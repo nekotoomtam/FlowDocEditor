@@ -157,7 +157,7 @@ Inline-edit session coverage locks visual freshness and transaction helper
 rules. WYSIWYG inline-edit config coverage keeps the experimental visual path
 disabled by default in every environment unless the flag is explicitly enabled.
 Real-font drift coverage loads
-`public/fonts/THSarabun.ttf` into Chromium canvas and fontkit, then checks
+`public/fonts/Sarabun/Sarabun-Regular.ttf` into Chromium canvas and fontkit, then checks
 representative Thai width parity and no `comparePagination` drift for a Thai
 document. Editor feel still needs focused browser smoke checks for selection,
 typing, undo/redo, flicker, and table panel workflows.

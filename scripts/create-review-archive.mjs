@@ -21,7 +21,7 @@ const REQUIRED_FILES = [
   "next.config.ts",
   "vitest.config.ts",
   "AGENTS.md",
-  "public/fonts/THSarabun.ttf",
+  "public/fonts/Sarabun/Sarabun-Regular.ttf",
   "scripts/review-build.mjs",
   "scripts/review-browser.mjs",
   "scripts/smoke-browser.mjs",
@@ -98,10 +98,10 @@ function assertRequiredFiles(files) {
     throw new Error(`Review archive is missing required files: ${missing.join(", ")}`)
   }
 
-  const fontPath = files.get("public/fonts/THSarabun.ttf")
+  const fontPath = files.get("public/fonts/Sarabun/Sarabun-Regular.ttf")
   const fontSize = fs.statSync(fontPath).size
   if (fontSize <= 0) {
-    throw new Error("Review archive runtime font is empty: public/fonts/THSarabun.ttf")
+    throw new Error("Review archive runtime font is empty: public/fonts/Sarabun/Sarabun-Regular.ttf")
   }
 }
 
@@ -236,7 +236,7 @@ assertReviewArchiveEntries(Array.from(files.keys()))
 
 if (checkOnly) {
   console.log(`Review archive check passed: ${files.size} files would be included.`)
-  console.log("Required runtime font: public/fonts/THSarabun.ttf")
+  console.log("Required runtime font: public/fonts/Sarabun/Sarabun-Regular.ttf")
 } else {
   makeZip(files, outputPath)
   assertReviewArchiveEntries(readZipEntries(outputPath))

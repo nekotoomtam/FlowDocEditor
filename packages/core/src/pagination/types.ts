@@ -1,4 +1,4 @@
-import type { LineSegment } from "../layout"
+import type { LineRun, LineSegment } from "../layout"
 
 /**
  * Pagination types — รู้จัก page และ cursor
@@ -71,6 +71,11 @@ export interface ParagraphBoxRenderProps {
 export interface ParagraphRenderProps {
   fontSize: number
   fontFamilyKey: string
+  textColor?: string
+  fontWeight?: "normal" | "bold"
+  fontStyle?: "normal" | "italic"
+  textDecoration?: "none" | "underline"
+  strikethrough?: boolean
   align: "left" | "center" | "right" | "justify"
   lineHeight: number
   spacingBefore: number
@@ -136,6 +141,7 @@ export interface PaginatedLine {
   height: number
   fontSize?: number  // per-line font size override (ใช้ใน TOC title vs entry)
   segments?: LineSegment[]
+  runs?: LineRun[]
 }
 
 // ─── TOC ──────────────────────────────────────────────────────────────────────

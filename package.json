@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "0.5.19",
+  "version": "0.6.6",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -28,6 +28,7 @@
     "smoke:wysiwyg-flow-table-colspan-overcase": "node scripts/wysiwyg-table-cell-boundary-smoke.mjs --target=flow-table-colspan-overcase",
     "smoke:wysiwyg-flow-table-rowspan-boundary": "node scripts/wysiwyg-table-cell-boundary-smoke.mjs --target=flow-table-rowspan",
     "smoke:wysiwyg-flow-table-mixed-span-boundary": "node scripts/wysiwyg-table-cell-boundary-smoke.mjs --target=flow-table-mixed-span",
+    "smoke:wysiwyg-rich-draft": "node scripts/wysiwyg-rich-draft-smoke.mjs",
     "smoke:wysiwyg-stage4c": "node scripts/wysiwyg-stage4c-smoke.mjs",
     "smoke:wysiwyg-reenter": "node scripts/wysiwyg-reenter-drift-probe.mjs",
     "smoke:wysiwyg-thai-repeat": "node scripts/wysiwyg-thai-repeat-reenter-probe.mjs",
@@ -41,6 +42,7 @@
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
     "docx": "^9.6.1",
+    "jszip": "^3.10.1",
     "linebreak": "^1.1.0",
     "next": "^16.2.4",
     "pdf-lib": "^1.17.1",

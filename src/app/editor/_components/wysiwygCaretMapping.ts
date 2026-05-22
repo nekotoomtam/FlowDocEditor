@@ -1,6 +1,7 @@
 import type { LineSegment, TextMeasurer } from "@/layout"
 import { snapToGraphemeBoundary, textGraphemeBoundaries } from "@/layout"
 import type { PageFragment, PaginatedDocument, PaginatedLine } from "@/pagination"
+import { resolveFontVariantKeyForStyle } from "@/font-registry"
 
 export type WysiwygCaretMappingSource = "segment-candidate" | "segment-ratio"
 
@@ -106,12 +107,14 @@ function segmentPrefixWidth(
 
   const fontFamilyKey = fragment.renderProps?.fontFamilyKey
   const fontSize = line.fontSize ?? fragment.renderProps?.fontSize
+  const fontVariant = resolveFontVariantKeyForStyle(fragment.renderProps?.fontWeight, fragment.renderProps?.fontStyle)
   if (!options.textMeasurer || !fontFamilyKey || !fontSize) return fallbackWidth
 
   const measured = options.textMeasurer.measureText(
     segment.text.slice(0, safeOffset),
     fontFamilyKey,
     fontSize,
+    fontVariant,
   ).width
   return clamp(measured, 0, segment.width)
 }

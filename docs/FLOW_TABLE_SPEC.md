@@ -35,12 +35,14 @@ Implementation status:
   across pages instead of moving the whole merged group when it would fit only
   on a clean page.
 - Core pagination repeats `headerRowCount` Flow Table header rows on body
-  continuation pages.
+  continuation pages when `repeatHeaderRows` is omitted or `true`.
 - PDF and editor preview draw Flow Table cell `box` fill/border from paginated
   `flow-table-cell` fragments.
 - DOCX output has best-effort fixed-table projection from paginated Flow Table
   fragments, including grid/span metadata.
-- Editor insertion creates a 3x3 `flow-table` table.
+- Editor insertion creates a 3x3 `flow-table` table with authored black cell
+  borders and the first row marked, labeled, and lightly styled as the default
+  header row.
 - Span-free editor row/column operations are available as the C1 slice. They
   intentionally no-op when the table contains `rowspan` or `colspan`; C2 owns
   span-aware structural edits.
@@ -248,6 +250,10 @@ type FlowTableNode = {
   type: "flow-table"
   props: {
     headerRowCount?: number
+    repeatHeaderRows?: boolean
+    align?: "left" | "center" | "right"
+    marginTop?: UnitValue
+    marginBottom?: UnitValue
     border?: CellBorder
   }
   columns: Array<{ width: UnitValue }>
@@ -302,6 +308,9 @@ Draft choices:
   draft direction, not an open model question.
 - Keep `rowspan` / `colspan` in the authored model from the beginning.
 - Keep columns authored as document units, not computed widths.
+- Keep table block alignment and vertical margins authored on the table node.
+  Layout resolves them against the available content width; cell padding remains
+  cell-level styling.
 - `mergeMap` is optional authored metadata used only to restore merged child
   content back to relative cell slots during span shrink/unmerge. It must not
   drive layout, pagination, or renderer geometry.
@@ -391,8 +400,10 @@ Normal cells and rows:
 
 Headers:
 
-- `headerRowCount` repeats header rows on continuation pages where body rows
-  continue.
+- `headerRowCount` marks authored header rows.
+- `repeatHeaderRows` defaults to `true`; when enabled, header rows repeat on
+  continuation pages where body rows continue. When disabled, those rows remain
+  authored headers but only render at their original position.
 - Header rows should be authored rows, not renderer-only decorations.
 - Repeated headers belong to paginated output.
 
@@ -482,10 +493,16 @@ DOCX:
 
 Editor support is explicit:
 
-- palette insertion creates a 3x3 Flow Table primitive
+- palette insertion creates a 3x3 Flow Table primitive with authored black cell
+  borders and the first row marked, labeled, and lightly styled as the default
+  header row
 - selection can target table, row, and cell fragments
 - property panel can edit the first accepted v1 props: table header rows,
-  row break allowance, and basic cell text/vertical alignment
+  table alignment/margins, row break allowance, and basic cell text/vertical
+  alignment
+- Fit to width is an explicit command that rewrites authored column widths to
+  the current section content width. Flow Table does not auto-stretch narrow
+  tables during layout.
 - text editing can stay conservative and reuse current safe cell-edit paths
 - live cross-page WYSIWYG editing inside Flow Table is deferred
 - safe span editing UI may expose `rowspan`/`colspan`, directional merge with
@@ -576,7 +593,10 @@ Pagination tests:
   continuation cell chrome, spanning-cell content fragments, remaining-page
   line progress, and mixed `rowspan`/`colspan` geometry
 - breakable non-rowspan rows split by line ranges
-- repeated headers appear on continuation pages
+- repeated headers appear on continuation pages when `repeatHeaderRows` is
+  omitted or `true`
+- repeated headers do not appear on continuation pages when `repeatHeaderRows`
+  is `false`
 - no empty continuation slice without progress
 - forced-progress warnings appear for impossible non-rowspan and rowspan slice
   cases

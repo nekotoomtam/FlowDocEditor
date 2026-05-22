@@ -1,10 +1,24 @@
 import type { Metadata } from "next";
-import { DEFAULT_FONT_CSS_FAMILY, resolveFontFileName } from "@/font-registry";
+import { listFontFaceEntries } from "@/font-registry";
 
 export const metadata: Metadata = {
   title: "FlowDoc",
   description: "FlowDoc development environment",
 };
+
+function buildFontFaceCss(): string {
+  return listFontFaceEntries()
+    .flatMap((entry) => Object.values(entry.variants).map((variant) => `
+          @font-face {
+            font-family: "${entry.cssFamily}";
+            src: url("/fonts/${variant.fileName}") format("truetype");
+            font-weight: ${variant.fontWeight};
+            font-style: ${variant.fontStyle};
+            font-display: swap;
+          }
+        `))
+    .join("\n");
+}
 
 export default function RootLayout({
   children,
@@ -14,13 +28,7 @@ export default function RootLayout({
   return (
     <html lang="th">
       <body>
-        <style>{`
-          @font-face {
-            font-family: "${DEFAULT_FONT_CSS_FAMILY}";
-            src: url("/fonts/${resolveFontFileName("default")}") format("truetype");
-            font-display: swap;
-          }
-        `}</style>
+        <style>{buildFontFaceCss()}</style>
         {children}
       </body>
     </html>

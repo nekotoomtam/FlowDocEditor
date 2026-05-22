@@ -5,7 +5,7 @@ import {
   buildWysiwygTextDraftPreviewDocument,
   countWysiwygTextDraftFragments,
 } from "../wysiwygDraftPreview"
-import { getPlainParagraphTextFromDocument } from "../wysiwygTextCommit"
+import { getEditableParagraphFromDocument, getPlainParagraphTextFromDocument } from "../wysiwygTextCommit"
 
 function docWithParagraph(text: string): DocumentNode {
   return {
@@ -97,6 +97,56 @@ describe("buildWysiwygTextDraftPreviewDocument", () => {
     expect(getPlainParagraphTextFromDocument(draft, "p1")).toBe("Flow draft")
     expect(draft.document.sections[0].nodes.fr1.type).toBe("flow-row")
     expect(draft.document.sections[0].nodes.fs1.type).toBe("flow-stack")
+  })
+
+  it("builds styled text-run draft previews without flattening unchanged styles", () => {
+    const source = docWithParagraph("Hello world")
+    const paragraph = source.document.sections[0].nodes.p1
+    if (paragraph.type !== "paragraph") throw new Error("expected paragraph")
+    paragraph.children = [
+      { id: "t1", type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+    ]
+
+    const draft = buildWysiwygTextDraftPreviewDocument({
+      doc: source,
+      nodeId: "p1",
+      draftText: "Hello wide world",
+    })
+    const updated = draft.document.sections[0].nodes.p1
+
+    expect(updated.type).toBe("paragraph")
+    if (updated.type !== "paragraph") return
+    expect(updated.children.map((child) =>
+      child.type === "text"
+        ? { text: child.text, style: child.style }
+        : child,
+    )).toEqual([
+      { text: "Hello wide ", style: { fontWeight: "bold" } },
+      { text: "world", style: { fontStyle: "italic" } },
+    ])
+    expect(getPlainParagraphTextFromDocument(source, "p1")).toBe("Hello world")
+  })
+
+  it("can build a rich draft paragraph preview for style-only draft changes", () => {
+    const source = docWithParagraph("Hello")
+    const sourceParagraph = getEditableParagraphFromDocument(source, "p1")
+    if (!sourceParagraph) throw new Error("expected source paragraph")
+    const draft = buildWysiwygTextDraftPreviewDocument({
+      doc: source,
+      nodeId: "p1",
+      draftText: "Hello",
+      draftParagraph: {
+        ...sourceParagraph,
+        children: [{ id: "p1-text", type: "text", text: "Hello", style: { fontWeight: "bold" } }],
+      },
+    })
+    const updated = getEditableParagraphFromDocument(draft, "p1")
+
+    expect(getPlainParagraphTextFromDocument(source, "p1")).toBe("Hello")
+    expect(updated?.children).toEqual([
+      { id: "p1-text", type: "text", text: "Hello", style: { fontWeight: "bold" } },
+    ])
   })
 })
 

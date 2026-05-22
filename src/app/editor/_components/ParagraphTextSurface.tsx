@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal, flushSync } from "react-dom"
-import { isPlainTextParagraph } from "@/document"
+import {
+  getTextRunParagraphText,
+  isTextRunOnlyParagraph,
+  replaceTextRunParagraphTextInParagraph,
+} from "@/document"
 import { measureParagraph, nextTextGraphemeBoundary, previousTextGraphemeBoundary, snapToGraphemeBoundary } from "@/layout"
 import type { TextMeasurer } from "@/layout"
 import { buildPaginatedLines } from "@/pagination"
 import type { DocumentNode, FlowTableNode, ParagraphNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
-import { resolveFontCssFamily } from "@/font-registry"
+import { resolveFontCssFamily, resolveFontVariantKeyForStyle } from "@/font-registry"
 import {
   getWysiwygFragmentTextRange,
   resolveCollapsedCaretOverlayInFragment,
@@ -26,7 +30,7 @@ import {
   getWysiwygTextSelectedText,
   WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
-import type { WysiwygTextSelection, WysiwygTextSessionDraftChange } from "./useWysiwygTextSession"
+import type { WysiwygTextInputKey, WysiwygTextSelection, WysiwygTextSessionDraftChange } from "./useWysiwygTextSession"
 import {
   classifyWysiwygTextReflow,
   shouldPrepareWysiwygTableCellDraftVisualPreview,
@@ -67,6 +71,7 @@ interface Props {
   onSplitParagraph: (nodeId: string, splitIndex: number) => void
   onMergeParagraph: (nodeId: string) => void
   onWysiwygTextDraftChange?: (nodeId: string, text: string, caretIndex: number | null, selection?: WysiwygTextSelection | null) => void
+  onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision?: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
 }
 
@@ -126,6 +131,9 @@ export function isWysiwygTextSessionFocusTarget(
 ): boolean {
   let current: Element | null = element ?? null
   while (current) {
+    if (current.getAttribute("data-wysiwyg-rich-text-toolbar-node-id") === nodeId) {
+      return true
+    }
     if (current.getAttribute("data-inline-edit-node-id") === nodeId) {
       if (
         current.getAttribute("data-wysiwyg-input-bridge") === "true" ||
@@ -254,10 +262,7 @@ function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | n
 function getEditableParagraphText(doc: DocumentNode, nodeId: string): string | null {
   const node = findParagraphNode(doc, nodeId)
   if (!node) return null
-  if (!isPlainTextParagraph(node)) return null
-  return node.children
-    .map((child) => child.type === "text" ? child.text : "")
-    .join("")
+  return getTextRunParagraphText(node)
 }
 
 function isTableCellNodeId(doc: DocumentNode, nodeId: string | null | undefined): boolean {
@@ -431,6 +436,79 @@ function segmentColor(kind: NonNullable<PaginatedLine["segments"]>[number]["kind
   return "#10b981"
 }
 
+function fontWeightForRenderProps(renderProps: ParagraphRenderProps | undefined): number | undefined {
+  return renderProps?.fontWeight === "bold" ? 700 : undefined
+}
+
+type RenderableLineRun = NonNullable<PaginatedLine["runs"]>[number]
+
+function fontWeightForLineRun(run: RenderableLineRun): number | undefined {
+  return run.style.fontWeight === "bold" ? 700 : undefined
+}
+
+function fontStyleForRenderProps(renderProps: ParagraphRenderProps | undefined): "italic" | undefined {
+  return renderProps?.fontStyle === "italic" ? "italic" : undefined
+}
+
+function fontStyleForLineRun(run: RenderableLineRun): "italic" | undefined {
+  return run.style.fontStyle === "italic" ? "italic" : undefined
+}
+
+function textColorForRenderProps(renderProps: ParagraphRenderProps | undefined): string {
+  return `#${renderProps?.textColor ?? "000000"}`
+}
+
+function textDecorationForRenderProps(renderProps: ParagraphRenderProps | undefined): string | undefined {
+  const decorations: string[] = []
+  if (renderProps?.textDecoration === "underline") decorations.push("underline")
+  if (renderProps?.strikethrough) decorations.push("line-through")
+  return decorations.length > 0 ? decorations.join(" ") : undefined
+}
+
+function textDecorationForLineRun(run: RenderableLineRun): string | undefined {
+  const decorations: string[] = []
+  if (run.style.textDecoration === "underline") decorations.push("underline")
+  if (run.style.strikethrough) decorations.push("line-through")
+  return decorations.length > 0 ? decorations.join(" ") : undefined
+}
+
+function renderRichLineRuns(
+  line: PaginatedLine,
+  index: number,
+  fragment: PageFragment,
+  pageKey: string,
+  scale: number,
+  opacity?: number,
+  clipPathId?: string,
+) {
+  if (!line.runs?.length) return null
+  const baseY = lineBaselineY(line) * scale
+  const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
+  const style: React.CSSProperties = { pointerEvents: "none", userSelect: "none" }
+
+  return (
+    <g key={index} clipPath={clip} opacity={opacity} style={style}>
+      {line.runs
+        .filter((run) => run.text.trim() !== "")
+        .map((run, runIndex) => (
+          <text
+            key={runIndex}
+            x={(line.x + run.x) * scale}
+            y={baseY}
+            fontSize={run.style.fontSize * scale}
+            fontFamily={resolveFontCssFamily(run.style.fontFamilyKey)}
+            fontWeight={fontWeightForLineRun(run)}
+            fontStyle={fontStyleForLineRun(run)}
+            textDecoration={textDecorationForLineRun(run)}
+            fill={`#${run.style.textColor}`}
+          >
+            {run.text}
+          </text>
+        ))}
+    </g>
+  )
+}
+
 function renderLine(
   line: PaginatedLine,
   index: number,
@@ -445,8 +523,15 @@ function renderLine(
   const fontSize = (line.fontSize ?? renderProps?.fontSize ?? 8) * scale
   const baseY = lineBaselineY(line) * scale
   const fontFamily = resolveFontCssFamily(renderProps?.fontFamilyKey)
+  const fontWeight = fontWeightForRenderProps(renderProps)
+  const fontStyle = fontStyleForRenderProps(renderProps)
+  const textDecoration = textDecorationForRenderProps(renderProps)
+  const textColor = textColorForRenderProps(renderProps)
   const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
   const style: React.CSSProperties = { pointerEvents: "none", userSelect: "none" }
+
+  const richLine = renderRichLineRuns(line, index, fragment, pageKey, scale, opacity, clipPathId)
+  if (richLine) return richLine
 
   // Justify: draw each non-space word segment at its adjusted x position
   if (align === "justify" && line.segments?.length) {
@@ -456,7 +541,8 @@ function renderLine(
           .filter((seg) => seg.kind !== "space" && seg.text.trim() !== "")
           .map((seg, si) => (
             <text key={si} x={(line.x + seg.x) * scale} y={baseY}
-              fontSize={fontSize} fontFamily={fontFamily} fill="#1e40af">
+              fontSize={fontSize} fontFamily={fontFamily} fontWeight={fontWeight}
+              fontStyle={fontStyle} textDecoration={textDecoration} fill={textColor}>
               {seg.text}
             </text>
           ))}
@@ -471,8 +557,11 @@ function renderLine(
       y={baseY}
       fontSize={fontSize}
       fontFamily={fontFamily}
+      fontWeight={fontWeight}
+      fontStyle={fontStyle}
+      textDecoration={textDecoration}
       textAnchor={textAnchorForAlign(align)}
-      fill="#1e40af"
+      fill={textColor}
       opacity={opacity}
       clipPath={clip}
       style={style}
@@ -601,13 +690,8 @@ interface TextEngineClipboardShortcutEvent {
 }
 
 function paragraphWithDraftText(node: ParagraphNode, draftText: string): ParagraphNode | null {
-  if (!isPlainTextParagraph(node)) return null
-  const firstRun = node.children[0]
-  if (!firstRun) return null
-  return {
-    ...node,
-    children: [{ ...firstRun, text: draftText }],
-  }
+  if (!isTextRunOnlyParagraph(node)) return null
+  return replaceTextRunParagraphTextInParagraph(node, draftText) ?? node
 }
 
 export interface WysiwygDraftParagraphLayout {
@@ -663,6 +747,10 @@ function cloneWysiwygDraftParagraphLayout(layout: WysiwygDraftParagraphLayout): 
     height: layout.height,
     lines: layout.lines.map((line) => ({
       ...line,
+      runs: line.runs?.map((run) => ({
+        ...run,
+        style: run.style ? { ...run.style } : run.style,
+      })),
       segments: line.segments?.map((segment) => ({ ...segment })),
     })),
   }
@@ -674,7 +762,6 @@ export function createWysiwygDraftParagraphLayoutCacheKey(
   draftText: string,
   options: { allowContinuedFirstFragment?: boolean } = {},
 ): string {
-  const firstRun = node.children[0]
   return JSON.stringify({
     draftText,
     fragment: {
@@ -691,14 +778,11 @@ export function createWysiwygDraftParagraphLayoutCacheKey(
     node: {
       id: node.id,
       props: node.props,
-      firstRun: firstRun
-        ? {
-            id: firstRun.id,
-            type: firstRun.type,
-            props: "props" in firstRun ? firstRun.props : undefined,
-          }
-        : null,
-      childCount: node.children.length,
+      children: node.children.map((child) => (
+        child.type === "text"
+          ? { id: child.id, type: child.type, text: child.text, style: child.style }
+          : { ...child }
+      )),
     },
     options: {
       allowContinuedFirstFragment: options.allowContinuedFirstFragment ?? false,
@@ -938,6 +1022,7 @@ interface WysiwygTextLayerProps {
   selection?: WysiwygTextSelection | null
   draftText?: string | null
   onDraftChange?: (nodeId: string, text: string, caretIndex: number | null, selection?: WysiwygTextSelection | null) => void
+  onRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onEndEdit?: (nodeId: string, reason?: "blur" | "keyboard") => void
   showTextSegments: boolean
   selectionOverlayRects?: ReturnType<typeof resolveSelectionOverlayRectsInFragment>
@@ -957,8 +1042,9 @@ function measureLiveEchoTextWidth(
   if (!text) return 0
   const fontFamilyKey = renderProps?.fontFamilyKey
   const fontSize = line?.fontSize ?? renderProps?.fontSize
+  const fontVariant = resolveFontVariantKeyForStyle(renderProps?.fontWeight, renderProps?.fontStyle)
   if (textMeasurer && fontFamilyKey && fontSize) {
-    return textMeasurer.measureText(text, fontFamilyKey, fontSize).width
+    return textMeasurer.measureText(text, fontFamilyKey, fontSize, fontVariant).width
   }
   return text.length * (fontSize ?? 8) * 0.5
 }
@@ -981,6 +1067,10 @@ function renderLiveTextEcho(
   const lineHeight = anchorLine?.height ?? renderProps?.lineHeight ?? (renderProps?.fontSize ?? 8) * 1.5
   const fontSize = (anchorLine?.fontSize ?? renderProps?.fontSize ?? 8) * scale
   const fontFamily = resolveFontCssFamily(renderProps?.fontFamilyKey)
+  const fontWeight = fontWeightForRenderProps(renderProps)
+  const fontStyle = fontStyleForRenderProps(renderProps)
+  const textDecoration = textDecorationForRenderProps(renderProps)
+  const textColor = textColorForRenderProps(renderProps)
   const parts = echo.text.split("\n")
   const continuationX = anchorLine ? lineVisualLeft(anchorLine) : fragment.x
   const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
@@ -1003,7 +1093,10 @@ function renderLiveTextEcho(
         y={(y + lineHeight * 0.78) * scale}
         fontSize={fontSize}
         fontFamily={fontFamily}
-        fill={INLINE_EDIT_TEXT_COLOR}
+        fontWeight={fontWeight}
+        fontStyle={fontStyle}
+        textDecoration={textDecoration}
+        fill={textColor}
         opacity={0.88}
         style={{ pointerEvents: "none", userSelect: "none" }}
       >
@@ -1057,6 +1150,7 @@ export function WysiwygTextLayer({
   selection,
   draftText,
   onDraftChange,
+  onRichTextShortcut,
   onEndEdit,
   showTextSegments,
   selectionOverlayRects = [],
@@ -1545,6 +1639,10 @@ export function WysiwygTextLayer({
         metaKey: event.metaKey,
         isComposing: event.isComposing,
       }
+      if (onRichTextShortcut?.(fragment.nodeId, keyInput)) {
+        event.preventDefault()
+        return
+      }
       const isVerticalNavigation = event.key === "ArrowUp" || event.key === "ArrowDown"
       const handled = applyVerticalKeyInput(keyInput) || applyKeyInput(keyInput)
       if (!handled) {
@@ -1651,6 +1749,7 @@ export function WysiwygTextLayer({
     handleClipboardShortcutKeyDown,
     isCompositionBridgeInput,
     onEndEdit,
+    onRichTextShortcut,
     startCompositionInput,
   ])
 
@@ -1867,6 +1966,7 @@ export function ParagraphTextSurface({
   onSplitParagraph,
   onMergeParagraph,
   onWysiwygTextDraftChange,
+  onWysiwygRichTextShortcut,
   onWysiwygTextReflowDecision,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -2176,6 +2276,7 @@ export function ParagraphTextSurface({
           selection={wysiwygTextSelection}
           draftText={textEngineDraftText}
           onDraftChange={onWysiwygTextDraftChange}
+          onRichTextShortcut={onWysiwygRichTextShortcut}
           onEndEdit={onEndEdit}
           showTextSegments={showTextSegments}
           selectionOverlayRects={textEngineSelectionOverlayRects}
@@ -2218,6 +2319,9 @@ export function ParagraphTextSurface({
               borderRadius: 2,
               display: "block",
               fontFamily: resolveFontCssFamily(renderProps?.fontFamilyKey),
+              fontWeight: fontWeightForRenderProps(renderProps),
+              fontStyle: fontStyleForRenderProps(renderProps),
+              textDecoration: textDecorationForRenderProps(renderProps),
               fontSize,
               lineHeight: `${lineHeight}px`,
               textAlign: textAlignForParagraph(renderProps?.align),

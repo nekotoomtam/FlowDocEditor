@@ -5,6 +5,7 @@ import {
   TOC_TITLE_FS,
   TOC_TITLE_LH,
 } from "../../layout"
+import { DEFAULT_FONT_KEY } from "../../font-registry"
 import type { FlowBox } from "../../layout"
 import type { DocumentNode, ParagraphNode, TocNode } from "../../schema"
 import type { PageFlowCursor, PaginatedLine, PaginatedPage, PaginatedSection, TocEntry } from "../types"
@@ -87,7 +88,7 @@ export function fillTocFragments(sections: PaginatedSection[], doc: DocumentNode
 
         frag.lines = lines
         frag.renderProps = {
-          fontSize: TOC_ENTRY_FS, fontFamilyKey: "default", align: "left",
+          fontSize: TOC_ENTRY_FS, fontFamilyKey: DEFAULT_FONT_KEY, align: "left",
           lineHeight: TOC_ENTRY_LH, spacingBefore: 0, spacingAfter: 0,
           textIndent: 0, indentLeft: 0, indentRight: 0,
         }

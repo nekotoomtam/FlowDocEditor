@@ -1,10 +1,29 @@
 import { z } from "zod"
+import { UnitValueSchema } from "./units"
+
+const HexColorSchema = z.string().regex(/^[0-9A-Fa-f]{6}$/)
+const PositiveUnitValueSchema = UnitValueSchema.refine((value) => value.value > 0, {
+  message: "Unit value must be positive",
+})
+
+export const TextRunStyleSchema = z.object({
+  fontSize: PositiveUnitValueSchema.optional(),
+  fontFamilyKey: z.string().min(1).optional(),
+  textColor: HexColorSchema.optional(),
+  fontWeight: z.union([z.literal("normal"), z.literal("bold")]).optional(),
+  fontStyle: z.union([z.literal("normal"), z.literal("italic")]).optional(),
+  textDecoration: z.union([z.literal("none"), z.literal("underline")]).optional(),
+  strikethrough: z.boolean().optional(),
+})
+
+export type TextRunStyle = z.infer<typeof TextRunStyleSchema>
 
 // TextRun — plain text ใน paragraph
 export const TextRunSchema = z.object({
   id: z.string().min(1),
   type: z.literal("text"),
   text: z.string(),
+  style: TextRunStyleSchema.optional(),
 })
 
 export type TextRun = z.infer<typeof TextRunSchema>

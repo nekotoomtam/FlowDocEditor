@@ -344,10 +344,18 @@ describe("ParagraphTextSurface focus behavior", () => {
       "data-inline-edit-node-id": "p2",
       "data-wysiwyg-input-bridge": "true",
     })
+    const toolbarButton = makeFocusElement({}, makeFocusElement({
+      "data-wysiwyg-rich-text-toolbar-node-id": "p1",
+    }))
+    const outsideToolbarButton = makeFocusElement({}, makeFocusElement({
+      "data-wysiwyg-rich-text-toolbar-node-id": "p2",
+    }))
 
     expect(isWysiwygTextSessionFocusTarget(bridge, "p1")).toBe(true)
     expect(isWysiwygTextSessionFocusTarget(nextBridge, "p1")).toBe(true)
+    expect(isWysiwygTextSessionFocusTarget(toolbarButton, "p1")).toBe(true)
     expect(isWysiwygTextSessionFocusTarget(outsideBridge, "p1")).toBe(false)
+    expect(isWysiwygTextSessionFocusTarget(outsideToolbarButton, "p1")).toBe(false)
     expect(isWysiwygTextSessionFocusTarget(null, "p1")).toBe(false)
   })
 })
@@ -567,6 +575,104 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(shouldUseInlineEditSvgVisual(true, true)).toBe(true)
     expect(shouldUseInlineEditSvgVisual(true, false)).toBe(false)
     expect(shouldUseInlineEditSvgVisual(false, true)).toBe(false)
+  })
+
+  it("renders paginated rich text runs with per-run SVG styling", () => {
+    const fragment = makeFragment({
+      lines: [{
+        text: "BoldItalic",
+        x: 10,
+        y: 20,
+        width: 90,
+        height: 18,
+        runs: [
+          {
+            text: "Bold",
+            start: 0,
+            end: 4,
+            x: 0,
+            width: 40,
+            sourceId: "t1",
+            sourceType: "text",
+            style: {
+              fontSize: 12,
+              fontFamilyKey: "sarabun",
+              textColor: "DC2626",
+              fontWeight: "bold",
+              fontStyle: "normal",
+              textDecoration: "underline",
+              strikethrough: false,
+              fontVariant: "bold",
+              lineHeight: 14,
+            },
+          },
+          {
+            text: "Italic",
+            start: 4,
+            end: 10,
+            x: 40,
+            width: 50,
+            sourceId: "t2",
+            sourceType: "text",
+            style: {
+              fontSize: 16,
+              fontFamilyKey: "notoSansThai",
+              textColor: "2563EB",
+              fontWeight: "normal",
+              fontStyle: "italic",
+              textDecoration: "none",
+              strikethrough: true,
+              fontVariant: "italic",
+              lineHeight: 18,
+            },
+          },
+        ],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "sarabun",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("BoldItalic"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: false,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: false,
+      showTextSegments: false,
+      initialCaretIndex: null,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+
+    expect(markup).toContain("Bold")
+    expect(markup).toContain("Italic")
+    expect(markup).toContain("x=\"10\"")
+    expect(markup).toContain("x=\"50\"")
+    expect(markup).toContain("font-family=\"FlowDocSarabun\"")
+    expect(markup).toContain("font-family=\"FlowDocNotoSansThai\"")
+    expect(markup).toContain("font-weight=\"700\"")
+    expect(markup).toContain("font-style=\"italic\"")
+    expect(markup).toContain("text-decoration=\"underline\"")
+    expect(markup).toContain("text-decoration=\"line-through\"")
+    expect(markup).toContain("fill=\"#DC2626\"")
+    expect(markup).toContain("fill=\"#2563EB\"")
   })
 
   it("keeps textarea text visible while visual lines are stale", () => {
@@ -1900,6 +2006,27 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(layout?.lines.map((line) => line.text)).toEqual(["A", "BC"])
     expect(layout?.lines.map((line) => line.y)).toEqual([22, 34])
     expect(layout?.lines.map((line) => line.x)).toEqual([45, 40])
+  })
+
+  it("builds styled text-run draft layout without flattening run styles", () => {
+    const doc = makeDoc("Hello world")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    paragraph.children = [
+      { id: "t1", type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+    ]
+    const fragment = makeFragment({ x: 10, y: 20, width: 200 })
+
+    const layout = buildWysiwygDraftParagraphLayout(fragment, paragraph, "Hello wide world", fixedMeasurer)
+
+    expect(layout?.lines[0]?.runs?.map((run) => ({
+      text: run.text,
+      fontWeight: run.style.fontWeight,
+      fontStyle: run.style.fontStyle,
+    }))).toEqual([
+      { text: "Hello wide ", fontWeight: "bold", fontStyle: "normal" },
+      { text: "world", fontWeight: "normal", fontStyle: "italic" },
+    ])
   })
 
   it("reuses cached draft layout measurements for identical text-engine inputs", () => {

@@ -385,6 +385,17 @@ function resolveTableColumnWidths(table: FlowTableNode, availableWidth: number):
   })
 }
 
+function resolveFlowTableMargin(value: FlowTableNode["props"]["marginTop"]): number {
+  return value ? Math.max(0, toAbstractUnit(value.value, value.unit)) : 0
+}
+
+function resolveFlowTableX(x: number, availableWidth: number, tableWidth: number, align: FlowTableNode["props"]["align"]): number {
+  const offset = Math.max(0, availableWidth - tableWidth)
+  if (align === "right") return x + offset
+  if (align === "center") return x + offset / 2
+  return x
+}
+
 function resolveFlowTableCellPadding(cellNode: FlowTableCellNode): { top: number; right: number; bottom: number; left: number } {
   const padding = cellNode.props.box?.padding
   return {
@@ -438,6 +449,10 @@ function flowFlowTable(
   wordBreaker: WordBreaker = defaultWordBreaker,
 ): FlowBox {
   const colWidths = resolveTableColumnWidths(table, width)
+  const tableWidth = colWidths.reduce((sum, colWidth) => sum + colWidth, 0)
+  const tableX = resolveFlowTableX(x, width, tableWidth, table.props.align)
+  const marginTop = resolveFlowTableMargin(table.props.marginTop)
+  const marginBottom = resolveFlowTableMargin(table.props.marginBottom)
   const grid = resolveFlowTableGrid(table)
   const placementByCellId = new Map(grid.placements.map((placement) => [placement.cellId, placement]))
 
@@ -479,7 +494,7 @@ function flowFlowTable(
     }
   })
 
-  let cursorY = y
+  let cursorY = y + marginTop
   const rowBoxes: FlowBox[] = []
 
   table.rowIds.forEach((rowId, rowIndex) => {
@@ -498,7 +513,7 @@ function flowFlowTable(
 
       const { cellWidth, padding, innerWidth } = resolveFlowTableCellBox(cellNode, placement.columnIndex, colWidths)
       const cellHeight = rowHeights.slice(rowIndex, rowIndex + placement.rowspan).reduce((s, h) => s + h, 0)
-      const cellX = x + colWidths.slice(0, placement.columnIndex).reduce((s, w) => s + w, 0)
+      const cellX = tableX + colWidths.slice(0, placement.columnIndex).reduce((s, w) => s + w, 0)
 
       let childCursorY = cursorY + padding.top
       const childBoxes: FlowBox[] = []
@@ -534,9 +549,9 @@ function flowFlowTable(
     rowBoxes.push({
       nodeId: rowId,
       nodeType: "flow-table-row",
-      x,
+      x: tableX,
       y: cursorY,
-      width,
+      width: tableWidth,
       height: rowHeight,
       children: cellBoxes,
     })
@@ -547,10 +562,10 @@ function flowFlowTable(
   return {
     nodeId: table.id,
     nodeType: "flow-table",
-    x,
+    x: tableX,
     y,
-    width,
-    height: cursorY - y,
+    width: tableWidth,
+    height: cursorY - y + marginBottom,
     children: rowBoxes,
   }
 }

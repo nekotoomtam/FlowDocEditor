@@ -74,6 +74,17 @@ Users should be able to:
   fragments are visual-only in the canvas until a dedicated row handle/gutter
   exists, so row chrome does not steal clicks from merged or row-spanning cells.
 - Selection should not silently mutate the document.
+- The canvas may show a breadcrumb-style selection path as editor-only chrome.
+  Hover paths are preview-only and must not change selection. Selected paths may
+  expose clickable context nodes, but clicking them is still selection state only
+  and must not create a document history entry.
+- Normal node chrome must not use per-node background tint as the primary
+  structure cue. Authored fills, active edit previews, selection outlines,
+  resize affordances, and read-only zone backgrounds remain allowed.
+- The canvas may show a selected-node action rail as editor-only chrome. The
+  rail is action-focused, separate from the path, and should stay selected-only
+  so hover remains preview-only. Drag, duplicate, and delete actions must route
+  through the normal editor lifecycle and history behavior.
 - Background clicks should clear selection and close inline edit through the
   normal edit transaction path.
 
@@ -231,6 +242,11 @@ Table-specific interaction rules are defined in
   empty `flow-stack` and rebalances all direct child stack width shares equally.
 - Adding a column from a selected `flow-stack` edge is a local action: it inserts
   before or after that stack by splitting only the selected stack width share.
+- Dragging an authored `flow-stack` moves the stack subtree as a column. Dropping
+  it on an existing `flow-row` edge inserts that same stack before or after the
+  target column using the same local split-width rule as column creation.
+  Dropping it into body/page space creates a new full-width `flow-row` containing
+  that stack with `widthShare: 100`.
 - `flow-stack` width changes should be sibling-safe: the user chooses the
   neighboring column to resize against, only that pair changes, and the owning
   `flow-row` width shares must still total exactly `100`.

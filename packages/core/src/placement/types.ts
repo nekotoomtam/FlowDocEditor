@@ -92,6 +92,8 @@ export type PlacementOperation =
   | { kind: "expand-row-right"; rowId: string; targetStackId: string; index: number }
   | { kind: "insert-stacks-into-row"; rowId: string; targetStackId: string; index: number; count: number }
   | { kind: "add-flow-stack-column"; rowId: string; targetStackId: string; position: "before" | "after" }
+  | { kind: "move-flow-stack-into-row"; rowId: string; targetStackId: string; position: "before" | "after" }
+  | { kind: "move-flow-stack-to-new-row"; parentId: string; parentType: "body"; index: number }
   | { kind: "wrap-in-row-left"; parentId: string; parentType: "body" | "stack"; index: number; targetNodeId: string }
   | { kind: "wrap-in-row-right"; parentId: string; parentType: "body" | "stack"; index: number; targetNodeId: string }
 

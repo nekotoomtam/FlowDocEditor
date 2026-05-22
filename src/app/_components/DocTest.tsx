@@ -6,6 +6,7 @@ import { buildSampleDoc } from "../_lib/sampleDoc"
 import { defaultTextMeasurer } from "@/layout"
 import { PdfRenderer } from "@/renderer/pdf"
 import { DocxRenderer } from "@/renderer/docx"
+import { resolveFontFileName } from "@/font-registry"
 import type { PaginatedDocument, PaginatedPage } from "@/pagination"
 import type { DocumentNode, LayoutNode } from "@/schema"
 
@@ -228,8 +229,8 @@ export default function DocTest() {
     setPdfLoading(true)
     try {
       const renderer = new PdfRenderer({
-        async getFont(_key) {
-          const res = await fetch("/fonts/THSarabun.ttf")
+        async getFont(key, variant) {
+          const res = await fetch(`/fonts/${resolveFontFileName(key, variant)}`)
           const buf = await res.arrayBuffer()
           return new Uint8Array(buf)
         },

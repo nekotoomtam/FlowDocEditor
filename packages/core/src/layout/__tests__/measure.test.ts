@@ -61,6 +61,23 @@ describe("empty text", () => {
 // ─── English ─────────────────────────────────────────────────────────────────
 
 describe("English text", () => {
+  it("passes paragraph bold and italic style to the text measurer", () => {
+    const variants: unknown[] = []
+    const measurer = {
+      measureText(text: string, _fontFamilyKey: string, fontSize: number, fontVariant?: unknown) {
+        variants.push(fontVariant)
+        return { width: text.length * fontSize }
+      },
+      measureLineHeight(_fontFamilyKey: string, fontSize: number, ratio: number) {
+        return fontSize * ratio
+      },
+    }
+
+    measureParagraph(makeParagraph("Hello", { fontWeight: "bold", fontStyle: "italic" }), 200, measurer, spaceBreaker)
+
+    expect(variants).toContain("boldItalic")
+  })
+
   it("single word fits on one line", () => {
     const result = measureParagraph(makeParagraph("Hello"), 200, defaultTextMeasurer, spaceBreaker)
     expect(result.lines).toHaveLength(1)
@@ -89,6 +106,83 @@ describe("English text", () => {
   it("totalHeight = lineCount * lineHeight when spacing is zero", () => {
     const result = measureParagraph(makeParagraph("Hello world"), 30, defaultTextMeasurer, spaceBreaker)
     expect(result.totalHeight).toBeCloseTo(2 * LH)
+  })
+})
+
+// ─── Rich text runs ───────────────────────────────────────────────────────────
+
+describe("rich text runs", () => {
+  it("measures adjacent styled text runs with their own font variants", () => {
+    const calls: Array<{ text: string; fontFamilyKey: string; fontSize: number; fontVariant?: unknown }> = []
+    const measurer = {
+      measureText(text: string, fontFamilyKey: string, fontSize: number, fontVariant?: unknown) {
+        calls.push({ text, fontFamilyKey, fontSize, fontVariant })
+        return { width: text.length * fontSize }
+      },
+      measureLineHeight(_fontFamilyKey: string, fontSize: number, ratio: number) {
+        return fontSize * ratio
+      },
+    }
+    const node = makeParagraph("")
+    node.children = [
+      { id: "t1", type: "text", text: "A", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "B", style: { fontFamilyKey: "notoSansThai", fontStyle: "italic" } },
+    ]
+
+    const result = measureParagraph(node, 200, measurer, spaceBreaker)
+
+    expect(calls.map((call) => [call.text, call.fontFamilyKey, call.fontVariant])).toEqual([
+      ["A", "sarabun", "bold"],
+      ["B", "notoSansThai", "italic"],
+    ])
+    expect(result.lines[0].runs?.map((run) => ({
+      text: run.text,
+      sourceId: run.sourceId,
+      fontFamilyKey: run.style.fontFamilyKey,
+      fontVariant: run.style.fontVariant,
+    }))).toEqual([
+      { text: "A", sourceId: "t1", fontFamilyKey: "sarabun", fontVariant: "bold" },
+      { text: "B", sourceId: "t2", fontFamilyKey: "notoSansThai", fontVariant: "italic" },
+    ])
+  })
+
+  it("uses the tallest run line height for a mixed-size line", () => {
+    const node = makeParagraph("")
+    node.children = [
+      { id: "t1", type: "text", text: "small " },
+      { id: "t2", type: "text", text: "large", style: { fontSize: { value: 20, unit: "pt" } } },
+    ]
+
+    const result = measureParagraph(node, 200, defaultTextMeasurer, spaceBreaker)
+
+    expect(result.lines).toHaveLength(1)
+    expect(result.lines[0].height).toBe(20 * 1.2)
+    expect(result.totalHeight).toBe(20 * 1.2)
+    expect(result.lines[0].runs?.map((run) => [run.text, run.style.fontSize, run.style.lineHeight])).toEqual([
+      ["small ", 10, 12],
+      ["large", 20, 24],
+    ])
+  })
+
+  it("splits a word segment at run boundaries before measuring", () => {
+    const node = makeParagraph("")
+    node.children = [
+      { id: "t1", type: "text", text: "AB" },
+      { id: "t2", type: "text", text: "CD", style: { fontSize: { value: 20, unit: "pt" } } },
+    ]
+    const noBoundaryBreaker: WordBreaker = { segment: () => ["ABCD"] }
+
+    const result = measureParagraph(node, 200, defaultTextMeasurer, noBoundaryBreaker)
+
+    expect(result.lines[0].segments?.map((segment) => ({
+      text: segment.text,
+      start: segment.start,
+      end: segment.end,
+      fontSize: segment.style?.fontSize,
+    }))).toEqual([
+      { text: "AB", start: 0, end: 2, fontSize: 10 },
+      { text: "CD", start: 2, end: 4, fontSize: 20 },
+    ])
   })
 })
 

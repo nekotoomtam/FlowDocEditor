@@ -4,10 +4,14 @@ import {
   addFlowStackColumn,
   addFlowTableColumn,
   addFlowTableRow,
+  applyParagraphTextStyle,
+  applyTextRunStyleRange,
   applyPlacementOperation,
   assertDocument,
   createDefaultDocument,
   deleteNode,
+  duplicateNode,
+  fitFlowTableToSectionWidth,
   mergeParagraphWithPrevious,
   normalizeDocument,
   removeFlowTableColumn,
@@ -20,16 +24,20 @@ import {
   updateFlowTableCellSpan,
   updateNodeProps,
   updateParagraphBoxStyle,
-  updateParagraphText,
   updateSectionMargin,
 } from "@/document"
-import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges } from "@/document"
-import type { DocumentNode } from "@/schema"
+import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
+import type { DocumentNode, ParagraphNode } from "@/schema"
 import type { DragSource, PlacementOperation, PlacementPreview } from "@/placement/types"
 import { loadDocumentFromStorage } from "./documentPersistence"
 import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
-import { commitWysiwygTextEditState, getPlainParagraphTextFromDocument } from "./wysiwygTextCommit"
+import {
+  commitWysiwygRichTextEditState,
+  commitWysiwygTextEditState,
+  getEditableParagraphTextFromDocument,
+  replaceEditableParagraphTextInDocument,
+} from "./wysiwygTextCommit"
 
 export interface DragState {
   source: DragSource
@@ -63,6 +71,8 @@ type EditorAction =
   | { type: "SELECT_NODE"; nodeId: string | null; anchorNodeId?: string | null }
   | { type: "UPDATE_PROPS"; nodeId: string; changes: Record<string, unknown> }
   | { type: "UPDATE_TEXT"; nodeId: string; text: string }
+  | { type: "UPDATE_PARAGRAPH_TEXT_STYLE"; nodeId: string; changes: ParagraphTextStyleChanges }
+  | { type: "UPDATE_TEXT_RUN_STYLE_RANGE"; nodeId: string; start: number; end: number; changes: ParagraphTextStyleChanges }
   | { type: "UPDATE_FIELD_REF"; fieldRefId: string; changes: FieldRefInlineChanges }
   | { type: "UPDATE_PARAGRAPH_BOX_STYLE"; nodeId: string; changes: ParagraphBoxStyleChanges }
   | { type: "UPDATE_FLOW_STACK_BOX_STYLE"; nodeId: string; changes: ParagraphBoxStyleChanges }
@@ -70,7 +80,9 @@ type EditorAction =
   | { type: "UPDATE_INLINE_TEXT_DRAFT"; nodeId: string; text: string }
   | { type: "COMMIT_INLINE_TEXT_EDIT"; nodeId: string; beforeDoc: DocumentNode; beforePaginated: PaginatedDocument; beforeText: string; afterPaginated: PaginatedDocument }
   | { type: "COMMIT_WYSIWYG_TEXT_EDIT"; nodeId: string; text: string; beforeText: string; history?: HistoryEntry; afterPaginated: PaginatedDocument }
+  | { type: "COMMIT_WYSIWYG_RICH_TEXT_EDIT"; nodeId: string; paragraph: ParagraphNode; history?: HistoryEntry; afterPaginated: PaginatedDocument }
   | { type: "DELETE_NODE"; nodeId: string }
+  | { type: "DUPLICATE_NODE"; nodeId: string }
   | { type: "SET_PAGINATED"; paginated: PaginatedDocument }
   | { type: "SET_INLINE_EDIT_HEIGHT"; nodeId: string; pageIndex: number | null; height: number; reflow?: WysiwygTextReflowDecision }
   | { type: "UNDO" }
@@ -79,6 +91,7 @@ type EditorAction =
   | { type: "TABLE_REMOVE_ROW"; tableId: string; rowIndex: number }
   | { type: "TABLE_ADD_COL"; tableId: string; afterIndex?: number }
   | { type: "TABLE_REMOVE_COL"; tableId: string; colIndex: number }
+  | { type: "TABLE_FIT_TO_WIDTH"; tableId: string }
   | { type: "FLOW_ROW_ADD_COL"; rowId: string; stackId?: string; position?: "before" | "after" }
   | { type: "LOAD_DOCUMENT"; doc: DocumentNode; paginated?: PaginatedDocument }
   | { type: "RESIZE_COLUMNS"; leftStackId: string; leftShare: number; rightStackId: string; rightShare: number; paginated?: PaginatedDocument }
@@ -188,7 +201,13 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
     case "UPDATE_PROPS":
       return pushDoc(state, updateNodeProps(state.doc, action.nodeId, action.changes))
     case "UPDATE_TEXT":
-      return pushDoc(state, updateParagraphText(state.doc, action.nodeId, action.text))
+      return pushDoc(state, replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text))
+    case "UPDATE_PARAGRAPH_TEXT_STYLE":
+      return pushDoc(state, applyParagraphTextStyle(state.doc, action.nodeId, action.changes))
+    case "UPDATE_TEXT_RUN_STYLE_RANGE": {
+      const nextDoc = applyTextRunStyleRange(state.doc, action.nodeId, action.start, action.end, action.changes)
+      return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
+    }
     case "UPDATE_FIELD_REF":
       return pushDoc(state, updateFieldRefInline(state.doc, action.fieldRefId, action.changes))
     case "UPDATE_PARAGRAPH_BOX_STYLE":
@@ -200,9 +219,9 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
     }
     case "UPDATE_INLINE_TEXT_DRAFT":
-      return setDocWithoutHistory(state, updateParagraphText(state.doc, action.nodeId, action.text))
+      return setDocWithoutHistory(state, replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text))
     case "COMMIT_INLINE_TEXT_EDIT": {
-      const currentText = getPlainParagraphTextFromDocument(state.doc, action.nodeId)
+      const currentText = getEditableParagraphTextFromDocument(state.doc, action.nodeId)
       if (currentText == null || currentText === action.beforeText) return {
         ...state,
         paginated: action.afterPaginated,
@@ -217,8 +236,24 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
     case "COMMIT_WYSIWYG_TEXT_EDIT": {
       return commitWysiwygTextEditState(state, action, MAX_HISTORY)
     }
+    case "COMMIT_WYSIWYG_RICH_TEXT_EDIT": {
+      return commitWysiwygRichTextEditState(state, action, MAX_HISTORY)
+    }
     case "DELETE_NODE":
-      return { ...pushDoc(state, deleteNode(state.doc, action.nodeId)), selectedNodeId: null, selectionAnchorNodeId: null }
+      {
+        const nextDoc = deleteNode(state.doc, action.nodeId)
+        if (nextDoc === state.doc) return state
+        return { ...pushDoc(state, nextDoc), selectedNodeId: null, selectionAnchorNodeId: null }
+      }
+    case "DUPLICATE_NODE": {
+      const result = duplicateNode(state.doc, action.nodeId)
+      if (result.doc === state.doc || !result.duplicatedNodeId) return state
+      return {
+        ...pushDoc(state, result.doc),
+        selectedNodeId: result.duplicatedNodeId,
+        selectionAnchorNodeId: result.duplicatedNodeId,
+      }
+    }
     case "REORDER_BODY_CHILD": {
       const nextDoc = reorderBodyChild(state.doc, action.sectionId, action.sourceNodeId, action.targetNodeId, action.position)
       if (nextDoc === state.doc) return state
@@ -280,6 +315,12 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
         state,
         action.tableId,
         (doc, tableId) => removeFlowTableColumn(doc, tableId, action.colIndex),
+      )
+    case "TABLE_FIT_TO_WIDTH":
+      return updateTableStructure(
+        state,
+        action.tableId,
+        (doc, tableId) => fitFlowTableToSectionWidth(doc, tableId),
       )
     case "FLOW_ROW_ADD_COL":
       return pushDoc(state, addFlowStackColumn(state.doc, action.rowId, action.stackId, action.position))

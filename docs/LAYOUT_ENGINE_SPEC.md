@@ -301,6 +301,10 @@ Rules:
   or nearest column width
 - table column deletion should preserve total table width by transferring the
   removed width to a neighboring column
+- table fit-to-width is an explicit authored-width rewrite; normal layout must
+  not silently stretch a narrow Flow Table
+- table `align`, `marginTop`, and `marginBottom` are authored table-block props
+  resolved by layout/pagination, not editor-only chrome
 - adding or deleting a column is not an implicit resize of the whole table
 - editor selection may target a `flow-table-cell` even when the pointer lands on an
   inner paragraph fragment, but this must remain editor interaction state and
@@ -344,7 +348,9 @@ Current policy direction:
   page space before advancing; a single row-boundary slice that does not fit
   the remaining page space subdivides at line boundaries using line-level cell
   split accounting;
-  `headerRowCount` repeats authored header rows on body continuation pages
+  `headerRowCount` marks authored header rows; `repeatHeaderRows` controls
+  whether those header rows repeat on body continuation pages and defaults to
+  enabled
 - flow-table cell content: splits by the same measured line boundaries as body
   paragraphs within breakable non-rowspan rows and spanning-cell row-boundary
   continuation slices

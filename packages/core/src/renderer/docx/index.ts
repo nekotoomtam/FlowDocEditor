@@ -17,13 +17,18 @@ import {
   SectionType,
   ShadingType,
   VerticalAlignTable,
+  CharacterSet,
+  UnderlineType,
 } from "docx"
+import JSZip from "jszip"
 import type { PaginatedDocument, PageFragment, ResolvedBorderSide } from "../../pagination"
 import type { ParagraphRenderProps } from "../../pagination"
-import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode } from "../../schema"
-import type { RenderResult, Renderer } from "../shared"
+import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode, TextRunStyle, UnitValue } from "../../schema"
+import { toAbstractUnit } from "../../layout"
+import type { FontProvider, RenderResult, Renderer } from "../shared"
 import { ptToTwips, ptToHalfPoints } from "../shared"
-import { resolveDocxFontName } from "../../font-registry"
+import { resolveDocxFontName, resolveFontEntry, resolveFontVariantKeyForStyle } from "../../font-registry"
+import type { FontVariantKey } from "../../font-registry"
 
 /**
  * DOCX Renderer
@@ -56,15 +61,46 @@ type ParagraphBuildItem = Paragraph | Table
 
 interface DocxRendererOptions {
   sourceDocument?: DocumentNode
+  fontProvider?: FontProvider
 }
 
 interface DocxRenderContext {
-  paragraphTextById: Map<string, string>
+  paragraphRunsById: Map<string, SourceParagraphRun[]>
+  flowTablePropsById: Map<string, FlowTableNode["props"]>
 }
 
 type SourceNode = LayoutNode | FlowTableNode["nodes"][string]
+type SourceParagraphRun = {
+  text: string
+  style?: TextRunStyle
+}
+type DocxTextRunSlice = {
+  text: string
+  style: DocxTextRunStyle
+}
+type DocxTextRunStyle = {
+  fontSize: number
+  fontFamilyKey: string
+  textColor: string
+  fontWeight: "normal" | "bold"
+  fontStyle: "normal" | "italic"
+  textDecoration: "none" | "underline"
+  strikethrough: boolean
+}
+type DocxEmbeddedFont = {
+  name: string
+  characterSet: (typeof CharacterSet)[keyof typeof CharacterSet]
+  variants: Partial<Record<FontVariantKey, DocxEmbeddedFontVariant>>
+}
 
-const EMPTY_RENDER_CONTEXT: DocxRenderContext = { paragraphTextById: new Map() }
+type DocxEmbeddedFontVariant = {
+  data: Uint8Array
+  fontKey: string
+  relationshipId: string
+  target: string
+}
+
+const EMPTY_RENDER_CONTEXT: DocxRenderContext = { paragraphRunsById: new Map(), flowTablePropsById: new Map() }
 
 // ─── Grouping ─────────────────────────────────────────────────────────────────
 
@@ -148,6 +184,12 @@ const ALIGNMENT: Record<ParagraphRenderProps["align"], string> = {
   justify: AlignmentType.JUSTIFIED,
 }
 
+const TABLE_ALIGNMENT: Record<NonNullable<FlowTableNode["props"]["align"]>, (typeof AlignmentType)[keyof typeof AlignmentType]> = {
+  left: AlignmentType.LEFT,
+  center: AlignmentType.CENTER,
+  right: AlignmentType.RIGHT,
+}
+
 const NO_BORDER = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" }
 
 const INVISIBLE_BORDERS = {
@@ -156,43 +198,49 @@ const INVISIBLE_BORDERS = {
   insideHorizontal: NO_BORDER, insideVertical: NO_BORDER,
 }
 
-function sourceParagraphText(node: ParagraphNode): string | null {
-  let text = ""
+function sourceParagraphRuns(node: ParagraphNode): SourceParagraphRun[] | null {
+  const runs: SourceParagraphRun[] = []
   for (const child of node.children) {
     if (child.type === "text") {
-      text += child.text
+      runs.push({ text: child.text.replace(/\r\n?/g, "\n"), style: child.style })
     } else if (child.type === "fieldRef") {
-      text += child.label ?? child.fallback ?? `{${child.key}}`
+      runs.push({ text: child.label ?? child.fallback ?? `{${child.key}}` })
     } else if (child.type === "pageNumber") {
       return null
     }
   }
-  return text.replace(/\r\n?/g, "\n")
+  return runs
 }
 
-function collectSourceParagraphTextFromNode(node: SourceNode, paragraphTextById: Map<string, string>): void {
+function collectSourceParagraphRunsFromNode(
+  node: SourceNode,
+  paragraphRunsById: Map<string, SourceParagraphRun[]>,
+  flowTablePropsById: Map<string, FlowTableNode["props"]>,
+): void {
   if (node.type === "paragraph") {
-    const text = sourceParagraphText(node)
-    if (text !== null) paragraphTextById.set(node.id, text)
+    const runs = sourceParagraphRuns(node)
+    if (runs !== null) paragraphRunsById.set(node.id, runs)
     return
   }
 
   if (node.type === "flow-table") {
+    flowTablePropsById.set(node.id, node.props)
     for (const child of Object.values(node.nodes)) {
-      collectSourceParagraphTextFromNode(child as SourceNode, paragraphTextById)
+      collectSourceParagraphRunsFromNode(child as SourceNode, paragraphRunsById, flowTablePropsById)
     }
   }
 }
 
 function createRenderContext(sourceDocument: DocumentNode | undefined): DocxRenderContext {
   if (!sourceDocument) return EMPTY_RENDER_CONTEXT
-  const paragraphTextById = new Map<string, string>()
+  const paragraphRunsById = new Map<string, SourceParagraphRun[]>()
+  const flowTablePropsById = new Map<string, FlowTableNode["props"]>()
   for (const section of sourceDocument.document.sections) {
     for (const node of Object.values(section.nodes)) {
-      collectSourceParagraphTextFromNode(node, paragraphTextById)
+      collectSourceParagraphRunsFromNode(node, paragraphRunsById, flowTablePropsById)
     }
   }
-  return { paragraphTextById }
+  return { paragraphRunsById, flowTablePropsById }
 }
 
 function toBorderOpts(side: ResolvedBorderSide | undefined) {
@@ -320,26 +368,154 @@ function buildParagraphTextFromSegments(fragments: PageFragment[]): string | nul
   return text.trim()
 }
 
-function buildParagraphText(fragments: PageFragment[], context: DocxRenderContext): string {
-  const sourceText = context.paragraphTextById.get(fragments[0]?.nodeId ?? "")
-  if (sourceText !== undefined) return sourceText
+function styleFromParagraphProps(props: ParagraphRenderProps): DocxTextRunStyle {
+  return {
+    fontSize: props.fontSize,
+    fontFamilyKey: props.fontFamilyKey,
+    textColor: props.textColor ?? "000000",
+    fontWeight: props.fontWeight ?? "normal",
+    fontStyle: props.fontStyle ?? "normal",
+    textDecoration: props.textDecoration ?? "none",
+    strikethrough: props.strikethrough ?? false,
+  }
+}
+
+function styleFromTextRunStyle(props: ParagraphRenderProps, style: TextRunStyle | undefined): DocxTextRunStyle {
+  const fallback = styleFromParagraphProps(props)
+  return {
+    fontSize: style?.fontSize ? toAbstractUnit(style.fontSize.value, style.fontSize.unit) : fallback.fontSize,
+    fontFamilyKey: style?.fontFamilyKey ?? fallback.fontFamilyKey,
+    textColor: style?.textColor ?? fallback.textColor,
+    fontWeight: style?.fontWeight ?? fallback.fontWeight,
+    fontStyle: style?.fontStyle ?? fallback.fontStyle,
+    textDecoration: style?.textDecoration ?? fallback.textDecoration,
+    strikethrough: style?.strikethrough ?? fallback.strikethrough,
+  }
+}
+
+function styleFromLineRun(run: NonNullable<NonNullable<PageFragment["lines"]>[number]["runs"]>[number]): DocxTextRunStyle {
+  return {
+    fontSize: run.style.fontSize,
+    fontFamilyKey: run.style.fontFamilyKey,
+    textColor: run.style.textColor,
+    fontWeight: run.style.fontWeight,
+    fontStyle: run.style.fontStyle,
+    textDecoration: run.style.textDecoration,
+    strikethrough: run.style.strikethrough,
+  }
+}
+
+function docxTextRunStyleKey(style: DocxTextRunStyle): string {
+  return [
+    style.fontSize,
+    style.fontFamilyKey,
+    style.textColor,
+    style.fontWeight,
+    style.fontStyle,
+    style.textDecoration,
+    style.strikethrough,
+  ].join("|")
+}
+
+function pushDocxTextRunSlice(slices: DocxTextRunSlice[], next: DocxTextRunSlice): void {
+  const previous = slices.at(-1)
+  if (previous && docxTextRunStyleKey(previous.style) === docxTextRunStyleKey(next.style)) {
+    slices[slices.length - 1] = {
+      ...previous,
+      text: previous.text + next.text,
+    }
+    return
+  }
+  slices.push(next)
+}
+
+function buildParagraphRunsFromPaginatedRuns(fragments: PageFragment[]): DocxTextRunSlice[] | null {
+  const runs = sortParagraphFragments(fragments)
+    .flatMap((fragment) => fragment.lines ?? [])
+    .flatMap((line) => line.runs ?? [])
+    .filter((run) => run.text.length > 0)
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+
+  if (runs.length === 0) return null
+
+  const slices: DocxTextRunSlice[] = []
+  let cursor = runs[0].start
+  for (const run of runs) {
+    if (run.end <= cursor) continue
+
+    const sliceStart = Math.max(0, cursor - run.start)
+    const piece = run.text.slice(sliceStart)
+    if (piece.length === 0) {
+      cursor = Math.max(cursor, run.end)
+      continue
+    }
+
+    if (run.start > cursor) {
+      const previous = slices.at(-1)
+      if (previous && !/\s$/.test(previous.text) && !/^\s/.test(piece)) {
+        pushDocxTextRunSlice(slices, { text: " ", style: previous.style })
+      }
+    }
+    pushDocxTextRunSlice(slices, { text: piece, style: styleFromLineRun(run) })
+    cursor = Math.max(cursor, run.end)
+  }
+
+  return slices.length > 0 ? slices : null
+}
+
+function buildParagraphTextRunSlices(
+  fragments: PageFragment[],
+  context: DocxRenderContext,
+  props: ParagraphRenderProps,
+): DocxTextRunSlice[] {
+  const sourceRuns = context.paragraphRunsById.get(fragments[0]?.nodeId ?? "")
+  if (sourceRuns !== undefined) {
+    return sourceRuns.map((run) => ({
+      text: run.text,
+      style: styleFromTextRunStyle(props, run.style),
+    }))
+  }
+
+  const paginatedRuns = buildParagraphRunsFromPaginatedRuns(fragments)
+  if (paginatedRuns !== null) return paginatedRuns
+
   const fromSegments = buildParagraphTextFromSegments(fragments)
-  if (fromSegments !== null) return fromSegments
-  return sortParagraphFragments(fragments)
+  const text = fromSegments ?? sortParagraphFragments(fragments)
     .flatMap((fragment) => fragment.lines ?? [])
     .map((line) => line.text)
     .join(" ")
     .trim()
+  return text ? [{ text, style: styleFromParagraphProps(props) }] : []
 }
 
-function buildTextRuns(text: string, props: ParagraphRenderProps): TextRun[] {
-  const lines = text.split("\n")
+function buildTextRunsFromSlice(slice: DocxTextRunSlice): TextRun[] {
+  const lines = slice.text.split("\n")
+  const bold = slice.style.fontWeight === "bold" || undefined
+  const italics = slice.style.fontStyle === "italic" || undefined
+  const color = slice.style.textColor
+  const underline = slice.style.textDecoration === "underline"
+    ? { type: UnderlineType.SINGLE, color }
+    : undefined
   return lines.map((line, index) => new TextRun({
     text: line,
     break: index > 0 ? 1 : undefined,
-    size: ptToHalfPoints(props.fontSize),
-    font: resolveDocxFontName(props.fontFamilyKey),
+    size: ptToHalfPoints(slice.style.fontSize),
+    font: resolveDocxFontName(slice.style.fontFamilyKey),
+    bold,
+    boldComplexScript: bold,
+    italics,
+    italicsComplexScript: italics,
+    underline,
+    strike: slice.style.strikethrough || undefined,
+    color,
   }))
+}
+
+function buildTextRuns(slices: DocxTextRunSlice[], props: ParagraphRenderProps): TextRun[] {
+  const content = slices.length > 0
+    ? slices
+    : [{ text: "", style: styleFromParagraphProps(props) }]
+  return content.flatMap(buildTextRunsFromSlice)
 }
 
 function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxRenderContext = EMPTY_RENDER_CONTEXT): Paragraph | null {
@@ -347,7 +523,8 @@ function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxR
   const firstFragment = paragraphFragments[0]
   if (!firstFragment?.renderProps) return null
   const props = firstFragment.renderProps
-  const text = buildParagraphText(paragraphFragments, context)
+  const textRuns = buildParagraphTextRunSlices(paragraphFragments, context, props)
+  const text = textRuns.map((run) => run.text).join("")
   if (!text && !props.box) return null
   const boxFragment: PageFragment = {
     ...firstFragment,
@@ -357,7 +534,7 @@ function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxR
 
   return new Paragraph({
     includeIfEmpty: Boolean(props.box),
-    children: buildTextRuns(text, props),
+    children: buildTextRuns(textRuns, props),
     alignment: ALIGNMENT[props.align] as any,
     spacing: {
       before: ptToTwips(props.spacingBefore),
@@ -377,6 +554,15 @@ function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxR
 
 function buildSpacer(fragment: PageFragment): Paragraph {
   return new Paragraph({ children: [], spacing: { after: ptToTwips(fragment.height) } })
+}
+
+function unitValueToPt(value: UnitValue | undefined): number {
+  return value ? Math.max(0, toAbstractUnit(value.value, value.unit)) : 0
+}
+
+function buildFlowTableBlockSpacer(height: number): Paragraph | null {
+  if (height <= 0) return null
+  return new Paragraph({ children: [], spacing: { after: ptToTwips(height) } })
 }
 
 function flushParagraphGroup(output: Paragraph[], group: PageFragment[], context: DocxRenderContext): PageFragment[] {
@@ -544,6 +730,7 @@ function buildFlowDataTable(group: TableGroup, context: DocxRenderContext): Tabl
     .sort((a, b) => a.rowFragment.y - b.rowFragment.y || a.rowFragment.x - b.rowFragment.x)
   const repeatedFullRowIds = collectRepeatedFullRowIds(sortedRows)
   const emittedRepeatedRows = new Set<string>()
+  const tableProps = context.flowTablePropsById.get(group.tableFragment.nodeId)
   const rows = sortedRows
     .flatMap((rowGroup) => {
       const isRepeatedHeaderRow = repeatedFullRowIds.has(rowGroup.rowFragment.nodeId) &&
@@ -570,6 +757,7 @@ function buildFlowDataTable(group: TableGroup, context: DocxRenderContext): Tabl
     width: { size: ptToTwips(group.tableFragment.width), type: WidthType.DXA },
     columnWidths: buildFlowTableColumnWidths(group),
     layout: TableLayoutType.FIXED,
+    alignment: tableProps?.align ? TABLE_ALIGNMENT[tableProps.align] : undefined,
     rows,
   })
 }
@@ -616,8 +804,14 @@ function buildItems(items: RenderItem[], context: DocxRenderContext): ParagraphB
     paragraphGroup = flushParagraphItems(output, paragraphGroup, context)
     if (item.kind === "spacer") output.push(buildSpacer(item.fragment))
     else if (item.kind === "row") output.push(buildLayoutTable(item.group, context))
-    else if (item.kind === "table") output.push(buildDataTable(item.group, context))
-    else if (item.kind === "toc") output.push(...buildToc(item.fragment))
+    else if (item.kind === "table") {
+      const props = context.flowTablePropsById.get(item.group.tableFragment.nodeId)
+      const marginTop = buildFlowTableBlockSpacer(unitValueToPt(props?.marginTop))
+      if (marginTop) output.push(marginTop)
+      output.push(buildDataTable(item.group, context))
+      const marginBottom = buildFlowTableBlockSpacer(unitValueToPt(props?.marginBottom))
+      if (marginBottom) output.push(marginBottom)
+    } else if (item.kind === "toc") output.push(...buildToc(item.fragment))
   }
 
   flushParagraphItems(output, paragraphGroup, context)
@@ -666,13 +860,205 @@ function buildSectionProperties(page: { width: number; height: number; contentBo
   }
 }
 
+const DOCX_FONT_VARIANT_ORDER: FontVariantKey[] = ["regular", "bold", "italic", "boldItalic"]
+
+const DOCX_FONT_VARIANT_EMBED_TAG: Record<FontVariantKey, string> = {
+  regular: "w:embedRegular",
+  bold: "w:embedBold",
+  italic: "w:embedItalic",
+  boldItalic: "w:embedBoldItalic",
+}
+
+const DOCX_FONT_VARIANT_PART_SUFFIX: Record<FontVariantKey, string> = {
+  regular: "",
+  bold: " Bold",
+  italic: " Italic",
+  boldItalic: " BoldItalic",
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+}
+
+function sanitizeDocxFontPartName(value: string): string {
+  return value.replace(/[\\/:*?"<>|]/g, "_")
+}
+
+function createDocxFontKey(): string {
+  const cryptoRef = globalThis.crypto
+  if (typeof cryptoRef?.randomUUID === "function") return cryptoRef.randomUUID()
+
+  const bytes = new Uint8Array(16)
+  if (typeof cryptoRef?.getRandomValues === "function") {
+    cryptoRef.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0"))
+  return [
+    hex.slice(0, 4).join(""),
+    hex.slice(4, 6).join(""),
+    hex.slice(6, 8).join(""),
+    hex.slice(8, 10).join(""),
+    hex.slice(10, 16).join(""),
+  ].join("-")
+}
+
+function obfuscateDocxFont(data: Uint8Array, fontKey: string): Uint8Array {
+  const guid = fontKey.replace(/-/g, "")
+  if (guid.length !== 32) throw new Error(`Invalid DOCX font key: ${fontKey}`)
+  const keyBytes = guid.match(/../g)!.map((hex) => Number.parseInt(hex, 16)).reverse()
+  const output = new Uint8Array(data)
+  const limit = Math.min(32, output.length)
+  for (let index = 0; index < limit; index += 1) {
+    output[index] = output[index] ^ keyBytes[index % keyBytes.length]
+  }
+  return output
+}
+
+function addVariantRequest(variants: Set<FontVariantKey>, key: string, requestedVariant: FontVariantKey): void {
+  variants.add("regular")
+  const entry = resolveFontEntry(key)
+  if (entry.variants[requestedVariant]) {
+    variants.add(requestedVariant)
+    return
+  }
+  if ((requestedVariant === "bold" || requestedVariant === "boldItalic") && entry.variants.bold) {
+    variants.add("bold")
+  }
+  if ((requestedVariant === "italic" || requestedVariant === "boldItalic") && entry.variants.italic) {
+    variants.add("italic")
+  }
+}
+
+function collectFontVariantRequestsFromFragments(fragments: PageFragment[], requests: Map<string, Set<FontVariantKey>>): void {
+  for (const fragment of fragments) {
+    if (fragment.renderProps?.fontFamilyKey) {
+      const key = resolveFontEntry(fragment.renderProps.fontFamilyKey).key
+      const variants = requests.get(key) ?? new Set<FontVariantKey>()
+      const requestedVariant = resolveFontVariantKeyForStyle(fragment.renderProps.fontWeight, fragment.renderProps.fontStyle)
+      addVariantRequest(variants, key, requestedVariant)
+      requests.set(key, variants)
+    }
+    for (const run of fragment.lines?.flatMap((line) => line.runs ?? []) ?? []) {
+      const key = resolveFontEntry(run.style.fontFamilyKey).key
+      const variants = requests.get(key) ?? new Set<FontVariantKey>()
+      addVariantRequest(variants, key, run.style.fontVariant)
+      requests.set(key, variants)
+    }
+  }
+}
+
+function collectDocxFontVariantRequests(doc: PaginatedDocument): Map<string, Set<FontVariantKey>> {
+  const requests = new Map<string, Set<FontVariantKey>>()
+  for (const section of doc.sections) {
+    for (const page of section.pages) {
+      collectFontVariantRequestsFromFragments(page.fragments, requests)
+      collectFontVariantRequestsFromFragments(page.headerFragments, requests)
+      collectFontVariantRequestsFromFragments(page.footerFragments, requests)
+    }
+  }
+  return requests
+}
+
+function resolveDocxFontTarget(name: string, variant: FontVariantKey): string {
+  const partName = sanitizeDocxFontPartName(`${name}${DOCX_FONT_VARIANT_PART_SUFFIX[variant]}`)
+  return `fonts/${partName}.odttf`
+}
+
+async function buildEmbeddedFonts(doc: PaginatedDocument, fontProvider: FontProvider | undefined): Promise<DocxEmbeddedFont[]> {
+  if (!fontProvider) return []
+
+  const embeddedByDocxName = new Map<string, DocxEmbeddedFont>()
+  let relationshipIndex = 1
+  for (const [key, variants] of collectDocxFontVariantRequests(doc)) {
+    const name = resolveDocxFontName(key)
+    const embedded = embeddedByDocxName.get(name) ?? {
+      name,
+      characterSet: CharacterSet.THAI,
+      variants: {},
+    }
+
+    for (const variant of DOCX_FONT_VARIANT_ORDER) {
+      if (!variants.has(variant) || embedded.variants[variant]) continue
+      const fontBuffer = await fontProvider.getFont(key, variant)
+      if (!fontBuffer) continue
+
+      embedded.variants[variant] = {
+        data: fontBuffer,
+        fontKey: createDocxFontKey(),
+        relationshipId: `rId${relationshipIndex}`,
+        target: resolveDocxFontTarget(name, variant),
+      }
+      relationshipIndex += 1
+    }
+
+    if (Object.keys(embedded.variants).length > 0) {
+      embeddedByDocxName.set(name, embedded)
+    }
+  }
+
+  return [...embeddedByDocxName.values()]
+}
+
+function buildFontTableXml(fonts: DocxEmbeddedFont[]): string {
+  const fontEntries = fonts.map((font) => {
+    const variantEntries = DOCX_FONT_VARIANT_ORDER.flatMap((variant) => {
+      const embedded = font.variants[variant]
+      if (!embedded) return []
+      const tag = DOCX_FONT_VARIANT_EMBED_TAG[variant]
+      return `<${tag} r:id="${xmlEscape(embedded.relationshipId)}" w:fontKey="{${xmlEscape(embedded.fontKey)}}"/>`
+    }).join("")
+    return `<w:font w:name="${xmlEscape(font.name)}"><w:charset w:val="${xmlEscape(font.characterSet)}"/><w:family w:val="auto"/><w:pitch w:val="variable"/>${variantEntries}</w:font>`
+  }).join("")
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${fontEntries}</w:fonts>`
+}
+
+function buildFontRelationshipsXml(fonts: DocxEmbeddedFont[]): string {
+  const relationships = fonts.flatMap((font) =>
+    DOCX_FONT_VARIANT_ORDER.flatMap((variant) => {
+      const embedded = font.variants[variant]
+      if (!embedded) return []
+      return `<Relationship Id="${xmlEscape(embedded.relationshipId)}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="${xmlEscape(embedded.target)}"/>`
+    }),
+  ).join("")
+  return `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`
+}
+
+async function injectEmbeddedFonts(buffer: Uint8Array, fonts: DocxEmbeddedFont[]): Promise<Uint8Array> {
+  if (fonts.length === 0) return buffer
+  const zip = await JSZip.loadAsync(buffer)
+  zip.file("word/fontTable.xml", buildFontTableXml(fonts))
+  zip.file("word/_rels/fontTable.xml.rels", buildFontRelationshipsXml(fonts))
+  for (const font of fonts) {
+    for (const variant of DOCX_FONT_VARIANT_ORDER) {
+      const embedded = font.variants[variant]
+      if (!embedded) continue
+      zip.file(`word/${embedded.target}`, obfuscateDocxFont(embedded.data, embedded.fontKey))
+    }
+  }
+  return zip.generateAsync({ type: "uint8array", compression: "DEFLATE" })
+}
+
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 
 export class DocxRenderer implements Renderer {
   private readonly context: DocxRenderContext
+  private readonly fontProvider?: FontProvider
 
   constructor(options: DocxRendererOptions = {}) {
     this.context = createRenderContext(options.sourceDocument)
+    this.fontProvider = options.fontProvider
   }
 
   async render(doc: PaginatedDocument): Promise<RenderResult> {
@@ -690,6 +1076,7 @@ export class DocxRenderer implements Renderer {
       }
     })
 
+    const fonts = await buildEmbeddedFonts(doc, this.fontProvider)
     const wordDoc = new Document({
       sections: sections.length > 0
         ? sections
@@ -697,8 +1084,9 @@ export class DocxRenderer implements Renderer {
     })
 
     const buffer = await Packer.toBuffer(wordDoc)
+    const outputBuffer = await injectEmbeddedFonts(new Uint8Array(buffer), fonts)
     return {
-      buffer: new Uint8Array(buffer),
+      buffer: outputBuffer,
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       extension: "docx",
     }

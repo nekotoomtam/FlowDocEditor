@@ -11,6 +11,9 @@ import { createBrowserFontkitMeasurer } from "../browserFontkitMeasurer"
 
 const FONT_PATH = resolveRuntimeFontPath()
 const FONT_AVAILABLE = existsSync(FONT_PATH)
+const SARABUN_FONT_PATH = resolveRuntimeFontPath("sarabun")
+const NOTO_SANS_THAI_FONT_PATH = resolveRuntimeFontPath("notoSansThai")
+const CATALOG_FONTS_AVAILABLE = [FONT_PATH, SARABUN_FONT_PATH, NOTO_SANS_THAI_FONT_PATH].every(existsSync)
 
 describe.skipIf(!FONT_AVAILABLE)("browser/server fontkit measurer parity", () => {
   it("produces identical widths for representative strings across font sizes", async () => {
@@ -61,5 +64,32 @@ describe.skipIf(!FONT_AVAILABLE)("browser/server fontkit measurer parity", () =>
   it("returns null when font buffer is unavailable so callers can keep their existing fallback", async () => {
     const browserMeasurer = await createBrowserFontkitMeasurer(null)
     expect(browserMeasurer).toBeNull()
+  })
+})
+
+describe.skipIf(!CATALOG_FONTS_AVAILABLE)("browser/server catalog fontkit measurer parity", () => {
+  it("uses the requested paragraph font key for width measurement", async () => {
+    const defaultFontBuffer = new Uint8Array(readFileSync(FONT_PATH))
+    const fontBuffersByKey = {
+      default: defaultFontBuffer,
+      sarabun: new Uint8Array(readFileSync(SARABUN_FONT_PATH)),
+      notoSansThai: new Uint8Array(readFileSync(NOTO_SANS_THAI_FONT_PATH)),
+    }
+    const serverMeasurer = createFontkitMeasurer(defaultFontBuffer, fontBuffersByKey)
+    const browserMeasurer = await createBrowserFontkitMeasurer(defaultFontBuffer, fontBuffersByKey)
+    if (!browserMeasurer) {
+      throw new Error("Expected browser fontkit measurer to initialize from catalog font bytes")
+    }
+
+    const text = "เอกสารไทย FlowDoc 123"
+    for (const key of ["sarabun", "notoSansThai"]) {
+      const serverWidth = serverMeasurer.measureText(text, key, 12).width
+      const browserWidth = browserMeasurer.measureText(text, key, 12).width
+      expect(browserWidth, `catalog parity mismatch for ${key}`).toBe(serverWidth)
+    }
+
+    expect(serverMeasurer.measureText(text, "sarabun", 12).width).not.toBe(
+      serverMeasurer.measureText(text, "notoSansThai", 12).width,
+    )
   })
 })

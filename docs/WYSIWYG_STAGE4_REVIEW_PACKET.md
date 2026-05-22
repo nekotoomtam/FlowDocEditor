@@ -34,7 +34,7 @@ Out of scope:
 
 ## PASS
 
-- Browser text measurement uses the same fontkit-on-`THSarabun.ttf` pipeline as
+- Browser text measurement uses the same fontkit-on-`Sarabun/Sarabun-Regular.ttf` pipeline as
   the server (Phase A of `docs/WYSIWYG_PARITY_PLAN.md` complete 2026-05-14).
   Evidence: `src/app/editor/_components/browserFontkitMeasurer.ts`,
   `src/app/editor/_components/__tests__/fontMeasurerParity.test.ts` (exact
@@ -106,7 +106,7 @@ npm.cmd run review:gate:full
 
 `review:gate` includes type-check, core tests, app tests, and `review:build`.
 `review:gate:full` first runs the review archive manifest check. These gates
-must fail if `public/fonts/THSarabun.ttf` is missing.
+must fail if `public/fonts/Sarabun/Sarabun-Regular.ttf` is missing.
 
 Focused tests:
 

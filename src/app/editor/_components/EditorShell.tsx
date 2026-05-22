@@ -6,7 +6,6 @@ import { assertDocument, createDefaultDocument, normalizeDocument } from "@/docu
 import {
   resizeFlowTableColumnPair as resizeFlowTableColumnPairForPreview,
   updateNodeProps,
-  updateParagraphText,
 } from "@/document"
 import { bindDocumentWithSnapshot } from "@/binding"
 import type { DataSnapshotV1, FieldScalarValue } from "@/dataSnapshot"
@@ -25,6 +24,7 @@ import type {
 } from "@/placement/types"
 import { EditorCanvas } from "./EditorCanvas"
 import { PropertyPanel } from "./PropertyPanel"
+import { RichTextToolbar } from "./RichTextToolbar"
 import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
 import { AddPanel } from "./AddPanel"
@@ -65,6 +65,7 @@ import { findWysiwygPageIndexInFragmentRanges, getWysiwygParagraphFragmentRanges
 import {
   WYSIWYG_INLINE_EDIT_ENABLED,
   WYSIWYG_PERF_TRACE_ENABLED,
+  WYSIWYG_RICH_TEXT_DRAFT_ENABLED,
   WYSIWYG_TEXT_ENGINE_ENABLED,
 } from "./wysiwygInlineEditConfig"
 import {
@@ -78,13 +79,29 @@ import {
 } from "./wysiwygDraftPreview"
 import { resolveEditorTestScenarioFromLocation } from "./wysiwygStage3StressScenarios"
 import { isParagraphInsideFlowStack, isParagraphInsideTableCell, isWysiwygTextEngineFragmentEligible } from "./wysiwygTextEligibility"
-import { getPlainParagraphTextFromDocument } from "./wysiwygTextCommit"
+import {
+  getEditableParagraphFromDocument,
+  getEditableParagraphTextFromDocument,
+  replaceEditableParagraphInDocument,
+  replaceEditableParagraphTextInDocument,
+} from "./wysiwygTextCommit"
 import { useInlineEditSession } from "./useInlineEditSession"
 import {
   describeWysiwygTextSessionAccessibility,
   useWysiwygTextSession,
+  type WysiwygTextInputKey,
   WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
+import {
+  projectRichTextDraftSessionToWysiwygTextSession,
+  useWysiwygRichTextDraftSession,
+} from "./richTextDraftSession"
+import {
+  applyRichTextDraftSessionCommand,
+  getRichTextDraftSessionCommandPatch,
+  resolveRichTextDraftKeyboardCommand,
+  type RichTextDraftSessionCommand,
+} from "./richTextDraftCommands"
 import { resolvePersistableWysiwygDocument } from "./wysiwygDraftPersistence"
 import {
   findEditorPageKeyByPageIndex,
@@ -394,7 +411,11 @@ function setDataSnapshotValue(snapshot: DataSnapshotV1, key: string, value: Fiel
 }
 
 function getParagraphTextFromDoc(doc: DocumentNode, nodeId: string): string | null {
-  return getPlainParagraphTextFromDocument(doc, nodeId)
+  return getEditableParagraphTextFromDocument(doc, nodeId)
+}
+
+function getParagraphFromDoc(doc: DocumentNode, nodeId: string) {
+  return getEditableParagraphFromDocument(doc, nodeId)
 }
 
 function findSectionIndexForNode(doc: DocumentNode, nodeId: string | null): number {
@@ -918,20 +939,83 @@ export default function EditorShell() {
   }, [])
 
   const {
-    state: wysiwygTextSessionState,
-    start: startWysiwygTextSession,
-    changeDraft: changeWysiwygTextDraft,
-    moveCaret: moveWysiwygTextCaret,
-    end: endWysiwygTextSession,
+    state: plainWysiwygTextSessionState,
+    start: startPlainWysiwygTextSession,
+    changeDraft: changePlainWysiwygTextDraft,
+    moveCaret: movePlainWysiwygTextCaret,
+    end: endPlainWysiwygTextSession,
   } = useWysiwygTextSession({
     enabled: WYSIWYG_TEXT_ENGINE_ENABLED,
     getParagraphText: (nodeId) => getParagraphTextFromDoc(docRef.current, nodeId),
   })
+
+  const {
+    state: richWysiwygDraftSessionState,
+    start: startRichWysiwygDraftSession,
+    changeDraft: changeRichWysiwygDraft,
+    moveCaret: moveRichWysiwygDraftCaret,
+    applyStyleCommand: applyRichWysiwygDraftStyleCommand,
+    end: endRichWysiwygDraftSession,
+  } = useWysiwygRichTextDraftSession({
+    enabled: WYSIWYG_TEXT_ENGINE_ENABLED && WYSIWYG_RICH_TEXT_DRAFT_ENABLED,
+    getParagraph: (nodeId) => getParagraphFromDoc(docRef.current, nodeId),
+  })
+
+  const richWysiwygTextSessionProjection = useMemo(
+    () => projectRichTextDraftSessionToWysiwygTextSession(richWysiwygDraftSessionState),
+    [richWysiwygDraftSessionState],
+  )
+  const wysiwygTextSessionState = WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygTextSessionProjection.nodeId
+    ? richWysiwygTextSessionProjection
+    : plainWysiwygTextSessionState
+  const startWysiwygTextSession = useCallback((nodeId: string, caretOffset: number | null = null, pageIndex: number | null = null) => {
+    if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED) {
+      const started = startRichWysiwygDraftSession(nodeId, caretOffset, pageIndex)
+      if (started) endPlainWysiwygTextSession()
+      return started
+    }
+    const started = startPlainWysiwygTextSession(nodeId, caretOffset, pageIndex)
+    if (started) endRichWysiwygDraftSession()
+    return started
+  }, [
+    endPlainWysiwygTextSession,
+    endRichWysiwygDraftSession,
+    startPlainWysiwygTextSession,
+    startRichWysiwygDraftSession,
+  ])
+  const changeWysiwygTextDraft = useCallback((change: Parameters<typeof changePlainWysiwygTextDraft>[0]) => {
+    if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionState.nodeId) {
+      changeRichWysiwygDraft(change)
+      return
+    }
+    changePlainWysiwygTextDraft(change)
+  }, [
+    changePlainWysiwygTextDraft,
+    changeRichWysiwygDraft,
+    richWysiwygDraftSessionState.nodeId,
+  ])
+  const moveWysiwygTextCaret = useCallback((caretOffset: number | null, selection?: Parameters<typeof movePlainWysiwygTextCaret>[1]) => {
+    if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionState.nodeId) {
+      moveRichWysiwygDraftCaret(caretOffset, selection)
+      return
+    }
+    movePlainWysiwygTextCaret(caretOffset, selection)
+  }, [
+    movePlainWysiwygTextCaret,
+    moveRichWysiwygDraftCaret,
+    richWysiwygDraftSessionState.nodeId,
+  ])
+  const endWysiwygTextSession = useCallback(() => {
+    endPlainWysiwygTextSession()
+    endRichWysiwygDraftSession()
+  }, [endPlainWysiwygTextSession, endRichWysiwygDraftSession])
+
   const wysiwygTextAccessibilityStatus = useMemo(
     () => describeWysiwygTextSessionAccessibility(wysiwygTextSessionState),
     [wysiwygTextSessionState],
   )
   const wysiwygTextSessionStateRef = useRef(wysiwygTextSessionState)
+  const richWysiwygDraftSessionStateRef = useRef(richWysiwygDraftSessionState)
   const [wysiwygDraftPaginationNodeId, setWysiwygDraftPaginationNodeIdState] = useState<string | null>(null)
   const wysiwygDraftPaginationNodeIdRef = useRef<string | null>(null)
   const setWysiwygDraftPaginationNodeId = useCallback((nodeId: string | null) => {
@@ -939,9 +1023,16 @@ export default function EditorShell() {
     setWysiwygDraftPaginationNodeIdState(nodeId)
   }, [])
   useEffect(() => { wysiwygTextSessionStateRef.current = wysiwygTextSessionState }, [wysiwygTextSessionState])
+  useEffect(() => { richWysiwygDraftSessionStateRef.current = richWysiwygDraftSessionState }, [richWysiwygDraftSessionState])
 
   const getPersistableDocumentSnapshot = useCallback(() => {
     try {
+      if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED) {
+        const richSession = richWysiwygDraftSessionStateRef.current
+        if (richSession.nodeId && richSession.draft) {
+          return replaceEditableParagraphInDocument(docRef.current, richSession.nodeId, richSession.draft.paragraph)
+        }
+      }
       return resolvePersistableWysiwygDocument(
         docRef.current,
         wysiwygTextSessionStateRef.current,
@@ -1027,6 +1118,10 @@ export default function EditorShell() {
         doc: docRef.current,
         nodeId: activeNodeId,
         draftText: source.draftText,
+        draftParagraph: WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+          richWysiwygDraftSessionStateRef.current.nodeId === activeNodeId
+          ? richWysiwygDraftSessionStateRef.current.draft?.paragraph ?? null
+          : null,
       })
       try {
         assertDocument(draftDoc)
@@ -1116,10 +1211,75 @@ export default function EditorShell() {
     setWysiwygDraftPaginationNodeId,
   ])
 
+  const scheduleRichTextDraftStylePagination = useCallback((nodeId: string) => {
+    wysiwygLatestDraftPaginationSnapshotRef.current = null
+    const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
+    const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
+    setWysiwygDraftPaginationNodeId(nodeId)
+    scheduleWysiwygDraftPagination(nodeId, resolveWysiwygDraftPaginationDelayMs({
+      draftPaginationActive: true,
+      isFlowStackParagraph,
+      isTableCellParagraph,
+      defaultDelayMs: WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS,
+      flowStackBoundaryDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+    }))
+  }, [
+    scheduleWysiwygDraftPagination,
+    setWysiwygDraftPaginationNodeId,
+  ])
+
+  const applyActiveRichTextDraftCommand = useCallback((nodeId: string, command: RichTextDraftSessionCommand): boolean => {
+    if (!WYSIWYG_RICH_TEXT_DRAFT_ENABLED) return false
+    const current = richWysiwygDraftSessionStateRef.current
+    if (!current.nodeId || current.nodeId !== nodeId || !current.draft) return false
+    const next = applyRichTextDraftSessionCommand(current, command)
+    if (next === current) return false
+    applyRichWysiwygDraftStyleCommand(getRichTextDraftSessionCommandPatch(current, command))
+    if (next.dirtyVersion !== current.dirtyVersion) {
+      scheduleRichTextDraftStylePagination(nodeId)
+    }
+    return true
+  }, [
+    applyRichWysiwygDraftStyleCommand,
+    scheduleRichTextDraftStylePagination,
+  ])
+
+  const handleWysiwygRichTextShortcut = useCallback((nodeId: string, input: WysiwygTextInputKey): boolean => {
+    const richTextCommand = resolveRichTextDraftKeyboardCommand(input)
+    return richTextCommand ? applyActiveRichTextDraftCommand(nodeId, richTextCommand) : false
+  }, [applyActiveRichTextDraftCommand])
+
   const finalizeWysiwygTextSessionBeforeAction = useCallback((): boolean => {
+    if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED) {
+      const richSession = richWysiwygDraftSessionState
+      if (WYSIWYG_TEXT_ENGINE_ENABLED && richSession.nodeId && richSession.draft) {
+        const afterDoc = replaceEditableParagraphInDocument(docRef.current, richSession.nodeId, richSession.draft.paragraph)
+        try {
+          assertDocument(afterDoc)
+        } catch (error) {
+          console.error("WYSIWYG rich text finalize produced invalid document:", error)
+          return false
+        }
+        const afterPaginated = paginatePreviewDoc(afterDoc)
+        const history = consumeInlineEditHistory(richSession.nodeId)
+        docRef.current = afterDoc
+        paginatedRef.current = afterPaginated
+        dispatch({
+          type: "COMMIT_WYSIWYG_RICH_TEXT_EDIT",
+          nodeId: richSession.nodeId,
+          paragraph: richSession.draft.paragraph,
+          history,
+          afterPaginated,
+        })
+        clearWysiwygDraftPagination()
+        endWysiwygTextSession()
+        resetInlineEditStateForDocumentReplace()
+        return true
+      }
+    }
     const session = wysiwygTextSessionState
     if (!WYSIWYG_TEXT_ENGINE_ENABLED || !session.nodeId) return false
-    const afterDoc = normalizeDocument(updateParagraphText(docRef.current, session.nodeId, session.draftText))
+    const afterDoc = replaceEditableParagraphTextInDocument(docRef.current, session.nodeId, session.draftText)
     try {
       assertDocument(afterDoc)
     } catch (error) {
@@ -1148,6 +1308,7 @@ export default function EditorShell() {
     endWysiwygTextSession,
     paginatePreviewDoc,
     resetInlineEditStateForDocumentReplace,
+    richWysiwygDraftSessionState,
     wysiwygTextSessionState,
   ])
 
@@ -2016,6 +2177,28 @@ export default function EditorShell() {
     pendingDragRef.current = { source, clientX: e.clientX, clientY: e.clientY, clickAction }
   }, [finalizeInlineEditBeforeAction])
 
+  const selectContextNode = useCallback((nodeId: string) => {
+    finalizeInlineEditBeforeAction()
+    dispatch({
+      type: "SELECT_NODE",
+      nodeId,
+      anchorNodeId: state.selectionAnchorNodeId ?? nodeId,
+    })
+    setRightRailMode("properties")
+  }, [finalizeInlineEditBeforeAction, state.selectionAnchorNodeId])
+
+  const duplicateNodeFromCanvas = useCallback((nodeId: string) => {
+    finalizeInlineEditBeforeAction()
+    dispatch({ type: "DUPLICATE_NODE", nodeId })
+    setRightRailMode("properties")
+  }, [finalizeInlineEditBeforeAction])
+
+  const deleteNodeFromCanvas = useCallback((nodeId: string) => {
+    finalizeInlineEditBeforeAction()
+    dispatch({ type: "DELETE_NODE", nodeId })
+    setRightRailMode("page")
+  }, [finalizeInlineEditBeforeAction])
+
   const activateWorkflowMode = useCallback((nextMode: WorkflowMode) => {
     finalizeInlineEditBeforeAction()
     setWorkflowMode(nextMode)
@@ -2333,13 +2516,17 @@ export default function EditorShell() {
         const { source, clickAction } = pendingDragRef.current
         pendingDragRef.current = null
         if (clickAction?.type === "inline-edit") {
-          dispatch({ type: "SELECT_NODE", nodeId: clickAction.selectNodeId ?? clickAction.nodeId })
+          dispatch({
+            type: "SELECT_NODE",
+            nodeId: clickAction.selectNodeId ?? clickAction.nodeId,
+            anchorNodeId: clickAction.nodeId,
+          })
           setRightRailMode("properties")
           handleInlineEditStart(clickAction.nodeId, clickAction.caretIndex, clickAction.pageIndex)
           return
         }
         if (source.source === "document") {
-          dispatch({ type: "SELECT_NODE", nodeId: source.nodeId })
+          dispatch({ type: "SELECT_NODE", nodeId: source.nodeId, anchorNodeId: source.nodeId })
           setRightRailMode("properties")
         }
         return
@@ -2406,6 +2593,20 @@ export default function EditorShell() {
     const tag = (e.target as HTMLElement).tagName
     const isTextInput = tag === "INPUT" || tag === "TEXTAREA"
     const shortcutKey = normalizeShortcutKey(e)
+    if (!isTextInput && WYSIWYG_RICH_TEXT_DRAFT_ENABLED && wysiwygTextSessionState.nodeId) {
+      const handledRichTextShortcut = handleWysiwygRichTextShortcut(wysiwygTextSessionState.nodeId, {
+        key: e.key,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.nativeEvent.isComposing,
+      })
+      if (handledRichTextShortcut) {
+        e.preventDefault()
+        return
+      }
+    }
     if (hasPlatformShortcutModifier(e) && !isTextInput) {
       if (shortcutKey === "+") {
         e.preventDefault()
@@ -2453,7 +2654,20 @@ export default function EditorShell() {
       if (!isTemplateMode) return
       handleRedo()
     }
-  }, [handleInlineEditEnd, handleRedo, handleUndo, inlineEditNodeId, isTemplateMode, resetZoom, state.drag, state.selectedNodeId, zoomIn, zoomOut])
+  }, [
+    handleWysiwygRichTextShortcut,
+    handleInlineEditEnd,
+    handleRedo,
+    handleUndo,
+    inlineEditNodeId,
+    isTemplateMode,
+    resetZoom,
+    state.drag,
+    state.selectedNodeId,
+    wysiwygTextSessionState.nodeId,
+    zoomIn,
+    zoomOut,
+  ])
 
   const fieldCount = packageFieldRegistry.fields.length
   const fillIssueCount = dataReadiness.issues.length
@@ -2477,6 +2691,7 @@ export default function EditorShell() {
       data-testid="editor-shell"
       data-editor-test-scenario={initialTestScenario?.id ?? undefined}
       data-wysiwyg-text-engine-enabled={WYSIWYG_TEXT_ENGINE_ENABLED ? "true" : "false"}
+      data-wysiwyg-rich-text-draft-enabled={WYSIWYG_RICH_TEXT_DRAFT_ENABLED ? "true" : "false"}
       data-wysiwyg-perf-trace-enabled={WYSIWYG_PERF_TRACE_ENABLED ? "true" : "false"}
       style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
@@ -2740,6 +2955,43 @@ export default function EditorShell() {
             </button>
           </div>
         </div>
+
+        {isTemplateMode && (
+          <RichTextToolbar
+            doc={state.doc}
+            selectedNodeId={state.selectedNodeId}
+            draftParagraph={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+              richWysiwygDraftSessionState.nodeId === state.selectedNodeId
+              ? richWysiwygDraftSessionState.draft?.paragraph ?? null
+              : null}
+            pendingStyle={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+              richWysiwygDraftSessionState.nodeId === state.selectedNodeId
+              ? richWysiwygDraftSessionState.draft?.pendingStyle ?? null
+              : null}
+            textSelection={wysiwygTextSessionState.nodeId && wysiwygTextSessionState.selection
+              ? {
+                nodeId: wysiwygTextSessionState.nodeId,
+                anchorOffset: wysiwygTextSessionState.selection.anchorOffset,
+                focusOffset: wysiwygTextSessionState.selection.focusOffset,
+              }
+              : null}
+            editable={isTemplateMode}
+            onUpdateParagraphTextStyle={(nodeId, changes) => {
+              if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
+              const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
+              const finalized = finalizeInlineEditBeforeAction()
+              if (hadWysiwygTextSession && !finalized) return
+              dispatch({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })
+            }}
+            onUpdateTextRunStyleRange={(nodeId, start, end, changes) => {
+              if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
+              const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
+              const finalized = finalizeInlineEditBeforeAction()
+              if (hadWysiwygTextSession && !finalized) return
+              dispatch({ type: "UPDATE_TEXT_RUN_STYLE_RANGE", nodeId, start, end, changes })
+            }}
+          />
+        )}
       </div>
 
       {/* Body */}
@@ -2813,6 +3065,7 @@ export default function EditorShell() {
             drag={isTemplateMode ? state.drag : null}
             scale={scale}
             selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
+            selectionAnchorNodeId={isTemplateMode ? state.selectionAnchorNodeId : null}
             isLayoutLoading={showLayoutLoadingOverlay}
             textMeasurer={editorTextMeasurer}
             inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
@@ -2831,6 +3084,9 @@ export default function EditorShell() {
             setPageRef={setPageRef}
             onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
             onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
+            onSelectContextNode={isTemplateMode ? selectContextNode : () => undefined}
+            onDuplicateNode={isTemplateMode ? duplicateNodeFromCanvas : () => undefined}
+            onDeleteNode={isTemplateMode ? deleteNodeFromCanvas : () => undefined}
             onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
             onTableColumnResizeStart={isTemplateMode ? handleTableColumnResizeStart : () => undefined}
             resizeDrag={isTemplateMode ? resizeDrag : null}
@@ -2851,6 +3107,7 @@ export default function EditorShell() {
             wysiwygTextSelection={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
             wysiwygTextDraftPaginationActive={wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
             onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
+            onWysiwygRichTextShortcut={handleWysiwygRichTextShortcut}
             onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
           />
         )}
@@ -2968,22 +3225,20 @@ export default function EditorShell() {
                       selectionAnchorNodeId={state.selectionAnchorNodeId}
                       onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
                       onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
+                      onUpdateParagraphTextStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })}
                       onUpdateFieldRef={(fieldRefId, changes) => dispatch({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
                       onUpdateParagraphBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
                       onUpdateFlowStackBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId, changes })}
                       onUpdateFlowTableCellSpan={(cellId, changes) => dispatch({ type: "UPDATE_FLOW_TABLE_CELL_SPAN", cellId, changes })}
                       onSelectNode={(nodeId) => dispatch({ type: "SELECT_NODE", nodeId, anchorNodeId: nodeId })}
-                      onSelectContextNode={(nodeId) => dispatch({
-                        type: "SELECT_NODE",
-                        nodeId,
-                        anchorNodeId: state.selectionAnchorNodeId ?? nodeId,
-                      })}
+                      onSelectContextNode={selectContextNode}
                       onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
                       tableOps={{
                         addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
                         removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
                         addCol: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_COL", tableId, afterIndex }),
                         removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
+                        fitToWidth: (tableId) => dispatch({ type: "TABLE_FIT_TO_WIDTH", tableId }),
                       }}
                       flowRowOps={{
                         addCol: (rowId, stackId, position = "after") => dispatch({ type: "FLOW_ROW_ADD_COL", rowId, stackId, position }),

@@ -5,6 +5,7 @@ import { paginateDocument } from "@/pagination"
 import { defaultTextMeasurer } from "@/layout"
 import { PdfRenderer } from "@/renderer/pdf"
 import { DocxRenderer } from "@/renderer/docx"
+import { resolveFontFileName } from "@/font-registry"
 import type { PaginatedDocument, PaginatedPage, PageFragment } from "@/pagination"
 import { parseDSL } from "../../_lib/parseDSL"
 import { PRESETS } from "../../_lib/presets"
@@ -394,8 +395,8 @@ export default function DebugView() {
     setPdfLoading(true)
     try {
       const renderer = new PdfRenderer({
-        async getFont(_key) {
-          const res = await fetch("/fonts/THSarabun.ttf")
+        async getFont(key, variant) {
+          const res = await fetch(`/fonts/${resolveFontFileName(key, variant)}`)
           return new Uint8Array(await res.arrayBuffer())
         },
       })

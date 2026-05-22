@@ -1,4 +1,4 @@
-import { resolveFontCssFamily } from "@/font-registry"
+import { resolveFontCssFamily, resolveFontVariantEntry } from "@/font-registry"
 import { defaultTextMeasurer } from "@/layout"
 import type { TextMeasurer } from "@/layout"
 
@@ -14,13 +14,14 @@ export function createBrowserTextMeasurer(): TextMeasurer {
   const widthCache = new Map<string, number>()
 
   return {
-    measureText(text, fontFamilyKey, fontSize) {
+    measureText(text, fontFamilyKey, fontSize, fontVariant = "regular") {
       if (!text) return { width: 0 }
-      const cacheKey = JSON.stringify([fontFamilyKey, fontSize, text])
+      const cacheKey = JSON.stringify([fontFamilyKey, fontVariant, fontSize, text])
       const cached = widthCache.get(cacheKey)
       if (cached !== undefined) return { width: cached }
       const family = resolveFontCssFamily(fontFamilyKey)
-      context.font = `${fontSize}px "${family}", sans-serif`
+      const variant = resolveFontVariantEntry(fontFamilyKey, fontVariant)
+      context.font = `${variant.fontStyle} ${variant.fontWeight} ${fontSize}px "${family}", sans-serif`
       const width = context.measureText(text).width
       if (widthCache.size < CANVAS_WIDTH_CACHE_LIMIT) widthCache.set(cacheKey, width)
       return { width }

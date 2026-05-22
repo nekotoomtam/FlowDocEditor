@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   resolveWysiwygInlineEditEnabled,
   resolveWysiwygPerfTraceEnabled,
+  resolveWysiwygRichTextDraftEnabled,
   resolveWysiwygTextEngineEnabled,
 } from "../wysiwygInlineEditConfig"
 
@@ -66,5 +67,22 @@ describe("resolveWysiwygPerfTraceEnabled", () => {
   it("keeps tracing independent from the text engine rollout flag", () => {
     expect(resolveWysiwygPerfTraceEnabled("enabled", "development")).toBe(true)
     expect(resolveWysiwygPerfTraceEnabled("unknown", "development")).toBe(false)
+  })
+})
+
+describe("resolveWysiwygRichTextDraftEnabled", () => {
+  it("keeps the sibling rich draft lane disabled by default", () => {
+    expect(resolveWysiwygRichTextDraftEnabled(undefined, true)).toBe(false)
+    expect(resolveWysiwygRichTextDraftEnabled(undefined, false)).toBe(false)
+  })
+
+  it("requires the base text engine to be enabled first", () => {
+    expect(resolveWysiwygRichTextDraftEnabled("enabled", false)).toBe(false)
+    expect(resolveWysiwygRichTextDraftEnabled("enabled", true)).toBe(true)
+  })
+
+  it("allows explicit opt-out even when the base text engine is enabled", () => {
+    expect(resolveWysiwygRichTextDraftEnabled("off", true)).toBe(false)
+    expect(resolveWysiwygRichTextDraftEnabled(" unknown ", true)).toBe(false)
   })
 })

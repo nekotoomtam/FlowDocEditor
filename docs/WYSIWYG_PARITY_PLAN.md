@@ -50,7 +50,7 @@ Concretely:
 
 | Decision | Value | Rationale |
 |---|---|---|
-| Authoritative text metric | fontkit reading `THSarabun.ttf` | Already authoritative on server; same algorithm gives true parity |
+| Authoritative text metric | fontkit reading `Sarabun/Sarabun-Regular.ttf` | Already authoritative on server; same algorithm gives true parity |
 | Browser measurement runtime | fontkit (port to browser) | Removes Canvas/fontkit drift entirely |
 | Whitespace policy | Preserve 1:1 (no collapse, no trim) | Confirmed product decision; existing word-breaker already preserves |
 | Roll-out flag | `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE` (existing) | Reuse current production gate flag |
@@ -98,7 +98,7 @@ Phases A, B, C may be parallelized across agents. Phase D blocks on all three.
 ### A.1 Goal
 
 Replace `createBrowserTextMeasurer()` with a fontkit-based measurer that
-reads the same `THSarabun.ttf` bytes the server reads. Both runtimes call
+reads the same `Sarabun/Sarabun-Regular.ttf` bytes the server reads. Both runtimes call
 identical glyph-width logic.
 
 ### A.2 Scope
@@ -139,7 +139,7 @@ Files to inspect (no change expected):
 
 Font loading lifecycle:
 
-1. On editor mount, `EditorShell` triggers `fetch('/fonts/THSarabun.ttf')`
+1. On editor mount, `EditorShell` triggers `fetch('/fonts/Sarabun/Sarabun-Regular.ttf')`
 2. Buffer is passed to `fontkit.create()` and held in a ref/context
 3. Until font resolves, measurer falls back to existing canvas measurer
 4. After font resolves, measurer swaps to fontkit-backed implementation

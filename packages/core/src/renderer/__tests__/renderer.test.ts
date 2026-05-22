@@ -6,6 +6,7 @@ import { DocxRenderer } from "../docx"
 import { paginateDocument, type PageFragment } from "../../pagination"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { ptToTwips } from "../shared"
+import type { FontProvider } from "../shared"
 import { pt } from "../../schema"
 import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode, SpacerNode } from "../../schema"
 
@@ -79,6 +80,15 @@ async function readDocxXml(buffer: Uint8Array, path: string): Promise<string> {
   return file.async("string")
 }
 
+async function readDocxXmlParts(buffer: Uint8Array, pathPattern: RegExp): Promise<string[]> {
+  const zip = await JSZip.loadAsync(buffer)
+  const paths = Object.keys(zip.files)
+    .filter((path) => pathPattern.test(path))
+    .sort()
+  if (paths.length === 0) throw new Error(`Missing DOCX XML part matching: ${pathPattern}`)
+  return Promise.all(paths.map((path) => zip.file(path)!.async("string")))
+}
+
 function countText(xml: string, text: string): number {
   const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   return xml.match(new RegExp(escaped, "g"))?.length ?? 0
@@ -103,6 +113,34 @@ function docxParagraphsContaining(xml: string, marker: string): string[] {
   return [...xml.matchAll(/<w:p[\s\S]*?<\/w:p>/g)]
     .map((match) => match[0])
     .filter((paragraphXml) => paragraphXml.includes(marker))
+}
+
+function decodeXmlText(text: string): string {
+  return text
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+}
+
+function docxTextRuns(paragraphXml: string): Array<{ text: string; propertiesXml: string }> {
+  return [...paragraphXml.matchAll(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g)]
+    .map((match) => {
+      const runXml = match[0]
+      const propertiesXml = runXml.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/)?.[1] ?? ""
+      const text = [...runXml.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)]
+        .map((textMatch) => decodeXmlText(textMatch[1]))
+        .join("")
+      return { text, propertiesXml }
+    })
+    .filter((run) => run.text.length > 0)
+}
+
+function findDocxTextRun(paragraphXml: string, text: string): { text: string; propertiesXml: string } {
+  const run = docxTextRuns(paragraphXml).find((candidate) => candidate.text.includes(text))
+  if (!run) throw new Error(`Missing DOCX text run: ${text}`)
+  return run
 }
 
 function makeLines(prefix: string, count: number): string {
@@ -187,6 +225,50 @@ describe("PdfRenderer smoke tests", () => {
     expect(result.buffer.length).toBeGreaterThan(0)
     // PDF starts with %PDF header
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("requests the matching font variant for paragraph-level bold and italic text", async () => {
+    const requests: Array<{ key: string; variant: string | undefined }> = []
+    const renderer = new PdfRenderer({
+      async getFont(key, variant) {
+        requests.push({ key, variant })
+        return null
+      },
+    })
+      const p = makePara("p1", "Styled PDF text", {
+        fontFamilyKey: "sarabun",
+        textColor: "DC2626",
+        fontWeight: "bold",
+        fontStyle: "italic",
+        textDecoration: "underline",
+        strikethrough: true,
+      })
+
+    const result = await renderer.render(paginate(makeDoc(["p1"], { p1: p })))
+
+    expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+    expect(requests).toContainEqual({ key: "sarabun", variant: "boldItalic" })
+  })
+
+  it("requests PDF fonts per rich text run", async () => {
+    const requests: Array<{ key: string; variant: string | undefined }> = []
+    const renderer = new PdfRenderer({
+      async getFont(key, variant) {
+        requests.push({ key, variant })
+        return null
+      },
+    })
+    const p = makePara("p1", "", { fontFamilyKey: "sarabun" })
+    p.children = [
+      { id: "p1-bold", type: "text", text: "Bold ", style: { fontWeight: "bold", textColor: "DC2626" } },
+      { id: "p1-noto", type: "text", text: "Noto", style: { fontFamilyKey: "notoSansThai", fontStyle: "italic" } },
+    ]
+
+    const result = await renderer.render(paginate(makeDoc(["p1"], { p1: p })))
+
+    expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+    expect(requests).toContainEqual({ key: "sarabun", variant: "bold" })
+    expect(requests).toContainEqual({ key: "notoSansThai", variant: "italic" })
   })
 
   it("renders multi-paragraph document without throwing", async () => {
@@ -598,6 +680,70 @@ describe("renderer input contract — fragment coverage", () => {
     expect(paragraphs[0]).toContain("DOCX_SOURCE_GAMMA")
     expect(countText(paragraphs[0], "<w:br")).toBe(2)
   })
+
+  it("DOCX renderer preserves source rich text runs in one editable paragraph across pages", async () => {
+    const p = makePara("p-docx-rich-multi-page", "", { fontFamilyKey: "sarabun" })
+    p.children = [
+      { id: "p-docx-rich-multi-base", type: "text", text: makeLines("DOCX_MULTI_BASE_", 40) },
+      {
+        id: "p-docx-rich-multi-bold",
+        type: "text",
+        text: makeLines("DOCX_MULTI_BOLD_", 40),
+        style: { fontWeight: "bold", textColor: "DC2626" },
+      },
+      {
+        id: "p-docx-rich-multi-noto",
+        type: "text",
+        text: makeLines("DOCX_MULTI_NOTO_", 30),
+        style: {
+          fontFamilyKey: "notoSansThai",
+          fontSize: pt(16),
+          fontStyle: "italic",
+          textDecoration: "underline",
+          strikethrough: true,
+          textColor: "2563EB",
+        },
+      },
+    ]
+    const doc = makeDoc([p.id], { [p.id]: p })
+    const paginated = paginate(doc)
+    const paragraphFragments = paginated.sections[0].pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === p.id),
+    )
+
+    const result = await new DocxRenderer({ sourceDocument: doc }).render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+    const paragraphs = docxParagraphsContaining(xml, "DOCX_MULTI_BASE_001")
+
+    expect(paragraphFragments.length).toBeGreaterThanOrEqual(2)
+    expect(paragraphs).toHaveLength(1)
+    expect(paragraphs[0]).toContain("DOCX_MULTI_BASE_040")
+    expect(paragraphs[0]).toContain("DOCX_MULTI_BOLD_040")
+    expect(paragraphs[0]).toContain("DOCX_MULTI_NOTO_030")
+
+    const baseRun = findDocxTextRun(paragraphs[0], "DOCX_MULTI_BASE_040")
+    const boldRun = findDocxTextRun(paragraphs[0], "DOCX_MULTI_BOLD_040")
+    const notoRun = findDocxTextRun(paragraphs[0], "DOCX_MULTI_NOTO_030")
+
+    expect(baseRun.propertiesXml).toContain('w:ascii="Sarabun"')
+    expect(baseRun.propertiesXml).not.toContain("<w:b/>")
+    expect(baseRun.propertiesXml).not.toContain("<w:i/>")
+    expect(baseRun.propertiesXml).not.toContain("<w:u")
+
+    expect(boldRun.propertiesXml).toContain('w:ascii="Sarabun"')
+    expect(boldRun.propertiesXml).toContain("<w:b/>")
+    expect(boldRun.propertiesXml).toContain('w:color w:val="DC2626"')
+    expect(boldRun.propertiesXml).not.toContain("<w:i/>")
+
+    expect(notoRun.propertiesXml).toContain('w:ascii="Noto Sans Thai"')
+    expect(notoRun.propertiesXml).toContain("<w:i/>")
+    expect(notoRun.propertiesXml).toContain("<w:strike/>")
+    expect(notoRun.propertiesXml).toContain('w:sz w:val="32"')
+    expect(notoRun.propertiesXml).toContain('w:color w:val="2563EB"')
+    expect(notoRun.propertiesXml).toContain("<w:u")
+    expect(notoRun.propertiesXml).toContain('w:color="2563EB"')
+    expect(notoRun.propertiesXml).not.toContain("<w:b/>")
+  })
 })
 
 // ─── DOCX smoke tests ─────────────────────────────────────────────────────────
@@ -614,6 +760,304 @@ describe("DocxRenderer smoke tests", () => {
     // DOCX is a ZIP — starts with PK magic bytes (0x50 0x4B)
     expect(result.buffer[0]).toBe(0x50)
     expect(result.buffer[1]).toBe(0x4b)
+  })
+
+  it("keeps DOCX fonts name-only when no font provider is supplied", async () => {
+    const p = makePara("p1", "Name-only Sarabun")
+    const result = await docx.render(paginate(makeDoc(["p1"], { p1: p })))
+    const zip = await JSZip.loadAsync(result.buffer)
+    const documentXml = await readDocxXml(result.buffer, "word/document.xml")
+    const fontTableXml = await readDocxXml(result.buffer, "word/fontTable.xml")
+    const fontRelsXml = await readDocxXml(result.buffer, "word/_rels/fontTable.xml.rels")
+
+    expect(documentXml).toContain('w:ascii="Sarabun"')
+    expect(fontTableXml).not.toContain("w:embedRegular")
+    expect(fontRelsXml).not.toContain("/relationships/font")
+    expect(zip.file("word/fonts/Sarabun.odttf")).toBeNull()
+  })
+
+  it("embeds regular DOCX font files when a font provider is supplied", async () => {
+    const fakeFont = Uint8Array.from({ length: 64 }, (_, index) => index)
+    const fontProvider: FontProvider = {
+      async getFont(key) {
+        return key === "sarabun" || key === "notoSansThai" ? fakeFont : null
+      },
+    }
+    const sarabun = makePara("p-sarabun", "Sarabun paragraph", { fontFamilyKey: "sarabun" })
+    const noto = makePara("p-noto", "Noto paragraph", { fontFamilyKey: "notoSansThai" })
+    const result = await new DocxRenderer({ fontProvider }).render(paginate(makeDoc(["p-sarabun", "p-noto"], { "p-sarabun": sarabun, "p-noto": noto })))
+    const zip = await JSZip.loadAsync(result.buffer)
+    const fontTableXml = await readDocxXml(result.buffer, "word/fontTable.xml")
+    const fontRelsXml = await readDocxXml(result.buffer, "word/_rels/fontTable.xml.rels")
+
+    expect(zip.file("word/fonts/Sarabun.odttf")).not.toBeNull()
+    expect(zip.file("word/fonts/Noto Sans Thai.odttf")).not.toBeNull()
+    expect(fontTableXml).toContain('w:name="Sarabun"')
+    expect(fontTableXml).toContain('w:name="Noto Sans Thai"')
+    expect(fontTableXml).toContain("w:embedRegular")
+    expect(fontRelsXml).toContain('Target="fonts/Sarabun.odttf"')
+    expect(fontRelsXml).toContain('Target="fonts/Noto Sans Thai.odttf"')
+  })
+
+  it("embeds requested DOCX font variant files when a font provider is supplied", async () => {
+    const requests: Array<{ key: string; variant: string | undefined }> = []
+    const fontProvider: FontProvider = {
+      async getFont(key, variant) {
+        requests.push({ key, variant })
+        if (key !== "sarabun") return null
+        const offset = variant === "bold" ? 1 : variant === "italic" ? 2 : variant === "boldItalic" ? 3 : 0
+        return Uint8Array.from({ length: 64 }, (_, index) => (index + offset) % 256)
+      },
+    }
+    const regular = makePara("p-regular", "Regular Sarabun", { fontFamilyKey: "sarabun" })
+    const bold = makePara("p-bold", "Bold Sarabun", { fontFamilyKey: "sarabun", fontWeight: "bold" })
+    const italic = makePara("p-italic", "Italic Sarabun", { fontFamilyKey: "sarabun", fontStyle: "italic" })
+    const boldItalic = makePara("p-bold-italic", "Bold italic Sarabun", {
+      fontFamilyKey: "sarabun",
+      fontWeight: "bold",
+      fontStyle: "italic",
+    })
+
+    const result = await new DocxRenderer({ fontProvider }).render(paginate(makeDoc(
+      ["p-regular", "p-bold", "p-italic", "p-bold-italic"],
+      { "p-regular": regular, "p-bold": bold, "p-italic": italic, "p-bold-italic": boldItalic },
+    )))
+    const zip = await JSZip.loadAsync(result.buffer)
+    const fontTableXml = await readDocxXml(result.buffer, "word/fontTable.xml")
+    const fontRelsXml = await readDocxXml(result.buffer, "word/_rels/fontTable.xml.rels")
+
+    expect(requests).toEqual([
+      { key: "sarabun", variant: "regular" },
+      { key: "sarabun", variant: "bold" },
+      { key: "sarabun", variant: "italic" },
+      { key: "sarabun", variant: "boldItalic" },
+    ])
+    expect(zip.file("word/fonts/Sarabun.odttf")).not.toBeNull()
+    expect(zip.file("word/fonts/Sarabun Bold.odttf")).not.toBeNull()
+    expect(zip.file("word/fonts/Sarabun Italic.odttf")).not.toBeNull()
+    expect(zip.file("word/fonts/Sarabun BoldItalic.odttf")).not.toBeNull()
+    expect(fontTableXml).toContain("w:embedRegular")
+    expect(fontTableXml).toContain("w:embedBold")
+    expect(fontTableXml).toContain("w:embedItalic")
+    expect(fontTableXml).toContain("w:embedBoldItalic")
+    expect(fontRelsXml).toContain('Target="fonts/Sarabun BoldItalic.odttf"')
+  })
+
+  it("serializes paragraph-level text style run properties", async () => {
+    const p = makePara("p1", "Styled text", {
+      textColor: "DC2626",
+      fontWeight: "bold",
+      fontStyle: "italic",
+      textDecoration: "underline",
+      strikethrough: true,
+    })
+    const result = await docx.render(paginate(makeDoc(["p1"], { p1: p })))
+    const documentXml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(documentXml).toContain("<w:b/>")
+    expect(documentXml).toContain("<w:i/>")
+    expect(documentXml).toContain("<w:strike/>")
+    expect(documentXml).toContain('w:color w:val="DC2626"')
+    expect(documentXml).toContain("<w:u")
+    expect(documentXml).toContain('w:val="single"')
+    expect(documentXml).toContain('w:color="DC2626"')
+  })
+
+  it("serializes source rich text runs with per-run DOCX properties", async () => {
+    const p = makePara("p-docx-rich-source", "", { fontFamilyKey: "sarabun" })
+    p.children = [
+      { id: "p-docx-rich-base", type: "text", text: "DOCX_RUN_BASE " },
+      { id: "p-docx-rich-bold", type: "text", text: "DOCX_RUN_BOLD ", style: { fontWeight: "bold", textColor: "DC2626" } },
+      {
+        id: "p-docx-rich-noto",
+        type: "text",
+        text: "DOCX_RUN_NOTO",
+        style: {
+          fontFamilyKey: "notoSansThai",
+          fontSize: pt(16),
+          fontStyle: "italic",
+          textDecoration: "underline",
+          strikethrough: true,
+          textColor: "2563EB",
+        },
+      },
+    ]
+    const doc = makeDoc(["p-docx-rich-source"], { "p-docx-rich-source": p })
+
+    const result = await new DocxRenderer({ sourceDocument: doc }).render(paginate(doc))
+    const documentXml = await readDocxXml(result.buffer, "word/document.xml")
+    const paragraphs = docxParagraphsContaining(documentXml, "DOCX_RUN_BASE")
+
+    expect(paragraphs).toHaveLength(1)
+    expect(paragraphs[0]).toContain("DOCX_RUN_BOLD")
+    expect(paragraphs[0]).toContain("DOCX_RUN_NOTO")
+    expect(paragraphs[0]).toContain('w:ascii="Sarabun"')
+    expect(paragraphs[0]).toContain('w:ascii="Noto Sans Thai"')
+    expect(paragraphs[0]).toContain("<w:b/>")
+    expect(paragraphs[0]).toContain("<w:i/>")
+    expect(paragraphs[0]).toContain("<w:strike/>")
+    expect(paragraphs[0]).toContain('w:sz w:val="32"')
+    expect(paragraphs[0]).toContain('w:color w:val="DC2626"')
+    expect(paragraphs[0]).toContain('w:color w:val="2563EB"')
+    expect(paragraphs[0]).toContain("<w:u")
+    expect(paragraphs[0]).toContain('w:color="2563EB"')
+
+    const baseRun = findDocxTextRun(paragraphs[0], "DOCX_RUN_BASE")
+    const boldRun = findDocxTextRun(paragraphs[0], "DOCX_RUN_BOLD")
+    const notoRun = findDocxTextRun(paragraphs[0], "DOCX_RUN_NOTO")
+
+    expect(baseRun.propertiesXml).toContain('w:ascii="Sarabun"')
+    expect(baseRun.propertiesXml).not.toContain("<w:b/>")
+    expect(baseRun.propertiesXml).not.toContain("<w:i/>")
+    expect(baseRun.propertiesXml).not.toContain("<w:strike/>")
+    expect(baseRun.propertiesXml).not.toContain("<w:u")
+
+    expect(boldRun.propertiesXml).toContain('w:ascii="Sarabun"')
+    expect(boldRun.propertiesXml).toContain("<w:b/>")
+    expect(boldRun.propertiesXml).toContain('w:color w:val="DC2626"')
+    expect(boldRun.propertiesXml).not.toContain('w:ascii="Noto Sans Thai"')
+    expect(boldRun.propertiesXml).not.toContain("<w:i/>")
+
+    expect(notoRun.propertiesXml).toContain('w:ascii="Noto Sans Thai"')
+    expect(notoRun.propertiesXml).toContain("<w:i/>")
+    expect(notoRun.propertiesXml).toContain("<w:strike/>")
+    expect(notoRun.propertiesXml).toContain('w:sz w:val="32"')
+    expect(notoRun.propertiesXml).toContain('w:color w:val="2563EB"')
+    expect(notoRun.propertiesXml).toContain("<w:u")
+    expect(notoRun.propertiesXml).toContain('w:color="2563EB"')
+    expect(notoRun.propertiesXml).not.toContain("<w:b/>")
+  })
+
+  it("serializes paginated rich text runs without a source document", async () => {
+    const p = makePara("p-docx-rich-paginated", "", { fontFamilyKey: "sarabun" })
+    p.children = [
+      { id: "p-docx-rich-paginated-base", type: "text", text: "DOCX_PAG_BASE " },
+      { id: "p-docx-rich-paginated-bold", type: "text", text: "DOCX_PAG_BOLD ", style: { fontWeight: "bold", textColor: "DC2626" } },
+      {
+        id: "p-docx-rich-paginated-marked",
+        type: "text",
+        text: "DOCX_PAG_MARKED",
+        style: {
+          fontSize: pt(16),
+          fontStyle: "italic",
+          textDecoration: "underline",
+          strikethrough: true,
+          textColor: "2563EB",
+        },
+      },
+    ]
+    const doc = makeDoc(["p-docx-rich-paginated"], { "p-docx-rich-paginated": p })
+
+    const result = await docx.render(paginate(doc))
+    const documentXml = await readDocxXml(result.buffer, "word/document.xml")
+    const paragraphs = docxParagraphsContaining(documentXml, "DOCX_PAG_BASE")
+
+    expect(paragraphs).toHaveLength(1)
+    expect(paragraphs[0]).toContain("DOCX_PAG_BOLD")
+    expect(paragraphs[0]).toContain("DOCX_PAG_MARKED")
+    expect(paragraphs[0]).toContain("<w:b/>")
+    expect(paragraphs[0]).toContain("<w:i/>")
+    expect(paragraphs[0]).toContain("<w:strike/>")
+    expect(paragraphs[0]).toContain('w:sz w:val="32"')
+    expect(paragraphs[0]).toContain('w:color w:val="DC2626"')
+    expect(paragraphs[0]).toContain('w:color w:val="2563EB"')
+    expect(paragraphs[0]).toContain("<w:u")
+    expect(paragraphs[0]).toContain('w:color="2563EB"')
+  })
+
+  it("serializes source rich text runs inside DOCX headers and footers", async () => {
+    const body = makePara("docx-rich-zone-body", "Zone body")
+    const header = makePara("docx-rich-header", "", { fontFamilyKey: "sarabun", spacingAfter: pt(0) })
+    const footer = makePara("docx-rich-footer", "", { fontFamilyKey: "sarabun", spacingAfter: pt(0) })
+    header.children = [
+      { id: "docx-rich-header-base", type: "text", text: "DOCX_HEADER_BASE " },
+      { id: "docx-rich-header-bold", type: "text", text: "DOCX_HEADER_BOLD", style: { fontWeight: "bold", textColor: "DC2626" } },
+    ]
+    footer.children = [
+      { id: "docx-rich-footer-base", type: "text", text: "DOCX_FOOTER_BASE " },
+      {
+        id: "docx-rich-footer-noto",
+        type: "text",
+        text: "DOCX_FOOTER_NOTO",
+        style: {
+          fontFamilyKey: "notoSansThai",
+          fontSize: pt(16),
+          fontStyle: "italic",
+          textDecoration: "underline",
+          strikethrough: true,
+          textColor: "2563EB",
+        },
+      },
+    ]
+    const doc = makeDoc([body.id], { [body.id]: body, [header.id]: header, [footer.id]: footer })
+    doc.document.sections[0].headerRootId = header.id
+    doc.document.sections[0].footerRootId = footer.id
+
+    const result = await new DocxRenderer({ sourceDocument: doc }).render(paginate(doc))
+    const headerXml = (await readDocxXmlParts(result.buffer, /^word\/header\d+\.xml$/)).join("\n")
+    const footerXml = (await readDocxXmlParts(result.buffer, /^word\/footer\d+\.xml$/)).join("\n")
+    const headerParagraphs = docxParagraphsContaining(headerXml, "DOCX_HEADER_BASE")
+    const footerParagraphs = docxParagraphsContaining(footerXml, "DOCX_FOOTER_BASE")
+
+    expect(headerParagraphs).toHaveLength(1)
+    expect(footerParagraphs).toHaveLength(1)
+    expect(countText(headerXml, "DOCX_HEADER_BOLD")).toBe(1)
+    expect(countText(footerXml, "DOCX_FOOTER_NOTO")).toBe(1)
+
+    const headerBaseRun = findDocxTextRun(headerParagraphs[0], "DOCX_HEADER_BASE")
+    const headerBoldRun = findDocxTextRun(headerParagraphs[0], "DOCX_HEADER_BOLD")
+    const footerBaseRun = findDocxTextRun(footerParagraphs[0], "DOCX_FOOTER_BASE")
+    const footerNotoRun = findDocxTextRun(footerParagraphs[0], "DOCX_FOOTER_NOTO")
+
+    expect(headerBaseRun.propertiesXml).toContain('w:ascii="Sarabun"')
+    expect(headerBaseRun.propertiesXml).not.toContain("<w:b/>")
+    expect(headerBoldRun.propertiesXml).toContain("<w:b/>")
+    expect(headerBoldRun.propertiesXml).toContain('w:color w:val="DC2626"')
+
+    expect(footerBaseRun.propertiesXml).toContain('w:ascii="Sarabun"')
+    expect(footerBaseRun.propertiesXml).not.toContain("<w:i/>")
+    expect(footerBaseRun.propertiesXml).not.toContain("<w:u")
+    expect(footerNotoRun.propertiesXml).toContain('w:ascii="Noto Sans Thai"')
+    expect(footerNotoRun.propertiesXml).toContain("<w:i/>")
+    expect(footerNotoRun.propertiesXml).toContain("<w:strike/>")
+    expect(footerNotoRun.propertiesXml).toContain('w:sz w:val="32"')
+    expect(footerNotoRun.propertiesXml).toContain('w:color w:val="2563EB"')
+    expect(footerNotoRun.propertiesXml).toContain("<w:u")
+    expect(footerNotoRun.propertiesXml).toContain('w:color="2563EB"')
+  })
+
+  it("embeds requested DOCX font variant files from rich text runs", async () => {
+    const requests: Array<{ key: string; variant: string | undefined }> = []
+    const fakeFont = Uint8Array.from({ length: 64 }, (_, index) => index)
+    const fontProvider: FontProvider = {
+      async getFont(key, variant) {
+        requests.push({ key, variant })
+        return fakeFont
+      },
+    }
+    const p = makePara("p-docx-rich-fonts", "", { fontFamilyKey: "sarabun" })
+    p.children = [
+      { id: "p-docx-rich-font-bold", type: "text", text: "Bold ", style: { fontWeight: "bold" } },
+      { id: "p-docx-rich-font-italic", type: "text", text: "Italic ", style: { fontStyle: "italic" } },
+      { id: "p-docx-rich-font-noto", type: "text", text: "Noto", style: { fontFamilyKey: "notoSansThai", fontWeight: "bold" } },
+    ]
+
+    const result = await new DocxRenderer({ fontProvider }).render(paginate(makeDoc(["p-docx-rich-fonts"], { "p-docx-rich-fonts": p })))
+    const zip = await JSZip.loadAsync(result.buffer)
+    const fontTableXml = await readDocxXml(result.buffer, "word/fontTable.xml")
+
+    expect(requests).toEqual([
+      { key: "sarabun", variant: "regular" },
+      { key: "sarabun", variant: "bold" },
+      { key: "sarabun", variant: "italic" },
+      { key: "notoSansThai", variant: "regular" },
+      { key: "notoSansThai", variant: "bold" },
+    ])
+    expect(zip.file("word/fonts/Sarabun Bold.odttf")).not.toBeNull()
+    expect(zip.file("word/fonts/Sarabun Italic.odttf")).not.toBeNull()
+    expect(zip.file("word/fonts/Noto Sans Thai Bold.odttf")).not.toBeNull()
+    expect(fontTableXml).toContain("w:embedBold")
+    expect(fontTableXml).toContain("w:embedItalic")
   })
 
   it("renders multi-paragraph document without throwing", async () => {
@@ -748,6 +1192,92 @@ describe("DocxRenderer smoke tests", () => {
     expect(countText(xml, "FLOW_TABLE_RIGHT")).toBe(1)
   })
 
+  it("serializes source rich text runs inside DOCX flow-table cells", async () => {
+    const p = makePara("ft-rich-cell-p", "", { fontFamilyKey: "sarabun" })
+    p.children = [
+      { id: "ft-rich-cell-base", type: "text", text: "DOCX_CELL_BASE " },
+      { id: "ft-rich-cell-bold", type: "text", text: "DOCX_CELL_BOLD ", style: { fontWeight: "bold", textColor: "DC2626" } },
+      {
+        id: "ft-rich-cell-noto",
+        type: "text",
+        text: "DOCX_CELL_NOTO",
+        style: {
+          fontFamilyKey: "notoSansThai",
+          fontSize: pt(16),
+          fontStyle: "italic",
+          textDecoration: "underline",
+          strikethrough: true,
+          textColor: "2563EB",
+        },
+      },
+    ]
+    const cell = makeFlowTableCell("ft-rich-cell", [p.id])
+    const row = makeFlowTableRow("ft-rich-row", [cell.id], { height: pt(30) })
+    const table: FlowTableNode = {
+      id: "ft-rich-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(180) }],
+      rowIds: [row.id],
+      nodes: { [row.id]: row, [cell.id]: cell, [p.id]: p },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+
+    const result = await new DocxRenderer({ sourceDocument: doc }).render(paginate(doc))
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+    const paragraphs = docxParagraphsContaining(xml, "DOCX_CELL_BASE")
+
+    expect(paragraphs).toHaveLength(1)
+    expect(countText(xml, "DOCX_CELL_BASE")).toBe(1)
+    expect(countText(xml, "DOCX_CELL_BOLD")).toBe(1)
+    expect(countText(xml, "DOCX_CELL_NOTO")).toBe(1)
+
+    const baseRun = findDocxTextRun(paragraphs[0], "DOCX_CELL_BASE")
+    const boldRun = findDocxTextRun(paragraphs[0], "DOCX_CELL_BOLD")
+    const notoRun = findDocxTextRun(paragraphs[0], "DOCX_CELL_NOTO")
+
+    expect(baseRun.propertiesXml).toContain('w:ascii="Sarabun"')
+    expect(baseRun.propertiesXml).not.toContain("<w:b/>")
+    expect(baseRun.propertiesXml).not.toContain("<w:i/>")
+    expect(baseRun.propertiesXml).not.toContain("<w:u")
+
+    expect(boldRun.propertiesXml).toContain('w:ascii="Sarabun"')
+    expect(boldRun.propertiesXml).toContain("<w:b/>")
+    expect(boldRun.propertiesXml).toContain('w:color w:val="DC2626"')
+    expect(boldRun.propertiesXml).not.toContain('w:ascii="Noto Sans Thai"')
+
+    expect(notoRun.propertiesXml).toContain('w:ascii="Noto Sans Thai"')
+    expect(notoRun.propertiesXml).toContain("<w:i/>")
+    expect(notoRun.propertiesXml).toContain("<w:strike/>")
+    expect(notoRun.propertiesXml).toContain('w:sz w:val="32"')
+    expect(notoRun.propertiesXml).toContain('w:color w:val="2563EB"')
+    expect(notoRun.propertiesXml).toContain("<w:u")
+    expect(notoRun.propertiesXml).toContain('w:color="2563EB"')
+    expect(notoRun.propertiesXml).not.toContain("<w:b/>")
+  })
+
+  it("emits DOCX flow-table alignment and block margins from source table props", async () => {
+    const c1 = makeFlowTableCell("ft-layout-c1", [])
+    const r1 = makeFlowTableRow("ft-layout-r1", [c1.id], { height: pt(24) })
+    const table: FlowTableNode = {
+      id: "ft-layout",
+      type: "flow-table",
+      props: { align: "center", marginTop: pt(12), marginBottom: pt(8) },
+      columns: [{ width: pt(160) }],
+      rowIds: [r1.id],
+      nodes: { [r1.id]: r1, [c1.id]: c1 },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+    const paginated = paginate(doc)
+
+    const result = await new DocxRenderer({ sourceDocument: doc }).render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(xml).toContain('w:jc w:val="center"')
+    expect(xml).toContain(`w:spacing w:after="${ptToTwips(12)}"`)
+    expect(xml).toContain(`w:spacing w:after="${ptToTwips(8)}"`)
+  })
+
   it("emits flow-table span metadata as DOCX gridSpan and vMerge", async () => {
     const p1 = makePara("ft-span-p1", "SPAN_CELL")
     const p2 = makePara("ft-span-p2", "TOP_CELL")
@@ -850,6 +1380,44 @@ describe("DocxRenderer smoke tests", () => {
     for (const marker of [bodyLines[0], bodyLines[45], bodyLines[89], bodyLines[129]]) {
       expect(countText(xml, marker)).toBe(1)
     }
+  })
+
+  it("does not mark DOCX flow-table headers as repeating when header repeat is disabled", async () => {
+    const bodyLines = Array.from({ length: 130 }, (_, i) => `NR${String(i).padStart(3, "0")}`)
+    const header = makePara("ft-no-repeat-header-p", "NO_REPEAT_HEADER")
+    const body = makePara("ft-no-repeat-body-p", bodyLines.join("\n"))
+    const headerCell = makeFlowTableCell("ft-no-repeat-header-cell", [header.id])
+    const bodyCell = makeFlowTableCell("ft-no-repeat-body-cell", [body.id])
+    const headerRow = makeFlowTableRow("ft-no-repeat-header-row", [headerCell.id], { height: pt(24) })
+    const bodyRow = makeFlowTableRow("ft-no-repeat-body-row", [bodyCell.id])
+    const table: FlowTableNode = {
+      id: "ft-no-repeat",
+      type: "flow-table",
+      props: { headerRowCount: 1, repeatHeaderRows: false },
+      columns: [{ width: pt(220) }],
+      rowIds: [headerRow.id, bodyRow.id],
+      nodes: {
+        [headerRow.id]: headerRow,
+        [bodyRow.id]: bodyRow,
+        [headerCell.id]: headerCell,
+        [bodyCell.id]: bodyCell,
+        [header.id]: header,
+        [body.id]: body,
+      },
+    }
+    const paginated = paginate(makeDoc([table.id], { [table.id]: table as unknown as LayoutNode }))
+    const pages = paginated.sections[0].pages
+    const headerParagraphs = pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === header.id && fragment.nodeType === "paragraph"),
+    )
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(pages.length).toBeGreaterThan(1)
+    expect(headerParagraphs).toHaveLength(1)
+    expect(countText(xml, "NO_REPEAT_HEADER")).toBe(1)
+    expect(countText(xml, "w:tblHeader")).toBe(0)
   })
 
   it("renders split flow-table rowspan continuations in DOCX output", async () => {

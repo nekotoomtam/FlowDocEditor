@@ -152,6 +152,73 @@ describe("flow-table static pagination", () => {
     expect(leftParagraph?.lines?.[0]?.text).toBe("Left")
   })
 
+  it("aligns a narrow flow-table inside the page content box without stretching authored columns", () => {
+    const p1 = makePara("p1", "Left")
+    const p2 = makePara("p2", "Right")
+    const c1 = makeCell("c1", [p1.id])
+    const c2 = makeCell("c2", [p2.id])
+    const r1 = makeRow("r1", [c1.id, c2.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: { align: "center" },
+      columns: [{ width: pt(100) }, { width: pt(120) }],
+      rowIds: [r1.id],
+      nodes: { r1, c1, c2, p1, p2 },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const fragments = result.sections[0].pages[0].fragments
+    const tableFragment = fragments.find((fragment) => fragment.nodeId === "ft1" && fragment.nodeType === "flow-table")
+    const rowFragment = fragments.find((fragment) => fragment.nodeId === "r1" && fragment.nodeType === "flow-table-row")
+    const rightCell = fragments.find((fragment) => fragment.nodeId === "c2" && fragment.nodeType === "flow-table-cell")
+    const expectedX = 72 + (451 - 220) / 2
+
+    expect(tableFragment?.x).toBeCloseTo(expectedX, 5)
+    expect(tableFragment?.width).toBe(220)
+    expect(tableFragment?.flowTableGridProps?.columnWidths).toEqual([100, 120])
+    expect(rowFragment?.x).toBeCloseTo(expectedX, 5)
+    expect(rowFragment?.width).toBe(220)
+    expect(rightCell?.x).toBeCloseTo(expectedX + 100, 5)
+  })
+
+  it("applies flow-table top and bottom margins around the placed table rows", () => {
+    const before = makeSpacer("before", 10)
+    const after = makeSpacer("after", 10)
+    const c1 = makeCell("c1", [])
+    const r1 = makeRow("r1", [c1.id], { height: pt(20) })
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: { marginTop: pt(18), marginBottom: pt(12) },
+      columns: [{ width: pt(100) }],
+      rowIds: [r1.id],
+      nodes: { r1, c1 },
+    }
+    const doc = makeDoc([before.id, table.id, after.id], {
+      [before.id]: before as unknown as LayoutNode,
+      [table.id]: table as unknown as LayoutNode,
+      [after.id]: after as unknown as LayoutNode,
+    })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const tableFragment = fragmentsFor(result, "ft1", "flow-table")[0]
+    const rowFragment = fragmentsFor(result, "r1", "flow-table-row")[0]
+    const afterFragment = fragmentsFor(result, "after", "spacer")[0]
+
+    expect(tableFragment.y).toBe(100)
+    expect(tableFragment.height).toBe(20)
+    expect(rowFragment.y).toBe(100)
+    expect(afterFragment.y).toBe(132)
+  })
+
   it("uses colspan and rowspan occupancy for static geometry", () => {
     const p1 = makePara("p1", "Wide")
     const p2 = makePara("p2", "Top right")
@@ -343,6 +410,51 @@ describe("flow-table static pagination", () => {
     expect(headerRows.every((fragment) => fragment.y === 72)).toBe(true)
     expect(bodyRows.length).toBeGreaterThan(1)
     expect(bodyRows.every((fragment) => fragment.y === 72 + 24)).toBe(true)
+    expectContiguousLineFragments(bodyParagraphs, bodyLineCount)
+  })
+
+  it("keeps authored flow-table headers on the first page when header repeat is disabled", () => {
+    const bodyLineCount = 130
+    const header = makePara("header", "Header")
+    const body = makePara("body-p", makeLines("Body", bodyLineCount))
+    const headerCell = makeCell("header-cell", [header.id])
+    const bodyCell = makeCell("body-cell", [body.id])
+    const headerRow = makeRow("header-row", [headerCell.id], { height: pt(24) })
+    const bodyRow = makeRow("body-row", [bodyCell.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: { headerRowCount: 1, repeatHeaderRows: false },
+      columns: [{ width: pt(220) }],
+      rowIds: [headerRow.id, bodyRow.id],
+      nodes: {
+        [headerRow.id]: headerRow,
+        [bodyRow.id]: bodyRow,
+        [headerCell.id]: headerCell,
+        [bodyCell.id]: bodyCell,
+        [header.id]: header,
+        [body.id]: body,
+      },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const pages = result.sections[0].pages
+    const headerRows = fragmentsFor(result, headerRow.id, "flow-table-row")
+    const headerParagraphs = fragmentsFor(result, header.id, "paragraph")
+    const bodyRows = fragmentsFor(result, bodyRow.id, "flow-table-row")
+    const bodyParagraphs = fragmentsFor(result, body.id, "paragraph")
+
+    expect(pages.length).toBeGreaterThan(1)
+    expect(headerRows).toHaveLength(1)
+    expect(headerParagraphs).toHaveLength(1)
+    expect(headerRows[0].y).toBe(72)
+    expect(bodyRows.length).toBeGreaterThan(1)
+    expect(bodyRows[0].y).toBe(72 + 24)
+    expect(bodyRows.slice(1).every((fragment) => fragment.y === 72)).toBe(true)
     expectContiguousLineFragments(bodyParagraphs, bodyLineCount)
   })
 

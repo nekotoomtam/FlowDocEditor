@@ -184,7 +184,11 @@ function getSourceBlockType(document: DocumentNode, source?: DragSource | null):
 
 function isStructuralStackSource(document: DocumentNode, source?: DragSource | null): boolean {
   const sourceType = getSourceBlockType(document, source)
-  return sourceType === "stack" || sourceType === "flow-stack"
+  return sourceType === "stack"
+}
+
+function isFlowStackSource(document: DocumentNode, source?: DragSource | null): boolean {
+  return getSourceBlockType(document, source) === "flow-stack"
 }
 
 function getPaletteBlockType(source?: DragSource | null): PaletteBlockType | null {
@@ -315,6 +319,19 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     if (location.node.type !== "stack" && location.node.type !== "body" && location.node.type !== "flow-stack") {
       return err(rawIntent, "invalid-zone", "Center placement only allowed on body, stack, or flow-stack.")
     }
+    if (isFlowStackSource(document, source)) {
+      if (location.node.type !== "body") {
+        return err(rawIntent, "invalid-parent", "Flow stack can only move into a row or become a new row.")
+      }
+      const node = location.node as LayoutNode & { childIds: string[] }
+      const intent = makeIntent(rawIntent, target.nodeId, target.nodeId, location.node.type)
+      return ok(intent, {
+        kind: "move-flow-stack-to-new-row",
+        parentId: target.nodeId,
+        parentType: "body",
+        index: node.childIds.length,
+      })
+    }
     if (isRowLikeSource(document, source) && (location.node.type === "stack" || location.node.type === "flow-stack")) {
       return err(rawIntent, "invalid-parent", "Cannot create columns inside a column.")
     }
@@ -339,6 +356,18 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     if (location.parent == null) return err(rawIntent, "invalid-parent", "Node has no parent.")
     if (location.parent.type !== "body" && location.parent.type !== "stack" && location.parent.type !== "flow-stack") {
       return err(rawIntent, "invalid-parent", "Vertical placement requires body, stack, or flow-stack parent.")
+    }
+    if (isFlowStackSource(document, source)) {
+      if (location.parent.type !== "body") {
+        return err(rawIntent, "invalid-parent", "Flow stack can only become a full row in the body.")
+      }
+      const intent = makeIntent(rawIntent, target.nodeId, location.parent.id, location.parent.type)
+      return ok(intent, {
+        kind: "move-flow-stack-to-new-row",
+        parentId: location.parent.id,
+        parentType: "body",
+        index: zone === "top" ? location.index : location.index + 1,
+      })
     }
     if (isRowLikeSource(document, source) && (location.parent.type === "stack" || location.parent.type === "flow-stack")) {
       return err(rawIntent, "invalid-parent", "Row-like source cannot be inserted into a stack.")
@@ -400,6 +429,9 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     if (isRowLikeSource(document, source)) {
       return err(rawIntent, "invalid-zone", "Row-like source cannot be placed on left/right edges.")
     }
+    if (isFlowStackSource(document, source)) {
+      return err(rawIntent, "invalid-zone", "Flow stack can only be inserted into an existing flow row or moved as a full row.")
+    }
 
     if (location.parent == null) return err(rawIntent, "invalid-parent", "Node has no parent.")
     if (location.parent.type !== "body" && location.parent.type !== "stack") {
@@ -440,6 +472,19 @@ function resolveRowOuterLaw(document: DocumentNode, rawIntent: RawPlacementInten
   const sourceNodeId = getSourceNodeId(source)
   const subtreeErr = rejectSubtree(document, rawIntent, sourceNodeId, target.rowId)
   if (subtreeErr != null) return subtreeErr
+  if (isFlowStackSource(document, source)) {
+    if (rowLocation.parent.type !== "body") {
+      return err(rawIntent, "invalid-parent", "Flow stack can only become a full row in the body.")
+    }
+    const isTop = target.kind === "row-outer-top"
+    const intent = makeIntent(rawIntent, target.rowId, rowLocation.parent.id, rowLocation.parent.type)
+    return ok(intent, {
+      kind: "move-flow-stack-to-new-row",
+      parentId: rowLocation.parent.id,
+      parentType: "body",
+      index: isTop ? rowLocation.index : rowLocation.index + 1,
+    })
+  }
 
   const isTop = target.kind === "row-outer-top"
   const intent = makeIntent(rawIntent, target.rowId, rowLocation.parent.id, rowLocation.parent.type)
@@ -471,6 +516,15 @@ function resolveRowStackLaw(document: DocumentNode, rawIntent: RawPlacementInten
 
   if (zone === "left" || zone === "right") {
     if (rowType === "flow-row") {
+      if (isFlowStackSource(document, source)) {
+        const intent = makeIntent(rawIntent, target.stackId, target.rowId, "flow-row")
+        return ok(intent, {
+          kind: "move-flow-stack-into-row",
+          rowId: target.rowId,
+          targetStackId: target.stackId,
+          position: zone === "left" ? "before" : "after",
+        })
+      }
       if (!isFlowStackEdgeColumnSource(source)) {
         return err(rawIntent, "invalid-zone", "Flow-row edge insertion only accepts a column source.")
       }
@@ -508,6 +562,9 @@ function resolveRowStackLaw(document: DocumentNode, rawIntent: RawPlacementInten
   }
 
   if (zone === "center") {
+    if (isFlowStackSource(document, source)) {
+      return err(rawIntent, "invalid-zone", "Flow stack must be inserted before or after an existing column.")
+    }
     if (isRowLikeSource(document, source)) {
       return err(rawIntent, "invalid-zone", "Row-like source cannot be inserted into row stack center.")
     }

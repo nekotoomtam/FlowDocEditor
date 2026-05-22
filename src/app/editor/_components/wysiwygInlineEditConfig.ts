@@ -38,5 +38,17 @@ export function resolveWysiwygPerfTraceEnabled(
   return false
 }
 
+export function resolveWysiwygRichTextDraftEnabled(
+  rawValue: string | undefined = process.env.NEXT_PUBLIC_FLOWDOC_WYSIWYG_RICH_TEXT_DRAFT,
+  textEngineEnabled: boolean = resolveWysiwygTextEngineEnabled(),
+): boolean {
+  if (!textEngineEnabled) return false
+  const normalized = rawValue?.trim().toLowerCase()
+  if (normalized && ENABLED_VALUES.has(normalized)) return true
+  if (normalized && DISABLED_VALUES.has(normalized)) return false
+  return false
+}
+
 export const WYSIWYG_TEXT_ENGINE_ENABLED = resolveWysiwygTextEngineEnabled()
 export const WYSIWYG_PERF_TRACE_ENABLED = resolveWysiwygPerfTraceEnabled()
+export const WYSIWYG_RICH_TEXT_DRAFT_ENABLED = resolveWysiwygRichTextDraftEnabled(undefined, WYSIWYG_TEXT_ENGINE_ENABLED)

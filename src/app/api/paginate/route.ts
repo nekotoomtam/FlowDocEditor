@@ -6,7 +6,7 @@ import { assertDocument, DocumentAssertionError } from "@/document"
 import { assertPaginatedDocument } from "@/pagination"
 import { DEFAULT_FONT_KEY } from "@/font-registry"
 import type { TextMeasurer } from "@/layout"
-import { loadRuntimeFontSync, runtimeFontFallbackHeaders } from "../runtimeFont"
+import { loadRuntimeFontMapSync, loadRuntimeFontSync, runtimeFontFallbackHeaders } from "../runtimeFont"
 
 // ─── Font + Measurer Cache ────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ function getMeasurer(): TextMeasurer {
   if (measurer) return measurer
   const buf = loadRuntimeFontSync(DEFAULT_FONT_KEY)
   fontFallback = buf === null
-  measurer = createFontkitMeasurer(buf)
+  measurer = createFontkitMeasurer(buf, loadRuntimeFontMapSync())
   return measurer
 }
 

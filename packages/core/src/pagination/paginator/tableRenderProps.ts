@@ -78,3 +78,13 @@ export function resolveFlowTableColumnWidths(tableNode: FlowTableNode, available
     return width
   })
 }
+
+export function resolveFlowTableBlockMargins(tableNode: FlowTableNode): { top: number; bottom: number } {
+  const top = tableNode.props.marginTop
+    ? Math.max(0, toAbstractUnit(tableNode.props.marginTop.value, tableNode.props.marginTop.unit))
+    : 0
+  const bottom = tableNode.props.marginBottom
+    ? Math.max(0, toAbstractUnit(tableNode.props.marginBottom.value, tableNode.props.marginBottom.unit))
+    : 0
+  return { top, bottom }
+}

@@ -1,5 +1,9 @@
-import type { ParagraphBoxBorderSide, ParagraphBoxStyle, ParagraphNode, SpacerNode } from "../schema"
+import type { ParagraphBoxBorderSide, ParagraphBoxStyle, ParagraphNode, SpacerNode, TextRun } from "../schema"
+import type { FontVariantKey } from "../font-registry"
+import { resolveFontVariantKeyForStyle } from "../font-registry"
+import { resolveTextRunStyle } from "../document/richText"
 import type {
+  LineRun,
   LineSegment,
   MeasuredBoxEdges,
   MeasuredLine,
@@ -8,6 +12,7 @@ import type {
   MeasuredParagraphBox,
   MeasuredSpacer,
   TextMeasurer,
+  TextRunLayoutStyle,
   WordBreaker,
 } from "./types"
 import { defaultWordBreaker } from "./types"
@@ -32,8 +37,17 @@ export function toAbstractUnit(value: number, unit: "pt" | "mm"): number {
 
 // ─── Paragraph Measurement ────────────────────────────────────────────────────
 
-type SourceLineSegment = Omit<LineSegment, "x" | "breakableAfter">
-type FieldRange = { start: number; end: number }
+type SourceLineSegment = Omit<LineSegment, "x" | "breakableAfter"> & {
+  sourceType: LineRun["sourceType"]
+  style: TextRunLayoutStyle
+}
+type RichTextRange = {
+  start: number
+  end: number
+  sourceId?: string
+  sourceType: LineRun["sourceType"]
+  style: TextRunLayoutStyle
+}
 
 const ZERO_EDGES: MeasuredBoxEdges = { top: 0, right: 0, bottom: 0, left: 0 }
 
@@ -107,16 +121,54 @@ export function paragraphBoxBottomInset(box: MeasuredParagraphBox | undefined): 
   return box.padding.bottom + borderWidth(box.border.bottom)
 }
 
-function getSegmentKind(
-  text: string,
-  start: number,
-  end: number,
-  fieldRanges: FieldRange[],
-  pageNumberRanges: FieldRange[] = [],
-): LineSegment["kind"] {
-  if (pageNumberRanges.some((range) => start >= range.start && end <= range.end)) return "pageNumber"
-  if (fieldRanges.some((range) => start >= range.start && end <= range.end)) return "field"
+function getSegmentKind(text: string, sourceType: LineRun["sourceType"]): LineSegment["kind"] {
+  if (sourceType === "pageNumber") return "pageNumber"
+  if (sourceType === "field") return "field"
   return /^\s+$/.test(text) ? "space" : "word"
+}
+
+function layoutStyleKey(style: TextRunLayoutStyle | undefined): string {
+  if (!style) return ""
+  return [
+    style.fontSize,
+    style.fontFamilyKey,
+    style.textColor,
+    style.fontWeight,
+    style.fontStyle,
+    style.textDecoration,
+    style.strikethrough,
+    style.fontVariant,
+    style.lineHeight,
+  ].join("|")
+}
+
+function areLineRunStylesEqual(a: TextRunLayoutStyle | undefined, b: TextRunLayoutStyle | undefined): boolean {
+  return layoutStyleKey(a) === layoutStyleKey(b)
+}
+
+function toRunLayoutStyle(
+  paragraph: ParagraphNode,
+  run: TextRun,
+  measurer: TextMeasurer,
+): TextRunLayoutStyle {
+  const effective = resolveTextRunStyle(paragraph, run)
+  const fontSize = toAbstractUnit(effective.fontSize.value, effective.fontSize.unit)
+  const fontVariant = resolveFontVariantKeyForStyle(effective.fontWeight, effective.fontStyle)
+  return {
+    fontSize,
+    fontFamilyKey: effective.fontFamilyKey,
+    textColor: effective.textColor,
+    fontWeight: effective.fontWeight,
+    fontStyle: effective.fontStyle,
+    textDecoration: effective.textDecoration,
+    strikethrough: effective.strikethrough,
+    fontVariant,
+    lineHeight: measurer.measureLineHeight(effective.fontFamilyKey, fontSize, paragraph.props.lineHeight),
+  }
+}
+
+function paragraphDefaultRunStyle(paragraph: ParagraphNode, measurer: TextMeasurer): TextRunLayoutStyle {
+  return toRunLayoutStyle(paragraph, { id: `${paragraph.id}-default-style`, type: "text", text: "" }, measurer)
 }
 
 const THAI_SARA_AM = "\u0E33"
@@ -221,8 +273,9 @@ function measureSegmentWidth(
   measurer: TextMeasurer,
   fontFamilyKey: string,
   fontSize: number,
+  fontVariant: FontVariantKey,
 ): number {
-  return measurer.measureText(text, fontFamilyKey, fontSize).width
+  return measurer.measureText(text, fontFamilyKey, fontSize, fontVariant).width
 }
 
 function hasRepeatedGraphemeRun(graphemes: string[], minimumRunLength: number): boolean {
@@ -259,8 +312,6 @@ function shouldSplitWordToFillLine(segment: SourceLineSegment, availableWidth: n
 function splitSourceSegmentToGraphemes(
   segment: SourceLineSegment,
   measurer: TextMeasurer,
-  fontFamilyKey: string,
-  fontSize: number,
 ): SourceLineSegment[] {
   const graphemeSegments: SourceLineSegment[] = []
   let graphemeStart = segment.start
@@ -271,8 +322,11 @@ function splitSourceSegmentToGraphemes(
       text: grapheme,
       start: graphemeStart,
       end: graphemeEnd,
-      width: measureSegmentWidth(grapheme, measurer, fontFamilyKey, fontSize),
+      width: measureSegmentWidth(grapheme, measurer, segment.style.fontFamilyKey, segment.style.fontSize, segment.style.fontVariant),
       kind: "grapheme",
+      sourceId: segment.sourceId,
+      sourceType: segment.sourceType,
+      style: segment.style,
     })
     graphemeStart = graphemeEnd
   }
@@ -284,16 +338,27 @@ function createSourceSegments(
   text: string,
   availableWidth: number,
   measurer: TextMeasurer,
-  fontFamilyKey: string,
-  fontSize: number,
   wordBreaker: WordBreaker,
-  fieldRanges: FieldRange[] = [],
+  richTextRanges: RichTextRange[],
+  fallbackStyle: TextRunLayoutStyle,
   offsetBase: number = 0,
-  pageNumberRanges: FieldRange[] = [],
 ): SourceLineSegment[] {
   const segments = wordBreaker.segment(text)
   const sourceSegments: SourceLineSegment[] = []
   let cursor = 0
+
+  const rangeAt = (offset: number): RichTextRange | undefined =>
+    richTextRanges.find((range) => offset >= range.start && offset < range.end)
+
+  const nextRangeBoundary = (start: number, end: number): number => {
+    const nextStart = richTextRanges
+      .filter((range) => range.start > start && range.start < end)
+      .map((range) => range.start)
+      .sort((a, b) => a - b)[0]
+    const current = rangeAt(start)
+    const currentEnd = current && current.end > start && current.end < end ? current.end : undefined
+    return Math.min(nextStart ?? end, currentEnd ?? end)
+  }
 
   for (const segment of segments) {
     if (segment.length === 0) continue
@@ -301,26 +366,76 @@ function createSourceSegments(
     const start = cursor
     const end = cursor + segment.length
     cursor = end
-    const width = measureSegmentWidth(segment, measurer, fontFamilyKey, fontSize)
-    const kind = getSegmentKind(segment, start, end, fieldRanges, pageNumberRanges)
 
-    if (kind === "word" && width > availableWidth) {
-      sourceSegments.push(...splitSourceSegmentToGraphemes(
-        { text: segment, start: start + offsetBase, end: end + offsetBase, width, kind },
-        measurer,
-        fontFamilyKey,
-        fontSize,
-      ))
-      continue
+    let sliceStart = start
+    while (sliceStart < end) {
+      const globalStart = sliceStart + offsetBase
+      const globalEnd = end + offsetBase
+      const range = rangeAt(globalStart)
+      const sliceGlobalEnd = nextRangeBoundary(globalStart, globalEnd)
+      const sliceEnd = sliceGlobalEnd - offsetBase
+      const sliceText = segment.slice(sliceStart - start, sliceEnd - start)
+      const style = range?.style ?? fallbackStyle
+      const sourceType = range?.sourceType ?? "text"
+      const width = measureSegmentWidth(sliceText, measurer, style.fontFamilyKey, style.fontSize, style.fontVariant)
+      const kind = getSegmentKind(sliceText, sourceType)
+      const sourceSegment: SourceLineSegment = {
+        text: sliceText,
+        start: globalStart,
+        end: sliceGlobalEnd,
+        width,
+        kind,
+        sourceId: range?.sourceId,
+        sourceType,
+        style,
+      }
+
+      if (kind === "word" && width > availableWidth) {
+        sourceSegments.push(...splitSourceSegmentToGraphemes(sourceSegment, measurer))
+      } else {
+        sourceSegments.push(sourceSegment)
+      }
+      sliceStart = sliceEnd
     }
-
-    sourceSegments.push({ text: segment, start: start + offsetBase, end: end + offsetBase, width, kind })
   }
 
   return sourceSegments
 }
 
-function buildLine(segments: SourceLineSegment[], fontSize: number): MeasuredLine | null {
+function buildLineRuns(segments: LineSegment[]): LineRun[] | undefined {
+  const runs: LineRun[] = []
+  for (const segment of segments) {
+    if (!segment.style || !segment.sourceType) continue
+    const previous = runs.at(-1)
+    if (
+      previous &&
+      previous.sourceId === segment.sourceId &&
+      previous.sourceType === segment.sourceType &&
+      areLineRunStylesEqual(previous.style, segment.style)
+    ) {
+      runs[runs.length - 1] = {
+        ...previous,
+        text: previous.text + segment.text,
+        end: segment.end,
+        width: (segment.x + segment.width) - previous.x,
+      }
+      continue
+    }
+    runs.push({
+      text: segment.text,
+      start: segment.start,
+      end: segment.end,
+      x: segment.x,
+      width: segment.width,
+      sourceId: segment.sourceId,
+      sourceType: segment.sourceType,
+      style: segment.style,
+    })
+  }
+  return runs.length > 0 ? runs : undefined
+}
+
+function buildLine(segments: SourceLineSegment[], fallbackStyle: TextRunLayoutStyle): MeasuredLine | null {
   const trimmedSegments = [...segments]
   while (trimmedSegments.at(-1)?.kind === "space") {
     trimmedSegments.pop()
@@ -341,8 +456,9 @@ function buildLine(segments: SourceLineSegment[], fontSize: number): MeasuredLin
   return {
     text: lineSegments.map((segment) => segment.text).join(""),
     width: x,
-    height: fontSize,
+    height: Math.max(...lineSegments.map((segment) => segment.style?.lineHeight ?? fallbackStyle.lineHeight)),
     segments: lineSegments,
+    runs: buildLineRuns(lineSegments),
   }
 }
 
@@ -350,24 +466,22 @@ function wrapLines(
   text: string,
   availableWidth: number,
   measurer: TextMeasurer,
-  fontFamilyKey: string,
-  fontSize: number,
   wordBreaker: WordBreaker,
-  fieldRanges: FieldRange[] = [],
+  richTextRanges: RichTextRange[],
+  fallbackStyle: TextRunLayoutStyle,
   offsetBase: number = 0,
-  pageNumberRanges: FieldRange[] = [],
 ): MeasuredLine[] {
   if (text.length === 0) {
-    return [{ text: "", width: 0, height: fontSize }]
+    return [{ text: "", width: 0, height: fallbackStyle.lineHeight }]
   }
 
-  const segments = createSourceSegments(text, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, offsetBase, pageNumberRanges)
+  const segments = createSourceSegments(text, availableWidth, measurer, wordBreaker, richTextRanges, fallbackStyle, offsetBase)
   const lines: MeasuredLine[] = []
   let currentLine: SourceLineSegment[] = []
   let currentWidth = 0
 
   const pushCurrentLine = () => {
-    const line = buildLine(currentLine, fontSize)
+    const line = buildLine(currentLine, fallbackStyle)
     if (line) lines.push(line)
     currentLine = []
     currentWidth = 0
@@ -386,7 +500,7 @@ function wrapLines(
     }
 
     if (shouldSplitWordToFillLine(segment, availableWidth, currentWidth)) {
-      const splitSegments = splitSourceSegmentToGraphemes(segment, measurer, fontFamilyKey, fontSize)
+      const splitSegments = splitSourceSegmentToGraphemes(segment, measurer)
       const firstSegmentWidth = splitSegments[0]?.width ?? Number.POSITIVE_INFINITY
       if (currentWidth + firstSegmentWidth <= availableWidth) {
         for (const splitSegment of splitSegments) appendSegment(splitSegment)
@@ -410,38 +524,48 @@ function wrapLines(
 
 // ─── Paragraph Text Builder ───────────────────────────────────────────────────
 
-function buildParagraphFullText(node: ParagraphNode): {
+function buildParagraphTextModel(node: ParagraphNode, measurer: TextMeasurer): {
   fullText: string
-  fieldRanges: FieldRange[]
-  pageNumberRanges: FieldRange[]
+  richTextRanges: RichTextRange[]
+  fallbackStyle: TextRunLayoutStyle
 } {
   let fullText = ""
-  const fieldRanges: FieldRange[] = []
-  const pageNumberRanges: FieldRange[] = []
+  const richTextRanges: RichTextRange[] = []
+  const fallbackStyle = paragraphDefaultRunStyle(node, measurer)
+
+  const pushRange = (
+    text: string,
+    sourceId: string | undefined,
+    sourceType: LineRun["sourceType"],
+    style: TextRunLayoutStyle,
+  ) => {
+    if (text.length === 0) return
+    const start = fullText.length
+    fullText += text
+    richTextRanges.push({ start, end: fullText.length, sourceId, sourceType, style })
+  }
+
   for (const child of node.children) {
-    if (child.type === "text") { fullText += child.text; continue }
-    if (child.type === "pageNumber") {
-      const start = fullText.length
-      fullText += "00"
-      pageNumberRanges.push({ start, end: fullText.length })
+    if (child.type === "text") {
+      pushRange(child.text, child.id, "text", toRunLayoutStyle(node, child, measurer))
       continue
     }
-    const start = fullText.length
-    fullText += child.label ?? `{${child.key}}`
-    fieldRanges.push({ start, end: fullText.length })
+    if (child.type === "pageNumber") {
+      pushRange("00", child.id, "pageNumber", fallbackStyle)
+      continue
+    }
+    pushRange(child.label ?? `{${child.key}}`, child.id, "field", fallbackStyle)
   }
-  return { fullText, fieldRanges, pageNumberRanges }
+  return { fullText, richTextRanges, fallbackStyle }
 }
 
 function measureHardLines(
   fullText: string,
   availableWidth: number,
   measurer: TextMeasurer,
-  fontFamilyKey: string,
-  fontSize: number,
   wordBreaker: WordBreaker,
-  fieldRanges: FieldRange[],
-  pageNumberRanges: FieldRange[],
+  richTextRanges: RichTextRange[],
+  fallbackStyle: TextRunLayoutStyle,
   fromOffset: number = 0,
 ): MeasuredLine[] {
   const hardLines = fullText.split("\n")
@@ -455,13 +579,8 @@ function measureHardLines(
       continue
     }
     const lineEnd = hardLineEnd
-    const lineFieldRanges = fieldRanges
-      .filter((r) => r.end > globalOffset && r.start < lineEnd)
-      .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
-    const linePageNumberRanges = pageNumberRanges
-      .filter((r) => r.end > globalOffset && r.start < lineEnd)
-      .map((r) => ({ start: r.start - globalOffset, end: r.end - globalOffset }))
-    const wrapped = wrapLines(hardLine, availableWidth, measurer, fontFamilyKey, fontSize, wordBreaker, lineFieldRanges, globalOffset, linePageNumberRanges)
+    const lineRanges = richTextRanges.filter((r) => r.end > globalOffset && r.start < lineEnd)
+    const wrapped = wrapLines(hardLine, availableWidth, measurer, wordBreaker, lineRanges, fallbackStyle, globalOffset)
     rawLines.push(...wrapped)
     globalOffset += hardLine.length + 1
   }
@@ -482,9 +601,9 @@ export function measureParagraph(
   const box = resolveParagraphBox(node, availableWidth)
   const contentWidth = box?.contentWidth ?? availableWidth
 
-  const { fullText, fieldRanges, pageNumberRanges } = buildParagraphFullText(node)
-  const rawLines = measureHardLines(fullText, contentWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, pageNumberRanges)
-  const lines: MeasuredLine[] = rawLines.map((line) => ({ ...line, height: lineHeight }))
+  const { fullText, richTextRanges, fallbackStyle } = buildParagraphTextModel(node, measurer)
+  const rawLines = measureHardLines(fullText, contentWidth, measurer, wordBreaker, richTextRanges, fallbackStyle)
+  const lines: MeasuredLine[] = rawLines
   const contentHeight = lines.reduce((sum, line) => sum + line.height, 0)
   const totalHeight = spacingBefore + paragraphBoxTopInset(box) + contentHeight + paragraphBoxBottomInset(box) + spacingAfter
 
@@ -505,9 +624,8 @@ export function measureParagraphFrom(
   const lineHeight = measurer.measureLineHeight(fontFamilyKey, fontSize, node.props.lineHeight)
   const box = resolveParagraphBox(node, availableWidth)
   const contentWidth = box?.contentWidth ?? availableWidth
-  const { fullText, fieldRanges, pageNumberRanges } = buildParagraphFullText(node)
-  const rawLines = measureHardLines(fullText, contentWidth, measurer, fontFamilyKey, fontSize, wordBreaker, fieldRanges, pageNumberRanges, fromOffset)
-  const tailLines = rawLines.map((line) => ({ ...line, height: lineHeight }))
+  const { fullText, richTextRanges, fallbackStyle } = buildParagraphTextModel(node, measurer)
+  const tailLines = measureHardLines(fullText, contentWidth, measurer, wordBreaker, richTextRanges, fallbackStyle, fromOffset)
   return { tailLines, lineHeight }
 }
 

@@ -3,6 +3,8 @@
  * ไม่รู้จัก pt, px, EMU — Renderer แปลงเอง
  */
 
+import type { FontVariantKey } from "../font-registry"
+
 // ─── Size ─────────────────────────────────────────────────────────────────────
 
 export interface Size {
@@ -23,6 +25,32 @@ export interface LineSegment {
   width: number
   kind: "word" | "space" | "field" | "grapheme" | "pageNumber"
   breakableAfter: boolean
+  sourceId?: string
+  sourceType?: "text" | "field" | "pageNumber"
+  style?: TextRunLayoutStyle
+}
+
+export interface TextRunLayoutStyle {
+  fontSize: number
+  fontFamilyKey: string
+  textColor: string
+  fontWeight: "normal" | "bold"
+  fontStyle: "normal" | "italic"
+  textDecoration: "none" | "underline"
+  strikethrough: boolean
+  fontVariant: FontVariantKey
+  lineHeight: number
+}
+
+export interface LineRun {
+  text: string
+  start: number
+  end: number
+  x: number
+  width: number
+  sourceId?: string
+  sourceType: "text" | "field" | "pageNumber"
+  style: TextRunLayoutStyle
 }
 
 // ผลลัพธ์การ measure paragraph — แต่ละบรรทัด
@@ -31,6 +59,7 @@ export interface MeasuredLine {
   width: number
   height: number  // lineHeight
   segments?: LineSegment[]
+  runs?: LineRun[]
 }
 
 export interface MeasuredBoxEdges {
@@ -107,7 +136,7 @@ export interface FlowBox {
 // ─── Text Measurer ────────────────────────────────────────────────────────────
 
 export interface TextMeasurer {
-  measureText(text: string, fontFamilyKey: string, fontSize: number): { width: number }
+  measureText(text: string, fontFamilyKey: string, fontSize: number, fontVariant?: FontVariantKey): { width: number }
   measureLineHeight(fontFamilyKey: string, fontSize: number, lineHeightRatio: number): number
 }
 
