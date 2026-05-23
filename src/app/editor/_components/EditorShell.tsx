@@ -25,9 +25,7 @@ import type {
 import { EditorCanvas } from "./EditorCanvas"
 import { PropertyPanel } from "./PropertyPanel"
 import { RichTextToolbar } from "./RichTextToolbar"
-import { OutlinePanel } from "./OutlinePanel"
 import { FillingPanel } from "./FillingPanel"
-import { AddPanel } from "./AddPanel"
 import { PagePanel } from "./PagePanel"
 import {
   RIGHT_RAIL_COLLAPSED_WIDTH,
@@ -136,6 +134,19 @@ import {
 import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
 import { useAnimationFrameState } from "./useAnimationFrameState"
 import { createInitialEditorState, reducer, resizeColumnsDocument, type DragState } from "./editorReducer"
+import { buildSelectionContext } from "./selectionContext"
+import { EditorCanvasColumn } from "./shell/EditorCanvasColumn"
+import {
+  collectEditorPageNavItems,
+  findFirstPageIndexForNode,
+  type EditorPageNavItem,
+} from "./shell/editorCanvasNavigation"
+import {
+  EditorToolbar,
+  type EditorWorkflowMode,
+  type EditorWorkflowNavItem,
+} from "./shell/EditorToolbar"
+import { EditorLeftRail, type EditorLeftRailMode } from "./shell/EditorLeftRail"
 
 export type { DragState } from "./editorReducer"
 
@@ -246,9 +257,9 @@ export interface MarginDrag {
 }
 
 type ZoomMode = "fit" | "manual"
-type LeftRailMode = "outline" | "add"
+type LeftRailMode = EditorLeftRailMode
 type RightRailMode = "page" | "properties"
-type WorkflowMode = "design" | "fields" | "fill" | "render"
+type WorkflowMode = EditorWorkflowMode
 type RightRailResizeDrag = {
   pointerId: number
   startX: number
@@ -442,122 +453,6 @@ function findSectionIndexForNode(doc: DocumentNode, nodeId: string | null): numb
   return 0
 }
 
-const toolbarShellStyle: React.CSSProperties = {
-  padding: "8px 16px 9px",
-  background: "white",
-  borderBottom: "1px solid #e5e7eb",
-  display: "flex",
-  flexDirection: "column",
-  gap: 7,
-  flexShrink: 0,
-}
-
-const workflowBarStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  minWidth: 0,
-  flexWrap: "wrap",
-}
-
-const commandBarStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  minWidth: 0,
-  flexWrap: "wrap",
-}
-
-const workflowNavStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "stretch",
-  gap: 6,
-  minWidth: 0,
-  flexWrap: "wrap",
-}
-
-const workflowNavButton = (active: boolean): React.CSSProperties => ({
-  width: 118,
-  minHeight: 40,
-  border: `1px solid ${active ? "#bfdbfe" : "#e5e7eb"}`,
-  borderRadius: 6,
-  background: active ? "#eff6ff" : "#f8fafc",
-  color: active ? "#1d4ed8" : "#475569",
-  cursor: "pointer",
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 8px",
-  textAlign: "left",
-  boxSizing: "border-box",
-  boxShadow: active ? "inset 0 -2px 0 #2563eb" : "none",
-})
-
-const workflowNavIcon = (active: boolean): React.CSSProperties => ({
-  width: 24,
-  height: 24,
-  borderRadius: 5,
-  background: active ? "#dbeafe" : "#e2e8f0",
-  color: active ? "#1d4ed8" : "#475569",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 11,
-  fontWeight: 800,
-  flexShrink: 0,
-})
-
-const workflowNavText: React.CSSProperties = {
-  minWidth: 0,
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
-}
-
-const workflowNavTitle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 5,
-  minWidth: 0,
-  fontSize: 11,
-  fontWeight: 800,
-}
-
-const workflowNavDescription: React.CSSProperties = {
-  fontSize: 9,
-  color: "#94a3b8",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-}
-
-const workflowNavBadge: React.CSSProperties = {
-  minWidth: 16,
-  height: 16,
-  borderRadius: 8,
-  padding: "0 5px",
-  background: "#dbeafe",
-  color: "#1d4ed8",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 9,
-  fontWeight: 800,
-}
-
-const toolbarGroupStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 4,
-  alignItems: "center",
-}
-
-const toolbarSeparatorStyle: React.CSSProperties = {
-  width: 1,
-  height: 16,
-  background: "#e5e7eb",
-  flexShrink: 0,
-}
-
 const editorDragGhostStyle: React.CSSProperties = {
   position: "fixed",
   top: -10,
@@ -658,40 +553,6 @@ const dragGhostTableIcon: React.CSSProperties = {
 const dragGhostTableCell: React.CSSProperties = {
   backgroundColor: "#64748b",
   borderRadius: 1,
-}
-
-const LEFT_RAIL_WIDTH = 260
-
-const leftRailShellStyle: React.CSSProperties = {
-  width: LEFT_RAIL_WIDTH,
-  flexShrink: 0,
-  borderRight: "1px solid #e5e7eb",
-  background: "#fff",
-  display: "flex",
-  overflow: "hidden",
-}
-
-const leftRailSidebarStyle: React.CSSProperties = {
-  width: 36,
-  flexShrink: 0,
-  borderRight: "1px solid #e5e7eb",
-  background: "#f8fafc",
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "stretch",
-  gap: 5,
-  padding: "8px 0 8px 3px",
-  position: "relative",
-  zIndex: 2,
-}
-
-const leftRailContentStyle: React.CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  minHeight: 0,
-  overflow: "hidden",
-  display: "flex",
-  flexDirection: "column",
 }
 
 const rightRailSidebarStyle = (collapsed: boolean): React.CSSProperties => ({
@@ -840,11 +701,14 @@ export default function EditorShell() {
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [documentIoStatus, setDocumentIoStatus] = useState<{ type: "info" | "error"; message: string } | null>(null)
+  const [localSaveStatus, setLocalSaveStatus] = useState<"saved" | "saving">("saved")
   const resizePreviewRef = useRef<HTMLDivElement | null>(null)
   const resizePreviewFrameRef = useRef<number | null>(null)
   const pendingResizePreviewRef = useRef<ResizeDrag | null>(null)
   const [showTextSegments, setShowTextSegments] = useState(false)
   const [showDrift, setShowDrift] = useState(false)
+  const [showPageThumbnails, setShowPageThumbnails] = useState(false)
+  const [viewPageIndex, setViewPageIndex] = useState<number | null>(null)
   const [driftReport, setDriftReport] = useState<DriftReport | null>(null)
   const showDriftRef = useRef(showDrift)
   useEffect(() => { showDriftRef.current = showDrift }, [showDrift])
@@ -953,6 +817,49 @@ export default function EditorShell() {
   useEffect(() => { inlineEditPageIndexRef.current = inlineEditPageIndex }, [inlineEditPageIndex])
   const inlineEditVisualLockedRef = useRef(inlineEditVisualLocked)
   useEffect(() => { inlineEditVisualLockedRef.current = inlineEditVisualLocked }, [inlineEditVisualLocked])
+  const editorPageItems = useMemo(() => collectEditorPageNavItems(state.paginated), [state.paginated])
+  const selectedContextItems = useMemo(() => (
+    isTemplateMode
+      ? buildSelectionContext(state.doc, state.selectionAnchorNodeId ?? state.selectedNodeId)
+      : []
+  ), [isTemplateMode, state.doc, state.selectedNodeId, state.selectionAnchorNodeId])
+  const selectedContextLabel = !isTemplateMode
+    ? "Fill data"
+    : selectedContextItems.length > 0
+      ? selectedContextItems[selectedContextItems.length - 1].label
+      : "Canvas"
+  const selectedPageIndex = useMemo(() => (
+    findFirstPageIndexForNode(state.paginated, state.selectionAnchorNodeId ?? state.selectedNodeId)
+  ), [state.paginated, state.selectedNodeId, state.selectionAnchorNodeId])
+  const firstPageIndex = editorPageItems[0]?.pageIndex ?? 0
+  const currentCanvasPageIndex = inlineEditPageIndex ?? viewPageIndex ?? selectedPageIndex ?? firstPageIndex
+  const canvasSectionLabel = `Section ${activeSectionIndex + 1}`
+  const localSaveStatusLabel = initialTestScenario
+    ? "Test doc"
+    : localSaveStatus === "saving"
+      ? "Saving"
+      : "Saved"
+  const localSaveStatusTone = localSaveStatus === "saved" ? "success" : "neutral"
+  const jumpToEditorPage = useCallback((page: EditorPageNavItem) => {
+    setViewPageIndex(page.pageIndex)
+    scrollElementIntoNearestView(pageRefs.current.get(page.key))
+  }, [])
+
+  useEffect(() => {
+    const nextPageIndex = inlineEditPageIndex ?? selectedPageIndex
+    if (nextPageIndex !== null) setViewPageIndex(nextPageIndex)
+  }, [inlineEditPageIndex, selectedPageIndex])
+
+  useEffect(() => {
+    if (editorPageItems.length === 0) {
+      if (viewPageIndex !== null) setViewPageIndex(null)
+      return
+    }
+    if (viewPageIndex !== null && !editorPageItems.some((page) => page.pageIndex === viewPageIndex)) {
+      setViewPageIndex(editorPageItems[0].pageIndex)
+    }
+  }, [editorPageItems, viewPageIndex])
+
   const requestInlineEditPageFollow = useCallback((pageIndex: number) => {
     const pageKey = findEditorPageKeyByPageIndex(paginatedRef.current, pageIndex)
     if (!pageKey) return
@@ -1589,8 +1496,11 @@ export default function EditorShell() {
   useEffect(() => {
     if (initialTestScenario) return
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+    setLocalSaveStatus("saving")
     saveTimeoutRef.current = setTimeout(() => {
       saveToStorage(getPersistableDocumentSnapshot(), packageFieldRegistry, dataSnapshot)
+      saveTimeoutRef.current = null
+      setLocalSaveStatus("saved")
     }, 500)
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1612,6 +1522,7 @@ export default function EditorShell() {
         saveTimeoutRef.current = null
       }
       saveToStorage(getPersistableDocumentSnapshot(), packageFieldRegistryRef.current, dataSnapshotRef.current)
+      setLocalSaveStatus("saved")
     }
     const flushWhenHidden = () => {
       if (document.visibilityState === "hidden") flushDraftToStorage()
@@ -2818,13 +2729,7 @@ export default function EditorShell() {
 
   const fieldCount = packageFieldRegistry.fields.length
   const fillIssueCount = dataReadiness.issues.length
-  const workflowNavItems: Array<{
-    mode: WorkflowMode
-    label: string
-    description: string
-    icon: string
-    badge?: string
-  }> = [
+  const workflowNavItems: EditorWorkflowNavItem[] = [
       { mode: "design", label: "Design", description: "Outline / layout", icon: "D" },
       { mode: "fields", label: "Fields", description: "Variables", icon: "{}", badge: fieldCount > 0 ? String(fieldCount) : undefined },
       { mode: "fill", label: "Fill", description: "Data entry", icon: "F", badge: fillIssueCount > 0 ? String(fillIssueCount) : undefined },
@@ -2876,233 +2781,38 @@ export default function EditorShell() {
         {wysiwygTextAccessibilityStatus ?? ""}
       </div>
       {/* Toolbar */}
-      <div data-testid="editor-toolbar" style={toolbarShellStyle}>
-        <div data-testid="editor-workflow-bar" style={workflowBarStyle}>
-          <span style={{ fontSize: 13, fontWeight: "bold", color: "#111827", flexShrink: 0 }}>FlowDoc Editor</span>
-          <div data-testid="editor-workflow-nav" style={workflowNavStyle}>
-            {workflowNavItems.map((item) => {
-              const active = workflowMode === item.mode
-              return (
-                <button
-                  key={item.mode}
-                  type="button"
-                  data-testid={`editor-workflow-${item.mode}`}
-                  aria-pressed={active}
-                  title={`${item.label}: ${item.description}`}
-                  onClick={() => activateWorkflowMode(item.mode)}
-                  style={workflowNavButton(active)}
-                >
-                  <span style={workflowNavIcon(active)}>{item.icon}</span>
-                  <span style={workflowNavText}>
-                    <span style={workflowNavTitle}>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
-                      {item.badge && <span style={workflowNavBadge}>{item.badge}</span>}
-                    </span>
-                    <span style={workflowNavDescription}>{item.description}</span>
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", minHeight: 24, minWidth: 0 }}>
-            <div
-              data-testid="editor-status-region"
-              style={{
-                width: 430,
-                maxWidth: "34vw",
-                minWidth: 160,
-                minHeight: 20,
-                display: "flex",
-                gap: 6,
-                alignItems: "center",
-                justifyContent: "flex-end",
-                overflow: "hidden",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {fontFallback && (
-                <span data-testid="font-fallback-status" title="Server is using Helvetica fallback — Thai text layout may be incorrect" style={{ fontSize: 10, color: "#d97706", cursor: "help", flexShrink: 0 }}>
-                  ⚠ fallback font
-                </span>
-              )}
-              {editorTextMeasurerStatus === "loading" && (
-                <span data-testid="browser-font-loading-status" title="Browser font metrics are still loading; preview may settle again shortly" style={{ fontSize: 10, color: "#64748b", cursor: "help", flexShrink: 0 }}>
-                  font loading
-                </span>
-              )}
-              {editorTextMeasurerStatus === "fallback" && !fontFallback && (
-                <span data-testid="browser-font-fallback-status" title="Browser preview is using fallback text metrics; server/export pagination remains authoritative" style={{ fontSize: 10, color: "#d97706", cursor: "help", flexShrink: 0 }}>
-                  ⚠ browser font
-                </span>
-              )}
-              {layoutError && (
-                <span data-testid="layout-error-badge" title="Server pagination failed — editor is showing browser preview only" style={{ fontSize: 10, color: "#dc2626", cursor: "help", flexShrink: 0 }}>
-                  ⚠ layout error
-                </span>
-              )}
-              {authoritativeLayoutWarnings.length > 0 && (
-                <span
-                  data-testid="layout-warning-status"
-                  title={authoritativeLayoutWarnings.map((warning) => `${layoutWarningSource} ${warning.count} ${warning.message}`).join("; ")}
-                  style={{ fontSize: 10, color: "#d97706", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                >
-                  layout warning: {layoutWarningSource} {authoritativeLayoutWarnings[0].message}
-                </span>
-              )}
-              {exportError && (
-                <span data-testid="export-error" title={exportError} style={{ fontSize: 10, color: "#dc2626", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {exportError}
-                </span>
-              )}
-              {exportReadinessStatusReason && !exportError && (
-                <span
-                  data-testid="export-readiness-status"
-                  title={exportReadinessMessage ?? undefined}
-                  style={{ fontSize: 10, color: "#d97706", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                >
-                  export blocked: {exportReadinessStatusReason}
-                </span>
-              )}
-              {documentIoStatus && (
-                <span
-                  data-testid="document-io-status"
-                  title={documentIoStatus.message}
-                  style={{
-                    fontSize: 10,
-                    color: documentIoStatus.type === "error" ? "#dc2626" : "#2563eb",
-                    maxWidth: 220,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {documentIoStatus.message}
-                </span>
-              )}
-              {state.drag && (
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: "#6b7280",
-                    maxWidth: 220,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  dragging {describeDragSource(state.drag.source)} — Esc to cancel
-                </span>
-              )}
-            </div>
-            {(["pdf", "docx"] as const).map((fmt) => {
-              const disabled = isExporting || !exportReadiness.canExport
-              return (
-                <button
-                  key={fmt}
-                  disabled={disabled}
-                  onClick={() => handleExport(fmt)}
-                  title={!exportReadiness.canExport && exportReadinessMessage ? `Export blocked: ${exportReadinessMessage}` : undefined}
-                  style={{ padding: "4px 10px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: disabled ? "#f9fafb" : "white", color: disabled ? "#9ca3af" : "#374151" }}
-                >
-                  {isExporting ? "…" : `Export ${fmt.toUpperCase()}`}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        <div data-testid="editor-command-bar" style={commandBarStyle}>
-          <div style={toolbarGroupStyle}>
-            {(["Undo", "Redo"] as const).map((label) => {
-              const isUndo = label === "Undo"
-              const disabled = !isTemplateMode || (isUndo ? state.past.length === 0 : state.future.length === 0)
-              return (
-                <button key={label} disabled={disabled}
-                  onClick={isUndo ? handleUndo : handleRedo}
-                  title={`${label} (${isUndo ? "Ctrl+Z" : "Ctrl+Y"})`}
-                  style={{ padding: "4px 8px", fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: disabled ? "#d1d5db" : "#374151" }}>
-                  {label}
-                </button>
-              )
-            })}
-          </div>
-
-          <div style={toolbarSeparatorStyle} />
-
-          <div style={toolbarGroupStyle}>
-            <button
-              onClick={zoomOut}
-              title="Zoom out (Ctrl+-)"
-              disabled={scale <= MIN_SCALE + 0.001}
-              style={{ width: 26, height: 24, fontSize: 13, cursor: scale <= MIN_SCALE + 0.001 ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: scale <= MIN_SCALE + 0.001 ? "#d1d5db" : "#374151" }}
-            >
-              -
-            </button>
-            <button
-              onClick={resetZoom}
-              title="Reset zoom to 100% (Ctrl+0)"
-              style={{ minWidth: 46, height: 24, padding: "0 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: zoomMode === "manual" ? "#f3f4f6" : "white", color: "#374151" }}
-            >
-              {Math.round(scale * 100)}%
-            </button>
-            <button
-              onClick={zoomIn}
-              title="Zoom in (Ctrl++)"
-              disabled={scale >= MAX_SCALE - 0.001}
-              style={{ width: 26, height: 24, fontSize: 13, cursor: scale >= MAX_SCALE - 0.001 ? "not-allowed" : "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: scale >= MAX_SCALE - 0.001 ? "#d1d5db" : "#374151" }}
-            >
-              +
-            </button>
-            <button
-              onClick={fitZoom}
-              title="Fit page width"
-              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: zoomMode === "fit" ? "#dbeafe" : "white", color: zoomMode === "fit" ? "#1d4ed8" : "#374151", fontWeight: zoomMode === "fit" ? "bold" : "normal" }}
-            >
-              Fit
-            </button>
-          </div>
-
-          <div style={toolbarSeparatorStyle} />
-
-          <div style={toolbarGroupStyle}>
-            <button
-              onClick={() => setShowTextSegments((value) => !value)}
-              title="Toggle text segment overlay"
-              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: showTextSegments ? "#dcfce7" : "white", color: showTextSegments ? "#166534" : "#374151" }}
-            >
-              Segments
-            </button>
-            <button
-              onClick={() => setShowDrift((value) => !value)}
-              title="Toggle layout drift overlay (browser vs server pagination)"
-              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: showDrift ? "#fff7ed" : "white", color: showDrift ? "#c2410c" : "#374151" }}
-            >
-              {showDrift && driftReport && driftReport.driftCount > 0
-                ? `Drift ${driftReport.driftCount}/${driftReport.totalParagraphs}`
-                : "Drift"}
-            </button>
-          </div>
-
-          <div style={toolbarSeparatorStyle} />
-
-          <div style={toolbarGroupStyle}>
-            <button onClick={handleNewDocument}
-              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
-              New
-            </button>
-            <button onClick={() => importRef.current?.click()}
-              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
-              Open…
-            </button>
-            <input ref={importRef} type="file" accept=".flowdoc.json,.json,application/json" style={{ display: "none" }} onChange={handleImportJson} />
-            <button onClick={handleExportJson}
-              style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: "white", color: "#374151" }}>
-              Save JSON
-            </button>
-          </div>
-        </div>
-
+      <EditorToolbar
+        workflowMode={workflowMode}
+        workflowNavItems={workflowNavItems}
+        onActivateWorkflowMode={activateWorkflowMode}
+        fontFallback={fontFallback}
+        editorTextMeasurerStatus={editorTextMeasurerStatus}
+        layoutError={layoutError}
+        authoritativeLayoutWarnings={authoritativeLayoutWarnings}
+        layoutWarningSource={layoutWarningSource}
+        exportError={exportError}
+        exportReadinessStatusReason={exportReadinessStatusReason}
+        exportReadinessMessage={exportReadinessMessage}
+        documentIoStatus={documentIoStatus}
+        dragStatusLabel={state.drag ? `dragging ${describeDragSource(state.drag.source)} — Esc to cancel` : null}
+        isExporting={isExporting}
+        canExport={exportReadiness.canExport}
+        onExport={handleExport}
+        canUndo={isTemplateMode && state.past.length > 0}
+        canRedo={isTemplateMode && state.future.length > 0}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        showTextSegments={showTextSegments}
+        onToggleTextSegments={() => setShowTextSegments((value) => !value)}
+        showDrift={showDrift}
+        driftCount={driftReport?.driftCount ?? null}
+        driftTotalParagraphs={driftReport?.totalParagraphs ?? null}
+        onToggleDrift={() => setShowDrift((value) => !value)}
+        importRef={importRef}
+        onNewDocument={handleNewDocument}
+        onImportJson={handleImportJson}
+        onExportJson={handleExportJson}
+      >
         {isTemplateMode && (
           <RichTextToolbar
             doc={state.doc}
@@ -3134,135 +2844,119 @@ export default function EditorShell() {
             }}
           />
         )}
-      </div>
+      </EditorToolbar>
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <div data-testid="editor-left-rail" data-mode={leftRailMode} style={leftRailShellStyle}>
-          <div data-testid="editor-left-rail-sidebar" style={leftRailSidebarStyle}>
-            <div data-testid="editor-left-rail-mode-bookmarks" style={rightRailBookmarkGroup}>
-              <button
-                type="button"
-                data-testid="editor-left-rail-mode-outline"
-                aria-label="Show outline"
-                aria-pressed={leftRailMode === "outline"}
-                title="Outline"
-                onClick={() => setLeftRailMode("outline")}
-                style={rightRailBookmarkButton(leftRailMode === "outline")}
-              >
-                O
-              </button>
-              <button
-                type="button"
-                data-testid="editor-left-rail-mode-add"
-                aria-label="Show add"
-                aria-pressed={leftRailMode === "add"}
-                title="Add"
-                onClick={() => setLeftRailMode("add")}
-                style={rightRailBookmarkButton(leftRailMode === "add", 28, 14)}
-              >
-                +
-              </button>
+        <EditorLeftRail
+          mode={leftRailMode}
+          outlineDoc={isTemplateMode ? state.doc : previewDoc}
+          selectedNodeId={state.selectedNodeId}
+          registry={packageFieldRegistry}
+          editable={isTemplateMode}
+          isDragging={!!state.drag}
+          onModeChange={setLeftRailMode}
+          onSelectNode={(nodeId) => {
+            dispatch({ type: "SELECT_NODE", nodeId })
+            setRightRailMode("properties")
+          }}
+          onReorderBodyChild={(request) => {
+            finalizeInlineEditBeforeAction()
+            dispatch({ type: "REORDER_BODY_CHILD", ...request })
+            setRightRailMode("properties")
+          }}
+          onDragStart={startPaletteDrag}
+        />
+        <EditorCanvasColumn
+          saveStatusLabel={localSaveStatusLabel}
+          saveStatusTone={localSaveStatusTone}
+          sectionLabel={canvasSectionLabel}
+          contextLabel={selectedContextLabel}
+          pageItems={editorPageItems}
+          currentPageIndex={currentCanvasPageIndex}
+          scale={scale}
+          minScale={MIN_SCALE}
+          maxScale={MAX_SCALE}
+          zoomMode={zoomMode}
+          showPageThumbnails={showPageThumbnails}
+          onTogglePageThumbnails={() => setShowPageThumbnails((value) => !value)}
+          onJumpToPage={jumpToEditorPage}
+          onScaleChange={setManualScale}
+          onResetZoom={resetZoom}
+          onFitZoom={fitZoom}
+        >
+          {isInitialLayoutPreparing ? (
+            <div
+              data-testid="initial-layout-loading"
+              aria-live="polite"
+              style={{ flex: 1, display: "grid", placeItems: "center", overflow: "auto", padding: 24, background: "#f3f4f6", color: "#6b7280", fontSize: 12 }}
+            >
+              Preparing layout...
             </div>
-          </div>
-          <div data-testid="editor-left-rail-content" style={leftRailContentStyle}>
-            {leftRailMode === "outline" ? (
-              <OutlinePanel
-                doc={isTemplateMode ? state.doc : previewDoc}
+          ) : (
+            <EditorCanvasPerfProfiler
+              enabled={wysiwygPerfTraceActive}
+              onRender={handleEditorCanvasProfilerRender}
+            >
+              <EditorCanvas
+                paginated={state.paginated}
+                doc={previewDoc}
+                drag={isTemplateMode ? state.drag : null}
+                scale={scale}
                 selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
-                onAddShortcut={isTemplateMode ? () => setLeftRailMode("add") : undefined}
-                onSelect={(nodeId) => {
-                  if (!isTemplateMode) return
-                  dispatch({ type: "SELECT_NODE", nodeId })
-                  setRightRailMode("properties")
-                }}
-                onReorderBodyChild={isTemplateMode ? (request) => {
-                  finalizeInlineEditBeforeAction()
-                  dispatch({ type: "REORDER_BODY_CHILD", ...request })
-                  setRightRailMode("properties")
-                } : undefined}
+                selectionAnchorNodeId={isTemplateMode ? state.selectionAnchorNodeId : null}
+                isLayoutLoading={showLayoutLoadingOverlay}
+                textMeasurer={editorTextMeasurer}
+                inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
+                inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
+                inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
+                inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
+                inlineEditVisualLocked={isTemplateMode ? inlineEditVisualLocked : false}
+                onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
+                onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
+                onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
+                onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
+                onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightPreviewChange : () => undefined}
+                onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
+                onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
+                onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
+                setPageRef={setPageRef}
+                onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
+                onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
+                onSelectContextNode={isTemplateMode ? selectContextNode : () => undefined}
+                onDuplicateNode={isTemplateMode ? duplicateNodeFromCanvas : () => undefined}
+                onDeleteNode={isTemplateMode ? deleteNodeFromCanvas : () => undefined}
+                onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
+                onTableColumnResizeStart={isTemplateMode ? handleTableColumnResizeStart : () => undefined}
+                resizeDrag={isTemplateMode ? resizeDrag : null}
+                minHeightDrag={isTemplateMode ? minHeightDrag : null}
+                onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
+                marginDrag={isTemplateMode ? marginDrag : null}
+                onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
+                onScaleChange={handleCanvasScaleChange}
+                autoFitScale={zoomMode === "fit"}
+                showTextSegments={showTextSegments}
+                showDrift={showDrift}
+                driftMap={driftReport?.driftMap ?? null}
+                wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
+                wysiwygTextEngineEnabled={WYSIWYG_TEXT_ENGINE_ENABLED}
+                wysiwygTextDraftNodeId={wysiwygTextSessionState.nodeId}
+                wysiwygTextDraftText={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.draftText : null}
+                wysiwygTextDraftParagraph={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+                  richWysiwygDraftSessionState.nodeId === wysiwygTextSessionState.nodeId
+                  ? richWysiwygDraftSessionState.draft?.paragraph ?? null
+                  : null}
+                wysiwygTextDraftDirtyVersion={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.dirtyVersion : 0}
+                wysiwygTextCaretOffset={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.caretOffset : null}
+                wysiwygTextSelection={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
+                wysiwygTextDraftPaginationActive={wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
+                onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
+                onWysiwygRichTextShortcut={handleWysiwygRichTextShortcut}
+                onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
               />
-            ) : (
-              <AddPanel
-                registry={packageFieldRegistry}
-                editable={isTemplateMode}
-                onDragStart={startPaletteDrag}
-                isDragging={!!state.drag}
-              />
-            )}
-          </div>
-        </div>
-        {isInitialLayoutPreparing ? (
-          <div
-            data-testid="initial-layout-loading"
-            aria-live="polite"
-            style={{ flex: 1, display: "grid", placeItems: "center", overflow: "auto", padding: 24, background: "#f3f4f6", color: "#6b7280", fontSize: 12 }}
-          >
-            Preparing layout...
-          </div>
-        ) : (
-          <EditorCanvasPerfProfiler
-            enabled={wysiwygPerfTraceActive}
-            onRender={handleEditorCanvasProfilerRender}
-          >
-            <EditorCanvas
-              paginated={state.paginated}
-              doc={previewDoc}
-              drag={isTemplateMode ? state.drag : null}
-              scale={scale}
-              selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
-              selectionAnchorNodeId={isTemplateMode ? state.selectionAnchorNodeId : null}
-              isLayoutLoading={showLayoutLoadingOverlay}
-              textMeasurer={editorTextMeasurer}
-              inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
-              inlineEditNodeId={isTemplateMode ? inlineEditNodeId : null}
-              inlineEditCaretIndex={isTemplateMode ? inlineEditCaretIndex : null}
-              inlineEditPageIndex={isTemplateMode ? inlineEditPageIndex : null}
-              inlineEditVisualLocked={isTemplateMode ? inlineEditVisualLocked : false}
-              onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
-              onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
-              onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
-              onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
-              onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightPreviewChange : () => undefined}
-              onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
-              onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
-              onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
-              setPageRef={setPageRef}
-              onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
-              onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
-              onSelectContextNode={isTemplateMode ? selectContextNode : () => undefined}
-              onDuplicateNode={isTemplateMode ? duplicateNodeFromCanvas : () => undefined}
-              onDeleteNode={isTemplateMode ? deleteNodeFromCanvas : () => undefined}
-              onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
-              onTableColumnResizeStart={isTemplateMode ? handleTableColumnResizeStart : () => undefined}
-              resizeDrag={isTemplateMode ? resizeDrag : null}
-              minHeightDrag={isTemplateMode ? minHeightDrag : null}
-              onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
-              marginDrag={isTemplateMode ? marginDrag : null}
-              onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
-              onScaleChange={handleCanvasScaleChange}
-              autoFitScale={zoomMode === "fit"}
-              showTextSegments={showTextSegments}
-              showDrift={showDrift}
-              driftMap={driftReport?.driftMap ?? null}
-              wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
-              wysiwygTextEngineEnabled={WYSIWYG_TEXT_ENGINE_ENABLED}
-              wysiwygTextDraftNodeId={wysiwygTextSessionState.nodeId}
-              wysiwygTextDraftText={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.draftText : null}
-              wysiwygTextDraftParagraph={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
-                richWysiwygDraftSessionState.nodeId === wysiwygTextSessionState.nodeId
-                ? richWysiwygDraftSessionState.draft?.paragraph ?? null
-                : null}
-              wysiwygTextDraftDirtyVersion={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.dirtyVersion : 0}
-              wysiwygTextCaretOffset={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.caretOffset : null}
-              wysiwygTextSelection={wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
-              wysiwygTextDraftPaginationActive={wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
-              onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
-              onWysiwygRichTextShortcut={handleWysiwygRichTextShortcut}
-              onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
-            />
-          </EditorCanvasPerfProfiler>
-        )}
+            </EditorCanvasPerfProfiler>
+          )}
+        </EditorCanvasColumn>
         <div
           data-testid="editor-right-rail"
           data-width={rightRailDisplayWidth}

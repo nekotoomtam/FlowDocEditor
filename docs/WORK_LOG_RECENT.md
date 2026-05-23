@@ -22,6 +22,99 @@ Each entry should include:
 
 ---
 
+## 2026-05-24
+
+### Bump Canvas View/PDF Thai Baseline To 0.6.8
+
+Goal: Record the accepted PDF Thai combining-mark parity, canvas-scoped bottom
+view bar, and conservative EditorShell extraction work as the next patch
+baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.7` to `0.6.8`.
+- Updated the lockfile root package version to match.
+- Updated the project version marker test to assert the accepted `0.6.8`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.8`.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- No git tag was created; project versions remain release-readiness markers.
+- This patch does not change `DocumentNode.version`, FlowDoc package version,
+  storage package version, pagination semantics, undo/redo, or export behavior.
+
+---
+
+### Add Canvas-Scoped Bottom View Bar
+
+Goal: Move document view controls into a bottom bar that belongs only to the
+center canvas, leaving the left and right rails independent.
+
+Completed:
+
+- Added a canvas-column wrapper so the bottom bar is scoped to the editor
+  viewport and does not span under the side rails.
+- Moved zoom view controls out of the top command bar into the bottom bar,
+  with a range slider, percent reset, and Fit command.
+- Added a page thumbnail filmstrip toggle from the bottom of the canvas, with
+  clickable miniature page entries.
+- Added bottom-left document status chips for local save state, active section,
+  and selected context.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/shell/EditorCanvasColumn.tsx`
+- `src/app/editor/_components/shell/EditorCanvasBottomBar.tsx`
+- `src/app/editor/_components/shell/editorCanvasNavigation.ts`
+- `src/app/editor/_components/shell/EditorToolbar.tsx`
+- `src/app/editor/_components/shell/EditorLeftRail.tsx`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run type-check`
+- Playwright browser check against `http://localhost:4000/editor`: verified the
+  bottom bar bounds match the canvas column, do not overlap the side rails,
+  thumbnail filmstrip opens with page entries, zoom slider updates the percent
+  control, and no layout error badge or browser errors appeared.
+
+Notes:
+
+- This patch intentionally does not change document schema, pagination,
+  undo/redo, export, inline editing, or sidebar behavior.
+- Page activity is based on the selected/edited/jumped page, not full
+  scroll-position tracking; scroll-derived active page highlighting remains a
+  possible later slice.
+- The first refactor slice extracts the canvas bottom bar and page-navigation
+  helpers out of `EditorShell` while preserving the same props and behavior.
+- The second refactor slice extracts the workflow/status/export/command toolbar
+  into `EditorToolbar`; `RichTextToolbar` remains in `EditorShell` ownership
+  because its callbacks are tied to rich draft and inline-edit lifecycle.
+- The third refactor slice extracts the left rail shell into `EditorLeftRail`,
+  preserving the previous fill-mode no-op selection behavior.
+
+---
+
 ## 2026-05-23
 
 ### Coalesce WYSIWYG Draft Sync For Smooth Typing
