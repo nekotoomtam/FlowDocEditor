@@ -53,3 +53,14 @@ export function scrollElementIntoNearestView(
     element.scrollIntoView()
   }
 }
+
+export function scrollElementIntoStartView(
+  element: { scrollIntoView: (options?: ScrollIntoViewOptions) => void } | null | undefined,
+): void {
+  if (!element) return
+  try {
+    element.scrollIntoView({ block: "start", inline: "nearest" })
+  } catch {
+    element.scrollIntoView()
+  }
+}

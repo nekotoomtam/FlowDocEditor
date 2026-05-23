@@ -115,6 +115,7 @@ import { resolvePersistableWysiwygDocument } from "./wysiwygDraftPersistence"
 import {
   findEditorPageKeyByPageIndex,
   scrollElementIntoNearestView,
+  scrollElementIntoStartView,
   shouldFollowInlineEditPageChange,
   shouldRelocateInlineEditPage,
 } from "./editorPageFollow"
@@ -842,7 +843,7 @@ export default function EditorShell() {
   const localSaveStatusTone = localSaveStatus === "saved" ? "success" : "neutral"
   const jumpToEditorPage = useCallback((page: EditorPageNavItem) => {
     setViewPageIndex(page.pageIndex)
-    scrollElementIntoNearestView(pageRefs.current.get(page.key))
+    scrollElementIntoStartView(pageRefs.current.get(page.key))
   }, [])
 
   useEffect(() => {

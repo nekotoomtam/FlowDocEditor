@@ -153,8 +153,18 @@ Paragraph box styling is defined in
   collapsed, the editor should draw the collapsed caret from paginated line
   geometry and hide the native textarea caret.
 - The active custom caret should blink while the editor focus remains in the
-  inline text session. A caret-only move must keep the SVG caret visible and
-  must not require document or pagination changes.
+  inline text session and the user is idle or only moving the caret. During
+  active text input, the caret may switch to a steady visible mode, then return
+  to the blinking idle mode shortly after input stops. A caret-only move must
+  keep the SVG caret visible and must not require document or pagination
+  changes.
+- During active WYSIWYG table-cell edits, draft reflow or page-boundary
+  continuation may scroll the editor canvas just enough to keep the SVG caret
+  visible. This is viewport-only editor state and must not mutate document
+  content, pagination semantics, history, PDF, or DOCX export.
+- Table-cell WYSIWYG edits should not draw the unwrapped live-echo caret over
+  responsive pagination results; once table geometry owns the active lines, the
+  visible caret should come from the mapped paginated line geometry.
 - In the FlowDoc-owned text-engine lane, printable Space input must insert a
   literal U+0020 space whether the browser reports the key as `" "`, `Space`,
   or `Spacebar`.

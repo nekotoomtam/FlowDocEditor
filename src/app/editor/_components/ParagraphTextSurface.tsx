@@ -109,10 +109,13 @@ export interface InlineEditVisualMode {
   textareaOutlineOffset: number
 }
 
+export type WysiwygCaretVisualMode = "idle" | "typing"
+
 const EDIT_CHROME_X = 3
 const EDIT_CHROME_Y = 3
 const INLINE_EDIT_TEXT_COLOR = "#1e40af"
 const WYSIWYG_CARET_BLINK_DURATION = "1.05s"
+const WYSIWYG_TYPING_CARET_HOLD_MS = 650
 const WYSIWYG_TEXT_BLUR_SETTLE_MS = 32
 const POINTER_SELECTION_DRAG_THRESHOLD_PX = 3
 const SVG_TEXT_PRESERVE_WHITESPACE_STYLE: React.CSSProperties = {
@@ -621,7 +624,8 @@ function renderSegmentDebug(
   }) ?? null
 }
 
-function renderCaretBlinkAnimation() {
+function renderCaretBlinkAnimation(caretVisualMode: WysiwygCaretVisualMode) {
+  if (caretVisualMode === "typing") return null
   return (
     <animate
       data-wysiwyg-caret-blink="true"
@@ -640,6 +644,7 @@ function renderCollapsedCaretOverlay(
   scale: number,
   overlay: WysiwygCollapsedCaretOverlay | null,
   clipPathId?: string,
+  caretVisualMode: WysiwygCaretVisualMode = "idle",
 ) {
   if (!overlay) return null
 
@@ -647,6 +652,7 @@ function renderCollapsedCaretOverlay(
     <line
       key={`caret-${fragment.nodeId}-${overlay.offset}`}
       data-wysiwyg-caret="true"
+      data-wysiwyg-caret-mode={caretVisualMode}
       x1={overlay.x1 * scale}
       y1={overlay.y1 * scale}
       x2={overlay.x2 * scale}
@@ -657,7 +663,7 @@ function renderCollapsedCaretOverlay(
       clipPath={`url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`}
       style={{ pointerEvents: "none" }}
     >
-      {renderCaretBlinkAnimation()}
+      {renderCaretBlinkAnimation(caretVisualMode)}
     </line>
   )
 }
@@ -669,10 +675,11 @@ function renderCollapsedCaret(
   caretIndex: number | null,
   textMeasurer: TextMeasurer | undefined,
   clipPathId?: string,
+  caretVisualMode: WysiwygCaretVisualMode = "idle",
 ) {
   if (caretIndex == null) return null
   const overlay = resolveCollapsedCaretOverlayInFragment(fragment, caretIndex, { textMeasurer })
-  return renderCollapsedCaretOverlay(fragment, pageKey, scale, overlay, clipPathId)
+  return renderCollapsedCaretOverlay(fragment, pageKey, scale, overlay, clipPathId, caretVisualMode)
 }
 
 export function resolveTrailingWhitespaceCaretOverlayInFragment(input: {
@@ -1157,6 +1164,45 @@ export function resolvePointerSelectionWheelScrollDelta(input: {
   }
 }
 
+export interface WysiwygCaretFollowScrollRect {
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+export function resolveWysiwygCaretFollowScrollDelta(input: {
+  caretRect: WysiwygCaretFollowScrollRect
+  viewportRect: WysiwygCaretFollowScrollRect
+  margin?: number
+}): { left: number; top: number } {
+  const viewportWidth = Math.max(0, input.viewportRect.right - input.viewportRect.left)
+  const viewportHeight = Math.max(0, input.viewportRect.bottom - input.viewportRect.top)
+  const margin = Math.max(0, input.margin ?? 24)
+  const horizontalMargin = Math.min(margin, viewportWidth / 2)
+  const verticalMargin = Math.min(margin, viewportHeight / 2)
+  const leftLimit = input.viewportRect.left + horizontalMargin
+  const rightLimit = input.viewportRect.right - horizontalMargin
+  const topLimit = input.viewportRect.top + verticalMargin
+  const bottomLimit = input.viewportRect.bottom - verticalMargin
+  let left = 0
+  let top = 0
+
+  if (input.caretRect.left < leftLimit) {
+    left = input.caretRect.left - leftLimit
+  } else if (input.caretRect.right > rightLimit) {
+    left = input.caretRect.right - rightLimit
+  }
+
+  if (input.caretRect.top < topLimit) {
+    top = input.caretRect.top - topLimit
+  } else if (input.caretRect.bottom > bottomLimit) {
+    top = input.caretRect.bottom - bottomLimit
+  }
+
+  return { left, top }
+}
+
 function scrollEditorCanvasByPointerSelectionWheel(input: {
   deltaX: number
   deltaY: number
@@ -1177,6 +1223,29 @@ function scrollEditorCanvasByPointerSelectionWheel(input: {
     canvas.scrollTop += delta.top
   }
   return true
+}
+
+function scrollWysiwygCaretIntoEditorCanvas(caret: Element | null): boolean {
+  if (typeof document === "undefined" || !caret) return false
+  const canvas = document.querySelector<HTMLElement>('[data-testid="editor-canvas"]')
+  if (!canvas) return false
+  const delta = resolveWysiwygCaretFollowScrollDelta({
+    caretRect: caret.getBoundingClientRect(),
+    viewportRect: canvas.getBoundingClientRect(),
+  })
+  if (delta.left === 0 && delta.top === 0) return false
+  if (typeof canvas.scrollBy === "function") {
+    canvas.scrollBy({ left: delta.left, top: delta.top, behavior: "auto" })
+  } else {
+    canvas.scrollLeft += delta.left
+    canvas.scrollTop += delta.top
+  }
+  return true
+}
+
+function scrollActiveWysiwygCaretIntoEditorCanvas(layer: Element | null): boolean {
+  const caret = layer?.querySelector('[data-wysiwyg-live-caret="true"], [data-wysiwyg-caret="true"]') ?? null
+  return scrollWysiwygCaretIntoEditorCanvas(caret)
 }
 
 export function resolveWysiwygTextPointerOffsetFromFragmentTargets(input: {
@@ -1236,6 +1305,9 @@ interface WysiwygTextLayerProps {
   liveTextEcho?: WysiwygLiveTextEcho | null
   resolveImmediateDraftLayout?: (draftText: string) => WysiwygDraftParagraphLayout | null
   tableCellDraftVisualPreviewCandidate?: boolean
+  followCaretIntoView?: boolean
+  suppressLiveTextEcho?: boolean
+  caretVisualMode?: WysiwygCaretVisualMode
 }
 
 function measureLiveEchoTextWidth(
@@ -1262,6 +1334,7 @@ function renderLiveTextEcho(
   scale: number,
   textMeasurer: TextMeasurer | undefined,
   clipPathId?: string,
+  caretVisualMode: WysiwygCaretVisualMode = "idle",
 ): { content: React.ReactNode; caret: React.ReactNode } | null {
   if (!echo || echo.text.length === 0) return null
 
@@ -1328,6 +1401,7 @@ function renderLiveTextEcho(
       <line
         key={`live-caret-${fragment.nodeId}-${echo.anchorOffset}`}
         data-wysiwyg-live-caret="true"
+        data-wysiwyg-caret-mode={caretVisualMode}
         x1={caretX * scale}
         y1={caretY * scale}
         x2={caretX * scale}
@@ -1338,7 +1412,7 @@ function renderLiveTextEcho(
         clipPath={clip}
         style={{ pointerEvents: "none" }}
       >
-        {renderCaretBlinkAnimation()}
+        {renderCaretBlinkAnimation(caretVisualMode)}
       </line>
     ),
   }
@@ -1365,6 +1439,9 @@ export function WysiwygTextLayer({
   liveTextEcho,
   resolveImmediateDraftLayout,
   tableCellDraftVisualPreviewCandidate = false,
+  followCaretIntoView = false,
+  suppressLiveTextEcho = false,
+  caretVisualMode,
 }: WysiwygTextLayerProps) {
   const layerRef = useRef<SVGGElement | null>(null)
   const inputBridgeRef = useRef<HTMLDivElement | null>(null)
@@ -1379,7 +1456,9 @@ export function WysiwygTextLayer({
   const isComposingTextEngineRef = useRef(false)
   const suppressNextCompositionInputRef = useRef(false)
   const blurEndEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const typingCaretIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isPointerSelecting, setIsPointerSelecting] = useState(false)
+  const [localCaretVisualMode, setLocalCaretVisualMode] = useState<WysiwygCaretVisualMode>("idle")
   const [localPointerSelectionPreview, setLocalPointerSelectionPreviewState] = useState<WysiwygTextSelection | null>(null)
   const localPointerSelectionPreviewRef = useRef<WysiwygTextSelection | null>(null)
   const [immediateTextEcho, setImmediateTextEcho] = useState<WysiwygImmediateTextEcho | null>(null)
@@ -1436,21 +1515,28 @@ export function WysiwygTextLayer({
     for (const target of pointerFragments) addTarget(target)
     return targets
   }, [pageKey, pointerFragments, visualFragment])
-  const liveEchoVisual = useMemo(() => renderLiveTextEcho(
-    visualFragment,
-    liveTextEcho,
-    renderProps,
-    pageKey,
-    scale,
-    textMeasurer,
-    clipPathId,
-  ), [clipPathId, liveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
+  const activeCaretVisualMode = caretVisualMode ?? localCaretVisualMode
+  const liveEchoVisual = useMemo(() => (
+    suppressLiveTextEcho
+      ? null
+      : renderLiveTextEcho(
+        visualFragment,
+        liveTextEcho,
+        renderProps,
+        pageKey,
+        scale,
+        textMeasurer,
+        clipPathId,
+        activeCaretVisualMode,
+      )
+  ), [activeCaretVisualMode, clipPathId, liveTextEcho, pageKey, renderProps, scale, suppressLiveTextEcho, textMeasurer, visualFragment])
   const immediateLiveTextEcho = useMemo(() => {
+    if (suppressLiveTextEcho) return null
     if (activeImmediateDraftLayout) return null
     if (!immediateTextEcho) return null
     if (immediateTextEcho.draftText === (draftText ?? "") && (lines != null || liveTextEcho != null)) return null
     return resolveWysiwygLiveTextEcho(immediateTextEcho.baseText, immediateTextEcho.draftText)
-  }, [activeImmediateDraftLayout, draftText, immediateTextEcho, lines, liveTextEcho])
+  }, [activeImmediateDraftLayout, draftText, immediateTextEcho, lines, liveTextEcho, suppressLiveTextEcho])
   const immediateLiveEchoVisual = useMemo(() => renderLiveTextEcho(
     visualFragment,
     immediateLiveTextEcho,
@@ -1459,7 +1545,8 @@ export function WysiwygTextLayer({
     scale,
     textMeasurer,
     clipPathId,
-  ), [clipPathId, immediateLiveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
+    activeCaretVisualMode,
+  ), [activeCaretVisualMode, clipPathId, immediateLiveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
   const activeLiveEchoVisual = activeImmediateDraftLayout
     ? null
     : liveEchoVisual ?? immediateLiveEchoVisual
@@ -1573,6 +1660,10 @@ export function WysiwygTextLayer({
       clearTimeout(blurEndEditTimerRef.current)
       blurEndEditTimerRef.current = null
     }
+    if (typingCaretIdleTimerRef.current) {
+      clearTimeout(typingCaretIdleTimerRef.current)
+      typingCaretIdleTimerRef.current = null
+    }
   }, [])
 
   useEffect(() => () => {
@@ -1599,6 +1690,15 @@ export function WysiwygTextLayer({
 
   const clearInputBridgeText = useCallback((input: HTMLElement | null = inputBridgeRef.current) => {
     if (input) input.textContent = ""
+  }, [])
+
+  const markTypingCaretActive = useCallback(() => {
+    if (typingCaretIdleTimerRef.current) clearTimeout(typingCaretIdleTimerRef.current)
+    setLocalCaretVisualMode("typing")
+    typingCaretIdleTimerRef.current = setTimeout(() => {
+      typingCaretIdleTimerRef.current = null
+      setLocalCaretVisualMode("idle")
+    }, WYSIWYG_TYPING_CARET_HOLD_MS)
   }, [])
 
   const isCompositionBridgeInput = useCallback((event: InputEvent) => (
@@ -1696,8 +1796,9 @@ export function WysiwygTextLayer({
       caretOffset: nextCaretOffset,
       selection: nextSelection,
     }, { defer: textChanged })
+    if (textChanged) markTypingCaretActive()
     return true
-  }, [draftText, onDraftChange, resolveImmediateDraftLayout, scheduleDraftSync])
+  }, [draftText, markTypingCaretActive, onDraftChange, resolveImmediateDraftLayout, scheduleDraftSync])
 
   const applyTextInput = useCallback((insertedText: string) => {
     if (!insertedText || !onDraftChange) return false
@@ -2306,6 +2407,49 @@ export function WysiwygTextLayer({
       draftText: draftStateRef.current.text,
       textMeasurer,
     })
+  const caretFollowKey = useMemo(() => [
+    activeCaretIndex ?? "x",
+    activeCaretVisualMode,
+    draftText?.length ?? 0,
+    immediateTextEcho?.draftText.length ?? 0,
+    immediateDraftLayout?.draftText.length ?? 0,
+    visualFragment.pageIndex,
+    visualFragment.fragmentIndex ?? "x",
+    visualFragment.lineStart ?? "x",
+    visualFragment.lineEnd ?? "x",
+    visualFragment.height,
+    visualFragment.lines?.length ?? 0,
+    reflowKind ?? "x",
+    activeImmediateDraftLayout ? "immediate" : "settled",
+    activeLiveEchoVisual?.caret ? "live" : "mapped",
+  ].join(":"), [
+    activeCaretIndex,
+    activeCaretVisualMode,
+    activeImmediateDraftLayout,
+    activeLiveEchoVisual?.caret,
+    draftText?.length,
+    immediateDraftLayout?.draftText.length,
+    immediateTextEcho?.draftText.length,
+    reflowKind,
+    visualFragment.fragmentIndex,
+    visualFragment.height,
+    visualFragment.lineEnd,
+    visualFragment.lineStart,
+    visualFragment.lines?.length,
+    visualFragment.pageIndex,
+  ])
+
+  useEffect(() => {
+    if (!followCaretIntoView) return
+    if (typeof requestAnimationFrame !== "function") {
+      scrollActiveWysiwygCaretIntoEditorCanvas(layerRef.current)
+      return
+    }
+    const frame = requestAnimationFrame(() => {
+      scrollActiveWysiwygCaretIntoEditorCanvas(layerRef.current)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [caretFollowKey, followCaretIntoView])
 
   const pointerSelectionOverlay = isPointerSelecting && typeof document !== "undefined"
     ? createPortal(
@@ -2356,10 +2500,12 @@ export function WysiwygTextLayer({
         data-wysiwyg-text-engine-layer="true"
         data-wysiwyg-pointer-fragment-count={pointerFragmentTargets.length}
         data-wysiwyg-reflow-kind={reflowKind}
+        data-wysiwyg-caret-mode={activeCaretVisualMode}
         data-wysiwyg-line-count={visualFragment.lines?.length ?? 0}
         data-wysiwyg-immediate-draft-layout={activeImmediateDraftLayout ? "true" : undefined}
         data-wysiwyg-local-selection-preview={localPointerSelectionPreview ? "true" : undefined}
         data-wysiwyg-table-cell-preview-candidate={tableCellDraftVisualPreviewCandidate ? "true" : undefined}
+        data-wysiwyg-live-echo-suppressed={suppressLiveTextEcho ? "true" : undefined}
         data-inline-edit-node-id={fragment.nodeId}
         data-inline-edit-visual-mode="text-engine"
         tabIndex={0}
@@ -2422,8 +2568,8 @@ export function WysiwygTextLayer({
       {activeLiveEchoVisual?.content}
       {showTextSegments && renderSegmentDebug(visualFragment.lines, visualFragment, renderProps, scale)}
       {activeLiveEchoVisual?.caret ??
-        renderCollapsedCaretOverlay(visualFragment, pageKey, scale, trailingWhitespaceCaretOverlay, clipPathId) ??
-        renderCollapsedCaret(visualFragment, pageKey, scale, activeCaretIndex, textMeasurer, clipPathId)}
+        renderCollapsedCaretOverlay(visualFragment, pageKey, scale, trailingWhitespaceCaretOverlay, clipPathId, activeCaretVisualMode) ??
+        renderCollapsedCaret(visualFragment, pageKey, scale, activeCaretIndex, textMeasurer, clipPathId, activeCaretVisualMode)}
       </g>
     </>
   )
@@ -2783,6 +2929,8 @@ export function ParagraphTextSurface({
           liveTextEcho={textEngineLiveTextEcho}
           resolveImmediateDraftLayout={resolveTextEngineImmediateDraftLayout}
           tableCellDraftVisualPreviewCandidate={tableCellDraftVisualPreviewCandidate}
+          followCaretIntoView={isTableCellParagraph}
+          suppressLiveTextEcho={isTableCellParagraph}
         />
       )
     }

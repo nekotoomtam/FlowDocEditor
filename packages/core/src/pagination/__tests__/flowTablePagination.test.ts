@@ -13,7 +13,7 @@ const PAGE = {
   margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
 }
 
-function makePara(id: string, text = "Flow table cell"): ParagraphNode {
+function makePara(id: string, text = "Flow table cell", overrides: Partial<ParagraphNode["props"]> = {}): ParagraphNode {
   return {
     id,
     type: "paragraph",
@@ -27,6 +27,7 @@ function makePara(id: string, text = "Flow table cell"): ParagraphNode {
       textIndent: pt(0),
       indentLeft: pt(0),
       indentRight: pt(0),
+      ...overrides,
     },
     children: [{ id: `${id}-text`, type: "text", text }],
   }
@@ -329,6 +330,51 @@ describe("flow-table static pagination", () => {
       fragment.flowTableCellGridProps.rowspan === 1,
     )).toBe(true)
     expectContiguousLineFragments(paragraphFragments, lineCount)
+  })
+
+  it("keeps split flow-table row and cell fragments tall enough for their content", () => {
+    const before = makeSpacer("before", 402)
+    const p1 = makePara("p1", makeLines("Long", 25), { spacingAfter: pt(6) })
+    const c1 = makeCell("c1", [p1.id])
+    const r1 = makeRow("r1", [c1.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(220) }],
+      rowIds: [r1.id],
+      nodes: { r1, c1, p1 },
+    }
+    const doc = makeDoc([before.id, table.id], {
+      [before.id]: before,
+      [table.id]: table as unknown as LayoutNode,
+    })
+
+    assertDocument(doc)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const rowFragments = fragmentsFor(result, "r1", "flow-table-row")
+    const cellFragments = fragmentsFor(result, "c1", "flow-table-cell")
+    const paragraphFragments = fragmentsFor(result, "p1", "paragraph")
+    const firstRow = rowFragments[0]
+    const firstCell = cellFragments[0]
+    const firstParagraph = paragraphFragments[0]
+    const finalRow = rowFragments.at(-1)!
+    const finalCell = cellFragments.at(-1)!
+    const finalParagraph = paragraphFragments.at(-1)!
+    const firstParagraphBottom = firstParagraph.y + firstParagraph.height
+    const paragraphBottom = finalParagraph.y + finalParagraph.height
+
+    expect(rowFragments.length).toBeGreaterThan(1)
+    expect(firstRow.isContinued).toBe(true)
+    expect(finalRow.continuesFrom).toBe(true)
+    expect(firstCell.isContinued).toBe(true)
+    expect(finalCell.continuesFrom).toBe(true)
+    expect(firstRow.y + firstRow.height).toBe(firstParagraphBottom)
+    expect(firstCell.y + firstCell.height).toBe(firstParagraphBottom)
+    expect(finalRow.y + finalRow.height).toBeGreaterThanOrEqual(paragraphBottom)
+    expect(finalCell.y + finalCell.height).toBeGreaterThanOrEqual(paragraphBottom)
   })
 
   it("splits a breakable colspan-only flow-table cell across pages", () => {

@@ -275,7 +275,15 @@ Current implementation note:
   The same smoke runner also has a Flow Table colspan-only target gate for
   `stage3-flow-table-colspan-target`; it verifies `colspan>1,rowspan=1` keeps
   its wide cell chrome, splits through responsive draft pagination, and does not
-  duplicate the shorter sibling paragraph.
+  duplicate the shorter sibling paragraph. Active table-cell text-engine edits
+  may also scroll the editor canvas to keep the custom caret visible after
+  wrapping or page-boundary reflow; that caret-follow behavior is viewport-only
+  and does not change table pagination, document history, or export semantics.
+  Table-cell text-engine layers also suppress the unwrapped live-echo visual so
+  the active caret comes from mapped paginated line geometry while responsive
+  table pagination owns the wrapping. The WYSIWYG caret now has separate visual
+  modes: `typing` is steady and non-blinking during active text input, then
+  returns to the blinking `idle` mode shortly after input stops.
 - Row-stack paragraphs remain eligible for the text-engine lane, but they are
   guarded out of the body-paragraph live split preview. Heavy stack edits must
   preserve the current atomic row contract: the edited paragraph stays one

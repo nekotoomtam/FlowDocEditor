@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react"
-import type { EditorPageNavItem } from "./editorCanvasNavigation"
+import type { EditorPageNavItem, EditorPageThumbnailFragment } from "./editorCanvasNavigation"
 
 type SaveStatusTone = "neutral" | "success"
 type ZoomMode = "fit" | "manual"
@@ -149,9 +149,9 @@ const editorPageFilmstripStyle: CSSProperties = {
 }
 
 const editorPageThumbnailButtonStyle = (active: boolean): CSSProperties => ({
-  width: 82,
-  minWidth: 82,
-  height: 94,
+  width: 86,
+  minWidth: 86,
+  height: 98,
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
@@ -165,6 +165,26 @@ const editorPageThumbnailButtonStyle = (active: boolean): CSSProperties => ({
   boxShadow: active ? "0 0 0 2px rgba(37, 99, 235, 0.14)" : "none",
   flexShrink: 0,
 })
+
+const thumbnailNodePalette: Partial<Record<EditorPageThumbnailFragment["nodeType"], { fill: string; stroke: string }>> = {
+  paragraph: { fill: "#dbeafe", stroke: "#93c5fd" },
+  toc: { fill: "#e0f2fe", stroke: "#7dd3fc" },
+  spacer: { fill: "#e2e8f0", stroke: "#cbd5e1" },
+  row: { fill: "#fef3c7", stroke: "#fbbf24" },
+  "flow-row": { fill: "#fef3c7", stroke: "#f59e0b" },
+  stack: { fill: "#ede9fe", stroke: "#c4b5fd" },
+  "flow-stack": { fill: "#ede9fe", stroke: "#a78bfa" },
+  "flow-table": { fill: "#dcfce7", stroke: "#86efac" },
+  "flow-table-row": { fill: "#ecfccb", stroke: "#bef264" },
+  "flow-table-cell": { fill: "#f0fdf4", stroke: "#86efac" },
+  body: { fill: "#f1f5f9", stroke: "#cbd5e1" },
+}
+
+const thumbnailZonePalette: Record<EditorPageThumbnailFragment["zone"], { fill: string; stroke: string }> = {
+  header: { fill: "#fef9c3", stroke: "#fde68a" },
+  body: { fill: "#f8fafc", stroke: "#cbd5e1" },
+  footer: { fill: "#ffe4e6", stroke: "#fecdd3" },
+}
 
 function PageThumbnailGlyph() {
   return (
@@ -188,6 +208,64 @@ function PageThumbnailGlyph() {
   )
 }
 
+function resolveThumbnailFragmentPalette(fragment: EditorPageThumbnailFragment) {
+  if (fragment.zone !== "body") return thumbnailZonePalette[fragment.zone]
+  return thumbnailNodePalette[fragment.nodeType] ?? thumbnailZonePalette.body
+}
+
+function PageThumbnailFragmentShape({
+  fragment,
+  minDocWidth,
+  minDocHeight,
+}: {
+  fragment: EditorPageThumbnailFragment
+  minDocWidth: number
+  minDocHeight: number
+}) {
+  const palette = resolveThumbnailFragmentPalette(fragment)
+  const width = Math.max(fragment.width, minDocWidth)
+  const height = Math.max(fragment.height, minDocHeight)
+  const isTextLike = fragment.nodeType === "paragraph" || fragment.nodeType === "toc"
+  const lineCount = isTextLike
+    ? Math.max(1, Math.min(5, fragment.lineCount || Math.floor(fragment.height / 12)))
+    : 0
+  const padX = Math.min(width * 0.14, minDocWidth * 4)
+  const lineInset = Math.max(minDocWidth * 0.5, padX)
+  const lineHeight = Math.max(minDocHeight * 0.28, height * 0.055)
+
+  return (
+    <g>
+      <rect
+        x={fragment.x}
+        y={fragment.y}
+        width={width}
+        height={height}
+        rx={Math.max(0.8, minDocHeight * 0.2)}
+        fill={palette.fill}
+        stroke={palette.stroke}
+        strokeWidth={Math.max(0.5, minDocHeight * 0.16)}
+        opacity={fragment.zone === "body" ? 0.88 : 0.7}
+      />
+      {lineCount > 0 && Array.from({ length: lineCount }).map((_, index) => {
+        const y = fragment.y + (height * (index + 1)) / (lineCount + 1)
+        const finalLineShorten = index === lineCount - 1 ? width * 0.22 : 0
+        return (
+          <rect
+            key={index}
+            x={fragment.x + lineInset}
+            y={y}
+            width={Math.max(minDocWidth, width - lineInset * 2 - finalLineShorten)}
+            height={lineHeight}
+            rx={lineHeight / 2}
+            fill="#64748b"
+            opacity={0.48}
+          />
+        )
+      })}
+    </g>
+  )
+}
+
 function PageMiniature({
   page,
   active,
@@ -198,8 +276,12 @@ function PageMiniature({
   onJump: (page: EditorPageNavItem) => void
 }) {
   const ratio = page.width > 0 && page.height > 0 ? page.width / page.height : 0.707
-  const previewHeight = 54
-  const previewWidth = Math.max(34, Math.min(46, Math.round(previewHeight * ratio)))
+  const viewBoxWidth = Math.max(1, page.width)
+  const viewBoxHeight = Math.max(1, page.height)
+  const previewHeight = 58
+  const previewWidth = Math.max(36, Math.min(50, Math.round(previewHeight * ratio)))
+  const minDocWidth = viewBoxWidth / previewWidth
+  const minDocHeight = viewBoxHeight / previewHeight
 
   return (
     <button
@@ -211,25 +293,40 @@ function PageMiniature({
       onClick={() => onJump(page)}
       style={editorPageThumbnailButtonStyle(active)}
     >
-      <span
+      <svg
         aria-hidden="true"
+        width={previewWidth}
+        height={previewHeight}
+        viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}
+        preserveAspectRatio="none"
         style={{
-          width: previewWidth,
-          height: previewHeight,
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-          padding: 7,
+          display: "block",
           border: "1px solid #cbd5e1",
           background: "white",
           boxShadow: "0 2px 5px rgba(15, 23, 42, 0.10)",
           boxSizing: "border-box",
         }}
       >
-        <span style={{ height: 3, background: "#94a3b8", borderRadius: 1 }} />
-        <span style={{ height: 3, background: "#cbd5e1", borderRadius: 1 }} />
-        <span style={{ height: 3, width: "72%", background: "#cbd5e1", borderRadius: 1 }} />
-      </span>
+        <rect x={0} y={0} width={viewBoxWidth} height={viewBoxHeight} fill="#ffffff" />
+        <rect
+          x={page.contentBox.x}
+          y={page.contentBox.y}
+          width={page.contentBox.width}
+          height={page.contentBox.height}
+          fill="none"
+          stroke="#e2e8f0"
+          strokeWidth={Math.max(0.8, minDocHeight * 0.2)}
+          strokeDasharray={`${Math.max(3, minDocHeight * 0.8)} ${Math.max(2, minDocHeight * 0.5)}`}
+        />
+        {page.thumbnailFragments.map((fragment, index) => (
+          <PageThumbnailFragmentShape
+            key={`${fragment.zone}-${fragment.nodeType}-${fragment.x}-${fragment.y}-${index}`}
+            fragment={fragment}
+            minDocWidth={minDocWidth}
+            minDocHeight={minDocHeight}
+          />
+        ))}
+      </svg>
       <span style={{ fontSize: 10, fontWeight: 800 }}>Page {page.pageIndex + 1}</span>
     </button>
   )

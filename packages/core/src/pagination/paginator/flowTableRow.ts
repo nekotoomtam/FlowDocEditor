@@ -191,21 +191,8 @@ export function paginateFlowTableRowSplit(
       }
     }
 
-    pushFragment(pages, template, {
-      nodeId: rowBox.nodeId,
-      nodeType: "flow-table-row",
-      parentNodeId: tableNodeId,
-      pageIndex: current.pageIndex,
-      x: rowBox.x,
-      y: current.cursorY,
-      width: rowBox.width,
-      height: sliceH,
-      continuesFrom: heightPlaced > 0,
-      isContinued: !sliceIsLast,
-      warnings: sliceWarnings.get(rowBox.nodeId),
-      flowTableGridProps,
-    })
-
+    let renderedSliceH = 0
+    const cellFragments: PageFragment[] = []
     const contentFragments: PageFragment[] = []
     for (const cellBox of rowBox.children) {
       const from = fromSplits.get(cellBox.nodeId)!
@@ -215,7 +202,7 @@ export function paginateFlowTableRowSplit(
         ? resolveFlowTableCellBoxRenderProps(cellNode)
         : undefined
 
-      pushFragment(pages, template, {
+      cellFragments.push({
         nodeId: cellBox.nodeId,
         nodeType: "flow-table-cell",
         parentNodeId: rowBox.nodeId,
@@ -231,7 +218,7 @@ export function paginateFlowTableRowSplit(
         warnings: sliceWarnings.get(cellBox.nodeId),
       })
 
-      contentFragments.push(...collectFlowTableCellSlice(
+      const cellContentFragments = collectFlowTableCellSlice(
         cellBox,
         tableNode,
         measurer,
@@ -241,18 +228,41 @@ export function paginateFlowTableRowSplit(
         to,
         wordBreaker,
         current.pageNumberOffset,
-      ))
+      )
+      for (const fragment of cellContentFragments) {
+        renderedSliceH = Math.max(renderedSliceH, fragment.y + fragment.height - current.cursorY)
+      }
+      contentFragments.push(...cellContentFragments)
 
       if (!sliceIsLast) {
         fromSplits.set(cellBox.nodeId, to ?? { childIdx: cellBox.children.length, lineIdx: 0 })
       }
     }
+    if (renderedSliceH <= 0) renderedSliceH = sliceH
+
+    pushFragment(pages, template, {
+      nodeId: rowBox.nodeId,
+      nodeType: "flow-table-row",
+      parentNodeId: tableNodeId,
+      pageIndex: current.pageIndex,
+      x: rowBox.x,
+      y: current.cursorY,
+      width: rowBox.width,
+      height: renderedSliceH,
+      continuesFrom: heightPlaced > 0,
+      isContinued: !sliceIsLast,
+      warnings: sliceWarnings.get(rowBox.nodeId),
+      flowTableGridProps,
+    })
+
+    cellFragments
+      .forEach((fragment) => pushFragment(pages, template, { ...fragment, height: renderedSliceH }))
 
     contentFragments
       .sort((a, b) => a.y - b.y || a.x - b.x || a.nodeId.localeCompare(b.nodeId))
       .forEach((fragment) => pushFragment(pages, template, fragment))
 
-    current = { ...current, cursorY: current.cursorY + sliceH }
+    current = { ...current, cursorY: current.cursorY + renderedSliceH }
     heightPlaced += sliceH
 
     if (!sliceIsLast) {

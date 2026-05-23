@@ -20,6 +20,406 @@ Each entry should include:
 
 ## 2026-05-24
 
+### Bump Flow Table And Caret Stability Baseline To 0.6.9
+
+Goal: Record the accepted Flow Table split/export hardening and WYSIWYG
+table-cell caret stability work as the next patch baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.8` to `0.6.9`.
+- Updated package lock metadata and the project version alignment test.
+- Updated versioning docs so the current baseline points at `0.6.9`.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/editorPageFollow.test.ts src/app/editor/_components/__tests__/editorCanvasNavigation.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run type-check`
+
+Notes:
+
+- This is a patch release marker only; it does not change document schema,
+  pagination semantics, undo/redo, PDF, or DOCX behavior by itself.
+
+---
+
+### Split WYSIWYG Caret Into Idle And Typing Visual Modes
+
+Goal: Make the custom caret blink while idle, but stay steadily visible during
+active typing so key-repeat and fast table input do not visually lose the caret.
+
+Completed:
+
+- Added a `WysiwygCaretVisualMode` with `idle` and `typing` states.
+- Kept `idle` caret rendering on the existing SVG opacity animation.
+- Suppressed the blink animation in `typing` mode for both mapped collapsed
+  carets and live-echo carets.
+- Marked the caret as `typing` whenever a WYSIWYG draft text change is applied,
+  then returned it to `idle` after a short quiet window.
+- Exposed `data-wysiwyg-caret-mode` on the text layer and caret line for browser
+  verification.
+- Documented the mode split in the editor UX and WYSIWYG text-engine docs.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- Browser probe on
+  `/editor?flowdocTestScenario=wysiwyg-stage3-boundary&flowdocWysiwygPerfTrace=1`:
+  edited `stage3-flow-table-colspan-target`, typed one Thai character, and
+  confirmed `data-wysiwyg-caret-mode="typing"` with zero blink animations; after
+  the quiet window it returned to `idle` with one blink animation.
+
+Notes:
+
+- This intentionally does not change pagination, document state, undo/redo,
+  PDF, DOCX, or selection semantics.
+- The typing hold window starts at `650ms` and can be tuned if real typing feels
+  too sticky or too eager to blink.
+
+---
+
+### Keep WYSIWYG Table Cell Caret Visible During Reflow
+
+Goal: Prevent the custom text caret from appearing to disappear while typing in
+table cells when wrapping or responsive draft pagination moves the active
+fragment within the editor canvas.
+
+Completed:
+
+- Added a small, testable caret-follow scroll delta helper for the editor
+  canvas viewport.
+- Wired the WYSIWYG text layer to scroll the canvas after caret/visual changes,
+  but only when the active paragraph is inside a table cell.
+- Suppressed the unwrapped live-echo visual for table-cell WYSIWYG layers so
+  wrapping/continuation caret placement comes from mapped paginated line
+  geometry instead of a horizontally overflowing live caret.
+- Kept the behavior viewport-only; it does not change pagination, document
+  state, undo/redo, PDF, or DOCX export.
+- Documented the table-cell caret-follow constraint in the editor UX and
+  WYSIWYG text-engine docs.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- Browser probe on
+  `/editor?flowdocTestScenario=wysiwyg-stage3-boundary&flowdocWysiwygPerfTrace=1`:
+  edited `stage3-flow-table-colspan-target`, typed enough Thai repeat text to
+  trigger a two-fragment table-cell edit, and confirmed the active caret stayed
+  inside the editor canvas viewport with `pointerFragments=2`.
+- Reproduced the follow-up case where the live-echo caret moved horizontally
+  outside the canvas after additional wrapped table-cell input, then verified
+  the same scenario now reports `caretKind="caret"`,
+  `data-wysiwyg-live-echo-suppressed="true"`, and `visible=true` at a 1280x720
+  viewport.
+
+Notes:
+
+- This intentionally does not add a new pagination rule, table preview path, or
+  export renderer behavior.
+
+---
+
+### Add Flow Table Visual Slice Bottom Border Caps
+
+Goal: Make Flow Table cells that continue across a page boundary visibly close
+their current page slice without changing pagination, row height accounting, or
+paragraph/flow-stack split-box semantics.
+
+Completed:
+
+- Updated shared fragment box primitives so `flow-table-cell` fragments with
+  `isContinued=true` draw their authored bottom border at the visual slice
+  boundary.
+- Kept the exception table-specific; split paragraphs and flow-stack boxes keep
+  logical top/bottom border behavior.
+- Updated DOCX Flow Table cell border projection to emit the same page-slice
+  bottom cap on continued cell fragments.
+- Adjusted renderer and editor primitive tests to expect bottom borders on
+  non-final Flow Table cell slices.
+- Updated Flow Table, cross-page, and paragraph-box contracts to document the
+  table-specific page-slice cap.
+
+Files changed:
+
+- `packages/core/src/pagination/paragraphBoxPrimitives.ts`
+- `packages/core/src/renderer/docx/index.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/FLOW_TABLE_SPEC.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- This intentionally does not change split row/cell heights, child fragment
+  placement, undo/redo state, schema, or editor selection-chrome stitching.
+- DOCX remains best-effort; the page-slice cap is serialized from FlowDoc's
+  paginated slices, while Word/LibreOffice still own final reflow.
+
+---
+
+### Keep Flow Table Split Slice Geometry Around Content
+
+Goal: Fix Flow Table continuation slices whose row/cell fragment height could
+be shorter than the paragraph fragment placed inside the slice, causing table
+border geometry to lag or appear unclosed near page boundaries.
+
+Completed:
+
+- Updated `paginateFlowTableRowSplit` to collect table-cell content fragments
+  before emitting the row/cell fragments for a split slice.
+- Derived the emitted split row/cell height from the actual placed
+  child-fragment bottom when content exists, falling back to the planned row
+  slice height only for empty slices.
+- Preserved the existing row split accounting by continuing to advance
+  `heightPlaced` with the planned slice height.
+- Added a focused regression test for a low-on-page Flow Table row whose final
+  continuation paragraph includes an end inset.
+- Added editor-side diagnostic coverage proving authored split Flow Table cell
+  border primitives omit the source-page bottom border and keep the bottom
+  border on the final continuation fragment.
+- Updated the cross-page behavior contract to state that emitted split row/cell
+  geometry must contain the child fragments placed in that slice.
+
+Files changed:
+
+- `packages/core/src/pagination/paginator/flowTableRow.ts`
+- `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/flowTablePagination.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Rechecked `C:/Users/nekot/Downloads/Untitled.flowdoc (3).json` through
+  `/api/paginate`: the final Flow Table continuation row now reports height
+  `20pt`, matching the paragraph bottom, and no split cell content overflow was
+  reported.
+
+Notes:
+
+- This intentionally does not change DOCX-specific row-height relaxation,
+  split-border policy, document schema, or undo/redo state.
+- Split slice accounting still uses the planned slice height for progress, but
+  emitted row/cell geometry follows the placed content height so visual borders
+  do not extend past the content slice.
+
+---
+
+### Relax DOCX Split Flow Table Row Heights
+
+Goal: Prevent Word from moving an oversized Flow Table split slice to the next
+page and leaving a large blank area when the serialized minimum row height
+exactly consumes the remaining page space.
+
+Completed:
+
+- Stopped emitting DOCX `trHeight` for split Flow Table row fragments
+  (`continuesFrom` or `isContinued`), letting Word compute their row height from
+  cell content.
+- Kept minimum `atLeast` row heights for unsplit/full Flow Table rows, including
+  normal header/body rows.
+- Updated DOCX renderer expectations so split table slices no longer count as
+  rows that must carry `w:hRule="atLeast"`.
+
+Files changed:
+
+- `packages/core/src/renderer/docx/index.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run type-check`
+- Exported `C:/Users/nekot/Downloads/Untitled.flowdoc (3).json` through
+  `/api/export` as DOCX and inspected `word/document.xml`: the table header and
+  unsplit row keep `atLeast` heights, while both split row slices have no
+  `trHeight`; the final continuation row still carries a `single` bottom
+  border.
+
+Notes:
+
+- This is DOCX-only and intentionally does not change pagination, editor
+  preview, PDF export, or split-border policy.
+- Word may now use its own intrinsic row heights for split Flow Table slices,
+  which is consistent with DOCX being an exchange format rather than the
+  pixel-perfect target.
+
+---
+
+### Preserve DOCX Flow Table Row Order Across Pages
+
+Goal: Keep split Flow Table rows in their logical page order when serialized to
+DOCX, so continuation slices do not move before source-page slices when their
+page-local `y` position is smaller.
+
+Completed:
+
+- Updated DOCX Flow Table row sorting to compare `pageIndex` before page-local
+  `y/x` coordinates.
+- Added a regression test with a table pushed low on page 1 so its
+  continuation row starts near the top of page 2.
+- Rechecked the user-provided FlowDoc export and confirmed the DOCX row order
+  is now header, normal row, first split slice, then continuation slice.
+
+Files changed:
+
+- `packages/core/src/renderer/docx/index.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- Exported `C:/Users/nekot/Downloads/Untitled.flowdoc (3).json` through
+  `/api/export` as DOCX and inspected `word/document.xml`: the final
+  continuation row now appears after the first split slice and carries a
+  `single` bottom border in the XML.
+
+Notes:
+
+- This intentionally does not change Flow Table pagination slice heights,
+  editor preview behavior, PDF export, or split-border policy.
+- A remaining pagination invariant risk is that the observed continuation
+  row/cell height can be smaller than its paragraph fragment height.
+
+---
+
+### Fix DOCX Split Flow Table Source Text Duplication
+
+Goal: Stop DOCX export from duplicating full source paragraph text when a Flow
+Table cell paragraph is split across page/table slices.
+
+Completed:
+
+- Guarded DOCX source paragraph run reuse so it applies only when the rendered
+  fragment group covers the full logical paragraph.
+- Let partial continuation fragment groups fall back to paginated line/run
+  slices, preserving each table-cell slice without serializing the full source
+  text into every continuation cell.
+- Added a focused regression test for `sourceDocument` DOCX export of a split
+  Flow Table cell paragraph.
+
+Files changed:
+
+- `packages/core/src/renderer/docx/index.ts`
+- `packages/core/src/renderer/__tests__/renderer.test.ts`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- Exported `C:/Users/nekot/Downloads/Untitled.flowdoc (3).json` through
+  `/api/export` as DOCX and inspected `word/document.xml`: the long Thai table
+  paragraph now serializes as partial text nodes totaling the source length
+  instead of duplicating the full 204-character source paragraph.
+
+Notes:
+
+- This intentionally does not change Flow Table pagination, editor preview,
+  page-boundary border policy, PDF export, or DOCX table geometry.
+- The earlier root `npm.cmd test -- packages/core/src/renderer/__tests__/renderer.test.ts`
+  invocation ran the full core suite successfully, then failed only because the
+  root app test runner looked for that core path under `src/**`.
+
+---
+
+### Refine Bottom Page Navigation Thumbnails
+
+Goal: Make bottom page navigation jump to the top of the selected page and
+replace placeholder thumbnails with a lightweight page-layout silhouette.
+
+Completed:
+
+- Added explicit start-aligned page scrolling for bottom thumbnail, previous,
+  and next page navigation.
+- Kept inline-edit page-follow scrolling on nearest alignment so active typing
+  does not jump more than needed.
+- Extended page navigation items with copied page content boxes and bounded
+  thumbnail fragment shapes from header, body, and footer layout fragments.
+- Replaced the placeholder thumbnail glyph with a mini SVG silhouette showing
+  margins, text-like line hints, and broad block/table/row/stack areas.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/editorPageFollow.ts`
+- `src/app/editor/_components/__tests__/editorPageFollow.test.ts`
+- `src/app/editor/_components/__tests__/editorCanvasNavigation.test.ts`
+- `src/app/editor/_components/shell/EditorCanvasBottomBar.tsx`
+- `src/app/editor/_components/shell/editorCanvasNavigation.ts`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorPageFollow.test.ts src/app/editor/_components/__tests__/editorCanvasNavigation.test.ts`
+- `npm.cmd run type-check`
+- Playwright browser check against `http://localhost:4000/editor?flowdocTestScenario=wysiwyg-stage3-boundary&flowdocWysiwygPerfTrace=1`: verified 3 page thumbnails render as SVG silhouettes, clicking page 2 updates the page status to `2 / 3`, scrolls the target page top to the canvas viewport top, and reports no console/page errors.
+
+Notes:
+
+- This intentionally does not reuse the full editor canvas renderer inside the
+  thumbnail strip, so selection chrome, drag handles, inline editors, and export
+  rendering stay out of the bottom navigation preview.
+- This patch does not change document schema, pagination, undo/redo, export, or
+  inline-edit commit behavior.
+
+---
+
 ### Bump Canvas View/PDF Thai Baseline To 0.6.8
 
 Goal: Record the accepted PDF Thai combining-mark parity, canvas-scoped bottom

@@ -148,14 +148,11 @@ function countText(xml: string, text: string): number {
   return xml.match(new RegExp(escaped, "g"))?.length ?? 0
 }
 
-function expectedDocxRowCount(rows: PageFragment[]): number {
+function expectedDocxMinimumRowHeightCount(rows: PageFragment[]): number {
   const seenFullRows = new Set<string>()
   let count = 0
   for (const row of rows) {
-    if (row.continuesFrom === true || row.isContinued === true) {
-      count += 1
-      continue
-    }
+    if (row.continuesFrom === true || row.isContinued === true) continue
     if (seenFullRows.has(row.nodeId)) continue
     seenFullRows.add(row.nodeId)
     count += 1
@@ -590,7 +587,7 @@ describe("PdfRenderer smoke tests", () => {
     expect(primitives?.borders.map((line) => line.side).sort()).toEqual(["bottom", "left", "right", "top"])
   })
 
-  it("resolves split flow-table cell borders as sliced logical box edges", () => {
+  it("resolves split flow-table cell borders with visual page-slice bottom caps", () => {
     const baseFragment: PageFragment = {
       nodeId: "flow-cell",
       nodeType: "flow-table-cell",
@@ -614,8 +611,8 @@ describe("PdfRenderer smoke tests", () => {
     const middle = resolveFragmentBoxDrawingPrimitives({ ...baseFragment, continuesFrom: true, isContinued: true }, 400)
     const last = resolveFragmentBoxDrawingPrimitives({ ...baseFragment, continuesFrom: true }, 400)
 
-    expect(first?.borders.map((line) => line.side).sort()).toEqual(["left", "right", "top"])
-    expect(middle?.borders.map((line) => line.side).sort()).toEqual(["left", "right"])
+    expect(first?.borders.map((line) => line.side).sort()).toEqual(["bottom", "left", "right", "top"])
+    expect(middle?.borders.map((line) => line.side).sort()).toEqual(["bottom", "left", "right"])
     expect(last?.borders.map((line) => line.side).sort()).toEqual(["bottom", "left", "right"])
   })
 })
@@ -1452,10 +1449,121 @@ describe("DocxRenderer smoke tests", () => {
     expect(countText(xml, "SHORTBODY")).toBe(1)
     expect(countText(xml, "w:cantSplit")).toBe(0)
     expect(countText(xml, 'w:hRule="exact"')).toBe(0)
-    expect(countText(xml, 'w:hRule="atLeast"')).toBe(expectedDocxRowCount(flowTableRows))
+    expect(countText(xml, 'w:hRule="atLeast"')).toBe(expectedDocxMinimumRowHeightCount(flowTableRows))
     for (const marker of [bodyLines[0], bodyLines[45], bodyLines[89], bodyLines[129]]) {
       expect(countText(xml, marker)).toBe(1)
     }
+  })
+
+  it("does not duplicate source text for split flow-table cell paragraphs in DOCX output", async () => {
+    const bodyLines = Array.from({ length: 130 }, (_, i) => `DOCX_SPLIT_SOURCE_${String(i).padStart(3, "0")}`)
+    const body = makePara("ft-source-split-body-p", bodyLines.join("\n"))
+    const bodyCell = makeFlowTableCell("ft-source-split-body-cell", [body.id])
+    const bodyRow = makeFlowTableRow("ft-source-split-body-row", [bodyCell.id])
+    const table: FlowTableNode = {
+      id: "ft-source-split",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(220) }],
+      rowIds: [bodyRow.id],
+      nodes: {
+        [bodyRow.id]: bodyRow,
+        [bodyCell.id]: bodyCell,
+        [body.id]: body,
+      },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+    const paginated = paginate(doc)
+    const paragraphFragments = paginated.sections[0].pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === body.id && fragment.nodeType === "paragraph"),
+    )
+
+    const result = await new DocxRenderer({ sourceDocument: doc }).render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(paragraphFragments.length).toBeGreaterThan(1)
+    expect(paragraphFragments.some((fragment) => fragment.isContinued || fragment.continuesFrom)).toBe(true)
+    for (const marker of [bodyLines[0], bodyLines[45], bodyLines[89], bodyLines[129]]) {
+      expect(countText(xml, marker)).toBe(1)
+    }
+  })
+
+  it("emits split flow-table DOCX cell bottom borders for each visual page slice", async () => {
+    const bodyLines = Array.from({ length: 130 }, (_, i) => `DOCX_BORDER_SLICE_${String(i).padStart(3, "0")}`)
+    const body = makePara("ft-border-slice-body-p", bodyLines.join("\n"))
+    const bodyCell = makeFlowTableCell("ft-border-slice-body-cell", [body.id], {
+      box: {
+        padding: { top: pt(0), right: pt(0), bottom: pt(0), left: pt(0) },
+        border: {
+          bottom: { style: "solid", width: pt(1), color: "AA00CC" },
+        },
+      },
+    })
+    const bodyRow = makeFlowTableRow("ft-border-slice-body-row", [bodyCell.id])
+    const table: FlowTableNode = {
+      id: "ft-border-slice",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(220) }],
+      rowIds: [bodyRow.id],
+      nodes: {
+        [bodyRow.id]: bodyRow,
+        [bodyCell.id]: bodyCell,
+        [body.id]: body,
+      },
+    }
+    const doc = makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })
+    const paginated = paginate(doc)
+    const cellFragments = paginated.sections[0].pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === bodyCell.id && fragment.nodeType === "flow-table-cell"),
+    )
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(cellFragments.length).toBeGreaterThan(1)
+    expect(countText(xml, 'w:color="AA00CC"')).toBe(cellFragments.length)
+  })
+
+  it("keeps split flow-table DOCX rows in page order before vertical position", async () => {
+    const before = makeSpacer("ft-order-before", 420)
+    const bodyLines = Array.from({ length: 80 }, (_, i) => `DOCX_ORDER_${String(i).padStart(3, "0")}`)
+    const body = makePara("ft-order-body-p", bodyLines.join("\n"))
+    const bodyCell = makeFlowTableCell("ft-order-body-cell", [body.id])
+    const bodyRow = makeFlowTableRow("ft-order-body-row", [bodyCell.id])
+    const table: FlowTableNode = {
+      id: "ft-order-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(220) }],
+      rowIds: [bodyRow.id],
+      nodes: {
+        [bodyRow.id]: bodyRow,
+        [bodyCell.id]: bodyCell,
+        [body.id]: body,
+      },
+    }
+    const doc = makeDoc([before.id, table.id], {
+      [before.id]: before as unknown as LayoutNode,
+      [table.id]: table as unknown as LayoutNode,
+    })
+    const paginated = paginate(doc)
+    const rowFragments = paginated.sections[0].pages.flatMap((page) =>
+      page.fragments.filter((fragment) => fragment.nodeId === bodyRow.id && fragment.nodeType === "flow-table-row"),
+    )
+
+    const result = await docx.render(paginated)
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+    const firstLineIndex = xml.indexOf(bodyLines[0])
+    const lastLineIndex = xml.indexOf(bodyLines[bodyLines.length - 1])
+
+    expect(rowFragments.length).toBeGreaterThan(1)
+    expect(rowFragments[0].pageIndex).toBeLessThan(rowFragments[rowFragments.length - 1].pageIndex)
+    expect(rowFragments[0].y).toBeGreaterThan(rowFragments[rowFragments.length - 1].y)
+    expect(firstLineIndex).toBeGreaterThanOrEqual(0)
+    expect(lastLineIndex).toBeGreaterThanOrEqual(0)
+    expect(firstLineIndex).toBeLessThan(lastLineIndex)
+    expect(countText(xml, 'w:hRule="atLeast"')).toBe(expectedDocxMinimumRowHeightCount(rowFragments))
   })
 
   it("does not mark DOCX flow-table headers as repeating when header repeat is disabled", async () => {
@@ -1515,7 +1623,7 @@ describe("DocxRenderer smoke tests", () => {
     expect(xml).toContain("<w:vMerge")
     expect(countText(xml, "w:cantSplit")).toBe(0)
     expect(countText(xml, 'w:hRule="exact"')).toBe(0)
-    expect(countText(xml, 'w:hRule="atLeast"')).toBe(expectedDocxRowCount(flowTableRows))
+    expect(countText(xml, 'w:hRule="atLeast"')).toBe(expectedDocxMinimumRowHeightCount(flowTableRows))
     for (const marker of ["S001", "S004", "S007", "TOP3", "MID3", "BOT4"]) {
       expect(countText(xml, marker)).toBe(1)
     }

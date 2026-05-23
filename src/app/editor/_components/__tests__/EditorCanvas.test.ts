@@ -2,7 +2,7 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import { defaultTextMeasurer } from "@/layout"
-import type { PaginatedDocument, PaginatedPage, PageFragment, ParagraphRenderProps } from "@/pagination"
+import { resolveFragmentBoxLayoutPrimitives, type PaginatedDocument, type PaginatedPage, type PageFragment, type ParagraphRenderProps } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import {
   buildEditorFragmentClipPathId,
@@ -1328,6 +1328,45 @@ describe("EditorCanvas paragraph box preview", () => {
     expect(markup).toContain("data-paragraph-box-side=\"left\"")
     expect(markup).toContain("stroke=\"#111827\"")
     expect(markup).toContain("x=\"36\" y=\"72\" width=\"120\" height=\"44\" fill=\"transparent\" stroke=\"transparent\"")
+  })
+
+  it("keeps authored split flow-table cell bottom border on every visual page slice", () => {
+    const boxRenderProps: NonNullable<PageFragment["boxRenderProps"]> = {
+      padding: { top: 0, right: 0, bottom: 0, left: 0 },
+      border: {
+        top: { style: "solid", width: 1, color: "000000" },
+        right: { style: "solid", width: 1, color: "000000" },
+        bottom: { style: "solid", width: 1, color: "000000" },
+        left: { style: "solid", width: 1, color: "000000" },
+      },
+    }
+    const sourceFragment: PageFragment = {
+      nodeId: "ftc1",
+      nodeType: "flow-table-cell",
+      parentNodeId: "ftr1",
+      pageIndex: 0,
+      x: 36,
+      y: 72,
+      width: 120,
+      height: 42,
+      boxRenderProps,
+      continuesFrom: false,
+      isContinued: true,
+    }
+    const finalFragment: PageFragment = {
+      ...sourceFragment,
+      pageIndex: 1,
+      y: 72,
+      height: 18,
+      continuesFrom: true,
+      isContinued: false,
+    }
+
+    const sourceBorders = resolveFragmentBoxLayoutPrimitives(sourceFragment)?.borders.map((border) => border.side).sort()
+    const finalBorders = resolveFragmentBoxLayoutPrimitives(finalFragment)?.borders.map((border) => border.side).sort()
+
+    expect(sourceBorders).toEqual(["bottom", "left", "right", "top"])
+    expect(finalBorders).toEqual(["bottom", "left", "right"])
   })
 
   it("keeps flow-table row fragments pointer-transparent so cells own merged hit areas", () => {

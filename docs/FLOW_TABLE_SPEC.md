@@ -458,7 +458,9 @@ Cell box rules should mirror the paragraph/flow-stack split-box idea:
 - fill draws on every emitted cell slice
 - left/right borders draw on every emitted slice
 - top border draws only on the first logical cell slice
-- bottom border draws only on the final logical cell slice
+- bottom border draws on every visual page slice that ends the cell fragment,
+  including non-final slices that continue on a later page; this is a
+  page-slice closing border, not a new logical row boundary
 - top padding applies only to the first logical cell slice
 - bottom padding applies only to the final logical cell slice
 - horizontal padding applies on every slice

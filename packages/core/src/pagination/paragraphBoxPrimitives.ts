@@ -44,11 +44,13 @@ export function resolveFragmentBoxLayoutPrimitives(fragment: PageFragment): Para
   const yTop = boxY
   const yBottom = boxY + boxHeight
   const borders: ParagraphBoxLinePrimitive[] = []
+  const closesFlowTablePageSlice = fragment.nodeType === "flow-table-cell" && fragment.isContinued === true
+  const shouldDrawBottomBorder = isLastFragment || closesFlowTablePageSlice
 
   if (isFirstFragment && box.border.top) {
     borders.push({ side: "top", border: box.border.top, x1: x, y1: yTop, x2: x + fragment.width, y2: yTop })
   }
-  if (isLastFragment && box.border.bottom) {
+  if (shouldDrawBottomBorder && box.border.bottom) {
     borders.push({ side: "bottom", border: box.border.bottom, x1: x, y1: yBottom, x2: x + fragment.width, y2: yBottom })
   }
   if (box.border.left) {

@@ -4,6 +4,7 @@ import {
   findEditorPageKeyByPageIndex,
   resolveActiveInlineEditPageIndex,
   scrollElementIntoNearestView,
+  scrollElementIntoStartView,
   shouldFollowInlineEditPageChange,
   shouldRelocateInlineEditPage,
 } from "../editorPageFollow"
@@ -118,6 +119,33 @@ describe("editor page follow helpers", () => {
     expect(calls).toEqual([
       { block: "nearest", inline: "nearest" },
       { block: "nearest", inline: "nearest" },
+      "plain",
+    ])
+  })
+
+  it("scrolls explicit page navigation to the top of the page", () => {
+    const calls: Array<ScrollIntoViewOptions | "plain"> = []
+
+    scrollElementIntoStartView({
+      scrollIntoView: (options?: ScrollIntoViewOptions) => {
+        calls.push(options ?? "plain")
+      },
+    })
+
+    scrollElementIntoStartView({
+      scrollIntoView: (options?: ScrollIntoViewOptions) => {
+        if (!options) {
+          calls.push("plain")
+          return
+        }
+        calls.push(options)
+        throw new Error("scroll options unsupported")
+      },
+    })
+
+    expect(calls).toEqual([
+      { block: "start", inline: "nearest" },
+      { block: "start", inline: "nearest" },
       "plain",
     ])
   })

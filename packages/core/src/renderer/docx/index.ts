@@ -289,10 +289,12 @@ function buildFragmentBoxCellBorders(fragment: PageFragment) {
 
   const isFirstFragment = fragment.continuesFrom !== true
   const isLastFragment = fragment.isContinued !== true
+  const closesFlowTablePageSlice = fragment.nodeType === "flow-table-cell" && fragment.isContinued === true
+  const shouldDrawBottomBorder = isLastFragment || closesFlowTablePageSlice
   return {
     top: isFirstFragment ? toBorderOpts(box.border.top) : NO_BORDER,
     right: toBorderOpts(box.border.right),
-    bottom: isLastFragment ? toBorderOpts(box.border.bottom) : NO_BORDER,
+    bottom: shouldDrawBottomBorder ? toBorderOpts(box.border.bottom) : NO_BORDER,
     left: toBorderOpts(box.border.left),
     insideHorizontal: NO_BORDER,
     insideVertical: NO_BORDER,
@@ -469,7 +471,9 @@ function buildParagraphTextRunSlices(
   props: ParagraphRenderProps,
 ): DocxTextRunSlice[] {
   const sourceRuns = context.paragraphRunsById.get(fragments[0]?.nodeId ?? "")
-  if (sourceRuns !== undefined) {
+  const canUseSourceRuns = fragments[0]?.continuesFrom !== true &&
+    fragments[fragments.length - 1]?.isContinued !== true
+  if (sourceRuns !== undefined && canUseSourceRuns) {
     return sourceRuns.map((run) => ({
       text: run.text,
       style: styleFromTextRunStyle(props, run.style),
@@ -727,7 +731,11 @@ function buildFlowTableColumnWidths(group: TableGroup): number[] | undefined {
 
 function buildFlowDataTable(group: TableGroup, context: DocxRenderContext): Table {
   const sortedRows = [...group.rows]
-    .sort((a, b) => a.rowFragment.y - b.rowFragment.y || a.rowFragment.x - b.rowFragment.x)
+    .sort((a, b) =>
+      a.rowFragment.pageIndex - b.rowFragment.pageIndex ||
+      a.rowFragment.y - b.rowFragment.y ||
+      a.rowFragment.x - b.rowFragment.x
+    )
   const repeatedFullRowIds = collectRepeatedFullRowIds(sortedRows)
   const emittedRepeatedRows = new Set<string>()
   const tableProps = context.flowTablePropsById.get(group.tableFragment.nodeId)
@@ -746,10 +754,12 @@ function buildFlowDataTable(group: TableGroup, context: DocxRenderContext): Tabl
       return [new TableRow({
         children: cells.length > 0 ? cells : [new TableCell({ children: [new Paragraph({ children: [] })] })],
         tableHeader: isRepeatedHeaderRow ? true : undefined,
-        height: {
-          value: ptToTwips(rowGroup.rowFragment.height),
-          rule: HeightRule.ATLEAST,
-        },
+        height: isContinuedFragment(rowGroup.rowFragment)
+          ? undefined
+          : {
+              value: ptToTwips(rowGroup.rowFragment.height),
+              rule: HeightRule.ATLEAST,
+            },
       })]
     })
 

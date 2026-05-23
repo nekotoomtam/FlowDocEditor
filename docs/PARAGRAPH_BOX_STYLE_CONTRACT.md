@@ -123,6 +123,10 @@ This mirrors the existing table-cell continuation idea and avoids making a
 single logical paragraph look like separate independent boxes after a page
 break.
 
+Flow Table cells have a table-specific exception: a continued cell slice may
+draw a bottom page-slice cap so table grid borders remain visible at a page
+boundary. Paragraph and flow-stack boxes keep the logical-box policy above.
+
 If a future product decision wants repeated full boxes on each page, that should
 be a separate authored option, not the default.
 

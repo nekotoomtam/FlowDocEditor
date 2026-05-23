@@ -23,6 +23,7 @@ import {
   hasWysiwygTextDraftChange,
   isWysiwygTextSessionFocusTarget,
   resolvePointerSelectionWheelScrollDelta,
+  resolveWysiwygCaretFollowScrollDelta,
   resolveWysiwygLiveTextEcho,
   resolveSelectionOverlayRectsInFragmentWithPerf,
   resolveTrailingWhitespaceCaretOverlayInFragment,
@@ -960,6 +961,139 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toMatch(/data-wysiwyg-live-caret="true"[^>]*clip-path="url\(#cell-clip\)"/)
   })
 
+  it("can suppress unwrapped live echo so table-cell edits use the mapped caret", () => {
+    const fragment = makeFragment({
+      width: 40,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(WysiwygTextLayer, {
+      fragment,
+      renderProps: fragment.renderProps,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      caretIndex: 5,
+      draftText: "Hello overwide immediate text",
+      liveTextEcho: { anchorOffset: 5, text: " overwide immediate text" },
+      suppressLiveTextEcho: true,
+      showTextSegments: false,
+      reflowKind: "soft",
+      onDraftChange: () => undefined,
+      onEndEdit: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-live-echo-suppressed=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
+    expect(markup).toContain("data-wysiwyg-caret=\"true\"")
+  })
+
+  it("renders a steady mapped caret while text input is active", () => {
+    const fragment = makeFragment({
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(WysiwygTextLayer, {
+      fragment,
+      renderProps: fragment.renderProps,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      caretIndex: 5,
+      draftText: "Hello",
+      caretVisualMode: "typing",
+      showTextSegments: false,
+      reflowKind: "soft",
+      onDraftChange: () => undefined,
+      onEndEdit: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-caret-mode=\"typing\"")
+    expect(markup).toContain("data-wysiwyg-caret=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-caret-blink=\"true\"")
+  })
+
+  it("renders a steady live caret while text input is active", () => {
+    const fragment = makeFragment({
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(WysiwygTextLayer, {
+      fragment,
+      renderProps: fragment.renderProps,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      caretIndex: 5,
+      draftText: "Hello!",
+      liveTextEcho: { anchorOffset: 5, text: "!" },
+      caretVisualMode: "typing",
+      showTextSegments: false,
+      reflowKind: "soft",
+      onDraftChange: () => undefined,
+      onEndEdit: () => undefined,
+    })))
+
+    expect(markup).toContain("data-wysiwyg-live-caret=\"true\"")
+    expect(markup).toContain("data-wysiwyg-caret-mode=\"typing\"")
+    expect(markup).not.toContain("data-wysiwyg-caret-blink=\"true\"")
+  })
+
   it("resolves a double-click word selection range from draft text", () => {
     expect(resolveWysiwygWordSelectionRange("Hello world", 1)).toEqual({
       anchorOffset: 0,
@@ -1373,6 +1507,38 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       deltaMode: 2,
       pageHeight: 640,
     })).toEqual({ left: 0, top: 640 })
+  })
+
+  it("keeps WYSIWYG table caret follow idle while the caret is inside the canvas viewport", () => {
+    expect(resolveWysiwygCaretFollowScrollDelta({
+      caretRect: { left: 120, right: 121, top: 200, bottom: 218 },
+      viewportRect: { left: 80, right: 900, top: 100, bottom: 700 },
+      margin: 24,
+    })).toEqual({ left: 0, top: 0 })
+  })
+
+  it("scrolls down just enough when the WYSIWYG table caret falls below the canvas viewport", () => {
+    expect(resolveWysiwygCaretFollowScrollDelta({
+      caretRect: { left: 120, right: 121, top: 690, bottom: 708 },
+      viewportRect: { left: 80, right: 900, top: 100, bottom: 700 },
+      margin: 24,
+    })).toEqual({ left: 0, top: 32 })
+  })
+
+  it("scrolls up just enough when the WYSIWYG table caret moves above the canvas viewport", () => {
+    expect(resolveWysiwygCaretFollowScrollDelta({
+      caretRect: { left: 120, right: 121, top: 96, bottom: 114 },
+      viewportRect: { left: 80, right: 900, top: 100, bottom: 700 },
+      margin: 24,
+    })).toEqual({ left: 0, top: -28 })
+  })
+
+  it("scrolls horizontally when the WYSIWYG table caret moves outside the canvas viewport", () => {
+    expect(resolveWysiwygCaretFollowScrollDelta({
+      caretRect: { left: 890, right: 912, top: 200, bottom: 218 },
+      viewportRect: { left: 80, right: 900, top: 100, bottom: 700 },
+      margin: 24,
+    })).toEqual({ left: 36, top: 0 })
   })
 
   it("does not use the text-engine lane for continuation fragments", () => {
