@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import JSZip from "jszip"
-import { LineCapStyle } from "pdf-lib"
+import { LineCapStyle, PDFArray, PDFDict, PDFDocument as PdfLibDocument, PDFName, PDFNumber } from "pdf-lib"
 import { PdfRenderer, resolveFragmentBoxDrawingPrimitives, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions } from "../pdf"
 import { DocxRenderer } from "../docx"
 import { paginateDocument, type PageFragment } from "../../pagination"
@@ -17,6 +19,8 @@ const PAGE = {
   orientation: "portrait" as const,
   margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
 }
+
+const SARABUN_REGULAR_FONT_PATH = fileURLToPath(new URL("../../../../../public/fonts/Sarabun/Sarabun-Regular.ttf", import.meta.url))
 
 function makePara(id: string, text: string, overrides: Partial<ParagraphNode["props"]> = {}): ParagraphNode {
   return {
@@ -78,6 +82,56 @@ async function readDocxXml(buffer: Uint8Array, path: string): Promise<string> {
   const file = zip.file(path)
   if (!file) throw new Error(`Missing DOCX XML path: ${path}`)
   return file.async("string")
+}
+
+function pdfNumberValue(value: unknown): number | null {
+  return value instanceof PDFNumber ? value.asNumber() : null
+}
+
+async function collectPdfFontWidths(buffer: Uint8Array): Promise<Map<number, number>> {
+  const pdf = await PdfLibDocument.load(buffer)
+  const widthsByCid = new Map<number, number>()
+
+  for (const page of pdf.getPages()) {
+    const resources = page.node.Resources()
+    if (!resources) continue
+    const fonts = resources.lookup(PDFName.of("Font"))
+    if (!(fonts instanceof PDFDict)) continue
+
+    for (const key of fonts.keys()) {
+      const font = fonts.lookup(key)
+      if (!(font instanceof PDFDict)) continue
+      const descendants = font.lookup(PDFName.of("DescendantFonts"))
+      if (!(descendants instanceof PDFArray) || descendants.size() === 0) continue
+      const descendant = descendants.lookup(0)
+      if (!(descendant instanceof PDFDict)) continue
+      const widths = descendant.lookup(PDFName.of("W"))
+      if (!(widths instanceof PDFArray)) continue
+
+      for (let index = 0; index < widths.size();) {
+        const start = pdfNumberValue(widths.lookup(index))
+        const second = widths.lookup(index + 1)
+        if (start === null || !second) break
+
+        if (second instanceof PDFArray) {
+          for (let offset = 0; offset < second.size(); offset += 1) {
+            const width = pdfNumberValue(second.lookup(offset))
+            if (width !== null) widthsByCid.set(start + offset, width)
+          }
+          index += 2
+          continue
+        }
+
+        const end = pdfNumberValue(second)
+        const width = pdfNumberValue(widths.lookup(index + 2))
+        if (end === null || width === null) break
+        for (let cid = start; cid <= end; cid += 1) widthsByCid.set(cid, width)
+        index += 3
+      }
+    }
+  }
+
+  return widthsByCid
 }
 
 async function readDocxXmlParts(buffer: Uint8Array, pathPattern: RegExp): Promise<string[]> {
@@ -248,6 +302,28 @@ describe("PdfRenderer smoke tests", () => {
 
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
     expect(requests).toContainEqual({ key: "sarabun", variant: "boldItalic" })
+  })
+
+  it("keeps shaped Thai tone-mark glyphs zero-width in embedded PDF fonts", async () => {
+    const sarabunRegular = readFileSync(SARABUN_REGULAR_FONT_PATH)
+    const renderer = new PdfRenderer({
+      async getFont(key) {
+        return key === "sarabun" ? sarabunRegular : null
+      },
+    })
+    const p = makePara("p1", "วันที่ ความเชื่อมั่น หุ้น", {
+      fontFamilyKey: "sarabun",
+      fontSize: pt(12),
+      lineHeight: 1.5,
+    })
+
+    const result = await renderer.render(paginate(makeDoc(["p1"], { p1: p })))
+    const widths = await collectPdfFontWidths(result.buffer)
+
+    expect(widths.get(733)).toBe(0)
+    expect(widths.get(735)).toBe(0)
+    expect(widths.get(736)).toBe(0)
+    expect(widths.get(738)).toBe(0)
   })
 
   it("requests PDF fonts per rich text run", async () => {

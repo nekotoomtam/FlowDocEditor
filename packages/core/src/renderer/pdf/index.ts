@@ -1,4 +1,4 @@
-import { LineCapStyle, PDFDocument, StandardFonts, rgb } from "pdf-lib"
+import { LineCapStyle, PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, StandardFonts, rgb } from "pdf-lib"
 import type { PDFFont, PDFPage } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
 import type { PaginatedDocument, PaginatedLine, PaginatedPage, PageFragment, ResolvedBorderSide } from "../../pagination"
@@ -22,6 +22,22 @@ import type { RenderResult, Renderer, FontProvider } from "../shared"
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const PDF_TEXT_COLOR = rgb(0, 0, 0)
+// Marks that can shape to zero-advance glyphs; pdf-lib can omit those widths.
+const PDF_ZERO_ADVANCE_WIDTH_TEXT_PATTERN = /[\u0300-\u036F\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/
+
+type FontkitGlyph = {
+  advanceWidth: number
+}
+
+type FontkitFontForPdfWidths = {
+  numGlyphs: number
+  getGlyph(id: number): FontkitGlyph | null | undefined
+}
+
+type PdfFontCacheEntry = {
+  font: PDFFont
+  zeroAdvanceGlyphIds: number[]
+}
 
 function flipY(layoutY: number, elementHeight: number, pageHeight: number): number {
   return pageHeight - layoutY - elementHeight
@@ -39,6 +55,134 @@ function resolvePdfUnderlineSpan(line: NonNullable<PageFragment["lines"]>[number
   const start = Math.min(...line.segments.map((segment) => line.x + segment.x))
   const end = Math.max(...line.segments.map((segment) => line.x + segment.x + segment.width))
   return { x: start, width: Math.max(0, end - start) }
+}
+
+function createFontkitFontForPdfWidths(fontBuffer: Uint8Array): FontkitFontForPdfWidths | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const BufferCtor = (globalThis as any).Buffer
+    const bufferLike = BufferCtor ? BufferCtor.from(fontBuffer) : fontBuffer
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (fontkit as any).create(bufferLike) as FontkitFontForPdfWidths
+  } catch {
+    return null
+  }
+}
+
+function collectZeroAdvanceGlyphIds(fontBuffer: Uint8Array): number[] {
+  const font = createFontkitFontForPdfWidths(fontBuffer)
+  if (!font) return []
+
+  const ids: number[] = []
+  for (let id = 0; id < font.numGlyphs; id += 1) {
+    const glyph = font.getGlyph(id)
+    if (glyph?.advanceWidth === 0) ids.push(id)
+  }
+  return ids
+}
+
+function shouldPatchPdfZeroAdvanceGlyphWidthsForText(text: string): boolean {
+  return PDF_ZERO_ADVANCE_WIDTH_TEXT_PATTERN.test(text)
+}
+
+function registerZeroAdvanceGlyphIds(
+  zeroAdvanceGlyphIdsByFontName: Map<string, Set<number>>,
+  fontName: string,
+  zeroAdvanceGlyphIds: number[],
+): void {
+  if (zeroAdvanceGlyphIds.length === 0) return
+  const existing = zeroAdvanceGlyphIdsByFontName.get(fontName) ?? new Set<number>()
+  zeroAdvanceGlyphIds.forEach((glyphId) => existing.add(glyphId))
+  zeroAdvanceGlyphIdsByFontName.set(fontName, existing)
+}
+
+function pdfNumberValue(value: unknown): number | null {
+  return value instanceof PDFNumber ? value.asNumber() : null
+}
+
+function collectExplicitPdfWidths(widths: PDFArray): Map<number, number> {
+  const byCid = new Map<number, number>()
+
+  for (let index = 0; index < widths.size();) {
+    const start = pdfNumberValue(widths.lookup(index))
+    const second = widths.lookup(index + 1)
+    if (start === null || !second) break
+
+    if (second instanceof PDFArray) {
+      for (let offset = 0; offset < second.size(); offset += 1) {
+        const width = pdfNumberValue(second.lookup(offset))
+        if (width !== null) byCid.set(start + offset, width)
+      }
+      index += 2
+      continue
+    }
+
+    const end = pdfNumberValue(second)
+    const width = pdfNumberValue(widths.lookup(index + 2))
+    if (end === null || width === null) break
+    for (let cid = start; cid <= end; cid += 1) byCid.set(cid, width)
+    index += 3
+  }
+
+  return byCid
+}
+
+function zeroAdvanceGlyphIdsForBaseFont(
+  baseFontName: string,
+  zeroAdvanceGlyphIdsByFontName: Map<string, Set<number>>,
+): Set<number> | null {
+  for (const [fontName, ids] of zeroAdvanceGlyphIdsByFontName) {
+    if (baseFontName === fontName || baseFontName.startsWith(`${fontName}-`)) return ids
+  }
+  return null
+}
+
+async function patchPdfZeroAdvanceGlyphWidths(
+  buffer: Uint8Array,
+  zeroAdvanceGlyphIdsByFontName: Map<string, Set<number>>,
+): Promise<Uint8Array> {
+  if (zeroAdvanceGlyphIdsByFontName.size === 0) return buffer
+
+  const pdfDoc = await PDFDocument.load(buffer)
+  let changed = false
+
+  for (const page of pdfDoc.getPages()) {
+    const resources = page.node.Resources()
+    if (!resources) continue
+    const fonts = resources.lookup(PDFName.of("Font"))
+    if (!(fonts instanceof PDFDict)) continue
+
+    for (const key of fonts.keys()) {
+      const font = fonts.lookup(key)
+      if (!(font instanceof PDFDict)) continue
+
+      const baseFont = font.lookup(PDFName.of("BaseFont"))
+      const baseFontName = baseFont instanceof PDFName ? baseFont.decodeText() : ""
+      const zeroAdvanceGlyphIds = zeroAdvanceGlyphIdsForBaseFont(baseFontName, zeroAdvanceGlyphIdsByFontName)
+      if (!zeroAdvanceGlyphIds || zeroAdvanceGlyphIds.size === 0) continue
+
+      const descendants = font.lookup(PDFName.of("DescendantFonts"))
+      if (!(descendants instanceof PDFArray) || descendants.size() === 0) continue
+      const descendant = descendants.lookup(0)
+      if (!(descendant instanceof PDFDict)) continue
+
+      const widths = descendant.lookup(PDFName.of("W"))
+      if (!(widths instanceof PDFArray)) continue
+
+      const explicitWidths = collectExplicitPdfWidths(widths)
+      for (const glyphId of zeroAdvanceGlyphIds) {
+        if (explicitWidths.has(glyphId)) continue
+        const zeroWidth = PDFArray.withContext(pdfDoc.context)
+        zeroWidth.push(PDFNumber.of(0))
+        widths.push(PDFNumber.of(glyphId))
+        widths.push(zeroWidth)
+        explicitWidths.set(glyphId, 0)
+        changed = true
+      }
+    }
+  }
+
+  return changed ? pdfDoc.save() : buffer
 }
 
 function drawTextDecorations(
@@ -196,21 +340,24 @@ export class PdfRenderer implements Renderer {
   async render(doc: PaginatedDocument): Promise<RenderResult> {
     const pdfDoc = await PDFDocument.create()
     pdfDoc.registerFontkit(fontkit)
-    const fontCache = new Map<string, PDFFont>()
+    const fontCache = new Map<string, PdfFontCacheEntry>()
+    const zeroAdvanceGlyphIdsByFontName = new Map<string, Set<number>>()
 
     for (const section of doc.sections) {
       for (const page of section.pages) {
-        await this.renderPage(pdfDoc, fontCache, page)
+        await this.renderPage(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, page)
       }
     }
 
     const buffer = await pdfDoc.save()
-    return { buffer, mimeType: "application/pdf", extension: "pdf" }
+    const patchedBuffer = await patchPdfZeroAdvanceGlyphWidths(buffer, zeroAdvanceGlyphIdsByFontName)
+    return { buffer: patchedBuffer, mimeType: "application/pdf", extension: "pdf" }
   }
 
   private async renderPage(
     pdfDoc: PDFDocument,
-    fontCache: Map<string, PDFFont>,
+    fontCache: Map<string, PdfFontCacheEntry>,
+    zeroAdvanceGlyphIdsByFontName: Map<string, Set<number>>,
     page: PaginatedPage,
   ): Promise<void> {
     const pdfPage = pdfDoc.addPage([page.width, page.height])
@@ -248,9 +395,16 @@ export class PdfRenderer implements Renderer {
         const lineY = flipY(line.y, line.height, page.height)
         const fontSize = line.fontSize ?? defaultFontSize
         if (line.runs?.length) {
-          await this.drawRichTextRuns(pdfDoc, fontCache, pdfPage, line, lineY)
+          await this.drawRichTextRuns(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, pdfPage, line, lineY)
         } else {
-          const font = await this.resolveFont(pdfDoc, fontCache, fragment.renderProps.fontFamilyKey, fontVariant)
+          const font = await this.resolveFont(
+            pdfDoc,
+            fontCache,
+            zeroAdvanceGlyphIdsByFontName,
+            fragment.renderProps.fontFamilyKey,
+            fontVariant,
+            shouldPatchPdfZeroAdvanceGlyphWidthsForText(line.text),
+          )
           if (isJustify && line.segments?.length) {
             // Draw word segments individually at their adjusted x positions
             for (const seg of line.segments) {
@@ -279,7 +433,8 @@ export class PdfRenderer implements Renderer {
 
   private async drawRichTextRuns(
     pdfDoc: PDFDocument,
-    fontCache: Map<string, PDFFont>,
+    fontCache: Map<string, PdfFontCacheEntry>,
+    zeroAdvanceGlyphIdsByFontName: Map<string, Set<number>>,
     pdfPage: PDFPage,
     line: PaginatedLine,
     lineY: number,
@@ -287,7 +442,14 @@ export class PdfRenderer implements Renderer {
     for (const run of line.runs ?? []) {
       if (run.text.trim() === "") continue
       const color = hexToRgb(run.style.textColor)
-      const font = await this.resolveFont(pdfDoc, fontCache, run.style.fontFamilyKey, run.style.fontVariant)
+      const font = await this.resolveFont(
+        pdfDoc,
+        fontCache,
+        zeroAdvanceGlyphIdsByFontName,
+        run.style.fontFamilyKey,
+        run.style.fontVariant,
+        shouldPatchPdfZeroAdvanceGlyphWidthsForText(run.text),
+      )
       const x = line.x + run.x
       pdfPage.drawText(run.text, {
         x,
@@ -310,17 +472,29 @@ export class PdfRenderer implements Renderer {
 
   private async resolveFont(
     pdfDoc: PDFDocument,
-    cache: Map<string, PDFFont>,
+    cache: Map<string, PdfFontCacheEntry>,
+    zeroAdvanceGlyphIdsByFontName: Map<string, Set<number>>,
     key: string,
     variant: FontVariantKey = "regular",
+    trackZeroAdvanceGlyphs = false,
   ): Promise<PDFFont> {
     const cacheKey = resolveFontVariantCacheKey(key, variant)
-    if (cache.has(cacheKey)) return cache.get(cacheKey)!
+    const cached = cache.get(cacheKey)
+    if (cached) {
+      if (trackZeroAdvanceGlyphs) {
+        registerZeroAdvanceGlyphIds(zeroAdvanceGlyphIdsByFontName, cached.font.name, cached.zeroAdvanceGlyphIds)
+      }
+      return cached.font
+    }
     const buffer = (await this.fontProvider?.getFont(key, variant)) ?? null
     const font = buffer != null
       ? await pdfDoc.embedFont(buffer)
       : await pdfDoc.embedFont(StandardFonts.Helvetica)
-    cache.set(cacheKey, font)
+    const zeroAdvanceGlyphIds = buffer != null ? collectZeroAdvanceGlyphIds(buffer) : []
+    if (trackZeroAdvanceGlyphs) {
+      registerZeroAdvanceGlyphIds(zeroAdvanceGlyphIdsByFontName, font.name, zeroAdvanceGlyphIds)
+    }
+    cache.set(cacheKey, { font, zeroAdvanceGlyphIds })
     return font
   }
 }
