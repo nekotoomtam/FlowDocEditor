@@ -1,4 +1,4 @@
-import type { DocumentNode, FlowTableNode, LayoutNode } from "../schema"
+import type { DocumentNode, DocumentSection, FlowTableNode, LayoutNode } from "../schema"
 import type {
   DragSource,
   PaletteBlockType,
@@ -24,7 +24,7 @@ import type {
 // ─── Tree Helpers ─────────────────────────────────────────────────────────────
 
 interface NodeLocation {
-  section: { id: string; nodes: Record<string, LayoutNode> }
+  section: DocumentSection
   node: LayoutNode
   parent: (LayoutNode & { childIds: string[] }) | null
   index: number
@@ -235,6 +235,22 @@ function isRowStackTarget(location: NodeLocation | null, rowId: string): locatio
   return false
 }
 
+function isHeaderFooterZoneRoot(location: NodeLocation | null): boolean {
+  if (location?.node.type !== "stack") return false
+  const { section, node } = location
+  return section.headerRootId === node.id ||
+    section.footerRootId === node.id ||
+    section.headerFirstPageRootId === node.id ||
+    section.footerFirstPageRootId === node.id
+}
+
+function isHeaderFooterZoneRootId(section: DocumentSection, nodeId: string): boolean {
+  return section.headerRootId === nodeId ||
+    section.footerRootId === nodeId ||
+    section.headerFirstPageRootId === nodeId ||
+    section.footerFirstPageRootId === nodeId
+}
+
 // ─── Subtree Check ────────────────────────────────────────────────────────────
 
 function rejectSubtree(
@@ -297,6 +313,7 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
   const location = findLocation(document, target.nodeId)
 
   if (location == null) return err(rawIntent, "missing-target", `Node "${target.nodeId}" not found.`)
+  const targetIsHeaderFooterZoneRoot = isHeaderFooterZoneRoot(location)
 
   if (isFieldSource(source)) {
     if (zone !== "center" || location.node.type !== "paragraph") {
@@ -332,7 +349,10 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
         index: node.childIds.length,
       })
     }
-    if (isRowLikeSource(document, source) && (location.node.type === "stack" || location.node.type === "flow-stack")) {
+    if (isRowLikeSource(document, source) && (
+      location.node.type === "flow-stack" ||
+      (location.node.type === "stack" && !targetIsHeaderFooterZoneRoot)
+    )) {
       return err(rawIntent, "invalid-parent", "Cannot create columns inside a column.")
     }
     if (location.node.type === "flow-stack" && !isFlowStackContentSource(document, source)) {
@@ -357,6 +377,8 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     if (location.parent.type !== "body" && location.parent.type !== "stack" && location.parent.type !== "flow-stack") {
       return err(rawIntent, "invalid-parent", "Vertical placement requires body, stack, or flow-stack parent.")
     }
+    const parentIsHeaderFooterZoneRoot = location.parent.type === "stack" &&
+      isHeaderFooterZoneRootId(location.section, location.parent.id)
     if (isFlowStackSource(document, source)) {
       if (location.parent.type !== "body") {
         return err(rawIntent, "invalid-parent", "Flow stack can only become a full row in the body.")
@@ -369,7 +391,10 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
         index: zone === "top" ? location.index : location.index + 1,
       })
     }
-    if (isRowLikeSource(document, source) && (location.parent.type === "stack" || location.parent.type === "flow-stack")) {
+    if (isRowLikeSource(document, source) && (
+      location.parent.type === "flow-stack" ||
+      (location.parent.type === "stack" && !parentIsHeaderFooterZoneRoot)
+    )) {
       return err(rawIntent, "invalid-parent", "Row-like source cannot be inserted into a stack.")
     }
     if (location.parent.type === "flow-stack" && !isFlowStackContentSource(document, source)) {

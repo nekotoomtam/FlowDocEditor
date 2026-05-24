@@ -112,6 +112,32 @@ system Chromium/Chrome/Edge executable. Set only one of
 If bundled Chromium is missing, the smoke launcher prints FlowDoc-specific
 guidance with the install and system-browser alternatives.
 
+## Header/Footer Zone Mode Smoke
+
+Use this focused manual/browser check when changing header/footer zone
+interaction or the page-margin overlap rules:
+
+- Open `/editor?flowdocTestScenario=header-footer-zones`.
+- Confirm header and footer preview text appears on each page.
+- Confirm passive page-margin activation bands are present before entering a
+  header/footer zone.
+- Double-click the header reserved area. Confirm the header zone becomes active,
+  the body is lightly muted, and margin activation bands are hidden for that
+  section.
+- Click the body area or canvas outside the page. Confirm header/footer zone
+  mode exits and passive margin activation returns.
+- Repeat once for the footer reserved area.
+- Expand the right-rail `Header/Footer` page card, edit a reserved height, and
+  confirm the page content area reflows through normal undoable page settings.
+- In the same card, switch `In frame` to `Full` and confirm the active
+  header/footer zone spans the full page width while body content margins stay
+  unchanged. Switch back to `In frame` and confirm the zone returns to the body
+  content width.
+- While a header/footer zone is active, drag a `50 | 50` layout block from Add
+  into the zone. Confirm the drop preview appears in the active zone and the
+  inserted Flow Row / Flow Stack content repeats in that header/footer zone
+  rather than in the body.
+
 ## CI Browser Smoke Setup
 
 `npm ci` installs Playwright's package dependency, but it does not guarantee

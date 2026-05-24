@@ -24,7 +24,9 @@ import {
   updateFlowTableCellSpan,
   updateNodeProps,
   updateParagraphBoxStyle,
+  updateSectionHeaderFooterHorizontalMode,
   updateSectionMargin,
+  updateSectionReservedZones,
 } from "@/document"
 import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
 import type { DocumentNode, ParagraphNode } from "@/schema"
@@ -98,6 +100,8 @@ type EditorAction =
   | { type: "RESIZE_TABLE_COLUMN_PAIR"; tableId: string; leftColIndex: number; leftWidth: number; rightWidth: number; paginated?: PaginatedDocument }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
   | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
+  | { type: "UPDATE_RESERVED_ZONES"; sectionIndex: number; reserved: { headerReserved: number; footerReserved: number } }
+  | { type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE"; sectionIndex: number; mode: "body" | "full" }
   | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; history?: HistoryEntry }
   | { type: "CLEAR_SPLIT_NODE_ID" }
   | { type: "MERGE_PARAGRAPH"; nodeId: string; history?: HistoryEntry }
@@ -343,6 +347,14 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, updateNodeProps(state.doc, action.rowId, { minHeight: action.minHeight }))
     case "UPDATE_MARGIN":
       return pushDoc(state, updateSectionMargin(state.doc, action.sectionIndex, action.margin))
+    case "UPDATE_RESERVED_ZONES": {
+      const nextDoc = updateSectionReservedZones(state.doc, action.sectionIndex, action.reserved)
+      return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
+    }
+    case "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE": {
+      const nextDoc = updateSectionHeaderFooterHorizontalMode(state.doc, action.sectionIndex, action.mode)
+      return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
+    }
     case "SPLIT_PARAGRAPH": {
       const result = splitParagraphAtIndex(state.doc, action.nodeId, action.splitIndex)
       if (!result.newNodeId) return state

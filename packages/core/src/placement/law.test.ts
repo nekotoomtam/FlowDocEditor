@@ -111,6 +111,60 @@ describe("placement law flow-row / flow-stack sources", () => {
     expect(result.error.code).toBe("invalid-parent")
   })
 
+  it("allows flow-columns inside a header/footer zone root stack", () => {
+    const doc = makeDoc({
+      "header-root": { id: "header-root", type: "stack", props: {}, childIds: [] },
+    }, [])
+    doc.document.sections[0].headerRootId = "header-root"
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "center",
+        intent: "insertInside",
+        target: { kind: "node", nodeId: "header-root", nodeType: "stack" },
+      },
+      { source: "palette", blockType: "flow-columns" },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.operation).toEqual({
+      kind: "insert-into-container",
+      containerId: "header-root",
+      containerType: "stack",
+      index: 0,
+    })
+  })
+
+  it("allows flow-columns above existing content in a header/footer zone root stack", () => {
+    const doc = makeDoc({
+      "header-root": { id: "header-root", type: "stack", props: {}, childIds: ["p1"] },
+      p1: makeParagraph("p1", "Header text"),
+    }, [])
+    doc.document.sections[0].headerRootId = "header-root"
+
+    const result = resolvePlacementLaw(
+      doc,
+      {
+        zone: "top",
+        intent: "insertAbove",
+        target: { kind: "node", nodeId: "p1", nodeType: "paragraph" },
+      },
+      { source: "palette", blockType: "flow-columns" },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.operation).toEqual({
+      kind: "insert-before",
+      parentId: "header-root",
+      parentType: "stack",
+      index: 0,
+      anchorNodeId: "p1",
+    })
+  })
+
   it("does not expand an old row with a flow-row source", () => {
     const doc = makeDoc({
       row1: { id: "row1", type: "row", props: {}, childIds: ["stack1"] },

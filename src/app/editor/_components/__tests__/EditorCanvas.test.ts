@@ -555,6 +555,7 @@ interface RenderCanvasOptions {
   wysiwygTextCaretOffset?: number | null
   wysiwygTextDraftPaginationActive?: boolean
   marginEditMode?: { sectionIndex: number } | null
+  headerFooterEditMode?: { sectionIndex: number; zone: "header" | "footer" } | null
 }
 
 function renderCanvas(
@@ -572,8 +573,11 @@ function renderCanvas(
     minHeightDrag: null,
     marginDrag: null,
     marginEditMode: options.marginEditMode ?? null,
+    headerFooterEditMode: options.headerFooterEditMode ?? null,
     onMarginEditModeEnter: noop,
     onMarginEditModeExit: noop,
+    onHeaderFooterEditModeEnter: noop,
+    onHeaderFooterEditModeExit: noop,
     scale: 1,
     selectedNodeId,
     selectionAnchorNodeId: options.selectionAnchorNodeId ?? selectedNodeId,
@@ -619,6 +623,10 @@ function renderCanvas(
     onWysiwygTextDraftChange: noop,
     onWysiwygTextReflowDecision: noop,
   }))
+}
+
+function headerFooterHitArea(markup: string, zone: "header" | "footer"): string {
+  return markup.match(new RegExp(`<rect[^>]*data-testid="header-footer-zone-hit-area"[^>]*data-zone="${zone}"[^>]*>`))?.[0] ?? ""
 }
 
 describe("EditorCanvas page memoization", () => {
@@ -915,6 +923,40 @@ describe("EditorCanvas header/footer zones", () => {
     expect(markup).toContain("Header Preview")
     expect(markup).toContain("หน้า 7")
     expect(markup).toContain("pointer-events:none")
+  })
+
+  it("renders passive header and footer activation zones", () => {
+    const markup = renderCanvas()
+
+    expect(markup).toContain("data-testid=\"header-footer-zone-layer\"")
+    expect(markup).toContain("data-testid=\"header-footer-zone-hit-area\"")
+    expect(markup).toContain("data-zone=\"header\"")
+    expect(markup).toContain("data-zone=\"footer\"")
+    expect(markup).toContain("data-active=\"false\"")
+  })
+
+  it("uses the section header/footer horizontal mode for activation zones", () => {
+    const doc = makeDoc()
+    doc.document.sections[0].page.headerFooterHorizontalMode = "full"
+    const markup = renderCanvas(makePaginated(), doc)
+    const headerHitArea = headerFooterHitArea(markup, "header")
+    const footerHitArea = headerFooterHitArea(markup, "footer")
+
+    expect(headerHitArea).toContain("x=\"0\"")
+    expect(headerHitArea).toContain("width=\"300\"")
+    expect(footerHitArea).toContain("x=\"0\"")
+    expect(footerHitArea).toContain("width=\"300\"")
+  })
+
+  it("shows a body exit overlay and suppresses margin activation while header/footer mode is active", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+
+    expect(markup).toContain("data-testid=\"header-footer-body-exit-overlay\"")
+    expect(markup).toContain("data-active=\"true\"")
+    expect(markup).toContain(">HEADER</text>")
+    expect(markup).not.toContain("data-testid=\"page-margin-activation-band\"")
   })
 })
 

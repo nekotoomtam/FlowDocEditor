@@ -17,6 +17,7 @@ export const PageSettingsSchema = z.object({
   margin: PageMarginSchema,
   headerReserved: z.number().nonnegative().optional(),
   footerReserved: z.number().nonnegative().optional(),
+  headerFooterHorizontalMode: z.enum(["body", "full"]).optional(),
   pageNumberStart: z.number().positive().int().optional(),  // restart page numbering at this number; undefined = continue from previous section
 })
 

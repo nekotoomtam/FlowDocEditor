@@ -8,6 +8,7 @@ import type {
   ParagraphNode,
 } from "../schema"
 import { pt } from "../schema"
+import { getPageDimensions } from "../pagination/metrics"
 import { assertDocument } from "./assert"
 import { resolveFlowTableGrid } from "./flowTableGrid"
 import {
@@ -20,6 +21,7 @@ import {
   canUpdateFlowTableCellSpan,
   canRemoveFlowTableColumn,
   canRemoveFlowTableRow,
+  clampSectionReservedZones,
   deleteTextRunRange,
   deleteNode,
   duplicateNode,
@@ -27,6 +29,9 @@ import {
   isPlainTextParagraph,
   mergeParagraphWithPrevious,
   mergeTextRunParagraphWithPrevious,
+  MAX_HEADER_FOOTER_RESERVED_RATIO,
+  MIN_BODY_CONTENT_HEIGHT_RATIO,
+  MIN_HEADER_FOOTER_RESERVED_PT,
   removeFlowTableColumn,
   removeFlowTableRow,
   replaceTextRunParagraphText,
@@ -43,6 +48,8 @@ import {
   updateFlowStackBoxStyle,
   updateParagraphBoxStyle,
   updateParagraphText,
+  updateSectionHeaderFooterHorizontalMode,
+  updateSectionReservedZones,
 } from "./operations"
 
 function makeParagraph(id: string, children: ParagraphNode["children"]): ParagraphNode {
@@ -209,6 +216,87 @@ function flowTableCellParagraphTexts(table: FlowTableNode, cellId: string): stri
     return child?.type === "paragraph" ? paragraphText(child) : childId
   })
 }
+
+describe("section page settings operations", () => {
+  it("updates header and footer reserved heights without touching schema roots", () => {
+    const doc = makeDoc({}, [])
+    const next = updateSectionReservedZones(doc, 0, { headerReserved: 42.337, footerReserved: 31.664 })
+
+    expect(next.document.sections[0].page.headerReserved).toBe(42.34)
+    expect(next.document.sections[0].page.footerReserved).toBe(31.66)
+    expect(next.document.sections[0].bodyRootId).toBe("body")
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("clamps invalid reserved heights to non-negative point values", () => {
+    const doc = updateSectionReservedZones(makeDoc({}, []), 0, { headerReserved: 12, footerReserved: 8 })
+    const next = updateSectionReservedZones(doc, 0, { headerReserved: -12, footerReserved: Number.NaN })
+
+    expect(next.document.sections[0].page.headerReserved).toBe(0)
+    expect(next.document.sections[0].page.footerReserved).toBe(0)
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("keeps inactive header/footer zones at zero but gives active zones a one-line minimum", () => {
+    const inactive = updateSectionReservedZones(makeDoc({}, []), 0, { headerReserved: 0, footerReserved: 0 })
+    const active = makeDoc({
+      "header-root": { id: "header-root", type: "stack", props: {}, childIds: [] },
+    }, [])
+    active.document.sections[0].headerRootId = "header-root"
+
+    const next = updateSectionReservedZones(active, 0, { headerReserved: 0, footerReserved: 0 })
+
+    expect(inactive.document.sections[0].page.headerReserved).toBeUndefined()
+    expect(inactive.document.sections[0].page.footerReserved).toBeUndefined()
+    expect(next.document.sections[0].page.headerReserved).toBe(MIN_HEADER_FOOTER_RESERVED_PT)
+    expect(next.document.sections[0].page.footerReserved).toBe(0)
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("caps header/footer reserved heights so body keeps at least 30 percent of usable height", () => {
+    const doc = makeDoc({}, [])
+    const section = doc.document.sections[0]
+    const { height } = getPageDimensions(section.page)
+    const usableHeight = height - section.page.margin.top.value - section.page.margin.bottom.value
+    const maxReserved = Math.round(usableHeight * MAX_HEADER_FOOTER_RESERVED_RATIO * 100) / 100
+    const minBodyHeight = Math.round(usableHeight * MIN_BODY_CONTENT_HEIGHT_RATIO * 100) / 100
+    const next = updateSectionReservedZones(doc, 0, { headerReserved: 500, footerReserved: 200 })
+    const page = next.document.sections[0].page
+    const totalReserved = (page.headerReserved ?? 0) + (page.footerReserved ?? 0)
+    const bodyHeight = Math.round((usableHeight - totalReserved) * 100) / 100
+
+    expect(totalReserved).toBe(maxReserved)
+    expect(bodyHeight).toBe(minBodyHeight)
+    expect(page.footerReserved).toBe(MIN_HEADER_FOOTER_RESERVED_PT)
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("can preserve footer reserved height when footer is the active edit priority", () => {
+    const doc = makeDoc({}, [])
+    const section = doc.document.sections[0]
+    const { height } = getPageDimensions(section.page)
+    const usableHeight = height - section.page.margin.top.value - section.page.margin.bottom.value
+    const maxReserved = Math.round(usableHeight * MAX_HEADER_FOOTER_RESERVED_RATIO * 100) / 100
+
+    const next = clampSectionReservedZones(section, { headerReserved: 200, footerReserved: 500 }, "footerReserved")
+
+    expect(next.headerReserved).toBe(MIN_HEADER_FOOTER_RESERVED_PT)
+    expect(next.headerReserved + next.footerReserved).toBe(maxReserved)
+  })
+
+  it("updates header/footer horizontal mode without changing the default body mode", () => {
+    const doc = makeDoc({}, [])
+    const noOp = updateSectionHeaderFooterHorizontalMode(doc, 0, "body")
+    const full = updateSectionHeaderFooterHorizontalMode(doc, 0, "full")
+    const body = updateSectionHeaderFooterHorizontalMode(full, 0, "body")
+
+    expect(noOp).toBe(doc)
+    expect(full.document.sections[0].page.headerFooterHorizontalMode).toBe("full")
+    expect(body.document.sections[0].page.headerFooterHorizontalMode).toBe("body")
+    expect(() => assertDocument(full)).not.toThrow()
+    expect(() => assertDocument(body)).not.toThrow()
+  })
+})
 
 describe("body child reorder operations", () => {
   it("moves a direct body child before or after another body child", () => {
@@ -1419,6 +1507,32 @@ describe("flow-row / flow-stack operations", () => {
       const stack = section.nodes[id]
       return stack.type === "flow-stack" ? stack.props.widthShare : undefined
     })).toEqual([50, 50])
+  })
+
+  it("inserts a flow-row palette block into a header/footer zone root stack", () => {
+    const doc = makeDoc({
+      "header-root": { id: "header-root", type: "stack", props: {}, childIds: [] },
+    }, [])
+    doc.document.sections[0].headerRootId = "header-root"
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "insert-into-container", containerId: "header-root", containerType: "stack", index: 0 },
+      { source: "palette", blockType: "flow-columns", columnShares: [50, 50] },
+    )
+    const section = updated.document.sections[0]
+    const headerRoot = section.nodes["header-root"]
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(headerRoot.type).toBe("stack")
+    if (headerRoot.type !== "stack") return
+    expect(headerRoot.childIds).toHaveLength(1)
+
+    const row = section.nodes[headerRoot.childIds[0]]
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds.map((id) => section.nodes[id]?.type)).toEqual(["flow-stack", "flow-stack"])
   })
 
   it("uses palette column share presets when inserting flow columns", () => {

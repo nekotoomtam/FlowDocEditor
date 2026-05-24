@@ -2,8 +2,11 @@ import { measureParagraph } from "../../layout"
 import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
 import type { DocumentSection } from "../../schema"
 import type { PageFragment } from "../types"
-import { toPageFragmentNodeType } from "./cursor"
 import { buildPositionedParagraphLines, buildRenderProps, resolvePageNumbers } from "./paragraph"
+
+function toZonePageFragmentNodeType(nodeType: FlowBox["nodeType"]): PageFragment["nodeType"] {
+  return nodeType
+}
 
 function collectZoneFragments(
   box: FlowBox,
@@ -16,7 +19,7 @@ function collectZoneFragments(
 
   const fragment: PageFragment = {
     nodeId: box.nodeId,
-    nodeType: toPageFragmentNodeType(box.nodeType),
+    nodeType: toZonePageFragmentNodeType(box.nodeType),
     parentNodeId,
     pageIndex: 0,
     x: box.x,

@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react"
+import { clampSectionReservedZones, MIN_HEADER_FOOTER_RESERVED_PT } from "@/document"
 import { getPageDimensions } from "@/pagination"
 import type { DocumentNode } from "@/schema"
 import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
 
 type PageMarginSide = "top" | "right" | "bottom" | "left"
 export type PageMarginDraft = Record<PageMarginSide, number>
+type PageReservedZone = "headerReserved" | "footerReserved"
+export type PageReservedDraft = Record<PageReservedZone, number>
+export type PageHeaderFooterHorizontalMode = "body" | "full"
 type DocumentSection = DocumentNode["document"]["sections"][number]
+const headerFooterModeLabels: Record<PageHeaderFooterHorizontalMode, string> = {
+  body: "In frame",
+  full: "Full",
+}
 
 function readSectionMargin(section: DocumentSection): PageMarginDraft {
   return {
@@ -16,12 +24,31 @@ function readSectionMargin(section: DocumentSection): PageMarginDraft {
   }
 }
 
+function readSectionReserved(section: DocumentSection): PageReservedDraft {
+  return {
+    headerReserved: section.page.headerReserved ?? 0,
+    footerReserved: section.page.footerReserved ?? 0,
+  }
+}
+
+function readSectionHeaderFooterMode(section: DocumentSection): PageHeaderFooterHorizontalMode {
+  return section.page.headerFooterHorizontalMode === "full" ? "full" : "body"
+}
+
 function clampPageMarginValue(value: number, side: PageMarginSide, section: DocumentSection): number {
   const { width, height } = getPageDimensions(section.page)
   const pageExtent = side === "left" || side === "right" ? width : height
   const max = Math.max(0, pageExtent / 2 - 36)
   const numeric = Number.isFinite(value) ? value : 0
   return Math.max(0, Math.min(max, Math.round(numeric * 100) / 100))
+}
+
+function clampPageReservedDraft(
+  draft: PageReservedDraft,
+  section: DocumentSection,
+  priority: PageReservedZone,
+): PageReservedDraft {
+  return clampSectionReservedZones(section, draft, priority)
 }
 
 function clampPageMarginDraft(draft: PageMarginDraft, section: DocumentSection): PageMarginDraft {
@@ -37,8 +64,26 @@ function arePageMarginsEqual(a: PageMarginDraft, b: PageMarginDraft): boolean {
   return a.top === b.top && a.right === b.right && a.bottom === b.bottom && a.left === b.left
 }
 
+function arePageReservedZonesEqual(a: PageReservedDraft, b: PageReservedDraft): boolean {
+  return a.headerReserved === b.headerReserved && a.footerReserved === b.footerReserved
+}
+
 function formatPageMarginSummary(margin: PageMarginDraft): string {
   return `${margin.top}/${margin.right}/${margin.bottom}/${margin.left} pt`
+}
+
+function formatReservedZoneValue(value: number | undefined): string {
+  return `${Math.max(0, value ?? 0)} pt`
+}
+
+function formatHeaderFooterSummary(reserved: PageReservedDraft): string {
+  return `${formatReservedZoneValue(reserved.headerReserved)} / ${formatReservedZoneValue(reserved.footerReserved)}`
+}
+
+function hasReservedZoneRoot(section: DocumentSection, zone: PageReservedZone): boolean {
+  return zone === "headerReserved"
+    ? Boolean(section.headerRootId || section.headerFirstPageRootId)
+    : Boolean(section.footerRootId || section.footerFirstPageRootId)
 }
 
 function PagePanelSection({
@@ -88,24 +133,34 @@ export function PagePanel({
   sectionIndex,
   editable,
   onUpdateMargin,
+  onUpdateReservedZones,
+  onUpdateHeaderFooterMode,
 }: {
   doc: DocumentNode
   sectionIndex: number
   editable: boolean
   onUpdateMargin: (sectionIndex: number, margin: PageMarginDraft) => void
+  onUpdateReservedZones: (sectionIndex: number, reserved: PageReservedDraft) => void
+  onUpdateHeaderFooterMode: (sectionIndex: number, mode: PageHeaderFooterHorizontalMode) => void
 }) {
   const section = doc.document.sections[sectionIndex] ?? doc.document.sections[0]
   const [draft, setDraft] = useState<PageMarginDraft>(() => section ? readSectionMargin(section) : { top: 0, right: 0, bottom: 0, left: 0 })
+  const [reservedDraft, setReservedDraft] = useState<PageReservedDraft>(() => section ? readSectionReserved(section) : { headerReserved: 0, footerReserved: 0 })
+  const [reservedPriority, setReservedPriority] = useState<PageReservedZone>("headerReserved")
+  const headerFooterMode = section ? readSectionHeaderFooterMode(section) : "body"
 
   useEffect(() => {
     if (!section) return
     setDraft(readSectionMargin(section))
+    setReservedDraft(readSectionReserved(section))
   }, [
     section?.id,
     section?.page.margin.top.value,
     section?.page.margin.right.value,
     section?.page.margin.bottom.value,
     section?.page.margin.left.value,
+    section?.page.headerReserved,
+    section?.page.footerReserved,
   ])
 
   const commitDraft = useCallback(() => {
@@ -122,8 +177,33 @@ export function PagePanel({
     setDraft(readSectionMargin(section))
   }, [section])
 
+  const commitReservedDraft = useCallback(() => {
+    if (!editable || !section) return
+    const next = clampPageReservedDraft(reservedDraft, section, reservedPriority)
+    const current = readSectionReserved(section)
+    setReservedDraft(next)
+    if (arePageReservedZonesEqual(next, current)) return
+    onUpdateReservedZones(sectionIndex, next)
+  }, [editable, onUpdateReservedZones, reservedDraft, reservedPriority, section, sectionIndex])
+
+  const resetReservedDraft = useCallback(() => {
+    if (!section) return
+    setReservedDraft(readSectionReserved(section))
+  }, [section])
+
   const setMarginSide = (side: PageMarginSide, value: string) => {
     setDraft((prev) => ({ ...prev, [side]: Number(value) || 0 }))
+  }
+
+  const setReservedZone = (zone: PageReservedZone, value: string) => {
+    setReservedPriority(zone)
+    setReservedDraft((prev) => ({ ...prev, [zone]: Number(value) || 0 }))
+  }
+
+  const setHeaderFooterMode = (mode: PageHeaderFooterHorizontalMode) => {
+    if (!editable || !section) return
+    if (mode === headerFooterMode) return
+    onUpdateHeaderFooterMode(sectionIndex, mode)
   }
 
   const setAllMargins = (value: string) => {
@@ -222,6 +302,65 @@ export function PagePanel({
                 </div>
               )}
             </PagePanelSection>
+
+            <PagePanelSection title="Header/Footer" summary={formatHeaderFooterSummary(reservedDraft)} testId="page-header-footer-card" defaultOpen={false}>
+              <div role="group" aria-label="Header/footer width mode" style={pagePanelSegmentedControl}>
+                {(["body", "full"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={headerFooterMode === mode}
+                    disabled={!editable || !section}
+                    onClick={() => setHeaderFooterMode(mode)}
+                    style={{
+                      ...pagePanelSegmentButton,
+                      ...(headerFooterMode === mode ? pagePanelSegmentButtonActive : null),
+                      ...(!editable || !section ? pagePanelSegmentButtonDisabled : null),
+                    }}
+                  >
+                    {headerFooterModeLabels[mode]}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                {([
+                  ["headerReserved", "Header"],
+                  ["footerReserved", "Footer"],
+                ] as const).map(([zone, label]) => {
+                  const zoneMinimum = section && (hasReservedZoneRoot(section, zone) || reservedDraft[zone] > 0)
+                    ? MIN_HEADER_FOOTER_RESERVED_PT
+                    : 0
+                  return (
+                    <label key={zone} style={{ display: "grid", gap: 3 }}>
+                      <span style={pagePanelFieldLabel}>{label}</span>
+                      <input
+                        type="number"
+                        min={zoneMinimum}
+                        step={1}
+                        value={reservedDraft[zone]}
+                        disabled={!editable || !section}
+                        onChange={(event) => setReservedZone(zone, event.target.value)}
+                        onBlur={commitReservedDraft}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.currentTarget.blur()
+                          } else if (event.key === "Escape") {
+                            resetReservedDraft()
+                            event.currentTarget.blur()
+                          }
+                        }}
+                        style={{ ...pagePanelInput, background: editable ? "white" : "#f8fafc", color: editable ? "#111827" : "#94a3b8" }}
+                      />
+                    </label>
+                  )
+                })}
+              </div>
+              {!editable && (
+                <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 6 }}>
+                  Header/footer settings are read-only in Fill mode.
+                </div>
+              )}
+            </PagePanelSection>
           </>
         ) : (
           <div style={{ color: "#94a3b8", fontSize: 12 }}>No page section found.</div>
@@ -281,6 +420,37 @@ const pagePanelInput: CSSProperties = {
   padding: "4px 6px",
   boxSizing: "border-box",
   fontFamily: "monospace",
+}
+
+const pagePanelSegmentedControl: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  border: "1px solid #dbeafe",
+  borderRadius: 5,
+  overflow: "hidden",
+  background: "#f8fafc",
+}
+
+const pagePanelSegmentButton: CSSProperties = {
+  border: "none",
+  borderRight: "1px solid #dbeafe",
+  padding: "5px 6px",
+  background: "transparent",
+  color: "#64748b",
+  fontSize: 10,
+  fontFamily: "monospace",
+  cursor: "pointer",
+}
+
+const pagePanelSegmentButtonActive: CSSProperties = {
+  background: "#dbeafe",
+  color: "#1d4ed8",
+  fontWeight: 700,
+}
+
+const pagePanelSegmentButtonDisabled: CSSProperties = {
+  cursor: "default",
+  color: "#94a3b8",
 }
 
 const pageCompassGrid: CSSProperties = {

@@ -16,6 +16,22 @@ export function getPageDimensions(settings: PageSettings): { width: number; heig
     : { width: A4_PT.width, height: A4_PT.height }
 }
 
+export type HeaderFooterHorizontalMode = NonNullable<PageSettings["headerFooterHorizontalMode"]>
+
+export function getHeaderFooterHorizontalMode(settings: PageSettings): HeaderFooterHorizontalMode {
+  return settings.headerFooterHorizontalMode === "full" ? "full" : "body"
+}
+
+export function resolveHeaderFooterHorizontalBox(
+  settings: PageSettings,
+  contentBox: { x: number; width: number },
+  pageWidth = getPageDimensions(settings).width,
+): { x: number; width: number } {
+  return getHeaderFooterHorizontalMode(settings) === "full"
+    ? { x: 0, width: pageWidth }
+    : { x: contentBox.x, width: contentBox.width }
+}
+
 export function getPageMetrics(settings: PageSettings): PageMetrics {
   const dim = getPageDimensions(settings)
   const marginTop = toAbstractUnit(settings.margin.top.value, settings.margin.top.unit)

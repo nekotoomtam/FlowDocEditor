@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest"
+import { applyPlacementOperation, updateSectionHeaderFooterHorizontalMode } from "@/document"
 import { defaultTextMeasurer } from "@/layout"
 import { assertPaginatedDocument, paginateDocument } from "@/pagination"
 import {
+  HEADER_FOOTER_FLOW_HEAVY_FOOTER_MARKER,
+  HEADER_FOOTER_FLOW_HEAVY_FOOTER_ROW_ID,
+  HEADER_FOOTER_FLOW_HEAVY_HEADER_MARKER,
+  HEADER_FOOTER_FLOW_HEAVY_HEADER_ROW_ID,
+  HEADER_FOOTER_FLOW_HEAVY_SCENARIO_ID,
+  HEADER_FOOTER_ZONE_BODY_NODE_ID,
+  HEADER_FOOTER_ZONE_FOOTER_NODE_ID,
+  HEADER_FOOTER_ZONE_HEADER_NODE_ID,
+  HEADER_FOOTER_ZONE_SCENARIO_ID,
   WYSIWYG_STAGE3_BOUNDARY_APPEND_TEXT,
   WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT,
   WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID,
@@ -41,6 +51,8 @@ import {
   WYSIWYG_STAGE3_TABLE_TARGET_NODE_ID,
   WYSIWYG_STAGE3_TARGET_MARKER,
   WYSIWYG_STAGE3_TARGET_NODE_ID,
+  makeHeaderFooterFlowHeavyDocument,
+  makeHeaderFooterZoneDocument,
   makeWysiwygStage3BoundaryDocument,
   resolveEditorTestScenario,
 } from "../wysiwygStage3StressScenarios"
@@ -88,6 +100,103 @@ describe("WYSIWYG Stage 3 stress scenario", () => {
     expect(scenario?.id).toBe(WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID)
     expect(getPlainParagraphTextFromDocument(scenario?.document ?? makeWysiwygStage3BoundaryDocument(), WYSIWYG_STAGE3_TARGET_NODE_ID))
       .toBe(WYSIWYG_STAGE3_BOUNDARY_INITIAL_TEXT)
+  })
+
+  it("resolves a header/footer zone smoke scenario with repeated zone fragments", () => {
+    const scenario = resolveEditorTestScenario(
+      `?${WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM}=${HEADER_FOOTER_ZONE_SCENARIO_ID}`,
+    )
+    const doc = scenario?.document ?? makeHeaderFooterZoneDocument()
+    const paginated = paginateDocument(doc, defaultTextMeasurer)
+    const pages = paginated.sections[0].pages
+
+    expect(scenario?.id).toBe(HEADER_FOOTER_ZONE_SCENARIO_ID)
+    expect(() => assertPaginatedDocument(paginated)).not.toThrow()
+    expect(doc.document.sections[0].page.headerReserved).toBe(42)
+    expect(doc.document.sections[0].page.footerReserved).toBe(32)
+    expect(pages.length).toBeGreaterThanOrEqual(2)
+    expect(pages.every((page) =>
+      page.headerFragments.some((fragment) => fragment.nodeId === HEADER_FOOTER_ZONE_HEADER_NODE_ID),
+    )).toBe(true)
+    expect(pages.every((page) =>
+      page.footerFragments.some((fragment) => fragment.nodeId === HEADER_FOOTER_ZONE_FOOTER_NODE_ID),
+    )).toBe(true)
+    expect(allFragments(paginated).some((fragment) => fragment.nodeId === HEADER_FOOTER_ZONE_BODY_NODE_ID))
+      .toBe(true)
+  })
+
+  it("lays out header/footer fragments in body-width mode by default and full-width mode when requested", () => {
+    const bodyModeDoc = makeHeaderFooterZoneDocument()
+    const fullModeDoc = updateSectionHeaderFooterHorizontalMode(bodyModeDoc, 0, "full")
+    const bodyModePage = paginateDocument(bodyModeDoc, defaultTextMeasurer).sections[0].pages[0]
+    const fullModePage = paginateDocument(fullModeDoc, defaultTextMeasurer).sections[0].pages[0]
+    const bodyModeHeader = bodyModePage.headerFragments.find((fragment) => fragment.nodeId === HEADER_FOOTER_ZONE_HEADER_NODE_ID)
+    const fullModeHeader = fullModePage.headerFragments.find((fragment) => fragment.nodeId === HEADER_FOOTER_ZONE_HEADER_NODE_ID)
+
+    expect(bodyModeHeader?.x).toBe(bodyModePage.contentBox.x)
+    expect(bodyModeHeader?.width).toBe(bodyModePage.contentBox.width)
+    expect(fullModeHeader?.x).toBe(0)
+    expect(fullModeHeader?.width).toBe(fullModePage.width)
+    expect(fullModePage.contentBox).toEqual(bodyModePage.contentBox)
+  })
+
+  it("paginates flow-row and flow-stack content inserted into a header zone root", () => {
+    const doc = makeHeaderFooterZoneDocument()
+    const section = doc.document.sections[0]
+    const headerRootId = section.headerRootId
+    expect(headerRootId).toBeTruthy()
+    if (!headerRootId) return
+
+    const updated = applyPlacementOperation(
+      doc,
+      section.id,
+      { kind: "insert-into-container", containerId: headerRootId, containerType: "stack", index: section.nodes[headerRootId]?.type === "stack" ? section.nodes[headerRootId].childIds.length : 0 },
+      { source: "palette", blockType: "flow-columns", columnShares: [50, 50] },
+    )
+    const paginated = paginateDocument(updated, defaultTextMeasurer)
+    const page = paginated.sections[0].pages[0]
+
+    expect(() => assertPaginatedDocument(paginated)).not.toThrow()
+    expect(page.headerFragments.some((fragment) => fragment.nodeType === "flow-row")).toBe(true)
+    expect(page.headerFragments.filter((fragment) => fragment.nodeType === "flow-stack")).toHaveLength(2)
+    expect(page.fragments.some((fragment) => fragment.nodeType === "flow-row")).toBe(false)
+  })
+
+  it("resolves and paginates the heavy header/footer flow layout scenario", () => {
+    const scenario = resolveEditorTestScenario(
+      `?${WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM}=${HEADER_FOOTER_FLOW_HEAVY_SCENARIO_ID}`,
+    )
+    const doc = scenario?.document ?? makeHeaderFooterFlowHeavyDocument()
+    const paginated = paginateDocument(doc, defaultTextMeasurer)
+    const pages = paginated.sections[0].pages
+    const firstPage = pages[0]
+
+    expect(scenario?.id).toBe(HEADER_FOOTER_FLOW_HEAVY_SCENARIO_ID)
+    expect(() => assertPaginatedDocument(paginated)).not.toThrow()
+    expect(pages.length).toBeGreaterThanOrEqual(3)
+    expect(pages.every((page) =>
+      page.headerFragments.some((fragment) => fragment.nodeId === HEADER_FOOTER_FLOW_HEAVY_HEADER_ROW_ID && fragment.nodeType === "flow-row"),
+    )).toBe(true)
+    expect(pages.every((page) =>
+      page.footerFragments.some((fragment) => fragment.nodeId === HEADER_FOOTER_FLOW_HEAVY_FOOTER_ROW_ID && fragment.nodeType === "flow-row"),
+    )).toBe(true)
+    expect(firstPage.headerFragments.filter((fragment) => fragment.parentNodeId === HEADER_FOOTER_FLOW_HEAVY_HEADER_ROW_ID && fragment.nodeType === "flow-stack")).toHaveLength(4)
+    expect(firstPage.footerFragments.filter((fragment) => fragment.parentNodeId === HEADER_FOOTER_FLOW_HEAVY_FOOTER_ROW_ID && fragment.nodeType === "flow-stack")).toHaveLength(2)
+    expect(firstPage.headerFragments.flatMap((fragment) => fragment.lines ?? []).map((line) => line.text).join(" ")).toContain(HEADER_FOOTER_FLOW_HEAVY_HEADER_MARKER)
+    expect(firstPage.footerFragments.flatMap((fragment) => fragment.lines ?? []).map((line) => line.text).join(" ")).toContain(HEADER_FOOTER_FLOW_HEAVY_FOOTER_MARKER)
+  })
+
+  it("keeps heavy header/footer flow rows body-width by default and page-width in full mode", () => {
+    const bodyModePage = paginateDocument(makeHeaderFooterFlowHeavyDocument("body"), defaultTextMeasurer).sections[0].pages[0]
+    const fullModePage = paginateDocument(makeHeaderFooterFlowHeavyDocument("full"), defaultTextMeasurer).sections[0].pages[0]
+    const bodyModeHeaderRow = bodyModePage.headerFragments.find((fragment) => fragment.nodeId === HEADER_FOOTER_FLOW_HEAVY_HEADER_ROW_ID)
+    const fullModeHeaderRow = fullModePage.headerFragments.find((fragment) => fragment.nodeId === HEADER_FOOTER_FLOW_HEAVY_HEADER_ROW_ID)
+
+    expect(bodyModeHeaderRow?.x).toBe(bodyModePage.contentBox.x)
+    expect(bodyModeHeaderRow?.width).toBe(bodyModePage.contentBox.width)
+    expect(fullModeHeaderRow?.x).toBe(0)
+    expect(fullModeHeaderRow?.width).toBe(fullModePage.width)
+    expect(fullModePage.contentBox).toEqual(bodyModePage.contentBox)
   })
 
   it("starts near a page boundary, overflows after draft append, and shrinks back", () => {

@@ -307,6 +307,41 @@ Table-specific interaction rules are defined in
 - The right-rail `Page > Margins` fields remain the recovery path for zero or
   very small margins where canvas handles are hard to target.
 
+## Header/Footer Zone Editing Rules
+
+- Header/footer reserved areas are a separate editor-only mode, not part of page
+  margin editing.
+- Double-clicking a header/footer reserved area enters header/footer zone mode
+  for that section.
+- Header/footer zone mode takes priority over page margin activation in the same
+  section so margin handles do not appear under the active zone.
+- While header/footer zone mode is active, body selection, inline editing,
+  drag/resize, and margin activation are suppressed for that section.
+- Clicking the body area or the canvas outside the page exits header/footer zone
+  mode without changing document data.
+- Header/footer reserved heights are editable through the right-rail page panel
+  and must commit through document history like other page settings.
+- Active header/footer reserved heights must stay at least one editable line
+  tall (`24pt` in the current UI). Sections without header/footer roots and
+  with zero reserved height remain zero so older body-only documents do not
+  gain blank space automatically.
+- Header and footer reserved heights are capped together at 70% of usable page
+  height after top/bottom margins, leaving at least 30% for body layout.
+- Header/footer horizontal mode is authored page setup. The first supported
+  modes are `body` (`In frame`) and `full` (`Full`); absent values resolve to
+  `body` so existing documents preserve their current margin-bound behavior.
+- `body` mode lays header/footer content and edit hit areas inside the body
+  content width. `full` mode lays them from the page left edge to the page right
+  edge without changing body content margins.
+- Header/footer zone mode may accept Flow Row / Flow Stack layout blocks through
+  the same authored section nodes used by pagination and export, but only the
+  header/footer root stack should behave like a body-like container. Ordinary
+  column stacks must continue rejecting nested row-like insertions.
+- A future custom horizontal range is deferred until its document semantics,
+  undo/redo behavior, export mapping, and editor affordance are designed.
+- Header/footer content authoring remains deferred until a dedicated authoring
+  contract is designed and accepted.
+
 ## Flow Row Editing Rules
 
 - Adding a column from a selected `flow-row` is a global row action: it adds one

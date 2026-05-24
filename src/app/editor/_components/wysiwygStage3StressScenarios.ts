@@ -3,6 +3,15 @@ import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode } from "@/s
 
 export const WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM = "flowdocTestScenario"
 export const WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID = "wysiwyg-stage3-boundary"
+export const HEADER_FOOTER_ZONE_SCENARIO_ID = "header-footer-zones"
+export const HEADER_FOOTER_FLOW_HEAVY_SCENARIO_ID = "header-footer-flow-heavy"
+export const HEADER_FOOTER_ZONE_HEADER_NODE_ID = "header-footer-zone-header"
+export const HEADER_FOOTER_ZONE_FOOTER_NODE_ID = "header-footer-zone-footer"
+export const HEADER_FOOTER_ZONE_BODY_NODE_ID = "header-footer-zone-body-p1"
+export const HEADER_FOOTER_FLOW_HEAVY_HEADER_ROW_ID = "header-footer-flow-heavy-header-row"
+export const HEADER_FOOTER_FLOW_HEAVY_FOOTER_ROW_ID = "header-footer-flow-heavy-footer-row"
+export const HEADER_FOOTER_FLOW_HEAVY_HEADER_MARKER = "HF_HEAVY_HEADER_MARKER"
+export const HEADER_FOOTER_FLOW_HEAVY_FOOTER_MARKER = "HF_HEAVY_FOOTER_MARKER"
 export const WYSIWYG_STAGE3_TARGET_NODE_ID = "stage3-boundary-target"
 export const WYSIWYG_STAGE3_TARGET_MARKER = "STAGE3_BOUNDARY_MARKER"
 export const WYSIWYG_STAGE3_STACK_ROW_ID = "stage3-stack-row"
@@ -633,8 +642,184 @@ export function makeWysiwygStage3BoundaryDocument(): DocumentNode {
   }
 }
 
+export function makeHeaderFooterZoneDocument(): DocumentNode {
+  const header = paragraph(HEADER_FOOTER_ZONE_HEADER_NODE_ID, "Header zone preview", {
+    fontSize: pt(9),
+    lineHeight: 1.1,
+    spacingAfter: pt(0),
+  })
+  const footer = paragraph(HEADER_FOOTER_ZONE_FOOTER_NODE_ID, "Footer zone preview", {
+    align: "center",
+    fontSize: pt(9),
+    lineHeight: 1.1,
+    spacingAfter: pt(0),
+  })
+  const bodyParagraphs = Array.from({ length: 32 }, (_unused, index) => paragraph(
+    `header-footer-zone-body-p${index + 1}`,
+    `Header/footer zone body paragraph ${index + 1} keeps enough content for repeated page zones. `.repeat(2),
+    { fontSize: pt(10), lineHeight: 1.2, spacingAfter: pt(6) },
+  ))
+  const headerRoot: LayoutNode = {
+    id: "header-footer-zone-header-root",
+    type: "stack",
+    props: {},
+    childIds: [header.id],
+  }
+  const footerRoot: LayoutNode = {
+    id: "header-footer-zone-footer-root",
+    type: "stack",
+    props: {},
+    childIds: [footer.id],
+  }
+  const body: LayoutNode = {
+    id: "header-footer-zone-body",
+    type: "body",
+    props: {},
+    childIds: bodyParagraphs.map((node) => node.id),
+  }
+  const nodes: Record<string, LayoutNode> = {
+    [headerRoot.id]: headerRoot,
+    [footerRoot.id]: footerRoot,
+    [header.id]: header,
+    [footer.id]: footer,
+    [body.id]: body,
+  }
+  for (const node of bodyParagraphs) nodes[node.id] = node
+
+  return {
+    version: 1,
+    document: {
+      id: "header-footer-zone-doc",
+      meta: { title: "Header Footer Zone Smoke" },
+      sections: [{
+        id: "header-footer-zone-section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+          headerReserved: 42,
+          footerReserved: 32,
+        },
+        headerRootId: headerRoot.id,
+        bodyRootId: body.id,
+        footerRootId: footerRoot.id,
+        nodes,
+      }],
+    },
+  }
+}
+
+function heavyFlowParagraph(id: string, text: string, overrides: Partial<ParagraphNode["props"]> = {}): ParagraphNode {
+  return paragraph(id, text, {
+    fontSize: pt(8),
+    lineHeight: 1.05,
+    spacingAfter: pt(0),
+    ...overrides,
+  })
+}
+
+export function makeHeaderFooterFlowHeavyDocument(mode: "body" | "full" = "body"): DocumentNode {
+  const headerParagraphs = [
+    heavyFlowParagraph("hf-heavy-h-p1", `${HEADER_FOOTER_FLOW_HEAVY_HEADER_MARKER} A\nบริษัท ตัวอย่าง จำกัด`),
+    heavyFlowParagraph("hf-heavy-h-p2", "เลขที่เอกสาร\nDOC-2026-0001"),
+    heavyFlowParagraph("hf-heavy-h-p3", "รอบรายงาน\n10-13 พฤษภาคม"),
+    heavyFlowParagraph("hf-heavy-h-p4", "หน้าที่\n{{page}}"),
+  ]
+  const footerParagraphs = [
+    heavyFlowParagraph("hf-heavy-f-p1", `${HEADER_FOOTER_FLOW_HEAVY_FOOTER_MARKER} Prepared by FlowDoc`, { align: "left" }),
+    heavyFlowParagraph("hf-heavy-f-p2", "Confidential / Internal use", { align: "right" }),
+  ]
+  const headerStackIds = ["hf-heavy-h-s1", "hf-heavy-h-s2", "hf-heavy-h-s3", "hf-heavy-h-s4"]
+  const footerStackIds = ["hf-heavy-f-s1", "hf-heavy-f-s2"]
+  const headerStacks: LayoutNode[] = headerStackIds.map((id, index) => ({
+    id,
+    type: "flow-stack",
+    props: { widthShare: [28, 26, 26, 20][index], minHeight: 24 },
+    childIds: index === 2 ? [] : [headerParagraphs[index].id],
+  }))
+  const footerStacks: LayoutNode[] = footerStackIds.map((id, index) => ({
+    id,
+    type: "flow-stack",
+    props: { widthShare: index === 0 ? 55 : 45, minHeight: 18 },
+    childIds: [footerParagraphs[index].id],
+  }))
+  const headerRoot: LayoutNode = {
+    id: "hf-heavy-header-root",
+    type: "stack",
+    props: { gap: 2 },
+    childIds: [HEADER_FOOTER_FLOW_HEAVY_HEADER_ROW_ID],
+  }
+  const footerRoot: LayoutNode = {
+    id: "hf-heavy-footer-root",
+    type: "stack",
+    props: { gap: 2 },
+    childIds: [HEADER_FOOTER_FLOW_HEAVY_FOOTER_ROW_ID],
+  }
+  const headerRow: LayoutNode = {
+    id: HEADER_FOOTER_FLOW_HEAVY_HEADER_ROW_ID,
+    type: "flow-row",
+    props: { gap: 6, minHeight: 28 },
+    childIds: headerStackIds,
+  }
+  const footerRow: LayoutNode = {
+    id: HEADER_FOOTER_FLOW_HEAVY_FOOTER_ROW_ID,
+    type: "flow-row",
+    props: { gap: 8, minHeight: 20 },
+    childIds: footerStackIds,
+  }
+  const bodyParagraphs = Array.from({ length: 72 }, (_unused, index) => paragraph(
+    `hf-heavy-body-p${index + 1}`,
+    `Header/footer heavy body paragraph ${index + 1} keeps the document long enough for repeated zone layout. `.repeat(3),
+    { fontSize: pt(10), lineHeight: 1.2, spacingAfter: pt(7) },
+  ))
+  const body: LayoutNode = {
+    id: "hf-heavy-body",
+    type: "body",
+    props: {},
+    childIds: bodyParagraphs.map((node) => node.id),
+  }
+  const nodes: Record<string, LayoutNode> = {
+    [headerRoot.id]: headerRoot,
+    [footerRoot.id]: footerRoot,
+    [headerRow.id]: headerRow,
+    [footerRow.id]: footerRow,
+    [body.id]: body,
+  }
+  for (const node of [...headerStacks, ...footerStacks, ...headerParagraphs, ...footerParagraphs, ...bodyParagraphs]) {
+    nodes[node.id] = node
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "header-footer-flow-heavy-doc",
+      meta: { title: "Header Footer Flow Heavy" },
+      sections: [{
+        id: "header-footer-flow-heavy-section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+          headerReserved: 46,
+          footerReserved: 34,
+          headerFooterHorizontalMode: mode,
+        },
+        headerRootId: headerRoot.id,
+        bodyRootId: body.id,
+        footerRootId: footerRoot.id,
+        nodes,
+      }],
+    },
+  }
+}
+
 export interface EditorTestScenario {
-  id: typeof WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID
+  id:
+    | typeof WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID
+    | typeof HEADER_FOOTER_ZONE_SCENARIO_ID
+    | typeof HEADER_FOOTER_FLOW_HEAVY_SCENARIO_ID
   document: DocumentNode
 }
 
@@ -647,11 +832,26 @@ function editorTestScenariosEnabled(): boolean {
 export function resolveEditorTestScenario(search: string | null | undefined): EditorTestScenario | null {
   if (!editorTestScenariosEnabled() || !search) return null
   const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search)
-  if (params.get(WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM) !== WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID) return null
-  return {
-    id: WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID,
-    document: makeWysiwygStage3BoundaryDocument(),
+  const scenarioId = params.get(WYSIWYG_STAGE3_SCENARIO_QUERY_PARAM)
+  if (scenarioId === WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID) {
+    return {
+      id: WYSIWYG_STAGE3_BOUNDARY_SCENARIO_ID,
+      document: makeWysiwygStage3BoundaryDocument(),
+    }
   }
+  if (scenarioId === HEADER_FOOTER_ZONE_SCENARIO_ID) {
+    return {
+      id: HEADER_FOOTER_ZONE_SCENARIO_ID,
+      document: makeHeaderFooterZoneDocument(),
+    }
+  }
+  if (scenarioId === HEADER_FOOTER_FLOW_HEAVY_SCENARIO_ID) {
+    return {
+      id: HEADER_FOOTER_FLOW_HEAVY_SCENARIO_ID,
+      document: makeHeaderFooterFlowHeavyDocument(),
+    }
+  }
+  return null
 }
 
 export function resolveEditorTestScenarioFromLocation(): EditorTestScenario | null {

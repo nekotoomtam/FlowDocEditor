@@ -254,6 +254,14 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
   const reachable = new Set<string>()
   const active = new Set<string>()
   const seenParents = new Map<string, string>()
+  const zoneRootIds = new Set(
+    [
+      section.headerRootId,
+      section.headerFirstPageRootId,
+      section.footerRootId,
+      section.footerFirstPageRootId,
+    ].filter((id): id is string => typeof id === "string"),
+  )
 
   const visit = (nodeId: string, nodePath: string): void => {
     const node = section.nodes[nodeId]
@@ -304,8 +312,15 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
       }
 
       if (node.type === "stack") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "spacer" && child.type !== "flow-table" && child.type !== "toc") {
-          fail(childPath, `stack child must be paragraph, row, spacer, flow-table, or toc — got "${child.type}"`)
+        const isZoneRoot = zoneRootIds.has(node.id)
+        const validStackChild = child.type === "paragraph" ||
+          child.type === "row" ||
+          child.type === "spacer" ||
+          child.type === "flow-table" ||
+          child.type === "toc" ||
+          (isZoneRoot && child.type === "flow-row")
+        if (!validStackChild) {
+          fail(childPath, `stack child must be paragraph, row, spacer, flow-table, or toc${isZoneRoot ? ", or flow-row" : ""} — got "${child.type}"`)
         }
       }
 

@@ -14,7 +14,7 @@ import type {
   PaginatedSection,
   ParagraphSplitDecision,
 } from "./types"
-import { createEmptyPage, getPageMetrics } from "./metrics"
+import { createEmptyPage, getPageMetrics, resolveHeaderFooterHorizontalBox } from "./metrics"
 import {
   advancePage,
   pushFragment,
@@ -294,6 +294,7 @@ function paginateSection(
   const contentBottom = metrics.contentBox.y + metrics.contentBox.height
   const contentX = metrics.contentBox.x
   const contentWidth = metrics.contentBox.width
+  const zoneHorizontalBox = resolveHeaderFooterHorizontalBox(section.page, metrics.contentBox, metrics.pageWidth)
 
   // ─── Body ────────────────────────────────────────────────────────────────────
   const flowBox = flowSection(section, contentX, contentWidth, measurer, wordBreaker, tocHeightOverrides)
@@ -310,17 +311,17 @@ function paginateSection(
   const headerY = contentTop - Math.max(0, section.page.headerReserved ?? 0)
   const footerY = contentBottom
 
-  const defaultHeaderBox = flowZone(section, section.headerRootId, contentX, headerY, contentWidth, measurer, wordBreaker)
-  const defaultFooterBox = flowZone(section, section.footerRootId, contentX, footerY, contentWidth, measurer, wordBreaker)
+  const defaultHeaderBox = flowZone(section, section.headerRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker)
+  const defaultFooterBox = flowZone(section, section.footerRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker)
 
   // first page: undefined = ใช้ default, null = ไม่มี header/footer
   const hasFirstPageHeader = section.headerFirstPageRootId !== undefined
   const hasFirstPageFooter = section.footerFirstPageRootId !== undefined
   const firstPageHeaderBox = hasFirstPageHeader
-    ? flowZone(section, section.headerFirstPageRootId, contentX, headerY, contentWidth, measurer, wordBreaker)
+    ? flowZone(section, section.headerFirstPageRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker)
     : defaultHeaderBox
   const firstPageFooterBox = hasFirstPageFooter
-    ? flowZone(section, section.footerFirstPageRootId, contentX, footerY, contentWidth, measurer, wordBreaker)
+    ? flowZone(section, section.footerFirstPageRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker)
     : defaultFooterBox
 
   const defaultHeaderFragments = buildZoneFragments(defaultHeaderBox, section, measurer, wordBreaker)

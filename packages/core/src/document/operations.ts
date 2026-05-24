@@ -12,11 +12,12 @@ import type {
   ParagraphBoxPadding,
   ParagraphBoxStyle,
   ParagraphNode,
+  PageSettings,
   TextRun,
   UnitValue,
 } from "../schema"
 import { pt } from "../schema"
-import { getPageMetrics } from "../pagination/metrics"
+import { getPageDimensions, getPageMetrics } from "../pagination/metrics"
 import type { DragSource, PlacementOperation } from "../placement/types"
 import {
   createParagraphNode,
@@ -99,6 +100,9 @@ export interface FlowTableCellMergeTarget {
 }
 
 const MIN_TABLE_COLUMN_RESIZE_WIDTH_PT = 24
+export const MIN_HEADER_FOOTER_RESERVED_PT = 24
+export const MIN_BODY_CONTENT_HEIGHT_RATIO = 0.3
+export const MAX_HEADER_FOOTER_RESERVED_RATIO = 1 - MIN_BODY_CONTENT_HEIGHT_RATIO
 
 // ─── Tree Helpers ──────────────────────────────────────────────────────────────
 
@@ -2571,6 +2575,113 @@ export function updateSectionMargin(
           bottom: pt(margin.bottom),
           left: pt(margin.left),
         },
+      },
+    },
+  )
+  return { ...doc, document: { ...doc.document, sections } }
+}
+
+function roundNonNegativePt(value: number): number {
+  const numeric = Number.isFinite(value) ? value : 0
+  return Math.max(0, Math.round(numeric * 100) / 100)
+}
+
+export type HeaderFooterHorizontalMode = NonNullable<PageSettings["headerFooterHorizontalMode"]>
+export type ReservedZonePriority = "headerReserved" | "footerReserved"
+
+function roundPt(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+function hasHeaderRoot(section: DocumentNode["document"]["sections"][number]): boolean {
+  return Boolean(section.headerRootId || section.headerFirstPageRootId)
+}
+
+function hasFooterRoot(section: DocumentNode["document"]["sections"][number]): boolean {
+  return Boolean(section.footerRootId || section.footerFirstPageRootId)
+}
+
+export function clampSectionReservedZones(
+  section: DocumentNode["document"]["sections"][number],
+  reserved: { headerReserved: number; footerReserved: number },
+  priority: ReservedZonePriority = "headerReserved",
+): { headerReserved: number; footerReserved: number } {
+  const rawHeaderReserved = roundNonNegativePt(reserved.headerReserved)
+  const rawFooterReserved = roundNonNegativePt(reserved.footerReserved)
+  const headerActive = hasHeaderRoot(section) || rawHeaderReserved > 0
+  const footerActive = hasFooterRoot(section) || rawFooterReserved > 0
+  const { height } = getPageDimensions(section.page)
+  const usableHeight = Math.max(0, height - section.page.margin.top.value - section.page.margin.bottom.value)
+  const maxTotalReserved = roundPt(usableHeight * MAX_HEADER_FOOTER_RESERVED_RATIO)
+  const activeCount = (headerActive ? 1 : 0) + (footerActive ? 1 : 0)
+  const minReserved = activeCount > 0
+    ? roundPt(Math.min(MIN_HEADER_FOOTER_RESERVED_PT, maxTotalReserved / activeCount))
+    : 0
+  const minHeaderReserved = headerActive ? minReserved : 0
+  const minFooterReserved = footerActive ? minReserved : 0
+  let headerReserved = headerActive ? Math.max(rawHeaderReserved, minHeaderReserved) : 0
+  let footerReserved = footerActive ? Math.max(rawFooterReserved, minFooterReserved) : 0
+
+  if (headerReserved + footerReserved > maxTotalReserved) {
+    if (priority === "footerReserved") {
+      footerReserved = Math.min(footerReserved, Math.max(minFooterReserved, maxTotalReserved - minHeaderReserved))
+      headerReserved = Math.min(headerReserved, Math.max(minHeaderReserved, maxTotalReserved - footerReserved))
+    } else {
+      headerReserved = Math.min(headerReserved, Math.max(minHeaderReserved, maxTotalReserved - minFooterReserved))
+      footerReserved = Math.min(footerReserved, Math.max(minFooterReserved, maxTotalReserved - headerReserved))
+    }
+  }
+
+  return {
+    headerReserved: roundPt(headerReserved),
+    footerReserved: roundPt(footerReserved),
+  }
+}
+
+function normalizeHeaderFooterHorizontalMode(mode: PageSettings["headerFooterHorizontalMode"]): HeaderFooterHorizontalMode {
+  return mode === "full" ? "full" : "body"
+}
+
+export function updateSectionReservedZones(
+  doc: DocumentNode,
+  sectionIndex: number,
+  reserved: { headerReserved: number; footerReserved: number },
+): DocumentNode {
+  const section = doc.document.sections[sectionIndex]
+  if (!section) return doc
+  const { headerReserved, footerReserved } = clampSectionReservedZones(section, reserved)
+  if (
+    (section.page.headerReserved ?? 0) === headerReserved &&
+    (section.page.footerReserved ?? 0) === footerReserved
+  ) return doc
+  const sections = doc.document.sections.map((s, i) =>
+    i !== sectionIndex ? s : {
+      ...s,
+      page: {
+        ...s.page,
+        headerReserved,
+        footerReserved,
+      },
+    },
+  )
+  return { ...doc, document: { ...doc.document, sections } }
+}
+
+export function updateSectionHeaderFooterHorizontalMode(
+  doc: DocumentNode,
+  sectionIndex: number,
+  mode: HeaderFooterHorizontalMode,
+): DocumentNode {
+  const section = doc.document.sections[sectionIndex]
+  if (!section) return doc
+  const nextMode = normalizeHeaderFooterHorizontalMode(mode)
+  if (normalizeHeaderFooterHorizontalMode(section.page.headerFooterHorizontalMode) === nextMode) return doc
+  const sections = doc.document.sections.map((s, i) =>
+    i !== sectionIndex ? s : {
+      ...s,
+      page: {
+        ...s.page,
+        headerFooterHorizontalMode: nextMode,
       },
     },
   )

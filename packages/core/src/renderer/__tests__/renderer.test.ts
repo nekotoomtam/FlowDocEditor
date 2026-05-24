@@ -73,6 +73,67 @@ function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): Doc
   }
 }
 
+function makeHeaderFooterFlowHeavyRendererDoc(mode: "body" | "full" = "body"): DocumentNode {
+  const headerMarker = "HF_RENDER_HEAVY_HEADER"
+  const footerMarker = "HF_RENDER_HEAVY_FOOTER"
+  const headerParagraphs = [
+    makePara("hf-render-h-p1", `${headerMarker} A\nCompany`, { fontSize: pt(8), lineHeight: 1.05, spacingAfter: pt(0) }),
+    makePara("hf-render-h-p2", "Document\nDOC-2026-0001", { fontSize: pt(8), lineHeight: 1.05, spacingAfter: pt(0) }),
+    makePara("hf-render-h-p3", "Cycle\n10-13 May", { fontSize: pt(8), lineHeight: 1.05, spacingAfter: pt(0) }),
+    makePara("hf-render-h-p4", "Page\n{{page}}", { fontSize: pt(8), lineHeight: 1.05, spacingAfter: pt(0) }),
+  ]
+  const footerParagraphs = [
+    makePara("hf-render-f-p1", `${footerMarker} Prepared by FlowDoc`, { fontSize: pt(8), lineHeight: 1.05, spacingAfter: pt(0) }),
+    makePara("hf-render-f-p2", "Confidential", { align: "right", fontSize: pt(8), lineHeight: 1.05, spacingAfter: pt(0) }),
+  ]
+  const headerStackIds = ["hf-render-h-s1", "hf-render-h-s2", "hf-render-h-s3", "hf-render-h-s4"]
+  const footerStackIds = ["hf-render-f-s1", "hf-render-f-s2"]
+  const nodes: Record<string, LayoutNode> = {
+    "hf-render-header-root": { id: "hf-render-header-root", type: "stack", props: { gap: 2 }, childIds: ["hf-render-header-row"] },
+    "hf-render-footer-root": { id: "hf-render-footer-root", type: "stack", props: { gap: 2 }, childIds: ["hf-render-footer-row"] },
+    "hf-render-header-row": { id: "hf-render-header-row", type: "flow-row", props: { gap: 6, minHeight: 28 }, childIds: headerStackIds },
+    "hf-render-footer-row": { id: "hf-render-footer-row", type: "flow-row", props: { gap: 8, minHeight: 20 }, childIds: footerStackIds },
+  }
+  headerStackIds.forEach((id, index) => {
+    nodes[id] = {
+      id,
+      type: "flow-stack",
+      props: { widthShare: [28, 26, 26, 20][index], minHeight: 24 },
+      childIds: index === 2 ? [] : [headerParagraphs[index].id],
+    }
+  })
+  footerStackIds.forEach((id, index) => {
+    nodes[id] = {
+      id,
+      type: "flow-stack",
+      props: { widthShare: index === 0 ? 55 : 45, minHeight: 18 },
+      childIds: [footerParagraphs[index].id],
+    }
+  })
+  for (const paragraph of [...headerParagraphs, ...footerParagraphs]) nodes[paragraph.id] = paragraph
+
+  const bodyParagraphs = Array.from({ length: 60 }, (_unused, index) =>
+    makePara(`hf-render-body-p${index + 1}`, `Renderer heavy body paragraph ${index + 1} keeps repeated header footer flow rows active. `.repeat(3), {
+      fontSize: pt(10),
+      lineHeight: 1.2,
+      spacingAfter: pt(7),
+    }),
+  )
+  for (const paragraph of bodyParagraphs) nodes[paragraph.id] = paragraph
+
+  const doc = makeDoc(bodyParagraphs.map((paragraph) => paragraph.id), nodes)
+  const section = doc.document.sections[0]
+  section.headerRootId = "hf-render-header-root"
+  section.footerRootId = "hf-render-footer-root"
+  section.page = {
+    ...section.page,
+    headerReserved: 46,
+    footerReserved: 34,
+    headerFooterHorizontalMode: mode,
+  }
+  return doc
+}
+
 function paginate(doc: DocumentNode) {
   return paginateDocument(doc, defaultTextMeasurer, defaultWordBreaker)
 }
@@ -377,6 +438,25 @@ describe("PdfRenderer smoke tests", () => {
     const fs2: LayoutNode = { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] }
     const row: LayoutNode = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] }
     const result = await pdf.render(paginate(makeDoc(["fr1"], { fr1: row, fs1, fs2, p1, p2 })))
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("renders repeated header/footer flow rows without throwing", async () => {
+    const doc = makeHeaderFooterFlowHeavyRendererDoc()
+    const paginated = paginate(doc)
+    const pages = paginated.sections[0].pages
+
+    expect(pages.length).toBeGreaterThanOrEqual(3)
+    expect(pages.every((page) =>
+      page.headerFragments.some((fragment) => fragment.nodeId === "hf-render-header-row" && fragment.nodeType === "flow-row"),
+    )).toBe(true)
+    expect(pages.every((page) =>
+      page.footerFragments.some((fragment) => fragment.nodeId === "hf-render-footer-row" && fragment.nodeType === "flow-row"),
+    )).toBe(true)
+
+    const result = await pdf.render(paginated)
+
     expect(result.buffer.length).toBeGreaterThan(0)
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
   })

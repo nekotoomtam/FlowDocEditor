@@ -1,7 +1,7 @@
 "use client"
 
 import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
-import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
+import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
 import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
 import {
   resizeFlowTableColumnPair as resizeFlowTableColumnPairForPreview,
@@ -261,6 +261,11 @@ export interface MarginEditMode {
   sectionIndex: number
 }
 
+export interface HeaderFooterEditMode {
+  sectionIndex: number
+  zone: "header" | "footer"
+}
+
 type ZoomMode = "fit" | "manual"
 type LeftRailMode = EditorLeftRailMode
 type RightRailMode = "page" | "properties"
@@ -341,6 +346,26 @@ function zoneToIntent(zone: PlacementZone): PlacementIntentType {
     case "row-stack-inner":
       return "insertInside"
   }
+}
+
+function findSmallestFragmentAt(fragments: PageFragment[], docX: number, docY: number): PageFragment | null {
+  let hit: PageFragment | null = null
+  let hitArea = Infinity
+  for (const fragment of fragments) {
+    if (
+      docX >= fragment.x &&
+      docX <= fragment.x + fragment.width &&
+      docY >= fragment.y &&
+      docY <= fragment.y + fragment.height
+    ) {
+      const area = fragment.width * fragment.height
+      if (area < hitArea) {
+        hit = fragment
+        hitArea = area
+      }
+    }
+  }
+  return hit
 }
 
 function describeDragSource(source: DragSource): string {
@@ -704,6 +729,7 @@ export default function EditorShell() {
     setOnAnimationFrame: scheduleMarginDrag,
   } = useAnimationFrameState<MarginDrag | null>(null)
   const [marginEditMode, setMarginEditMode] = useState<MarginEditMode | null>(null)
+  const [headerFooterEditMode, setHeaderFooterEditMode] = useState<HeaderFooterEditMode | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [documentIoStatus, setDocumentIoStatus] = useState<{ type: "info" | "error"; message: string } | null>(null)
@@ -2074,6 +2100,12 @@ export default function EditorShell() {
   }, [])
 
   const handleBackgroundPointerDown = useCallback(() => {
+    if (headerFooterEditMode) {
+      setHeaderFooterEditMode(null)
+      dispatch({ type: "SELECT_NODE", nodeId: null })
+      setRightRailMode("page")
+      return
+    }
     if (marginEditMode) {
       setMarginEditMode(null)
       dispatch({ type: "SELECT_NODE", nodeId: null })
@@ -2088,12 +2120,13 @@ export default function EditorShell() {
     }
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setRightRailMode("page")
-  }, [finalizeInlineEditBeforeAction, inlineEditNodeId, marginEditMode])
+  }, [finalizeInlineEditBeforeAction, headerFooterEditMode, inlineEditNodeId, marginEditMode])
 
   const enterMarginEditMode = useCallback((sectionIndex: number) => {
     finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setRightRailMode("page")
+    setHeaderFooterEditMode(null)
     setMarginEditMode({ sectionIndex })
   }, [finalizeInlineEditBeforeAction])
 
@@ -2101,6 +2134,19 @@ export default function EditorShell() {
     if (marginDragRef.current && !marginDragRef.current.committed) return
     setMarginEditMode(null)
   }, [marginDragRef])
+
+  const enterHeaderFooterEditMode = useCallback((sectionIndex: number, zone: "header" | "footer") => {
+    finalizeInlineEditBeforeAction()
+    dispatch({ type: "SELECT_NODE", nodeId: null })
+    setRightRailMode("page")
+    setMarginEditMode(null)
+    setMarginDrag(null)
+    setHeaderFooterEditMode({ sectionIndex, zone })
+  }, [finalizeInlineEditBeforeAction, setMarginDrag])
+
+  const exitHeaderFooterEditMode = useCallback(() => {
+    setHeaderFooterEditMode(null)
+  }, [])
 
   const handleResizeStart = useCallback((
     rowId: string, leftStackId: string, rightStackId: string,
@@ -2243,6 +2289,7 @@ export default function EditorShell() {
     finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setRightRailMode("page")
+    setHeaderFooterEditMode(null)
     setMarginEditMode({ sectionIndex })
     setMarginDrag({ sectionIndex, side, pageWidthPt, pageHeightPt, currentMargins, pageKey, altKey })
   }, [finalizeInlineEditBeforeAction])
@@ -2294,6 +2341,7 @@ export default function EditorShell() {
       setMinHeightDrag(null)
       setMarginDrag(null)
       setMarginEditMode(null)
+      setHeaderFooterEditMode(null)
       setLeftRailMode("outline")
       setRightRailMode("properties")
       return
@@ -2336,22 +2384,78 @@ export default function EditorShell() {
           const docY = svgY / scale
 
           const page = section.pages[pi]
-          const allFragments = page.fragments
+          const sectionDef = doc.document.sections[si]
+          const activeHeaderFooterZone = headerFooterEditMode?.sectionIndex === si
+            ? headerFooterEditMode.zone
+            : null
 
-          let hit: PageFragment | null = null
-          let hitArea = Infinity
-          for (const f of allFragments) {
-            if (docX >= f.x && docX <= f.x + f.width && docY >= f.y && docY <= f.y + f.height) {
-              const area = f.width * f.height
-              if (area < hitArea) { hit = f; hitArea = area }
+          if (sectionDef && activeHeaderFooterZone) {
+            const zoneFragments = activeHeaderFooterZone === "header"
+              ? page.headerFragments ?? []
+              : page.footerFragments ?? []
+            const reservedHeight = Math.max(0, activeHeaderFooterZone === "header"
+              ? sectionDef.page.headerReserved ?? 0
+              : sectionDef.page.footerReserved ?? 0)
+            const zoneY = activeHeaderFooterZone === "header"
+              ? page.contentBox.y - reservedHeight
+              : page.contentBox.y + page.contentBox.height
+            const zoneHorizontalBox = resolveHeaderFooterHorizontalBox(sectionDef.page, page.contentBox, page.width)
+            const inActiveZone =
+              docX >= zoneHorizontalBox.x &&
+              docX <= zoneHorizontalBox.x + zoneHorizontalBox.width &&
+              docY >= zoneY &&
+              docY <= zoneY + reservedHeight
+            const rootId = activeHeaderFooterZone === "header"
+              ? sectionDef.headerRootId
+              : sectionDef.footerRootId
+            const hit = findSmallestFragmentAt(zoneFragments, docX, docY) ??
+              (inActiveZone && rootId ? zoneFragments.find((fragment) => fragment.nodeId === rootId) ?? null : null)
+
+            if (hit) {
+              const localX = docX - hit.x
+              const localY = docY - hit.y
+              const targetResult = detectPlacementTarget({
+                document: doc,
+                hoveredNodeId: hit.nodeId,
+                hoveredNodeType: hit.nodeType,
+                localX,
+                localY,
+                width: hit.width,
+                height: hit.height,
+                source: dragSource,
+              })
+
+              if (!targetResult) {
+                return { preview: { hoverNodeId: hit.nodeId, zone: null, target: null, placement: null, isValid: false }, sectionId: section.sectionId }
+              }
+
+              const rawIntent = { zone: targetResult.zone, intent: zoneToIntent(targetResult.zone), target: targetResult.target }
+              const lawResult = resolvePlacementLaw(doc, rawIntent, dragSource)
+
+              if (lawResult.ok) {
+                return {
+                  preview: { hoverNodeId: hit.nodeId, zone: targetResult.zone, target: targetResult.target, placement: lawResult.value.intent, isValid: true },
+                  sectionId: section.sectionId,
+                }
+              }
+
+              return {
+                preview: { hoverNodeId: hit.nodeId, zone: targetResult.zone, target: targetResult.target, placement: null, isValid: false },
+                sectionId: section.sectionId,
+              }
             }
+
+            if (inActiveZone) return { preview: null, sectionId: section.sectionId }
+            continue
           }
+
+          const allFragments = page.fragments
+          const hit = findSmallestFragmentAt(allFragments, docX, docY)
 
           if (!hit) {
             // ไม่เจอ fragment → fallback ไป body (empty body หรือ gap เหนือ/ล่าง content)
             const cb = page.contentBox
             if (docX >= cb.x && docX <= cb.x + cb.width && docY >= cb.y && docY <= cb.y + cb.height) {
-              const sectionDef = doc.document.sections[si]
               if (sectionDef) {
                 const bodyId = sectionDef.bodyRootId
                 const bodyTarget = { kind: "node" as const, nodeId: bodyId, nodeType: "body" as const }
@@ -2402,7 +2506,7 @@ export default function EditorShell() {
       }
       return { preview: null, sectionId: null }
     },
-    [state, scale],
+    [state, scale, headerFooterEditMode],
   )
 
   const cancelScheduledDragMove = useCallback(() => {
@@ -2722,6 +2826,10 @@ export default function EditorShell() {
         setMarginEditMode(null)
         return
       }
+      if (headerFooterEditMode) {
+        setHeaderFooterEditMode(null)
+        return
+      }
       if (state.drag) dispatch({ type: "DRAG_CANCEL" })
       else if (pendingDragRef.current) pendingDragRef.current = null
       else {
@@ -2752,6 +2860,7 @@ export default function EditorShell() {
     handleInlineEditEnd,
     handleRedo,
     handleUndo,
+    headerFooterEditMode,
     inlineEditNodeId,
     isTemplateMode,
     marginEditMode,
@@ -2971,8 +3080,11 @@ export default function EditorShell() {
                 onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
                 marginDrag={isTemplateMode ? marginDrag : null}
                 marginEditMode={isTemplateMode ? marginEditMode : null}
+                headerFooterEditMode={isTemplateMode ? headerFooterEditMode : null}
                 onMarginEditModeEnter={isTemplateMode ? enterMarginEditMode : () => undefined}
                 onMarginEditModeExit={isTemplateMode ? exitMarginEditMode : () => undefined}
+                onHeaderFooterEditModeEnter={isTemplateMode ? enterHeaderFooterEditMode : () => undefined}
+                onHeaderFooterEditModeExit={isTemplateMode ? exitHeaderFooterEditMode : () => undefined}
                 onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
                 onScaleChange={handleCanvasScaleChange}
                 autoFitScale={zoomMode === "fit"}
@@ -3099,6 +3211,14 @@ export default function EditorShell() {
                     onUpdateMargin={(sectionIndex, margin) => {
                       if (!isTemplateMode) return
                       dispatch({ type: "UPDATE_MARGIN", sectionIndex, margin })
+                    }}
+                    onUpdateReservedZones={(sectionIndex, reserved) => {
+                      if (!isTemplateMode) return
+                      dispatch({ type: "UPDATE_RESERVED_ZONES", sectionIndex, reserved })
+                    }}
+                    onUpdateHeaderFooterMode={(sectionIndex, mode) => {
+                      if (!isTemplateMode) return
+                      dispatch({ type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE", sectionIndex, mode })
                     }}
                   />
                 </div>
