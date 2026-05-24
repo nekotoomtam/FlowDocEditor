@@ -11,6 +11,9 @@ import {
   createDefaultDocument,
   deleteNode,
   duplicateNode,
+  disableSectionReservedZoneIfEmpty,
+  ensureReservedZoneRoots,
+  ensureSectionReservedZoneVisibleForAuthoring,
   fitFlowTableToSectionWidth,
   mergeParagraphWithPrevious,
   normalizeDocument,
@@ -101,6 +104,8 @@ type EditorAction =
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
   | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
   | { type: "UPDATE_RESERVED_ZONES"; sectionIndex: number; reserved: { headerReserved: number; footerReserved: number } }
+  | { type: "ENSURE_HEADER_FOOTER_ZONE_VISIBLE"; sectionIndex: number; zone: "header" | "footer" }
+  | { type: "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE"; sectionIndex: number; mode: "body" | "full" }
   | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; history?: HistoryEntry }
   | { type: "CLEAR_SPLIT_NODE_ID" }
@@ -168,7 +173,7 @@ function updateTableStructure(
 }
 
 export function createInitialEditorState(initialDocOverride?: DocumentNode | null): EditorState {
-  const initialDoc = normalizeDocument(initialDocOverride ?? loadFromStorage() ?? createDefaultDocument("Untitled"))
+  const initialDoc = normalizeDocument(ensureReservedZoneRoots(initialDocOverride ?? loadFromStorage() ?? createDefaultDocument("Untitled")))
   return {
     past: [],
     doc: initialDoc,
@@ -293,7 +298,7 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       }
     }
     case "LOAD_DOCUMENT": {
-      const normalizedDoc = normalizeDocument(action.doc)
+      const normalizedDoc = normalizeDocument(ensureReservedZoneRoots(action.doc))
       return { ...state, past: [], doc: normalizedDoc, future: [], paginated: action.paginated ?? paginate(normalizedDoc), selectedNodeId: null, selectionAnchorNodeId: null, drag: null }
     }
     case "TABLE_ADD_ROW":
@@ -349,6 +354,14 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, updateSectionMargin(state.doc, action.sectionIndex, action.margin))
     case "UPDATE_RESERVED_ZONES": {
       const nextDoc = updateSectionReservedZones(state.doc, action.sectionIndex, action.reserved)
+      return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
+    }
+    case "ENSURE_HEADER_FOOTER_ZONE_VISIBLE": {
+      const nextDoc = ensureSectionReservedZoneVisibleForAuthoring(state.doc, action.sectionIndex, action.zone)
+      return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
+    }
+    case "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY": {
+      const nextDoc = disableSectionReservedZoneIfEmpty(state.doc, action.sectionIndex, action.zone)
       return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
     }
     case "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE": {

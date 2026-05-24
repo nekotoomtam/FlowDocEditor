@@ -319,8 +319,35 @@ Table-specific interaction rules are defined in
   drag/resize, and margin activation are suppressed for that section.
 - Clicking the body area or the canvas outside the page exits header/footer zone
   mode without changing document data.
+- Clicking or double-clicking inside the active header/footer reserved area must
+  keep header/footer zone mode active. The active zone affordance is shown on
+  every rendered page in the edited section.
+- Clicking empty space inside the active header/footer reserved area exits the
+  current paragraph inline edit/selection only; it must not exit header/footer
+  zone mode.
 - Header/footer reserved heights are editable through the right-rail page panel
   and must commit through document history like other page settings.
+- The right-rail Header/Footer panel uses the mini page map as the primary
+  reserved-height control. Header and Footer values are editable in `pt`, Body
+  remains read-only, and all percentages reflect usable page height. Changes
+  must commit through reserved-zone operations and must not create a second
+  source of document state.
+- The mini page map's header/body and body/footer boundary lines may be dragged
+  as an editor-only affordance for the same reserved-height values. Drag preview
+  must remain clamped by the same reserved-zone rules, and the authored document
+  change is committed only when the drag ends.
+- While header/footer zone mode is active, hovering near the active zone's body
+  boundary may expose a canvas resize affordance for the same reserved-height
+  value. It must not exit header/footer zone mode, must stay above the body exit
+  overlay, and must commit through the same reserved-zone update path on drag
+  end.
+- Header and Footer switches in the right rail enable zones independently.
+  Turning a zero-height zone on assigns the authoring default (`80pt`). Turning
+  a zone off is allowed only when its reserved zone roots are empty; authored
+  content must never be deleted or hidden by a switch toggle.
+- First activation of a zero-height header/footer authoring zone assigns `80pt`
+  to that zone so the editable area is immediately usable. Existing non-zero
+  authored/imported reserved heights must not be expanded by activation.
 - Active header/footer reserved heights must stay at least one editable line
   tall (`24pt` in the current UI). Sections without header/footer roots and
   with zero reserved height remain zero so older body-only documents do not
@@ -337,10 +364,23 @@ Table-specific interaction rules are defined in
   the same authored section nodes used by pagination and export, but only the
   header/footer root stack should behave like a body-like container. Ordinary
   column stacks must continue rejecting nested row-like insertions.
+- While header/footer zone mode is active, Add panel block choices must be
+  scoped to header/footer-safe blocks. The first supported palette sources are
+  Paragraph and explicit Flow Columns presets; table, field, and body-only
+  structural sources stay hidden or disabled until their semantics are designed.
+- Header/footer drop preview and commit must target only the active zone root:
+  Header mode inserts into the header root, Footer mode inserts into the footer
+  root. If a section has reserved space but no corresponding root node, editor
+  authoring hydration must create an empty root stack before accepting content
+  so the visible zone is also a real document container.
+- The first header/footer content authoring pass supports paragraph inline
+  editing only inside the active header/footer zone. Active header/footer
+  paragraphs enter inline edit on single click, matching body paragraph
+  selection/edit behavior. Body editing remains suppressed while header/footer
+  mode is active, and table, field, resize, and body-to-zone move semantics stay
+  deferred.
 - A future custom horizontal range is deferred until its document semantics,
   undo/redo behavior, export mapping, and editor affordance are designed.
-- Header/footer content authoring remains deferred until a dedicated authoring
-  contract is designed and accepted.
 
 ## Flow Row Editing Rules
 

@@ -14,6 +14,7 @@ interface EditorLeftRailProps {
   registry: FieldRegistryV1
   editable: boolean
   isDragging: boolean
+  addPaletteScope?: "document" | "headerFooter"
   onModeChange: (mode: EditorLeftRailMode) => void
   onSelectNode: (nodeId: string) => void
   onReorderBodyChild: (request: OutlineBodyChildReorder) => void
@@ -91,6 +92,7 @@ export function EditorLeftRail({
   registry,
   editable,
   isDragging,
+  addPaletteScope = "document",
   onModeChange,
   onSelectNode,
   onReorderBodyChild,
@@ -139,6 +141,7 @@ export function EditorLeftRail({
             editable={editable}
             onDragStart={onDragStart}
             isDragging={isDragging}
+            paletteScope={addPaletteScope}
           />
         )}
       </div>

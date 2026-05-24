@@ -179,6 +179,27 @@ describe("isWysiwygTextEngineFragmentEligible", () => {
       pageIndex: 0,
     })).toBe(true)
   })
+
+  it("allows header/footer zone paragraphs through the same flagged text engine path", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = []
+    paginated.sections[0].pages[0].headerFragments = [{
+      nodeId: "p1",
+      nodeType: "paragraph",
+      pageIndex: 0,
+      x: 10,
+      y: 4,
+      width: 100,
+      height: 12,
+    }]
+
+    expect(isWysiwygTextEngineFragmentEligible({
+      doc: makeDoc(),
+      paginated,
+      nodeId: "p1",
+      pageIndex: 0,
+    })).toBe(true)
+  })
 })
 
 describe("isParagraphInsideFlowStack", () => {

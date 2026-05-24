@@ -23,4 +23,23 @@ describe("EditorPalette", () => {
     expect(markup).toContain("Paragraph")
     expect(markup).not.toContain("Flow cols")
   })
+
+  it("filters the palette to supported header/footer blocks", () => {
+    const markup = renderToStaticMarkup(createElement(EditorPalette, {
+      onDragStart: () => undefined,
+      isDragging: false,
+      scope: "headerFooter",
+    }))
+
+    expect(markup).toContain("data-scope=\"headerFooter\"")
+    expect(markup).toContain("50 | 50")
+    expect(markup).toContain("66 | 33")
+    expect(markup).toContain("33 | 66")
+    expect(markup).toContain("33 | 33 | 33")
+    expect(markup).toContain("25 | 25 | 25 | 25")
+    expect(markup).toContain("Paragraph")
+    expect(markup).not.toContain("data-testid=\"palette-block-row\"")
+    expect(markup).not.toContain("data-testid=\"palette-block-column\"")
+    expect(markup).not.toContain("data-testid=\"palette-table-picker-toggle\"")
+  })
 })

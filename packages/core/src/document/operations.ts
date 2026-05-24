@@ -101,6 +101,7 @@ export interface FlowTableCellMergeTarget {
 
 const MIN_TABLE_COLUMN_RESIZE_WIDTH_PT = 24
 export const MIN_HEADER_FOOTER_RESERVED_PT = 24
+export const DEFAULT_HEADER_FOOTER_RESERVED_PT = 80
 export const MIN_BODY_CONTENT_HEIGHT_RATIO = 0.3
 export const MAX_HEADER_FOOTER_RESERVED_RATIO = 1 - MIN_BODY_CONTENT_HEIGHT_RATIO
 
@@ -2601,6 +2602,59 @@ function hasFooterRoot(section: DocumentNode["document"]["sections"][number]): b
   return Boolean(section.footerRootId || section.footerFirstPageRootId)
 }
 
+function isEmptyReservedZoneRoot(
+  section: DocumentNode["document"]["sections"][number],
+  rootId: string | null | undefined,
+): boolean {
+  if (!rootId) return true
+  const root = section.nodes[rootId]
+  return root?.type === "stack" && root.childIds.length === 0
+}
+
+export function canDisableSectionReservedZone(
+  section: DocumentNode["document"]["sections"][number],
+  zone: "header" | "footer",
+): boolean {
+  return zone === "header"
+    ? isEmptyReservedZoneRoot(section, section.headerRootId) &&
+      isEmptyReservedZoneRoot(section, section.headerFirstPageRootId)
+    : isEmptyReservedZoneRoot(section, section.footerRootId) &&
+      isEmptyReservedZoneRoot(section, section.footerFirstPageRootId)
+}
+
+function ensureReservedZoneRootsInSection(
+  section: DocumentNode["document"]["sections"][number],
+): DocumentNode["document"]["sections"][number] {
+  let nodes = section.nodes
+  let headerRootId = section.headerRootId
+  let footerRootId = section.footerRootId
+
+  if ((section.page.headerReserved ?? 0) > 0 && !headerRootId) {
+    const root = createStackNode([], { widthShare: 100, minHeight: DEFAULT_STACK_MIN_HEIGHT })
+    nodes = { ...nodes, [root.id]: root }
+    headerRootId = root.id
+  }
+
+  if ((section.page.footerReserved ?? 0) > 0 && !footerRootId) {
+    const root = createStackNode([], { widthShare: 100, minHeight: DEFAULT_STACK_MIN_HEIGHT })
+    nodes = { ...nodes, [root.id]: root }
+    footerRootId = root.id
+  }
+
+  if (nodes === section.nodes && headerRootId === section.headerRootId && footerRootId === section.footerRootId) return section
+  return { ...section, nodes, headerRootId, footerRootId }
+}
+
+export function ensureReservedZoneRoots(doc: DocumentNode): DocumentNode {
+  let changed = false
+  const sections = doc.document.sections.map((section) => {
+    const next = ensureReservedZoneRootsInSection(section)
+    if (next !== section) changed = true
+    return next
+  })
+  return changed ? { ...doc, document: { ...doc.document, sections } } : doc
+}
+
 export function clampSectionReservedZones(
   section: DocumentNode["document"]["sections"][number],
   reserved: { headerReserved: number; footerReserved: number },
@@ -2646,23 +2700,80 @@ export function updateSectionReservedZones(
   doc: DocumentNode,
   sectionIndex: number,
   reserved: { headerReserved: number; footerReserved: number },
+  priority: ReservedZonePriority = "headerReserved",
 ): DocumentNode {
   const section = doc.document.sections[sectionIndex]
   if (!section) return doc
-  const { headerReserved, footerReserved } = clampSectionReservedZones(section, reserved)
+  const { headerReserved, footerReserved } = clampSectionReservedZones(section, reserved, priority)
+  const sectionWithReserved = {
+    ...section,
+    page: {
+      ...section.page,
+      headerReserved,
+      footerReserved,
+    },
+  }
+  const nextSection = ensureReservedZoneRootsInSection(sectionWithReserved)
   if (
     (section.page.headerReserved ?? 0) === headerReserved &&
-    (section.page.footerReserved ?? 0) === footerReserved
+    (section.page.footerReserved ?? 0) === footerReserved &&
+    nextSection === sectionWithReserved
   ) return doc
   const sections = doc.document.sections.map((s, i) =>
-    i !== sectionIndex ? s : {
-      ...s,
-      page: {
-        ...s.page,
-        headerReserved,
-        footerReserved,
-      },
+    i !== sectionIndex ? s : nextSection,
+  )
+  return { ...doc, document: { ...doc.document, sections } }
+}
+
+export function ensureSectionReservedZoneVisibleForAuthoring(
+  doc: DocumentNode,
+  sectionIndex: number,
+  zone: "header" | "footer",
+  defaultReserved: number = DEFAULT_HEADER_FOOTER_RESERVED_PT,
+): DocumentNode {
+  const section = doc.document.sections[sectionIndex]
+  if (!section) return doc
+  const zoneKey: ReservedZonePriority = zone === "header" ? "headerReserved" : "footerReserved"
+  const currentReserved = roundNonNegativePt(section.page[zoneKey] ?? 0)
+  const reserved = {
+    headerReserved: section.page.headerReserved ?? 0,
+    footerReserved: section.page.footerReserved ?? 0,
+  }
+  if (currentReserved <= 0) reserved[zoneKey] = defaultReserved
+  const nextReserved = clampSectionReservedZones(section, reserved, zoneKey)
+  return updateSectionReservedZones(doc, sectionIndex, nextReserved, zoneKey)
+}
+
+export function disableSectionReservedZoneIfEmpty(
+  doc: DocumentNode,
+  sectionIndex: number,
+  zone: "header" | "footer",
+): DocumentNode {
+  const section = doc.document.sections[sectionIndex]
+  if (!section || !canDisableSectionReservedZone(section, zone)) return doc
+
+  const rootKeys = zone === "header"
+    ? (["headerRootId", "headerFirstPageRootId"] as const)
+    : (["footerRootId", "footerFirstPageRootId"] as const)
+  const reservedKey = zone === "header" ? "headerReserved" : "footerReserved"
+  const nodes = { ...section.nodes }
+  for (const rootKey of rootKeys) {
+    const rootId = section[rootKey]
+    if (rootId && isEmptyReservedZoneRoot(section, rootId)) delete nodes[rootId]
+  }
+
+  const nextSection = {
+    ...section,
+    [rootKeys[0]]: undefined,
+    [rootKeys[1]]: undefined,
+    page: {
+      ...section.page,
+      [reservedKey]: 0,
     },
+    nodes,
+  }
+  const sections = doc.document.sections.map((candidate, index) =>
+    index === sectionIndex ? nextSection : candidate
   )
   return { ...doc, document: { ...doc.document, sections } }
 }

@@ -736,7 +736,7 @@ export function makeHeaderFooterFlowHeavyDocument(mode: "body" | "full" = "body"
     id,
     type: "flow-stack",
     props: { widthShare: [28, 26, 26, 20][index], minHeight: 24 },
-    childIds: index === 2 ? [] : [headerParagraphs[index].id],
+    childIds: [headerParagraphs[index].id],
   }))
   const footerStacks: LayoutNode[] = footerStackIds.map((id, index) => ({
     id,

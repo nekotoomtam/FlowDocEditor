@@ -100,7 +100,12 @@ export function findWysiwygTextEngineFragment(
 ): PageFragment | null {
   for (const section of paginated.sections) {
     for (const page of section.pages) {
-      const fragment = page.fragments.find((candidate) =>
+      const pageFragments = [
+        ...page.fragments,
+        ...page.headerFragments,
+        ...page.footerFragments,
+      ]
+      const fragment = pageFragments.find((candidate) =>
         candidate.nodeId === nodeId &&
         candidate.nodeType === "paragraph" &&
         (pageIndex == null || candidate.pageIndex === pageIndex)

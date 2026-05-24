@@ -21,10 +21,15 @@ import {
   canUpdateFlowTableCellSpan,
   canRemoveFlowTableColumn,
   canRemoveFlowTableRow,
+  canDisableSectionReservedZone,
   clampSectionReservedZones,
+  DEFAULT_HEADER_FOOTER_RESERVED_PT,
   deleteTextRunRange,
   deleteNode,
+  disableSectionReservedZoneIfEmpty,
   duplicateNode,
+  ensureReservedZoneRoots,
+  ensureSectionReservedZoneVisibleForAuthoring,
   fitFlowTableToSectionWidth,
   isPlainTextParagraph,
   mergeParagraphWithPrevious,
@@ -218,22 +223,46 @@ function flowTableCellParagraphTexts(table: FlowTableNode, cellId: string): stri
 }
 
 describe("section page settings operations", () => {
-  it("updates header and footer reserved heights without touching schema roots", () => {
+  it("updates header and footer reserved heights and creates empty zone roots", () => {
     const doc = makeDoc({}, [])
     const next = updateSectionReservedZones(doc, 0, { headerReserved: 42.337, footerReserved: 31.664 })
+    const section = next.document.sections[0]
 
-    expect(next.document.sections[0].page.headerReserved).toBe(42.34)
-    expect(next.document.sections[0].page.footerReserved).toBe(31.66)
-    expect(next.document.sections[0].bodyRootId).toBe("body")
+    expect(section.page.headerReserved).toBe(42.34)
+    expect(section.page.footerReserved).toBe(31.66)
+    expect(section.bodyRootId).toBe("body")
+    expect(section.headerRootId).toBeTruthy()
+    expect(section.footerRootId).toBeTruthy()
+    expect(section.headerRootId ? section.nodes[section.headerRootId]?.type : null).toBe("stack")
+    expect(section.footerRootId ? section.nodes[section.footerRootId]?.type : null).toBe("stack")
     expect(() => assertDocument(next)).not.toThrow()
   })
 
   it("clamps invalid reserved heights to non-negative point values", () => {
-    const doc = updateSectionReservedZones(makeDoc({}, []), 0, { headerReserved: 12, footerReserved: 8 })
+    const doc = makeDoc({}, [])
     const next = updateSectionReservedZones(doc, 0, { headerReserved: -12, footerReserved: Number.NaN })
 
-    expect(next.document.sections[0].page.headerReserved).toBe(0)
-    expect(next.document.sections[0].page.footerReserved).toBe(0)
+    expect(next.document.sections[0].page.headerReserved).toBeUndefined()
+    expect(next.document.sections[0].page.footerReserved).toBeUndefined()
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("creates missing reserved zone roots for loaded documents without changing existing roots", () => {
+    const doc = makeDoc({}, [])
+    doc.document.sections[0].page = {
+      ...doc.document.sections[0].page,
+      headerReserved: 36,
+      footerReserved: 24,
+    }
+
+    const next = ensureReservedZoneRoots(doc)
+    const section = next.document.sections[0]
+
+    expect(section.headerRootId).toBeTruthy()
+    expect(section.footerRootId).toBeTruthy()
+    expect(section.headerRootId ? section.nodes[section.headerRootId]?.type : null).toBe("stack")
+    expect(section.footerRootId ? section.nodes[section.footerRootId]?.type : null).toBe("stack")
+    expect(ensureReservedZoneRoots(next)).toBe(next)
     expect(() => assertDocument(next)).not.toThrow()
   })
 
@@ -251,6 +280,60 @@ describe("section page settings operations", () => {
     expect(next.document.sections[0].page.headerReserved).toBe(MIN_HEADER_FOOTER_RESERVED_PT)
     expect(next.document.sections[0].page.footerReserved).toBe(0)
     expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("opens an inactive header authoring zone at the default reserved height", () => {
+    const next = ensureSectionReservedZoneVisibleForAuthoring(makeDoc({}, []), 0, "header")
+    const section = next.document.sections[0]
+
+    expect(section.page.headerReserved).toBe(DEFAULT_HEADER_FOOTER_RESERVED_PT)
+    expect(section.page.footerReserved).toBe(0)
+    expect(section.headerRootId).toBeTruthy()
+    expect(section.footerRootId).toBeUndefined()
+    expect(section.headerRootId ? section.nodes[section.headerRootId]?.type : null).toBe("stack")
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("does not expand an existing header authoring zone when opening it", () => {
+    const doc = makeDoc({}, [])
+    doc.document.sections[0].page = {
+      ...doc.document.sections[0].page,
+      headerReserved: 36,
+    }
+
+    const next = ensureSectionReservedZoneVisibleForAuthoring(doc, 0, "header")
+    const section = next.document.sections[0]
+
+    expect(section.page.headerReserved).toBe(36)
+    expect(section.headerRootId).toBeTruthy()
+    expect(section.headerRootId ? section.nodes[section.headerRootId]?.type : null).toBe("stack")
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("can disable an empty header authoring zone", () => {
+    const visible = ensureSectionReservedZoneVisibleForAuthoring(makeDoc({}, []), 0, "header")
+    const next = disableSectionReservedZoneIfEmpty(visible, 0, "header")
+    const section = next.document.sections[0]
+
+    expect(section.page.headerReserved).toBe(0)
+    expect(section.headerRootId).toBeUndefined()
+    expect(Object.values(section.nodes).some((node) => node.type === "stack")).toBe(false)
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("refuses to disable a header authoring zone that contains content", () => {
+    const doc = makeDoc({
+      "header-root": { id: "header-root", type: "stack", props: {}, childIds: ["header-p"] },
+      "header-p": makeParagraph("header-p", [{ id: "header-t", type: "text", text: "Header" }]),
+    }, [])
+    doc.document.sections[0].headerRootId = "header-root"
+    doc.document.sections[0].page = {
+      ...doc.document.sections[0].page,
+      headerReserved: 80,
+    }
+
+    expect(canDisableSectionReservedZone(doc.document.sections[0], "header")).toBe(false)
+    expect(disableSectionReservedZoneIfEmpty(doc, 0, "header")).toBe(doc)
   })
 
   it("caps header/footer reserved heights so body keeps at least 30 percent of usable height", () => {

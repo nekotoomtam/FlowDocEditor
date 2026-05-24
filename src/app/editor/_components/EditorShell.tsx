@@ -2,7 +2,7 @@
 
 import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
-import { assertDocument, createDefaultDocument, normalizeDocument } from "@/document"
+import { assertDocument, clampSectionReservedZones, createDefaultDocument, normalizeDocument } from "@/document"
 import {
   resizeFlowTableColumnPair as resizeFlowTableColumnPairForPreview,
   updateNodeProps,
@@ -266,6 +266,17 @@ export interface HeaderFooterEditMode {
   zone: "header" | "footer"
 }
 
+export interface HeaderFooterReservedDrag {
+  sectionIndex: number
+  zone: "header" | "footer"
+  pageKey: string
+  pageHeightPt: number
+  marginTopPt: number
+  marginBottomPt: number
+  currentReserved: { headerReserved: number; footerReserved: number }
+  committed?: boolean
+}
+
 type ZoomMode = "fit" | "manual"
 type LeftRailMode = EditorLeftRailMode
 type RightRailMode = "page" | "properties"
@@ -380,6 +391,13 @@ function describeDragSource(source: DragSource): string {
   }
   if (source.source === "field") return source.field.label ?? source.field.key
   return "node"
+}
+
+function isHeaderFooterSupportedDragSource(source: DragSource): boolean {
+  return source.source === "palette" && (
+    source.blockType === "paragraph" ||
+    source.blockType === "flow-columns"
+  )
 }
 
 function dragFieldTypeLabel(source: DragSource): string {
@@ -728,6 +746,12 @@ export default function EditorShell() {
     setImmediate: setMarginDrag,
     setOnAnimationFrame: scheduleMarginDrag,
   } = useAnimationFrameState<MarginDrag | null>(null)
+  const {
+    value: headerFooterReservedDrag,
+    valueRef: headerFooterReservedDragRef,
+    setImmediate: setHeaderFooterReservedDrag,
+    setOnAnimationFrame: scheduleHeaderFooterReservedDrag,
+  } = useAnimationFrameState<HeaderFooterReservedDrag | null>(null)
   const [marginEditMode, setMarginEditMode] = useState<MarginEditMode | null>(null)
   const [headerFooterEditMode, setHeaderFooterEditMode] = useState<HeaderFooterEditMode | null>(null)
   const [isExporting, setIsExporting] = useState(false)
@@ -2091,8 +2115,9 @@ export default function EditorShell() {
       if (resizeDragRef.current?.committed) setResizeDrag(null)
       if (minHeightDragRef.current?.committed) setMinHeightDrag(null)
       if (marginDragRef.current?.committed) setMarginDrag(null)
+      if (headerFooterReservedDragRef.current?.committed) setHeaderFooterReservedDrag(null)
     }
-  }, [isLayoutLoading, marginDragRef, minHeightDragRef, resizeDragRef, setMarginDrag, setMinHeightDrag, setResizeDrag])
+  }, [headerFooterReservedDragRef, isLayoutLoading, marginDragRef, minHeightDragRef, resizeDragRef, setHeaderFooterReservedDrag, setMarginDrag, setMinHeightDrag, setResizeDrag])
 
   const setPageRef = useCallback((key: string, el: SVGSVGElement | null) => {
     if (el) pageRefs.current.set(key, el)
@@ -2101,6 +2126,7 @@ export default function EditorShell() {
 
   const handleBackgroundPointerDown = useCallback(() => {
     if (headerFooterEditMode) {
+      if (inlineEditNodeId) finalizeInlineEditBeforeAction()
       setHeaderFooterEditMode(null)
       dispatch({ type: "SELECT_NODE", nodeId: null })
       setRightRailMode("page")
@@ -2127,8 +2153,9 @@ export default function EditorShell() {
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setRightRailMode("page")
     setHeaderFooterEditMode(null)
+    setHeaderFooterReservedDrag(null)
     setMarginEditMode({ sectionIndex })
-  }, [finalizeInlineEditBeforeAction])
+  }, [finalizeInlineEditBeforeAction, setHeaderFooterReservedDrag])
 
   const exitMarginEditMode = useCallback(() => {
     if (marginDragRef.current && !marginDragRef.current.committed) return
@@ -2138,15 +2165,50 @@ export default function EditorShell() {
   const enterHeaderFooterEditMode = useCallback((sectionIndex: number, zone: "header" | "footer") => {
     finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
+    dispatch({ type: "ENSURE_HEADER_FOOTER_ZONE_VISIBLE", sectionIndex, zone })
+    setRightRailMode("page")
+    setMarginEditMode(null)
+    setMarginDrag(null)
+    setHeaderFooterReservedDrag(null)
+    setHeaderFooterEditMode({ sectionIndex, zone })
+  }, [finalizeInlineEditBeforeAction, setHeaderFooterReservedDrag, setMarginDrag])
+
+  const exitHeaderFooterEditMode = useCallback(() => {
+    if (inlineEditNodeId) finalizeInlineEditBeforeAction()
+    setHeaderFooterEditMode(null)
+  }, [finalizeInlineEditBeforeAction, inlineEditNodeId])
+
+  const handleHeaderFooterZonePointerDown = useCallback(() => {
+    if (inlineEditNodeId) finalizeInlineEditBeforeAction()
+    dispatch({ type: "SELECT_NODE", nodeId: null })
+    setRightRailMode("page")
+  }, [finalizeInlineEditBeforeAction, inlineEditNodeId])
+
+  const handleHeaderFooterReservedResizeStart = useCallback((
+    sectionIndex: number,
+    zone: "header" | "footer",
+    currentReserved: { headerReserved: number; footerReserved: number },
+    pageHeightPt: number,
+    marginTopPt: number,
+    marginBottomPt: number,
+    pageKey: string,
+  ) => {
+    finalizeInlineEditBeforeAction()
+    dispatch({ type: "SELECT_NODE", nodeId: null })
     setRightRailMode("page")
     setMarginEditMode(null)
     setMarginDrag(null)
     setHeaderFooterEditMode({ sectionIndex, zone })
-  }, [finalizeInlineEditBeforeAction, setMarginDrag])
-
-  const exitHeaderFooterEditMode = useCallback(() => {
-    setHeaderFooterEditMode(null)
-  }, [])
+    setHeaderFooterReservedDrag({
+      sectionIndex,
+      zone,
+      pageKey,
+      pageHeightPt,
+      marginTopPt,
+      marginBottomPt,
+      currentReserved,
+    })
+  }, [finalizeInlineEditBeforeAction, setHeaderFooterReservedDrag, setMarginDrag])
 
   const handleResizeStart = useCallback((
     rowId: string, leftStackId: string, rightStackId: string,
@@ -2296,10 +2358,11 @@ export default function EditorShell() {
 
   // Palette drag: starts immediately
   const startPaletteDrag = useCallback((source: DragSource, e: React.PointerEvent) => {
+    if (headerFooterEditMode && !isHeaderFooterSupportedDragSource(source)) return
     e.preventDefault()
     finalizeInlineEditBeforeAction()
     dispatch({ type: "DRAG_START", source, clientX: e.clientX, clientY: e.clientY })
-  }, [finalizeInlineEditBeforeAction])
+  }, [finalizeInlineEditBeforeAction, headerFooterEditMode])
 
   // Canvas fragment pointerDown: wait for movement before committing to drag
   const startNodePointerDown = useCallback((source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => {
@@ -2340,6 +2403,7 @@ export default function EditorShell() {
       setResizeDrag(null)
       setMinHeightDrag(null)
       setMarginDrag(null)
+      setHeaderFooterReservedDrag(null)
       setMarginEditMode(null)
       setHeaderFooterEditMode(null)
       setLeftRailMode("outline")
@@ -2361,7 +2425,7 @@ export default function EditorShell() {
 
     setLeftRailMode("outline")
     setRightRailMode(state.selectedNodeId ? "properties" : "page")
-  }, [finalizeInlineEditBeforeAction, hideResizePreview, state.selectedNodeId])
+  }, [finalizeInlineEditBeforeAction, hideResizePreview, setHeaderFooterReservedDrag, state.selectedNodeId])
 
   const computePreview = useCallback(
     (clientX: number, clientY: number, sourceOverride?: DragSource | null): { preview: PlacementPreview | null; sectionId: string | null } => {
@@ -2408,10 +2472,28 @@ export default function EditorShell() {
             const rootId = activeHeaderFooterZone === "header"
               ? sectionDef.headerRootId
               : sectionDef.footerRootId
-            const hit = findSmallestFragmentAt(zoneFragments, docX, docY) ??
-              (inActiveZone && rootId ? zoneFragments.find((fragment) => fragment.nodeId === rootId) ?? null : null)
+            const rootNode = rootId ? sectionDef.nodes[rootId] : null
+            const rootTarget = rootId && rootNode?.type === "stack"
+              ? { kind: "node" as const, nodeId: rootId, nodeType: "stack" as const }
+              : null
+            const hit = findSmallestFragmentAt(zoneFragments, docX, docY)
 
             if (hit) {
+              if (rootTarget && hit.nodeId === rootTarget.nodeId) {
+                const rawIntent = { zone: "center" as const, intent: "insertInside" as const, target: rootTarget }
+                const lawResult = resolvePlacementLaw(doc, rawIntent, dragSource)
+                if (lawResult.ok) {
+                  return {
+                    preview: { hoverNodeId: rootTarget.nodeId, zone: "center", target: rootTarget, placement: lawResult.value.intent, isValid: true },
+                    sectionId: section.sectionId,
+                  }
+                }
+                return {
+                  preview: { hoverNodeId: rootTarget.nodeId, zone: "center", target: rootTarget, placement: null, isValid: false },
+                  sectionId: section.sectionId,
+                }
+              }
+
               const localX = docX - hit.x
               const localY = docY - hit.y
               const targetResult = detectPlacementTarget({
@@ -2441,6 +2523,21 @@ export default function EditorShell() {
 
               return {
                 preview: { hoverNodeId: hit.nodeId, zone: targetResult.zone, target: targetResult.target, placement: null, isValid: false },
+                sectionId: section.sectionId,
+              }
+            }
+
+            if (inActiveZone && rootTarget) {
+              const rawIntent = { zone: "center" as const, intent: "insertInside" as const, target: rootTarget }
+              const lawResult = resolvePlacementLaw(doc, rawIntent, dragSource)
+              if (lawResult.ok) {
+                return {
+                  preview: { hoverNodeId: rootTarget.nodeId, zone: "center", target: rootTarget, placement: lawResult.value.intent, isValid: true },
+                  sectionId: section.sectionId,
+                }
+              }
+              return {
+                preview: { hoverNodeId: rootTarget.nodeId, zone: "center", target: rootTarget, placement: null, isValid: false },
                 sectionId: section.sectionId,
               }
             }
@@ -2539,6 +2636,25 @@ export default function EditorShell() {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
+      // Header/footer reserved-height drag
+      const activeHeaderFooterReservedDrag = headerFooterReservedDragRef.current
+      if (activeHeaderFooterReservedDrag && !activeHeaderFooterReservedDrag.committed) {
+        const svgEl = pageRefs.current.get(activeHeaderFooterReservedDrag.pageKey)
+        const section = state.doc.document.sections[activeHeaderFooterReservedDrag.sectionIndex]
+        if (!svgEl || !section) return
+        const rect = svgEl.getBoundingClientRect()
+        const docY = (e.clientY - rect.top) / scale
+        const zoneKey = activeHeaderFooterReservedDrag.zone === "header" ? "headerReserved" : "footerReserved"
+        const rawReserved = activeHeaderFooterReservedDrag.zone === "header"
+          ? docY - activeHeaderFooterReservedDrag.marginTopPt
+          : activeHeaderFooterReservedDrag.pageHeightPt - activeHeaderFooterReservedDrag.marginBottomPt - docY
+        const currentReserved = clampSectionReservedZones(section, {
+          ...activeHeaderFooterReservedDrag.currentReserved,
+          [zoneKey]: rawReserved,
+        }, zoneKey)
+        scheduleHeaderFooterReservedDrag({ ...activeHeaderFooterReservedDrag, currentReserved })
+        return
+      }
       // Margin resize drag
       const activeMarginDrag = marginDragRef.current
       if (activeMarginDrag && !activeMarginDrag.committed) {
@@ -2601,20 +2717,35 @@ export default function EditorShell() {
       scheduleDragMove({ clientX: e.clientX, clientY: e.clientY })
     },
     [
+      headerFooterReservedDragRef,
       marginDragRef,
       minHeightDragRef,
       resizeDragRef,
       scale,
       scheduleDragMove,
+      scheduleHeaderFooterReservedDrag,
       scheduleMarginDrag,
       scheduleMinHeightDrag,
       scheduleResizePreview,
+      state.doc,
       state.drag,
     ],
   )
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
+      // Commit header/footer reserved-height drag
+      const activeHeaderFooterReservedDrag = headerFooterReservedDragRef.current
+      if (activeHeaderFooterReservedDrag && !activeHeaderFooterReservedDrag.committed) {
+        suppressNextLayoutLoadingOverlay()
+        dispatch({
+          type: "UPDATE_RESERVED_ZONES",
+          sectionIndex: activeHeaderFooterReservedDrag.sectionIndex,
+          reserved: activeHeaderFooterReservedDrag.currentReserved,
+        })
+        setHeaderFooterReservedDrag(null)
+        return
+      }
       // Commit margin resize
       const activeMarginDrag = marginDragRef.current
       if (activeMarginDrag && !activeMarginDrag.committed) {
@@ -2743,11 +2874,13 @@ export default function EditorShell() {
       computePreview,
       cancelScheduledDragMove,
       handleInlineEditStart,
+      headerFooterReservedDragRef,
       marginDragRef,
       minHeightDragRef,
       resizeDragRef,
       editorTextMeasurer,
       resolvePreviewDoc,
+      setHeaderFooterReservedDrag,
       setMarginDrag,
       setMinHeightDrag,
       setResizeDrag,
@@ -2765,13 +2898,16 @@ export default function EditorShell() {
     if (resizeDragRef.current && !resizeDragRef.current.committed) setResizeDrag(null)
     if (minHeightDragRef.current && !minHeightDragRef.current.committed) setMinHeightDrag(null)
     if (marginDragRef.current && !marginDragRef.current.committed) setMarginDrag(null)
+    if (headerFooterReservedDragRef.current && !headerFooterReservedDragRef.current.committed) setHeaderFooterReservedDrag(null)
     if (state.drag) dispatch({ type: "DRAG_CANCEL" })
   }, [
     cancelScheduledDragMove,
+    headerFooterReservedDragRef,
     hideResizePreview,
     marginDragRef,
     minHeightDragRef,
     resizeDragRef,
+    setHeaderFooterReservedDrag,
     setMarginDrag,
     setMinHeightDrag,
     setResizeDrag,
@@ -2822,6 +2958,10 @@ export default function EditorShell() {
         setMarginDrag(null)
         return
       }
+      if (headerFooterReservedDragRef.current && !headerFooterReservedDragRef.current.committed) {
+        setHeaderFooterReservedDrag(null)
+        return
+      }
       if (marginEditMode) {
         setMarginEditMode(null)
         return
@@ -2861,11 +3001,13 @@ export default function EditorShell() {
     handleRedo,
     handleUndo,
     headerFooterEditMode,
+    headerFooterReservedDragRef,
     inlineEditNodeId,
     isTemplateMode,
     marginEditMode,
     marginDragRef,
     resetZoom,
+    setHeaderFooterReservedDrag,
     setMarginDrag,
     state.drag,
     state.selectedNodeId,
@@ -2892,7 +3034,7 @@ export default function EditorShell() {
       data-wysiwyg-text-engine-enabled={WYSIWYG_TEXT_ENGINE_ENABLED ? "true" : "false"}
       data-wysiwyg-rich-text-draft-enabled={WYSIWYG_RICH_TEXT_DRAFT_ENABLED ? "true" : "false"}
       data-wysiwyg-perf-trace-enabled={WYSIWYG_PERF_TRACE_ENABLED ? "true" : "false"}
-      style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) ? "none" : undefined }}
+      style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : (headerFooterReservedDrag && !headerFooterReservedDrag.committed) ? "ns-resize" : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) || (headerFooterReservedDrag && !headerFooterReservedDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
@@ -3002,6 +3144,7 @@ export default function EditorShell() {
           registry={packageFieldRegistry}
           editable={isTemplateMode}
           isDragging={!!state.drag}
+          addPaletteScope={headerFooterEditMode ? "headerFooter" : "document"}
           onModeChange={setLeftRailMode}
           onSelectNode={(nodeId) => {
             dispatch({ type: "SELECT_NODE", nodeId })
@@ -3081,10 +3224,13 @@ export default function EditorShell() {
                 marginDrag={isTemplateMode ? marginDrag : null}
                 marginEditMode={isTemplateMode ? marginEditMode : null}
                 headerFooterEditMode={isTemplateMode ? headerFooterEditMode : null}
+                headerFooterReservedDrag={isTemplateMode ? headerFooterReservedDrag : null}
                 onMarginEditModeEnter={isTemplateMode ? enterMarginEditMode : () => undefined}
                 onMarginEditModeExit={isTemplateMode ? exitMarginEditMode : () => undefined}
                 onHeaderFooterEditModeEnter={isTemplateMode ? enterHeaderFooterEditMode : () => undefined}
                 onHeaderFooterEditModeExit={isTemplateMode ? exitHeaderFooterEditMode : () => undefined}
+                onHeaderFooterZonePointerDown={isTemplateMode ? handleHeaderFooterZonePointerDown : () => undefined}
+                onHeaderFooterReservedResizeStart={isTemplateMode ? handleHeaderFooterReservedResizeStart : () => undefined}
                 onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
                 onScaleChange={handleCanvasScaleChange}
                 autoFitScale={zoomMode === "fit"}
@@ -3215,6 +3361,14 @@ export default function EditorShell() {
                     onUpdateReservedZones={(sectionIndex, reserved) => {
                       if (!isTemplateMode) return
                       dispatch({ type: "UPDATE_RESERVED_ZONES", sectionIndex, reserved })
+                    }}
+                    onToggleReservedZone={(sectionIndex, zone, enabled) => {
+                      if (!isTemplateMode) return
+                      dispatch({
+                        type: enabled ? "ENSURE_HEADER_FOOTER_ZONE_VISIBLE" : "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY",
+                        sectionIndex,
+                        zone,
+                      })
                     }}
                     onUpdateHeaderFooterMode={(sectionIndex, mode) => {
                       if (!isTemplateMode) return

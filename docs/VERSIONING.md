@@ -3,7 +3,7 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.11`: suitable for self-use with accepted
+The current baseline is `0.6.13`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -19,7 +19,10 @@ the canvas-scoped bottom view bar, and conservative EditorShell component extrac
 plus Flow Table split DOCX/export hardening, page-slice border caps, and table-cell
 WYSIWYG caret visibility/typing-mode fixes, editor/PDF text baseline convergence,
 readable Thai word-segment wrapping with compound and thanthakhat boundary repair,
-and intentional page margin edit mode with passive guides and explicit drag handles,
+intentional page margin edit mode with passive guides and explicit drag handles,
+the first header/footer authoring foundation, scoped header/footer add palette,
+editable header/footer paragraphs, right-rail header/footer setup controls,
+mini page reserved-height controls, and canvas boundary reserved-height dragging,
 but not yet a general-user `v1`.
 
 ## Version Meaning
@@ -46,6 +49,8 @@ but not yet a general-user `v1`.
 | `0.6.9` | Patch baseline for Flow Table split DOCX/export hardening, visual page-slice border caps, table-cell WYSIWYG caret visibility, and split idle/typing caret modes without changing persisted document or package schema versions. |
 | `0.6.10` | Patch baseline for editor/PDF text baseline convergence and readable Thai word-segment wrapping, including compound and thanthakhat boundary repair, without changing persisted document or package schema versions. |
 | `0.6.11` | Patch baseline for intentional page margin edit mode, passive margin guides, explicit edit overlays/drag handles, and right-rail recovery semantics without changing persisted document or package schema versions. |
+| `0.6.12` | Patch baseline for header/footer authoring foundation, active header/footer zone behavior, scoped header/footer-safe add choices, root hydration, and first paragraph editing support without changing persisted document or package schema versions. |
+| `0.6.13` | Patch baseline for right-rail header/footer switches, horizontal mode controls, mini page reserved-height inputs and drag handles, and canvas boundary reserved-height dragging without changing persisted document or package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

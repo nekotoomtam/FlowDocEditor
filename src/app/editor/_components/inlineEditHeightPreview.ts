@@ -2,6 +2,10 @@ import { DEFAULT_STACK_MIN_HEIGHT } from "@/document"
 import type { DocumentNode, LayoutNode } from "@/schema"
 import type { PageFragment, PaginatedDocument } from "@/pagination"
 
+type FragmentLane = "fragments" | "headerFragments" | "footerFragments"
+
+const FRAGMENT_LANES: FragmentLane[] = ["fragments", "headerFragments", "footerFragments"]
+
 function findDocumentNode(doc: DocumentNode, nodeId: string): LayoutNode | undefined {
   for (const section of doc.document.sections) {
     const node = section.nodes[nodeId]
@@ -27,25 +31,30 @@ export function resizeFragmentHeightAndShift(
 ): PaginatedDocument {
   let targetPageIndex: number | null = null
   let targetY: number | null = null
+  let targetLane: FragmentLane | null = null
   let delta = 0
 
   for (const section of paginated.sections) {
     for (const page of section.pages) {
-      const fragment = page.fragments.find((f) =>
-        f.nodeId === nodeId &&
-        f.nodeType === "paragraph" &&
-        (pageIndex == null || f.pageIndex === pageIndex)
-      )
-      if (!fragment) continue
-      targetPageIndex = page.index
-      targetY = fragment.y
-      delta = height - fragment.height
-      break
+      for (const lane of FRAGMENT_LANES) {
+        const fragment = page[lane].find((f) =>
+          f.nodeId === nodeId &&
+          f.nodeType === "paragraph" &&
+          (pageIndex == null || f.pageIndex === pageIndex)
+        )
+        if (!fragment) continue
+        targetPageIndex = page.index
+        targetY = fragment.y
+        targetLane = lane
+        delta = height - fragment.height
+        break
+      }
+      if (targetLane !== null) break
     }
-    if (targetY !== null) break
+    if (targetLane !== null) break
   }
 
-  if (targetPageIndex === null || targetY === null || Math.abs(delta) < 0.5) return paginated
+  if (targetPageIndex === null || targetY === null || targetLane === null || Math.abs(delta) < 0.5) return paginated
 
   return {
     ...paginated,
@@ -54,12 +63,13 @@ export function resizeFragmentHeightAndShift(
       pages: section.pages.map((page) => {
         if (page.index !== targetPageIndex) return page
 
-        const target = page.fragments.find((f) =>
+        const sourceFragments = page[targetLane]
+        const target = sourceFragments.find((f) =>
           f.nodeId === nodeId &&
           f.nodeType === "paragraph" &&
           (pageIndex == null || f.pageIndex === pageIndex)
         )
-        const byId = new Map(page.fragments.map((fragment) => [fragment.nodeId, fragment]))
+        const byId = new Map(sourceFragments.map((fragment) => [fragment.nodeId, fragment]))
 
         const isDescendantOf = (fragment: PageFragment, ancestorId: string): boolean => {
           let parentId = fragment.parentNodeId
@@ -96,7 +106,7 @@ export function resizeFragmentHeightAndShift(
               : rowStackKind.rowType === "flow-row" && rowNode?.type === "flow-row" && (rowAncestor.fragmentIndex ?? 0) === 0
                 ? Math.max(0, rowNode.props.minHeight ?? 0)
                 : 0
-          const stackFragments = page.fragments.filter((fragment) =>
+          const stackFragments = sourceFragments.filter((fragment) =>
             fragment.parentNodeId === rowAncestor.nodeId &&
             fragment.nodeType === rowStackKind.stackType
           )
@@ -109,7 +119,7 @@ export function resizeFragmentHeightAndShift(
                 : rowStackKind.stackType === "flow-stack" && stackNode?.type === "flow-stack" && (stack.fragmentIndex ?? 0) === 0
                   ? Math.max(0, stackNode.props.minHeight ?? 0)
                   : 0
-            const contentBottom = page.fragments.reduce((bottom, fragment) => {
+            const contentBottom = sourceFragments.reduce((bottom, fragment) => {
               if (!isDescendantOf(fragment, stack.nodeId)) return bottom
               const fragmentHeight = fragment.nodeId === nodeId ? height : fragment.height
               return Math.max(bottom, adjustedY(fragment) + fragmentHeight)
@@ -123,7 +133,7 @@ export function resizeFragmentHeightAndShift(
 
           return {
             ...page,
-            fragments: page.fragments.map((fragment) => {
+            [targetLane]: sourceFragments.map((fragment) => {
               const isTarget = fragment.nodeId === nodeId &&
                 fragment.nodeType === "paragraph" &&
                 (pageIndex == null || fragment.pageIndex === pageIndex)
@@ -146,7 +156,7 @@ export function resizeFragmentHeightAndShift(
 
         return {
           ...page,
-          fragments: page.fragments.map((fragment) => {
+          [targetLane]: sourceFragments.map((fragment) => {
             const isTarget = fragment.nodeId === nodeId &&
               fragment.nodeType === "paragraph" &&
               (pageIndex == null || fragment.pageIndex === pageIndex)

@@ -24,9 +24,14 @@ const TEXT_ITEMS: PaletteItem[] = [
   { type: "paragraph", label: "Paragraph", icon: "paragraph", desc: "Text block" },
 ]
 
+const HEADER_FOOTER_LAYOUT_ITEMS = LAYOUT_ITEMS.filter((item) =>
+  item.type === "flow-columns" && item.columnShares != null,
+)
+
 interface Props {
   onDragStart: (source: DragSource, e: PointerEvent) => void
   isDragging: boolean
+  scope?: "document" | "headerFooter"
 }
 
 function paletteSource(item: PaletteItem): DragSource {
@@ -187,25 +192,30 @@ function TablePicker({
   )
 }
 
-export function EditorPalette({ onDragStart, isDragging }: Props) {
+export function EditorPalette({ onDragStart, isDragging, scope = "document" }: Props) {
+  const layoutItems = scope === "headerFooter" ? HEADER_FOOTER_LAYOUT_ITEMS : LAYOUT_ITEMS
   return (
-    <div style={paletteShell}>
-      <PaletteSection title="Layout">
-        <div style={layoutGrid}>
-          {LAYOUT_ITEMS.map((item) => (
-            <PaletteCard
-              key={`${item.label}-${item.columnShares?.join("-") ?? "modifier"}`}
-              item={item}
-              isDragging={isDragging}
-              onDragStart={onDragStart}
-            />
-          ))}
-        </div>
-      </PaletteSection>
+    <div data-testid="editor-palette" data-scope={scope} style={paletteShell}>
+      {layoutItems.length > 0 && (
+        <PaletteSection title="Layout">
+          <div style={layoutGrid}>
+            {layoutItems.map((item) => (
+              <PaletteCard
+                key={`${item.label}-${item.columnShares?.join("-") ?? "modifier"}`}
+                item={item}
+                isDragging={isDragging}
+                onDragStart={onDragStart}
+              />
+            ))}
+          </div>
+        </PaletteSection>
+      )}
 
-      <PaletteSection title="Table">
-        <TablePicker isDragging={isDragging} onDragStart={onDragStart} />
-      </PaletteSection>
+      {scope === "document" && (
+        <PaletteSection title="Table">
+          <TablePicker isDragging={isDragging} onDragStart={onDragStart} />
+        </PaletteSection>
+      )}
 
       <PaletteSection title="Text">
         <div style={singleColumnList}>

@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useRef, useEffect, useMemo, useState } from "react"
+import { memo, useRef, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react"
 import type { TextMeasurer } from "@/layout"
 import {
   resolveFragmentBoxLayoutPrimitives,
@@ -15,7 +15,7 @@ import {
 import { getTextRunParagraphText, isPlainTextParagraph, isTextRunOnlyParagraph } from "@/document"
 import type { DocumentNode, FlowTableCellNode, FlowTableNode, LayoutNode, ParagraphNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
-import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag, MarginEditMode, HeaderFooterEditMode } from "./EditorShell"
+import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag, MarginEditMode, HeaderFooterEditMode, HeaderFooterReservedDrag } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
 import { getRowGeometry } from "@/placement/geometry"
 import {
@@ -988,68 +988,179 @@ function isStackInsideRow(doc: DocumentNode, stackId: string | null | undefined)
   return false
 }
 
-function ReadOnlyZoneFragments({
+function ZoneFragments({
   fragments,
   zone,
+  active,
   doc,
   pageKey,
   scale,
+  pageContentBottom,
   textMeasurer,
+  inlineEditVisualFresh,
+  inlineEditNodeId,
+  inlineEditCaretIndex,
+  activeInlineEditPageIndex,
+  editFragmentRef,
+  dragActive,
+  wysiwygInlineEditEnabled,
+  wysiwygTextEngineEnabled,
+  wysiwygTextDraftNodeId,
+  wysiwygTextDraftText,
+  wysiwygTextCaretOffset,
+  wysiwygTextSelection,
+  wysiwygTextDraftPaginationActive,
+  wysiwygTextPointerFragments,
   showTextSegments,
+  onInlineEditStart,
+  onInlineEditChange,
+  onInlineEditCaretChange,
+  onInlineEditUserInteraction,
+  onInlineEditHeightChange,
+  onInlineEditEnd,
+  onSplitParagraph,
+  onMergeParagraph,
+  onWysiwygTextDraftChange,
+  onWysiwygRichTextShortcut,
+  onWysiwygTextReflowDecision,
   clipPathIndexOffset = 0,
 }: {
   fragments: PageFragment[]
   zone: "header" | "footer"
+  active: boolean
   doc: DocumentNode
   pageKey: string
   scale: number
+  pageContentBottom?: number | null
   textMeasurer: TextMeasurer
+  inlineEditVisualFresh: boolean
+  inlineEditNodeId: string | null
+  inlineEditCaretIndex: number | null
+  activeInlineEditPageIndex: number | null
+  editFragmentRef: { current: { nodeId: string; pageKey: string; fragment: PageFragment } | null }
+  dragActive: boolean
+  wysiwygInlineEditEnabled: boolean
+  wysiwygTextEngineEnabled: boolean
+  wysiwygTextDraftNodeId: string | null
+  wysiwygTextDraftText: string | null
+  wysiwygTextCaretOffset: number | null
+  wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
+  wysiwygTextDraftPaginationActive: boolean
+  wysiwygTextPointerFragments: WysiwygTextPointerFragmentTarget[]
   showTextSegments: boolean
+  onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
+  onInlineEditChange: (nodeId: string, text: string, caretIndex: number | null) => void
+  onInlineEditCaretChange: (nodeId: string, caretIndex: number | null) => void
+  onInlineEditUserInteraction: (nodeId: string) => void
+  onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
+  onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
+  onSplitParagraph: (nodeId: string, splitIndex: number) => void
+  onMergeParagraph: (nodeId: string) => void
+  onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
+  onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
+  onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
   clipPathIndexOffset?: number
 }) {
   return fragments.map((fragment, index) => {
     const canRenderText = fragment.nodeType === "paragraph" || fragment.nodeType === "toc"
+    const editableParagraph = active &&
+      fragment.nodeType === "paragraph" &&
+      canInlineEditParagraph(doc, fragment.nodeId, wysiwygTextEngineEnabled)
+    const isInlineEditing = editableParagraph &&
+      inlineEditNodeId === fragment.nodeId &&
+      (activeInlineEditPageIndex == null || fragment.pageIndex === activeInlineEditPageIndex)
+    if (isInlineEditing) {
+      if (
+        editFragmentRef.current?.nodeId !== fragment.nodeId ||
+        editFragmentRef.current?.pageKey !== pageKey
+      ) {
+        editFragmentRef.current = { nodeId: fragment.nodeId, pageKey, fragment: { ...fragment } }
+      } else {
+        editFragmentRef.current = { ...editFragmentRef.current, fragment: { ...fragment } }
+      }
+    }
+    const displayFragment = isInlineEditing
+      ? editFragmentRef.current?.fragment ?? fragment
+      : fragment
+    const clipPathId = buildEditorFragmentClipPathId(pageKey, displayFragment, clipPathIndexOffset + index)
     return (
       <g
         key={`${zone}-${fragment.nodeId}-${fragment.pageIndex}-${index}`}
         data-testid="editor-zone-fragment"
         data-zone={zone}
+        data-zone-editable={editableParagraph ? "true" : undefined}
         data-node-id={fragment.nodeId}
         data-node-type={fragment.nodeType}
         data-page-index={fragment.pageIndex}
-        style={{ pointerEvents: "none" }}
+        style={{ pointerEvents: editableParagraph || isInlineEditing ? undefined : "none" }}
+        onPointerDown={editableParagraph ? (event) => {
+          event.stopPropagation()
+          if (dragActive || isInlineEditing) return
+          if (!shouldStartInlineEditOnSingleClick({
+            canInlineEditParagraph: editableParagraph,
+            isTableCellParagraph: false,
+          })) return
+          event.preventDefault()
+          onInlineEditStart(
+            fragment.nodeId,
+            wysiwygInlineEditEnabled || wysiwygTextEngineEnabled
+              ? caretIndexFromPointer(displayFragment, event, scale, textMeasurer, true)
+              : null,
+            displayFragment.pageIndex,
+          )
+        } : undefined}
+        onDoubleClick={editableParagraph && !dragActive ? (event) => {
+          event.stopPropagation()
+          event.preventDefault()
+          onInlineEditStart(
+            fragment.nodeId,
+            wysiwygInlineEditEnabled || wysiwygTextEngineEnabled
+              ? caretIndexFromPointer(displayFragment, event, scale, textMeasurer, true)
+              : null,
+            displayFragment.pageIndex,
+          )
+        } : undefined}
       >
         <rect
-          x={fragment.x * scale}
-          y={fragment.y * scale}
-          width={fragment.width * scale}
-          height={Math.max(fragment.height * scale, 2)}
-          fill={READ_ONLY_ZONE_FILL[zone]}
-          stroke="#9ca3af"
-          strokeWidth={0.5}
-          opacity={canRenderText ? 0.24 : 0.45}
+          x={displayFragment.x * scale}
+          y={displayFragment.y * scale}
+          width={displayFragment.width * scale}
+          height={Math.max(displayFragment.height * scale, 2)}
+          fill={isInlineEditing ? INLINE_EDIT_CHROME_FILL : READ_ONLY_ZONE_FILL[zone]}
+          stroke={isInlineEditing ? "#2563eb" : editableParagraph ? "#38bdf8" : "#9ca3af"}
+          strokeWidth={isInlineEditing ? 1.25 : editableParagraph ? 0.9 : 0.5}
+          opacity={canRenderText ? (active ? 0.34 : 0.24) : 0.45}
         />
         {canRenderText && (
           <ParagraphTextSurface
-            fragment={fragment}
+            fragment={displayFragment}
             doc={doc}
             pageKey={pageKey}
-            clipPathId={buildEditorFragmentClipPathId(pageKey, fragment, clipPathIndexOffset + index)}
+            clipPathId={clipPathId}
             scale={scale}
+            pageContentBottom={pageContentBottom}
             textMeasurer={textMeasurer}
-            isEditing={false}
-            isVisualFresh={false}
-            wysiwygInlineEditEnabled={false}
-            wysiwygTextEngineEnabled={false}
+            isEditing={isInlineEditing}
+            isVisualFresh={isInlineEditing && inlineEditVisualFresh}
+            wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
+            wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
+            wysiwygTextDraftText={wysiwygTextDraftNodeId === fragment.nodeId ? wysiwygTextDraftText : null}
+            wysiwygTextCaretOffset={wysiwygTextDraftNodeId === fragment.nodeId ? wysiwygTextCaretOffset : null}
+            wysiwygTextSelection={wysiwygTextDraftNodeId === fragment.nodeId ? wysiwygTextSelection : null}
+            wysiwygTextPointerFragments={wysiwygTextDraftNodeId === fragment.nodeId ? wysiwygTextPointerFragments : undefined}
+            wysiwygTextDraftPaginationActive={wysiwygTextDraftNodeId === fragment.nodeId && wysiwygTextDraftPaginationActive}
             showTextSegments={showTextSegments}
-            initialCaretIndex={null}
-            onChange={() => undefined}
-            onCaretChange={() => undefined}
-            onUserEditInteraction={() => undefined}
-            onHeightChange={() => undefined}
-            onEndEdit={() => undefined}
-            onSplitParagraph={() => undefined}
-            onMergeParagraph={() => undefined}
+            initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
+            onChange={onInlineEditChange}
+            onCaretChange={onInlineEditCaretChange}
+            onUserEditInteraction={onInlineEditUserInteraction}
+            onHeightChange={onInlineEditHeightChange}
+            onEndEdit={onInlineEditEnd}
+            onSplitParagraph={onSplitParagraph}
+            onMergeParagraph={onMergeParagraph}
+            onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+            onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
+            onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
           />
         )}
       </g>
@@ -1065,7 +1176,7 @@ function HeaderFooterZoneLayer({
   width,
   height,
   onEnter,
-  onExit,
+  onActivePointerDown,
 }: {
   zone: "header" | "footer"
   active: boolean
@@ -1074,7 +1185,7 @@ function HeaderFooterZoneLayer({
   width: number
   height: number
   onEnter: () => void
-  onExit: () => void
+  onActivePointerDown: () => void
 }) {
   if (width <= 0 || height <= 0) return null
   return (
@@ -1102,6 +1213,7 @@ function HeaderFooterZoneLayer({
           if (!active) return
           event.stopPropagation()
           event.preventDefault()
+          onActivePointerDown()
         }}
       />
       {active && (
@@ -1127,14 +1239,56 @@ function HeaderFooterZoneLayer({
           onPointerDown={(event) => {
             event.stopPropagation()
             event.preventDefault()
-          }}
-          onDoubleClick={(event) => {
-            event.stopPropagation()
-            event.preventDefault()
-            onExit()
+            onActivePointerDown()
           }}
         />
       )}
+    </g>
+  )
+}
+
+function HeaderFooterZoneResizeHandle({
+  zone,
+  x,
+  y,
+  width,
+  active,
+  onPointerDown,
+}: {
+  zone: "header" | "footer"
+  x: number
+  y: number
+  width: number
+  active: boolean
+  onPointerDown: (event: ReactPointerEvent<SVGRectElement>) => void
+}) {
+  if (width <= 0) return null
+  const stroke = zone === "header" ? "#2563eb" : "#db2777"
+  return (
+    <g data-testid="header-footer-zone-resize-layer" data-zone={zone} data-active={active ? "true" : "false"}>
+      <line
+        data-testid="header-footer-zone-resize-line"
+        data-zone={zone}
+        x1={x}
+        y1={y}
+        x2={x + width}
+        y2={y}
+        stroke={stroke}
+        strokeWidth={active ? 2 : 1.25}
+        strokeDasharray={active ? "none" : "4 3"}
+        style={{ pointerEvents: "none" }}
+      />
+      <rect
+        data-testid="header-footer-zone-resize-handle"
+        data-zone={zone}
+        x={x}
+        y={y - 7}
+        width={width}
+        height={14}
+        fill="transparent"
+        style={{ cursor: "ns-resize", touchAction: "none" }}
+        onPointerDown={onPointerDown}
+      />
     </g>
   )
 }
@@ -1160,6 +1314,20 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
     // มี content: line ล่างสุดของ fragment สุดท้าย
     const bottomY = Math.max(...fragments.map((f) => f.y + f.height)) * scale
     return <rect x={cx} y={bottomY + 2} width={cw} height={2} fill={DROP_INSERTION_STROKE} rx={1} style={{ pointerEvents: "none" }} />
+  }
+
+  if (target.kind === "node" && (target.nodeType === "stack" || target.nodeType === "flow-stack") && zone === "center") {
+    const containerFragment = fragments.find((f) => f.nodeId === target.nodeId)
+    const box = containerFragment ?? contentBox
+    const childFragments = fragments.filter((candidate) => candidate.parentNodeId === target.nodeId)
+    const childBottom = childFragments.length > 0
+      ? Math.max(...childFragments.map((candidate) => candidate.y + candidate.height))
+      : box.y + Math.min(Math.max(box.height / 2, 2), 8)
+    const lineY = Math.min(
+      (contentBox.y + contentBox.height) * scale - 2,
+      Math.max(contentBox.y * scale, childBottom * scale + (childFragments.length > 0 ? 2 : 0)),
+    )
+    return <rect data-testid="drop-highlight-container-insert" x={box.x * scale} y={lineY} width={Math.max(box.width * scale, 2)} height={2} fill={DROP_INSERTION_STROKE} rx={1} style={{ pointerEvents: "none" }} />
   }
 
   const frag = fragments.find((f) => f.nodeId === hoverNodeId)
@@ -1214,7 +1382,7 @@ function PageView({
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode,
   resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
-  sectionIndex, marginDrag, marginEditMode, headerFooterEditMode, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
+  sectionIndex, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygRichTextShortcut, onWysiwygTextReflowDecision,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
@@ -1264,10 +1432,13 @@ function PageView({
   marginDrag: MarginDrag | null
   marginEditMode: MarginEditMode | null
   headerFooterEditMode: HeaderFooterEditMode | null
+  headerFooterReservedDrag: HeaderFooterReservedDrag | null
   onMarginEditModeEnter: (sectionIndex: number) => void
   onMarginEditModeExit: () => void
   onHeaderFooterEditModeEnter: (sectionIndex: number, zone: "header" | "footer") => void
   onHeaderFooterEditModeExit: () => void
+  onHeaderFooterZonePointerDown: () => void
+  onHeaderFooterReservedResizeStart: (sectionIndex: number, zone: "header" | "footer", currentReserved: { headerReserved: number; footerReserved: number }, pageHeightPt: number, marginTopPt: number, marginBottomPt: number, pageKey: string) => void
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
 }) {
   const W = page.width * scale
@@ -1489,25 +1660,49 @@ function PageView({
   )
   const pageMarginTopPt = sectionPageSettings ? unitValueToPt(sectionPageSettings.margin.top) : Math.max(0, page.contentBox.y)
   const pageMarginBottomPt = sectionPageSettings ? unitValueToPt(sectionPageSettings.margin.bottom) : Math.max(0, page.height - page.contentBox.y - page.contentBox.height)
-  const headerReservedPt = sectionPageSettings ? Math.max(0, sectionPageSettings.headerReserved ?? 0) : 0
-  const footerReservedPt = sectionPageSettings ? Math.max(0, sectionPageSettings.footerReserved ?? 0) : 0
+  const liveHeaderFooterReserved = headerFooterReservedDrag?.sectionIndex === sectionIndex
+    ? headerFooterReservedDrag.currentReserved
+    : null
+  const headerReservedPt = sectionPageSettings ? Math.max(0, liveHeaderFooterReserved?.headerReserved ?? sectionPageSettings.headerReserved ?? 0) : 0
+  const footerReservedPt = sectionPageSettings ? Math.max(0, liveHeaderFooterReserved?.footerReserved ?? sectionPageSettings.footerReserved ?? 0) : 0
   const zoneHorizontalBox = sectionPageSettings
     ? resolveHeaderFooterHorizontalBox(sectionPageSettings, page.contentBox, page.width)
     : { x: page.contentBox.x, width: page.contentBox.width }
+  const headerZoneDoc = {
+    x: zoneHorizontalBox.x,
+    y: pageMarginTopPt,
+    width: zoneHorizontalBox.width,
+    height: Math.max(headerReservedPt, headerFragments.length > 0 ? 12 / scale : 0),
+  }
+  const footerZoneDoc = {
+    x: zoneHorizontalBox.x,
+    y: page.height - pageMarginBottomPt - footerReservedPt,
+    width: zoneHorizontalBox.width,
+    height: Math.max(footerReservedPt, footerFragments.length > 0 ? 12 / scale : 0),
+  }
+  const dropHighlightBox = isHeaderEditActive
+    ? headerZoneDoc
+    : isFooterEditActive
+      ? footerZoneDoc
+      : page.contentBox
   const dropHighlightFragments = isHeaderFooterEditSection
     ? [...page.fragments, ...zoneFragments]
     : page.fragments
   const headerZone = {
-    x: zoneHorizontalBox.x * scale,
-    y: pageMarginTopPt * scale,
-    width: zoneHorizontalBox.width * scale,
-    height: Math.max(headerReservedPt * scale, headerFragments.length > 0 ? 12 : 0),
+    x: headerZoneDoc.x * scale,
+    y: headerZoneDoc.y * scale,
+    width: headerZoneDoc.width * scale,
+    height: headerZoneDoc.height * scale,
   }
   const footerZone = {
-    x: zoneHorizontalBox.x * scale,
-    y: (page.height - pageMarginBottomPt - footerReservedPt) * scale,
-    width: zoneHorizontalBox.width * scale,
-    height: Math.max(footerReservedPt * scale, footerFragments.length > 0 ? 12 : 0),
+    x: footerZoneDoc.x * scale,
+    y: footerZoneDoc.y * scale,
+    width: footerZoneDoc.width * scale,
+    height: footerZoneDoc.height * scale,
+  }
+  const currentReservedForResize = {
+    headerReserved: headerReservedPt,
+    footerReserved: footerReservedPt,
   }
 
   return (
@@ -1849,27 +2044,6 @@ function PageView({
         )
       })}
 
-      <ReadOnlyZoneFragments
-        fragments={headerFragments}
-        zone="header"
-        doc={doc}
-        pageKey={pageKey}
-        scale={scale}
-        textMeasurer={textMeasurer}
-        showTextSegments={showTextSegments}
-        clipPathIndexOffset={renderFragments.length}
-      />
-      <ReadOnlyZoneFragments
-        fragments={footerFragments}
-        zone="footer"
-        doc={doc}
-        pageKey={pageKey}
-        scale={scale}
-        textMeasurer={textMeasurer}
-        showTextSegments={showTextSegments}
-        clipPathIndexOffset={renderFragments.length + headerFragments.length}
-      />
-
       <HeaderFooterZoneLayer
         zone="header"
         active={isHeaderEditActive}
@@ -1878,7 +2052,7 @@ function PageView({
         width={headerZone.width}
         height={headerZone.height}
         onEnter={() => onHeaderFooterEditModeEnter(sectionIndex, "header")}
-        onExit={onHeaderFooterEditModeExit}
+        onActivePointerDown={onHeaderFooterZonePointerDown}
       />
       <HeaderFooterZoneLayer
         zone="footer"
@@ -1888,7 +2062,82 @@ function PageView({
         width={footerZone.width}
         height={footerZone.height}
         onEnter={() => onHeaderFooterEditModeEnter(sectionIndex, "footer")}
-        onExit={onHeaderFooterEditModeExit}
+        onActivePointerDown={onHeaderFooterZonePointerDown}
+      />
+
+      <ZoneFragments
+        fragments={headerFragments}
+        zone="header"
+        active={isHeaderEditActive}
+        doc={doc}
+        pageKey={pageKey}
+        scale={scale}
+        pageContentBottom={headerZoneDoc.y + headerZoneDoc.height}
+        textMeasurer={textMeasurer}
+        inlineEditVisualFresh={inlineEditVisualFresh}
+        inlineEditNodeId={inlineEditNodeId}
+        inlineEditCaretIndex={inlineEditCaretIndex}
+        activeInlineEditPageIndex={activeInlineEditPageIndex}
+        editFragmentRef={editFragmentRef}
+        dragActive={Boolean(drag)}
+        wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
+        wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
+        wysiwygTextDraftNodeId={wysiwygTextDraftNodeId}
+        wysiwygTextDraftText={wysiwygTextDraftText}
+        wysiwygTextCaretOffset={wysiwygTextCaretOffset}
+        wysiwygTextSelection={wysiwygTextSelection}
+        wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive}
+        wysiwygTextPointerFragments={wysiwygTextPointerFragments}
+        showTextSegments={showTextSegments}
+        onInlineEditStart={onInlineEditStart}
+        onInlineEditChange={onInlineEditChange}
+        onInlineEditCaretChange={onInlineEditCaretChange}
+        onInlineEditUserInteraction={onInlineEditUserInteraction}
+        onInlineEditHeightChange={onInlineEditHeightChange}
+        onInlineEditEnd={onInlineEditEnd}
+        onSplitParagraph={onSplitParagraph}
+        onMergeParagraph={onMergeParagraph}
+        onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+        onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
+        onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
+        clipPathIndexOffset={renderFragments.length}
+      />
+      <ZoneFragments
+        fragments={footerFragments}
+        zone="footer"
+        active={isFooterEditActive}
+        doc={doc}
+        pageKey={pageKey}
+        scale={scale}
+        pageContentBottom={footerZoneDoc.y + footerZoneDoc.height}
+        textMeasurer={textMeasurer}
+        inlineEditVisualFresh={inlineEditVisualFresh}
+        inlineEditNodeId={inlineEditNodeId}
+        inlineEditCaretIndex={inlineEditCaretIndex}
+        activeInlineEditPageIndex={activeInlineEditPageIndex}
+        editFragmentRef={editFragmentRef}
+        dragActive={Boolean(drag)}
+        wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
+        wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
+        wysiwygTextDraftNodeId={wysiwygTextDraftNodeId}
+        wysiwygTextDraftText={wysiwygTextDraftText}
+        wysiwygTextCaretOffset={wysiwygTextCaretOffset}
+        wysiwygTextSelection={wysiwygTextSelection}
+        wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive}
+        wysiwygTextPointerFragments={wysiwygTextPointerFragments}
+        showTextSegments={showTextSegments}
+        onInlineEditStart={onInlineEditStart}
+        onInlineEditChange={onInlineEditChange}
+        onInlineEditCaretChange={onInlineEditCaretChange}
+        onInlineEditUserInteraction={onInlineEditUserInteraction}
+        onInlineEditHeightChange={onInlineEditHeightChange}
+        onInlineEditEnd={onInlineEditEnd}
+        onSplitParagraph={onSplitParagraph}
+        onMergeParagraph={onMergeParagraph}
+        onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+        onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
+        onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
+        clipPathIndexOffset={renderFragments.length + headerFragments.length}
       />
 
       {isHeaderFooterEditSection && (
@@ -1905,6 +2154,53 @@ function PageView({
             event.stopPropagation()
             event.preventDefault()
             onHeaderFooterEditModeExit()
+          }}
+        />
+      )}
+
+      {isHeaderEditActive && (
+        <HeaderFooterZoneResizeHandle
+          zone="header"
+          x={headerZone.x}
+          y={headerZone.y + headerZone.height}
+          width={headerZone.width}
+          active={headerFooterReservedDrag?.sectionIndex === sectionIndex && headerFooterReservedDrag.zone === "header"}
+          onPointerDown={(event) => {
+            event.stopPropagation()
+            event.preventDefault()
+            event.currentTarget.setPointerCapture(event.pointerId)
+            onHeaderFooterReservedResizeStart(
+              sectionIndex,
+              "header",
+              currentReservedForResize,
+              page.height,
+              pageMarginTopPt,
+              pageMarginBottomPt,
+              pageKey,
+            )
+          }}
+        />
+      )}
+      {isFooterEditActive && (
+        <HeaderFooterZoneResizeHandle
+          zone="footer"
+          x={footerZone.x}
+          y={footerZone.y}
+          width={footerZone.width}
+          active={headerFooterReservedDrag?.sectionIndex === sectionIndex && headerFooterReservedDrag.zone === "footer"}
+          onPointerDown={(event) => {
+            event.stopPropagation()
+            event.preventDefault()
+            event.currentTarget.setPointerCapture(event.pointerId)
+            onHeaderFooterReservedResizeStart(
+              sectionIndex,
+              "footer",
+              currentReservedForResize,
+              page.height,
+              pageMarginTopPt,
+              pageMarginBottomPt,
+              pageKey,
+            )
           }}
         />
       )}
@@ -2154,7 +2450,7 @@ function PageView({
         />
       )}
 
-      <DropHighlight doc={doc} drag={drag} fragments={dropHighlightFragments} scale={scale} contentBox={page.contentBox} />
+      <DropHighlight doc={doc} drag={drag} fragments={dropHighlightFragments} scale={scale} contentBox={dropHighlightBox} />
 
       {isLayoutLoading && !inlineEditNodeId && !drag && !resizeDrag?.committed && !minHeightDrag?.committed && (
         <rect x={0} y={0} width={W} height={H} fill="white" opacity={0.15}
@@ -2165,7 +2461,7 @@ function PageView({
 }
 
 type PageViewProps = Parameters<typeof PageView>[0]
-const PAGE_VIEW_TRANSIENT_PROP_KEYS: Array<keyof PageViewProps> = ["resizeDrag", "minHeightDrag", "marginDrag", "marginEditMode", "headerFooterEditMode"]
+const PAGE_VIEW_TRANSIENT_PROP_KEYS: Array<keyof PageViewProps> = ["resizeDrag", "minHeightDrag", "marginDrag", "marginEditMode", "headerFooterEditMode", "headerFooterReservedDrag"]
 const PAGE_VIEW_SCOPED_EDIT_PROP_KEYS: Array<keyof PageViewProps> = [
   "inlineEditVisualFresh",
   "inlineEditNodeId",
@@ -2228,9 +2524,17 @@ function headerFooterEditModeAffectsPage(sectionIndex: number, mode: HeaderFoote
   return mode?.sectionIndex === sectionIndex
 }
 
+function headerFooterReservedDragAffectsPage(sectionIndex: number, drag: HeaderFooterReservedDrag | null): boolean {
+  return drag?.sectionIndex === sectionIndex
+}
+
 function pageHasNodeFragment(page: PaginatedPage, nodeId: string | null): boolean {
   if (!nodeId) return false
-  return page.fragments.some((fragment) =>
+  return [
+    ...page.fragments,
+    ...(page.headerFragments ?? []),
+    ...(page.footerFragments ?? []),
+  ].some((fragment) =>
     fragment.nodeId === nodeId &&
     fragment.nodeType === "paragraph"
   )
@@ -2287,6 +2591,11 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     headerFooterEditModeAffectsPage(next.sectionIndex, next.headerFooterEditMode)
   )) return false
 
+  if (prev.headerFooterReservedDrag !== next.headerFooterReservedDrag && (
+    headerFooterReservedDragAffectsPage(prev.sectionIndex, prev.headerFooterReservedDrag) ||
+    headerFooterReservedDragAffectsPage(next.sectionIndex, next.headerFooterReservedDrag)
+  )) return false
+
   return true
 }
 
@@ -2330,10 +2639,13 @@ interface Props {
   marginDrag: MarginDrag | null
   marginEditMode: MarginEditMode | null
   headerFooterEditMode: HeaderFooterEditMode | null
+  headerFooterReservedDrag: HeaderFooterReservedDrag | null
   onMarginEditModeEnter: (sectionIndex: number) => void
   onMarginEditModeExit: () => void
   onHeaderFooterEditModeEnter: (sectionIndex: number, zone: "header" | "footer") => void
   onHeaderFooterEditModeExit: () => void
+  onHeaderFooterZonePointerDown: () => void
+  onHeaderFooterReservedResizeStart: (sectionIndex: number, zone: "header" | "footer", currentReserved: { headerReserved: number; footerReserved: number }, pageHeightPt: number, marginTopPt: number, marginBottomPt: number, pageKey: string) => void
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
   onScaleChange: (scale: number) => void
   autoFitScale: boolean
@@ -2441,10 +2753,10 @@ export function buildWysiwygDraftVisualPreview(input: {
 }
 
 export function EditorCanvas({
-  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
+  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
   textMeasurer,
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
-  setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onMarginResizeStart, onScaleChange,
+  setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled,
@@ -2539,7 +2851,7 @@ export function EditorCanvas({
     if (!wysiwygTextEngineEnabled || !wysiwygTextDraftNodeId) return []
     const sourceFragments = wysiwygDraftVisualPreview?.fragments ?? sections.flatMap((section) =>
       section.pages.flatMap((page) =>
-        page.fragments.filter((fragment) =>
+        [...page.fragments, ...page.headerFragments, ...page.footerFragments].filter((fragment) =>
           fragment.nodeId === wysiwygTextDraftNodeId &&
           fragment.nodeType === "paragraph"
         ),
@@ -2639,10 +2951,13 @@ export function EditorCanvas({
                   marginDrag={marginDrag}
                   marginEditMode={marginEditMode}
                   headerFooterEditMode={headerFooterEditMode}
+                  headerFooterReservedDrag={headerFooterReservedDrag}
                   onMarginEditModeEnter={onMarginEditModeEnter}
                   onMarginEditModeExit={onMarginEditModeExit}
                   onHeaderFooterEditModeEnter={onHeaderFooterEditModeEnter}
                   onHeaderFooterEditModeExit={onHeaderFooterEditModeExit}
+                  onHeaderFooterZonePointerDown={onHeaderFooterZonePointerDown}
+                  onHeaderFooterReservedResizeStart={onHeaderFooterReservedResizeStart}
                   onMarginResizeStart={onMarginResizeStart}
                   showTextSegments={showTextSegments}
                   showDrift={showDrift}

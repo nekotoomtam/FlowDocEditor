@@ -148,6 +148,60 @@ function makeFlowPaginated(): PaginatedDocument {
   }
 }
 
+function makeHeaderFlowPaginated(): PaginatedDocument {
+  return {
+    tocEntries: [],
+    sections: [{
+      sectionId: "s1",
+      pages: [{
+        index: 0,
+        width: 220,
+        height: 300,
+        contentBox: { x: 10, y: 40, width: 200, height: 230 },
+        footerFragments: [],
+        fragments: [flowParagraph("below", "body", 80, 10)],
+        headerFragments: [
+          {
+            nodeId: "fr1",
+            nodeType: "flow-row",
+            pageIndex: 0,
+            x: 10,
+            y: 10,
+            width: 180,
+            height: 35,
+            fragmentIndex: 0,
+          },
+          {
+            nodeId: "fs1",
+            nodeType: "flow-stack",
+            parentNodeId: "fr1",
+            pageIndex: 0,
+            x: 10,
+            y: 10,
+            width: 85,
+            height: 35,
+            fragmentIndex: 0,
+          },
+          {
+            nodeId: "fs2",
+            nodeType: "flow-stack",
+            parentNodeId: "fr1",
+            pageIndex: 0,
+            x: 105,
+            y: 10,
+            width: 85,
+            height: 35,
+            fragmentIndex: 0,
+          },
+          flowParagraph("p1", "fs1", 10, 20),
+          flowParagraph("p2", "fs2", 10, 30, 105),
+          flowParagraph("p3", "fs1", 35, 10),
+        ],
+      }],
+    }],
+  }
+}
+
 describe("resizeFragmentHeightAndShift", () => {
   it("patches the active paragraph height and shifts following same-page fragments", () => {
     const next = resizeFragmentHeightAndShift(makePaginated(), doc, "p1", 32, 0)
@@ -193,5 +247,20 @@ describe("resizeFragmentHeightAndShift", () => {
     expect(byId.get("p3")?.lines?.[0].y).toBe(27)
     expect(byId.get("below")?.y).toBe(55)
     expect(byId.get("below")?.lines?.[0].y).toBe(55)
+  })
+
+  it("patches header flow-row and sibling flow-stack heights during same-page inline growth", () => {
+    const next = resizeFragmentHeightAndShift(makeHeaderFlowPaginated(), flowDoc, "p1", 40, 0)
+    const page = next.sections[0].pages[0]
+    const headerById = new Map(page.headerFragments.map((fragment) => [fragment.nodeId, fragment]))
+
+    expect(headerById.get("p1")?.height).toBe(40)
+    expect(headerById.get("fr1")?.height).toBe(55)
+    expect(headerById.get("fs1")?.height).toBe(55)
+    expect(headerById.get("fs2")?.height).toBe(55)
+    expect(headerById.get("p3")?.y).toBe(55)
+    expect(headerById.get("p3")?.lines?.[0].y).toBe(55)
+    expect(page.fragments[0].y).toBe(80)
+    expect(page.fragments[0].lines?.[0].y).toBe(80)
   })
 })

@@ -13,6 +13,7 @@ import {
   pageViewScopedEditPropsAffectPage,
   shouldStartInlineEditOnSingleClick,
 } from "../EditorCanvas"
+import type { DragState } from "../editorReducer"
 
 const renderProps: ParagraphRenderProps = {
   align: "left",
@@ -556,6 +557,7 @@ interface RenderCanvasOptions {
   wysiwygTextDraftPaginationActive?: boolean
   marginEditMode?: { sectionIndex: number } | null
   headerFooterEditMode?: { sectionIndex: number; zone: "header" | "footer" } | null
+  drag?: DragState | null
 }
 
 function renderCanvas(
@@ -568,16 +570,19 @@ function renderCanvas(
   return renderToStaticMarkup(createElement(EditorCanvas, {
     paginated,
     doc,
-    drag: null,
+    drag: options.drag ?? null,
     resizeDrag: null,
     minHeightDrag: null,
     marginDrag: null,
     marginEditMode: options.marginEditMode ?? null,
     headerFooterEditMode: options.headerFooterEditMode ?? null,
+    headerFooterReservedDrag: null,
     onMarginEditModeEnter: noop,
     onMarginEditModeExit: noop,
     onHeaderFooterEditModeEnter: noop,
     onHeaderFooterEditModeExit: noop,
+    onHeaderFooterZonePointerDown: noop,
+    onHeaderFooterReservedResizeStart: noop,
     scale: 1,
     selectedNodeId,
     selectionAnchorNodeId: options.selectionAnchorNodeId ?? selectedNodeId,
@@ -637,6 +642,23 @@ describe("EditorCanvas page memoization", () => {
       inlineEditNodeId: "active-p",
       inlineEditPageIndex: 0,
       wysiwygTextDraftNodeId: "active-p",
+      wysiwygDraftVisualPreview: null,
+      wysiwygTableCellDraftVisualChromeByPageIndex: new Map<number, PageFragment[]>(),
+      wysiwygTextPointerFragments: [],
+    }
+
+    expect(pageViewScopedEditPropsAffectPage(activePage, props)).toBe(true)
+    expect(pageViewScopedEditPropsAffectPage(otherPage, props)).toBe(false)
+  })
+
+  it("keeps header/footer paragraph edits in the page render scope", () => {
+    const activePage = pageWithFragments(0, [textFragment("body-p", "Body", 72)])
+    activePage.headerFragments = [textFragment("header-p", "Header", 36)]
+    const otherPage = pageWithFragments(1, [textFragment("other-p", "Other", 72, { pageIndex: 1 })])
+    const props = {
+      inlineEditNodeId: "header-p",
+      inlineEditPageIndex: 0,
+      wysiwygTextDraftNodeId: "header-p",
       wysiwygDraftVisualPreview: null,
       wysiwygTableCellDraftVisualChromeByPageIndex: new Map<number, PageFragment[]>(),
       wysiwygTextPointerFragments: [],
@@ -957,6 +979,77 @@ describe("EditorCanvas header/footer zones", () => {
     expect(markup).toContain("data-active=\"true\"")
     expect(markup).toContain(">HEADER</text>")
     expect(markup).not.toContain("data-testid=\"page-margin-activation-band\"")
+  })
+
+  it("shows a reserved-height resize handle for the active header/footer zone only", () => {
+    const passiveMarkup = renderCanvas()
+    const activeMarkup = renderCanvas(makePaginated(), makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+
+    expect(passiveMarkup).not.toContain("data-testid=\"header-footer-zone-resize-handle\"")
+    expect(activeMarkup).toContain("data-testid=\"header-footer-zone-resize-handle\"")
+    expect(activeMarkup).toContain("data-zone=\"header\"")
+    expect(activeMarkup).toContain("cursor:ns-resize")
+  })
+
+  it("marks active header paragraph fragments as editable zone content", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+
+    expect(markup).toContain("data-zone-editable=\"true\"")
+    expect(markup).toContain("data-node-id=\"header-p\"")
+  })
+
+  it("renders an inline editor for the active header paragraph fragment", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+      inlineEditNodeId: "header-p",
+      inlineEditPageIndex: 0,
+      inlineEditVisualFresh: true,
+      wysiwygTextEngineEnabled: true,
+    })
+
+    expect(markup).toContain("data-zone-editable=\"true\"")
+    expect(markup).toContain("data-inline-edit-node-id=\"header-p\"")
+    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+  })
+
+  it("shows a container drop line inside the active header/footer root stack", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].headerFragments = [
+      { nodeId: "header-root", nodeType: "stack", pageIndex: 0, x: 36, y: 36, width: 228, height: 16 },
+      textFragment("header-p", "Header Preview", 36, { parentNodeId: "header-root" }),
+    ]
+    const rootTarget = { kind: "node" as const, nodeId: "header-root", nodeType: "stack" as const }
+    const drag: DragState = {
+      source: { source: "palette", blockType: "paragraph" },
+      clientX: 0,
+      clientY: 0,
+      preview: {
+        hoverNodeId: "header-root",
+        zone: "center",
+        target: rootTarget,
+        placement: {
+          zone: "center",
+          intent: "insertInside",
+          target: rootTarget,
+          targetNodeId: "header-root",
+          parentNodeId: "header-root",
+          targetParentType: "stack",
+        },
+        isValid: true,
+      },
+    }
+
+    const markup = renderCanvas(paginated, makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+      drag,
+    })
+
+    expect(markup).toContain("data-testid=\"drop-highlight-container-insert\"")
+    expect(markup).toContain("fill=\"#0d9488\"")
   })
 })
 

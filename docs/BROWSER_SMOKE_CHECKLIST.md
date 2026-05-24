@@ -133,10 +133,15 @@ interaction or the page-margin overlap rules:
   header/footer zone spans the full page width while body content margins stay
   unchanged. Switch back to `In frame` and confirm the zone returns to the body
   content width.
+- While a header/footer zone is active, open Add. Confirm the palette is scoped
+  to Paragraph and Flow Columns presets, with Table and Fields unavailable.
 - While a header/footer zone is active, drag a `50 | 50` layout block from Add
   into the zone. Confirm the drop preview appears in the active zone and the
   inserted Flow Row / Flow Stack content repeats in that header/footer zone
   rather than in the body.
+- While a header/footer zone is active, drag a Paragraph block from Add into the
+  zone, double-click the paragraph, type text, and confirm the typed content
+  stays inside the active header/footer zone.
 
 ## CI Browser Smoke Setup
 

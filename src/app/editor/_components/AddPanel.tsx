@@ -9,11 +9,13 @@ export function AddPanel({
   registry,
   editable,
   isDragging,
+  paletteScope = "document",
   onDragStart,
 }: {
   registry: FieldRegistryV1
   editable: boolean
   isDragging: boolean
+  paletteScope?: "document" | "headerFooter"
   onDragStart: (source: DragSource, event: PointerEvent) => void
 }) {
   return (
@@ -22,8 +24,10 @@ export function AddPanel({
       <div style={{ ...rightRailPanelBody, padding: 0 }}>
         {editable ? (
           <>
-            <EditorPalette onDragStart={onDragStart} isDragging={isDragging} />
-            <FieldPalette registry={registry} onDragStart={onDragStart} isDragging={isDragging} />
+            <EditorPalette onDragStart={onDragStart} isDragging={isDragging} scope={paletteScope} />
+            {paletteScope === "document" && (
+              <FieldPalette registry={registry} onDragStart={onDragStart} isDragging={isDragging} />
+            )}
           </>
         ) : (
           <div style={{ padding: 14, fontSize: 11, color: "#9ca3af", lineHeight: 1.5 }}>
