@@ -257,6 +257,10 @@ export interface MarginDrag {
   committed?: boolean
 }
 
+export interface MarginEditMode {
+  sectionIndex: number
+}
+
 type ZoomMode = "fit" | "manual"
 type LeftRailMode = EditorLeftRailMode
 type RightRailMode = "page" | "properties"
@@ -699,6 +703,7 @@ export default function EditorShell() {
     setImmediate: setMarginDrag,
     setOnAnimationFrame: scheduleMarginDrag,
   } = useAnimationFrameState<MarginDrag | null>(null)
+  const [marginEditMode, setMarginEditMode] = useState<MarginEditMode | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [documentIoStatus, setDocumentIoStatus] = useState<{ type: "info" | "error"; message: string } | null>(null)
@@ -2069,6 +2074,12 @@ export default function EditorShell() {
   }, [])
 
   const handleBackgroundPointerDown = useCallback(() => {
+    if (marginEditMode) {
+      setMarginEditMode(null)
+      dispatch({ type: "SELECT_NODE", nodeId: null })
+      setRightRailMode("page")
+      return
+    }
     if (inlineEditNodeId) {
       finalizeInlineEditBeforeAction()
       dispatch({ type: "SELECT_NODE", nodeId: null })
@@ -2077,7 +2088,19 @@ export default function EditorShell() {
     }
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setRightRailMode("page")
-  }, [finalizeInlineEditBeforeAction, inlineEditNodeId])
+  }, [finalizeInlineEditBeforeAction, inlineEditNodeId, marginEditMode])
+
+  const enterMarginEditMode = useCallback((sectionIndex: number) => {
+    finalizeInlineEditBeforeAction()
+    dispatch({ type: "SELECT_NODE", nodeId: null })
+    setRightRailMode("page")
+    setMarginEditMode({ sectionIndex })
+  }, [finalizeInlineEditBeforeAction])
+
+  const exitMarginEditMode = useCallback(() => {
+    if (marginDragRef.current && !marginDragRef.current.committed) return
+    setMarginEditMode(null)
+  }, [marginDragRef])
 
   const handleResizeStart = useCallback((
     rowId: string, leftStackId: string, rightStackId: string,
@@ -2219,6 +2242,8 @@ export default function EditorShell() {
   ) => {
     finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
+    setRightRailMode("page")
+    setMarginEditMode({ sectionIndex })
     setMarginDrag({ sectionIndex, side, pageWidthPt, pageHeightPt, currentMargins, pageKey, altKey })
   }, [finalizeInlineEditBeforeAction])
 
@@ -2268,6 +2293,7 @@ export default function EditorShell() {
       setResizeDrag(null)
       setMinHeightDrag(null)
       setMarginDrag(null)
+      setMarginEditMode(null)
       setLeftRailMode("outline")
       setRightRailMode("properties")
       return
@@ -2688,6 +2714,14 @@ export default function EditorShell() {
         handleInlineEditEnd()
         return
       }
+      if (marginDragRef.current && !marginDragRef.current.committed) {
+        setMarginDrag(null)
+        return
+      }
+      if (marginEditMode) {
+        setMarginEditMode(null)
+        return
+      }
       if (state.drag) dispatch({ type: "DRAG_CANCEL" })
       else if (pendingDragRef.current) pendingDragRef.current = null
       else {
@@ -2720,7 +2754,10 @@ export default function EditorShell() {
     handleUndo,
     inlineEditNodeId,
     isTemplateMode,
+    marginEditMode,
+    marginDragRef,
     resetZoom,
+    setMarginDrag,
     state.drag,
     state.selectedNodeId,
     wysiwygTextSessionState.nodeId,
@@ -2933,6 +2970,9 @@ export default function EditorShell() {
                 minHeightDrag={isTemplateMode ? minHeightDrag : null}
                 onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
                 marginDrag={isTemplateMode ? marginDrag : null}
+                marginEditMode={isTemplateMode ? marginEditMode : null}
+                onMarginEditModeEnter={isTemplateMode ? enterMarginEditMode : () => undefined}
+                onMarginEditModeExit={isTemplateMode ? exitMarginEditMode : () => undefined}
                 onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
                 onScaleChange={handleCanvasScaleChange}
                 autoFitScale={zoomMode === "fit"}

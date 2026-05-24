@@ -14,7 +14,7 @@ import {
 import { getTextRunParagraphText, isPlainTextParagraph, isTextRunOnlyParagraph } from "@/document"
 import type { DocumentNode, FlowTableCellNode, FlowTableNode, LayoutNode, ParagraphNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
-import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag } from "./EditorShell"
+import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag, MarginEditMode } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
 import { getRowGeometry } from "@/placement/geometry"
 import {
@@ -1131,7 +1131,7 @@ function PageView({
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode,
   resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
-  sectionIndex, marginDrag, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
+  sectionIndex, marginDrag, marginEditMode, onMarginEditModeEnter, onMarginEditModeExit, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygRichTextShortcut, onWysiwygTextReflowDecision,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
@@ -1179,6 +1179,9 @@ function PageView({
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   sectionIndex: number
   marginDrag: MarginDrag | null
+  marginEditMode: MarginEditMode | null
+  onMarginEditModeEnter: (sectionIndex: number) => void
+  onMarginEditModeExit: () => void
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
 }) {
   const W = page.width * scale
@@ -1197,7 +1200,7 @@ function PageView({
   }
 
   function queueHoverPath(nodeId: string) {
-    if (drag || resizeDrag || minHeightDrag || marginDrag) return
+    if (drag || resizeDrag || minHeightDrag || marginDrag || marginEditMode) return
     clearHoverPathTimer()
     hoverPathTimerRef.current = setTimeout(() => {
       setHoverPathTarget({ nodeId, pageKey })
@@ -1216,9 +1219,9 @@ function PageView({
 
   useEffect(() => () => clearHoverPathTimer(), [])
   useEffect(() => {
-    if (!drag && !resizeDrag && !minHeightDrag && !marginDrag) return
+    if (!drag && !resizeDrag && !minHeightDrag && !marginDrag && !marginEditMode) return
     clearHoverPath()
-  }, [drag, resizeDrag, minHeightDrag, marginDrag])
+  }, [drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode])
 
   useEffect(() => {
     if (inlineEditNodeId == null) editFragmentRef.current = null
@@ -1337,7 +1340,7 @@ function PageView({
     () => buildSelectionContext(doc, hoverPathNodeId),
     [doc, hoverPathNodeId],
   )
-  const suppressPathOverlays = Boolean(drag || resizeDrag || minHeightDrag || marginDrag)
+  const suppressPathOverlays = Boolean(drag || resizeDrag || minHeightDrag || marginDrag || marginEditMode)
   const selectedPathFragment = suppressPathOverlays ? null : findCanvasPathFragment(
     renderFragments,
     selectedNodeId,
@@ -1353,6 +1356,48 @@ function PageView({
   const selectedActionCanDrag = Boolean(selectedActionNode && DRAGGABLE_TYPES.has(selectedActionNode.type))
   const selectedActionCanDuplicate = Boolean(selectedActionNode && selectedActionNode.type !== "body")
   const selectedActionCanDelete = selectedActionCanDuplicate
+  const isMarginDragSection = marginDrag?.sectionIndex === sectionIndex
+  const isMarginEditSection = marginEditMode?.sectionIndex === sectionIndex
+  const isMarginGuideEditable = isMarginDragSection || isMarginEditSection
+  const liveMargins = isMarginDragSection ? marginDrag!.currentMargins : {
+    left: page.contentBox.x,
+    top: page.contentBox.y,
+    right: page.width - page.contentBox.x - page.contentBox.width,
+    bottom: page.height - page.contentBox.y - page.contentBox.height,
+  }
+  const marginGuide = {
+    lx: liveMargins.left * scale,
+    rx: (page.width - liveMargins.right) * scale,
+    ty: liveMargins.top * scale,
+    by: (page.height - liveMargins.bottom) * scale,
+  }
+  const marginSides = [
+    { side: "left"   as const, x1: marginGuide.lx, y1: 0,              x2: marginGuide.lx, y2: H,              hx: marginGuide.lx - 7, hy: 0,                  hw: 14, hh: H,  cur: "ew-resize" },
+    { side: "right"  as const, x1: marginGuide.rx, y1: 0,              x2: marginGuide.rx, y2: H,              hx: marginGuide.rx - 7, hy: 0,                  hw: 14, hh: H,  cur: "ew-resize" },
+    { side: "top"    as const, x1: 0,              y1: marginGuide.ty, x2: W,              y2: marginGuide.ty, hx: 0,                  hy: marginGuide.ty - 7, hw: W,  hh: 14, cur: "ns-resize" },
+    { side: "bottom" as const, x1: 0,              y1: marginGuide.by, x2: W,              y2: marginGuide.by, hx: 0,                  hy: marginGuide.by - 7, hw: W,  hh: 14, cur: "ns-resize" },
+  ]
+  const marginActivationBands = [
+    { side: "left" as const, x: 0, y: 0, width: Math.max(marginGuide.lx, 1), height: H },
+    { side: "right" as const, x: marginGuide.rx, y: 0, width: Math.max(W - marginGuide.rx, 1), height: H },
+    { side: "top" as const, x: 0, y: 0, width: W, height: Math.max(marginGuide.ty, 1) },
+    { side: "bottom" as const, x: 0, y: marginGuide.by, width: W, height: Math.max(H - marginGuide.by, 1) },
+  ]
+  const isMarginSideActive = (side: string) => isMarginDragSection && marginDrag!.side === side
+  const isMarginSideMirror = (side: string) =>
+    isMarginDragSection && !marginDrag!.altKey && (
+      (marginDrag!.side === "left" && side === "right") ||
+      (marginDrag!.side === "right" && side === "left") ||
+      (marginDrag!.side === "top" && side === "bottom") ||
+      (marginDrag!.side === "bottom" && side === "top")
+    )
+  const marginLineStroke = (side: string) => (
+    isMarginSideActive(side) ? "#2563eb" : isMarginSideMirror(side) ? "#93c5fd" : isMarginGuideEditable ? "#3b82f6" : "#e5e7eb"
+  )
+  const marginLineWidth = (side: string) => (
+    isMarginSideActive(side) ? 1.75 : isMarginSideMirror(side) ? 1.25 : isMarginGuideEditable ? 1.25 : 0.5
+  )
+
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
     <svg
@@ -1378,60 +1423,42 @@ function PageView({
         })}
       </defs>
 
-      {/* margin handles — 4 drag lines แทน content box guide */}
-      {(() => {
-        const isThisSection = marginDrag?.sectionIndex === sectionIndex
-        const liveMargins = isThisSection ? marginDrag!.currentMargins : {
-          left: page.contentBox.x,
-          top: page.contentBox.y,
-          right: page.width - page.contentBox.x - page.contentBox.width,
-          bottom: page.height - page.contentBox.y - page.contentBox.height,
-        }
-        const lx = liveMargins.left * scale
-        const rx = (page.width - liveMargins.right) * scale
-        const ty = liveMargins.top * scale
-        const by = (page.height - liveMargins.bottom) * scale
-
-        const sides = [
-          { side: "left"   as const, x1: lx, y1: 0,  x2: lx, y2: H,  hx: lx - 6, hy: 0,     hw: 12, hh: H,  cur: "ew-resize" },
-          { side: "right"  as const, x1: rx, y1: 0,  x2: rx, y2: H,  hx: rx - 6, hy: 0,     hw: 12, hh: H,  cur: "ew-resize" },
-          { side: "top"    as const, x1: 0,  y1: ty, x2: W,  y2: ty, hx: 0,      hy: ty - 6, hw: W,  hh: 12, cur: "ns-resize" },
-          { side: "bottom" as const, x1: 0,  y1: by, x2: W,  y2: by, hx: 0,      hy: by - 6, hw: W,  hh: 12, cur: "ns-resize" },
-        ]
-
-        const isActive = (s: string) => isThisSection && marginDrag!.side === s
-        const isMirror = (s: string) =>
-          isThisSection && !marginDrag!.altKey && (
-            (marginDrag!.side === "left" && s === "right") ||
-            (marginDrag!.side === "right" && s === "left") ||
-            (marginDrag!.side === "top" && s === "bottom") ||
-            (marginDrag!.side === "bottom" && s === "top")
-          )
-
-        return sides.map(({ side, x1, y1, x2, y2, hx, hy, hw, hh, cur }) => (
-          <g key={`mg-${side}`}>
-            <rect x={hx} y={hy} width={hw} height={hh}
-              fill="transparent" style={{ cursor: cur, touchAction: "none" }}
-              onPointerDown={(e) => {
-                e.stopPropagation(); e.preventDefault()
-                e.currentTarget.setPointerCapture(e.pointerId)
-                onMarginResizeStart(sectionIndex, side, {
-                  left: page.contentBox.x,
-                  top: page.contentBox.y,
-                  right: page.width - page.contentBox.x - page.contentBox.width,
-                  bottom: page.height - page.contentBox.y - page.contentBox.height,
-                }, page.width, page.height, pageKey, e.altKey)
-              }}
-            />
-            <line x1={x1} y1={y1} x2={x2} y2={y2}
-              stroke={isActive(side) ? "#2563eb" : isMirror(side) ? "#93c5fd" : "#e5e7eb"}
-              strokeWidth={isActive(side) ? 1.5 : isMirror(side) ? 1 : 0.5}
-              strokeDasharray={isActive(side) || isMirror(side) ? "none" : "4 2"}
-              style={{ pointerEvents: "none" }}
-            />
-          </g>
-        ))
-      })()}
+      {/* margin guides are passive until the user intentionally enters margin edit mode */}
+      <g data-testid="page-margin-guides" data-margin-edit-active={isMarginGuideEditable ? "true" : "false"}>
+        {!isMarginGuideEditable && marginActivationBands.map(({ side, x, y, width, height }) => (
+          <rect
+            key={`margin-activate-${side}`}
+            data-testid="page-margin-activation-band"
+            data-side={side}
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            fill="transparent"
+            style={{ cursor: "default", touchAction: "none" }}
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              e.preventDefault()
+              onMarginEditModeEnter(sectionIndex)
+            }}
+          />
+        ))}
+        {marginSides.map(({ side, x1, y1, x2, y2 }) => (
+          <line
+            key={`margin-guide-${side}`}
+            data-testid="page-margin-guide-line"
+            data-side={side}
+            x1={x1}
+            y1={y1}
+            x2={x2}
+            y2={y2}
+            stroke={marginLineStroke(side)}
+            strokeWidth={marginLineWidth(side)}
+            strokeDasharray={isMarginGuideEditable ? "none" : "4 2"}
+            style={{ pointerEvents: "none" }}
+          />
+        ))}
+      </g>
 
       {/* empty body placeholder */}
       {page.fragments.length === 0 && (() => {
@@ -1556,13 +1583,13 @@ function PageView({
             data-table-structure-chrome={isTableStructureChrome ? "true" : undefined}
             data-wysiwyg-table-cell-visual-chrome={isWysiwygTableCellDraftVisualChrome ? "true" : undefined}
             data-wysiwyg-table-cell-structure-chrome={isWysiwygTableCellDraftStructureChrome ? "true" : undefined}
-            onPointerEnter={!isFlowTableRowVisualOnly && !drag && !resizeDrag && !minHeightDrag && !marginDrag && !isInlineEditing
+            onPointerEnter={!isFlowTableRowVisualOnly && !drag && !resizeDrag && !minHeightDrag && !marginDrag && !marginEditMode && !isInlineEditing
               ? () => queueHoverPath(f.nodeId)
               : undefined}
             onPointerLeave={!isFlowTableRowVisualOnly
               ? () => clearHoverPath(f.nodeId)
               : undefined}
-            onPointerDown={!isFlowTableRowVisualOnly && (isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !isInlineEditing
+            onPointerDown={!isFlowTableRowVisualOnly && (isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !marginEditMode && !isInlineEditing
               ? (e) => {
                 e.stopPropagation()
                 const clickAction = shouldStartInlineEditOnSingleClick({
@@ -1583,7 +1610,7 @@ function PageView({
                 onNodePointerDown({ source: "document", nodeId }, e, clickAction)
               }
               : undefined}
-            onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "flow-table-cell") && !drag
+            onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "flow-table-cell") && !drag && !marginEditMode
               ? (e) => {
                 e.stopPropagation()
                 const paragraphId = f.nodeType === "flow-table-cell"
@@ -1732,7 +1759,7 @@ function PageView({
       />
 
       {/* resize handles — แสดงระหว่าง stacks ของแต่ละ row */}
-      {!drag && page.fragments.filter((f) => f.nodeType === "row" || f.nodeType === "flow-row").map((rowFrag) => {
+      {!drag && !marginEditMode && page.fragments.filter((f) => f.nodeType === "row" || f.nodeType === "flow-row").map((rowFrag) => {
         const rowNode = nodeById.get(rowFrag.nodeId)
         if (rowNode?.type !== "row" && rowNode?.type !== "flow-row") return null
         if (rowNode.type !== rowFrag.nodeType) return null
@@ -1774,7 +1801,7 @@ function PageView({
       })}
 
       {/* table column resize handles — internal column boundaries only */}
-      {!drag && tableColumnResizeHandles.map((handle) => {
+      {!drag && !marginEditMode && tableColumnResizeHandles.map((handle) => {
         const isActive = resizeDrag?.type === "table-column" &&
           resizeDrag.tableId === handle.tableId &&
           resizeDrag.leftColIndex === handle.leftColIndex
@@ -1824,7 +1851,7 @@ function PageView({
       })}
 
       {/* minHeight resize handles — แสดงด้านล่างของ row */}
-      {!drag && page.fragments.filter((f) => f.nodeType === "row").map((rowFrag) => {
+      {!drag && !marginEditMode && page.fragments.filter((f) => f.nodeType === "row").map((rowFrag) => {
         const isActive = minHeightDrag?.rowId === rowFrag.nodeId
         const rowNode = nodeById.get(rowFrag.nodeId)
         if (rowNode?.type !== "row") return null
@@ -1860,6 +1887,82 @@ function PageView({
           </g>
         )
       })}
+
+      {isMarginGuideEditable && (
+        <g data-testid="page-margin-edit-layer">
+          {marginActivationBands.map(({ side, x, y, width, height }) => (
+            <rect
+              key={`margin-edit-outer-${side}`}
+              data-testid="page-margin-edit-outer-band"
+              data-side={side}
+              x={x}
+              y={y}
+              width={width}
+              height={height}
+              fill="#dbeafe"
+              opacity={0.12}
+              style={{ cursor: "default", touchAction: "none" }}
+              onPointerDown={(e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                onMarginEditModeExit()
+              }}
+            />
+          ))}
+          <rect
+            data-testid="page-margin-edit-content-overlay"
+            x={marginGuide.lx}
+            y={marginGuide.ty}
+            width={Math.max(0, marginGuide.rx - marginGuide.lx)}
+            height={Math.max(0, marginGuide.by - marginGuide.ty)}
+            fill="#eff6ff"
+            opacity={0.18}
+            style={{ cursor: "default", touchAction: "none" }}
+            onPointerDown={(e) => {
+              e.stopPropagation()
+              e.preventDefault()
+              onMarginEditModeExit()
+            }}
+          />
+          {marginSides.map(({ side, x1, y1, x2, y2, hx, hy, hw, hh, cur }) => (
+            <g key={`margin-edit-${side}`}>
+              <rect
+                data-testid="page-margin-drag-handle"
+                data-side={side}
+                x={hx}
+                y={hy}
+                width={hw}
+                height={hh}
+                fill="transparent"
+                style={{ cursor: cur, touchAction: "none" }}
+                onPointerDown={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  e.currentTarget.setPointerCapture(e.pointerId)
+                  onMarginResizeStart(sectionIndex, side, {
+                    left: page.contentBox.x,
+                    top: page.contentBox.y,
+                    right: page.width - page.contentBox.x - page.contentBox.width,
+                    bottom: page.height - page.contentBox.y - page.contentBox.height,
+                  }, page.width, page.height, pageKey, e.altKey)
+                }}
+              />
+              <line
+                data-testid="page-margin-edit-line"
+                data-side={side}
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke={marginLineStroke(side)}
+                strokeWidth={marginLineWidth(side)}
+                strokeDasharray="none"
+                style={{ pointerEvents: "none" }}
+              />
+            </g>
+          ))}
+        </g>
+      )}
 
       {selectedNodeId && selectedActionFragment && (
         <CanvasNodeActionRail
@@ -1911,7 +2014,7 @@ function PageView({
 }
 
 type PageViewProps = Parameters<typeof PageView>[0]
-const PAGE_VIEW_TRANSIENT_PROP_KEYS: Array<keyof PageViewProps> = ["resizeDrag", "minHeightDrag", "marginDrag"]
+const PAGE_VIEW_TRANSIENT_PROP_KEYS: Array<keyof PageViewProps> = ["resizeDrag", "minHeightDrag", "marginDrag", "marginEditMode"]
 const PAGE_VIEW_SCOPED_EDIT_PROP_KEYS: Array<keyof PageViewProps> = [
   "inlineEditVisualFresh",
   "inlineEditNodeId",
@@ -1966,6 +2069,10 @@ function marginDragAffectsPage(sectionIndex: number, drag: MarginDrag | null): b
   return drag?.sectionIndex === sectionIndex
 }
 
+function marginEditModeAffectsPage(sectionIndex: number, mode: MarginEditMode | null): boolean {
+  return mode?.sectionIndex === sectionIndex
+}
+
 function pageHasNodeFragment(page: PaginatedPage, nodeId: string | null): boolean {
   if (!nodeId) return false
   return page.fragments.some((fragment) =>
@@ -2015,6 +2122,11 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     marginDragAffectsPage(next.sectionIndex, next.marginDrag)
   )) return false
 
+  if (prev.marginEditMode !== next.marginEditMode && (
+    marginEditModeAffectsPage(prev.sectionIndex, prev.marginEditMode) ||
+    marginEditModeAffectsPage(next.sectionIndex, next.marginEditMode)
+  )) return false
+
   return true
 }
 
@@ -2056,6 +2168,9 @@ interface Props {
   onTableColumnResizeStart: (tableId: string, leftColIndex: number, pairX: number, pairWidth: number, leftWidthOriginal: number, rightWidthOriginal: number, startClientX: number, pageKey: string, tableFragY: number, tableFragHeight: number) => void
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
   marginDrag: MarginDrag | null
+  marginEditMode: MarginEditMode | null
+  onMarginEditModeEnter: (sectionIndex: number) => void
+  onMarginEditModeExit: () => void
   onMarginResizeStart: (sectionIndex: number, side: "top" | "right" | "bottom" | "left", currentMargins: { top: number; right: number; bottom: number; left: number }, pageWidthPt: number, pageHeightPt: number, pageKey: string, altKey: boolean) => void
   onScaleChange: (scale: number) => void
   autoFitScale: boolean
@@ -2163,10 +2278,10 @@ export function buildWysiwygDraftVisualPreview(input: {
 }
 
 export function EditorCanvas({
-  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
+  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
   textMeasurer,
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
-  setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginResizeStart, onScaleChange,
+  setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled,
@@ -2300,6 +2415,13 @@ export function EditorCanvas({
     <div
       ref={containerRef}
       data-testid="editor-canvas"
+      onPointerDown={(event) => {
+        if (!marginEditMode) return
+        const target = event.target
+        if (!(target instanceof Element)) return
+        if (target.closest('[data-testid="editor-page"]')) return
+        onMarginEditModeExit()
+      }}
       style={{
         flex: 1,
         overflow: "auto",
@@ -2351,6 +2473,9 @@ export function EditorCanvas({
                   onMinHeightResizeStart={onMinHeightResizeStart}
                   sectionIndex={si}
                   marginDrag={marginDrag}
+                  marginEditMode={marginEditMode}
+                  onMarginEditModeEnter={onMarginEditModeEnter}
+                  onMarginEditModeExit={onMarginEditModeExit}
                   onMarginResizeStart={onMarginResizeStart}
                   showTextSegments={showTextSegments}
                   showDrift={showDrift}

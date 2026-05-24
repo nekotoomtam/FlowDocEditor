@@ -293,6 +293,20 @@ Table-specific interaction rules are defined in
 - margin resizing with tables should expose a visible, predictable drag affordance
   and enough feedback that users understand the table is being reflowed.
 
+## Page Margin Editing Rules
+
+- Page margin guides are passive in the normal canvas state. A single pointer
+  down on a margin guide must not begin a resize.
+- Double-clicking the page margin area intentionally enters margin edit mode.
+- In margin edit mode, the content box may be lightly tinted as editor-only
+  chrome, and margin guide lines/drag handles should become visually stronger.
+- Clicking the page content area or the canvas outside the page exits margin
+  edit mode without changing document data.
+- Dragging a margin handle still commits through the existing page-margin update
+  path so one drag creates one authored margin change.
+- The right-rail `Page > Margins` fields remain the recovery path for zero or
+  very small margins where canvas handles are hard to target.
+
 ## Flow Row Editing Rules
 
 - Adding a column from a selected `flow-row` is a global row action: it adds one

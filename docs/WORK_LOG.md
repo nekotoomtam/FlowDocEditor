@@ -20,6 +20,54 @@ Each entry should include:
 
 ## 2026-05-24
 
+### Bump Page Margin Edit Mode Baseline To 0.6.11
+
+Goal: Record the accepted page margin interaction change as the next patch
+baseline before starting header/footer authoring design.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.10` to `0.6.11`.
+- Added an editor-only margin edit mode so page margin guides stay passive until
+  the user intentionally enters edit mode.
+- Switched canvas margin interaction from immediate single-click drag to
+  double-click activation on margin bands, with explicit drag handles only while
+  editing margins.
+- Added light content/outer-zone overlays and click-away/Escape exits for the
+  margin edit state.
+- Kept the existing authored margin commit path through `UPDATE_MARGIN`.
+- Documented page margin editing rules in the editor UX contract.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/keyboardShortcuts.test.ts src/app/editor/_components/__tests__/editorCanvasNavigation.test.ts src/app/editor/_components/__tests__/editorPageFollow.test.ts`
+- `npm.cmd run type-check`
+- Browser check on `/editor?flowdocTestScenario=wysiwyg-stage3-boundary&flowdocWysiwygPerfTrace=1`: double-clicked a page margin band, confirmed margin edit mode showed handles/overlays, then clicked the content overlay to return to passive guides.
+- `git diff --check`
+
+Notes:
+
+- This is a patch release marker only; it does not change document schema,
+  pagination semantics, undo/redo model, PDF, or DOCX behavior.
+- Header/footer authoring remains deferred and should be designed as a separate
+  zone mode, not folded into margin edit mode.
+
+---
+
 ### Bump Text Baseline And Thai Segment Baseline To 0.6.10
 
 Goal: Record the accepted editor/PDF text baseline convergence and readable

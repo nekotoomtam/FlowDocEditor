@@ -554,6 +554,7 @@ interface RenderCanvasOptions {
   wysiwygTextDraftDirtyVersion?: number
   wysiwygTextCaretOffset?: number | null
   wysiwygTextDraftPaginationActive?: boolean
+  marginEditMode?: { sectionIndex: number } | null
 }
 
 function renderCanvas(
@@ -570,6 +571,9 @@ function renderCanvas(
     resizeDrag: null,
     minHeightDrag: null,
     marginDrag: null,
+    marginEditMode: options.marginEditMode ?? null,
+    onMarginEditModeEnter: noop,
+    onMarginEditModeExit: noop,
     scale: 1,
     selectedNodeId,
     selectionAnchorNodeId: options.selectionAnchorNodeId ?? selectedNodeId,
@@ -804,6 +808,33 @@ describe("EditorCanvas fragment identity", () => {
     expect(markup).not.toContain(">paragraph</text>")
     expect(selectedMarkup).not.toContain(">paragraph</text>")
     expect(editingMarkup).not.toContain(">paragraph</text>")
+  })
+})
+
+describe("EditorCanvas page margin edit mode", () => {
+  it("keeps page margin guides passive before edit mode is activated", () => {
+    const markup = renderCanvas()
+
+    expect(markup).toContain("data-testid=\"page-margin-guides\"")
+    expect(markup).toContain("data-margin-edit-active=\"false\"")
+    expect(markup).toContain("data-testid=\"page-margin-activation-band\"")
+    expect(markup).toContain("data-testid=\"page-margin-guide-line\"")
+    expect(markup).not.toContain("data-testid=\"page-margin-drag-handle\"")
+    expect(markup).not.toContain("data-testid=\"page-margin-edit-content-overlay\"")
+  })
+
+  it("shows the page content overlay and drag handles in margin edit mode", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), null, {
+      marginEditMode: { sectionIndex: 0 },
+    })
+
+    expect(markup).toContain("data-margin-edit-active=\"true\"")
+    expect(markup).toContain("data-testid=\"page-margin-edit-layer\"")
+    expect(markup).toContain("data-testid=\"page-margin-edit-content-overlay\"")
+    expect(markup).toContain("data-testid=\"page-margin-edit-outer-band\"")
+    expect(markup).toContain("data-testid=\"page-margin-drag-handle\"")
+    expect(markup).toContain("data-testid=\"page-margin-edit-line\"")
+    expect(markup).not.toContain("data-testid=\"page-margin-activation-band\"")
   })
 })
 
