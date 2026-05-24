@@ -20,6 +20,59 @@ Each entry should include:
 
 ## 2026-05-24
 
+### Bump Text Baseline And Thai Segment Baseline To 0.6.10
+
+Goal: Record the accepted editor/PDF text baseline convergence and readable
+Thai word-segment wrapping work as the next patch baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.9` to `0.6.10`.
+- Added a shared paginated-line baseline helper and applied it to editor text
+  rendering plus PDF text drawing so Thai table text sits closer between views.
+- Added shared Intl word segmentation repair for Thai wrapping, including
+  known compound splitting and combining-mark/thanthakhat boundary repair.
+- Updated package lock metadata, the project version alignment test, and
+  versioning docs.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/layout/types.ts`
+- `packages/core/src/layout/word-breaker.ts`
+- `packages/core/src/layout/word-segments.ts`
+- `packages/core/src/layout/__tests__/measure.test.ts`
+- `packages/core/src/layout/__tests__/word-segments.test.ts`
+- `packages/core/src/pagination/index.ts`
+- `packages/core/src/pagination/textBaseline.ts`
+- `packages/core/src/pagination/__tests__/textBaseline.test.ts`
+- `packages/core/src/renderer/pdf/index.ts`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+
+Verification:
+
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/textBaseline.test.ts src/layout/__tests__/word-segments.test.ts src/layout/__tests__/measure.test.ts src/renderer/__tests__/textFlow.test.ts src/pagination/__tests__/drift.test.ts src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:pdf-visual`
+- `git diff --check`
+
+Notes:
+
+- This is a patch release marker only; it does not change document schema,
+  undo/redo semantics, storage package versions, or DOCX rendering behavior.
+- Thai segmentation remains a conservative readability layer, not a full Thai
+  dictionary or linguistic tokenizer.
+
+---
+
 ### Bump Flow Table And Caret Stability Baseline To 0.6.9
 
 Goal: Record the accepted Flow Table split/export hardening and WYSIWYG

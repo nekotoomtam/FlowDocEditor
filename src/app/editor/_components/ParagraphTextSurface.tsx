@@ -7,7 +7,7 @@ import {
 } from "@/document"
 import { measureParagraph, nextTextGraphemeBoundary, previousTextGraphemeBoundary, snapToGraphemeBoundary } from "@/layout"
 import type { TextMeasurer } from "@/layout"
-import { buildPaginatedLines } from "@/pagination"
+import { buildPaginatedLines, resolvePaginatedLineBaselineY } from "@/pagination"
 import type { DocumentNode, FlowTableNode, ParagraphNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily, resolveFontVariantKeyForStyle } from "@/font-registry"
@@ -436,7 +436,7 @@ function lineVisualLeft(line: PaginatedLine): number {
 }
 
 function lineBaselineY(line: PaginatedLine): number {
-  return line.y + line.height * 0.78
+  return resolvePaginatedLineBaselineY(line)
 }
 
 function segmentColor(kind: NonNullable<PaginatedLine["segments"]>[number]["kind"]): string {

@@ -571,6 +571,29 @@ describe("defaultWordBreaker integration", () => {
   })
 })
 
+describe("Thai word wrapping", () => {
+  it("wraps known Thai compound terms at readable word units", () => {
+    const text = `${"A".repeat(8)} ตะวันออกกลาง`
+    const result = measureParagraph(makeParagraph(text), 100, defaultTextMeasurer, defaultWordBreaker)
+
+    expect(result.lines.map((line) => line.text)).toEqual([
+      `${"A".repeat(8)} ตะวันออก`,
+      "กลาง",
+    ])
+    expect(result.lines[0].segments?.map((segment) => segment.text)).toEqual(["A".repeat(8), " ", "ตะวัน", "ออก"])
+    expect(result.lines[1].segments?.map((segment) => segment.text)).toEqual(["กลาง"])
+  })
+
+  it("still splits Thai text to graphemes when a single word is wider than the available line", () => {
+    const text = "ก".repeat(20)
+    const result = measureParagraph(makeParagraph(text), 50, defaultTextMeasurer, spaceBreaker)
+
+    expect(result.lines.length).toBeGreaterThan(1)
+    expect(result.lines.flatMap((line) => line.segments ?? []).some((segment) => segment.kind === "grapheme")).toBe(true)
+    expect(result.lines.map((line) => line.text).join("")).toBe(text)
+  })
+})
+
 // ─── snapToGraphemeBoundary ───────────────────────────────────────────────────
 
 describe("textGraphemeBoundaries", () => {

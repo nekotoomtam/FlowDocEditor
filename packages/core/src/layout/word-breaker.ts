@@ -1,4 +1,5 @@
 import type { WordBreaker } from "./types"
+import { segmentTextWithIntlWordBreaker } from "./word-segments"
 
 /**
  * Concrete WordBreaker implementations
@@ -7,22 +8,10 @@ import type { WordBreaker } from "./types"
  * - thaiWordBreaker: alias เดิมสำหรับ server call sites
  */
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function fallbackSegment(text: string): string[] {
-  return text.match(/\s+|\S+/g) ?? []
-}
-
 // ─── Thai Word Breaker ────────────────────────────────────────────────────────
 
 function segmentWithIntl(text: string): string[] {
-  const Segmenter = Intl.Segmenter
-  if (!Segmenter) return fallbackSegment(text)
-
-  const segmenter = new Segmenter(["th", "en"], { granularity: "word" })
-  return Array.from(segmenter.segment(text))
-    .map((part) => part.segment)
-    .filter((segment) => segment.length > 0)
+  return segmentTextWithIntlWordBreaker(text)
 }
 
 export const intlWordBreaker: WordBreaker = {

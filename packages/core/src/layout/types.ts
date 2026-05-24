@@ -4,6 +4,7 @@
  */
 
 import type { FontVariantKey } from "../font-registry"
+import { segmentTextWithIntlWordBreaker } from "./word-segments"
 
 // ─── Size ─────────────────────────────────────────────────────────────────────
 
@@ -177,13 +178,6 @@ export interface WordBreaker {
 // authored whitespace because wrapping must not reconstruct spaces manually.
 export const defaultWordBreaker: WordBreaker = {
   segment(text: string): string[] {
-    const Segmenter = Intl.Segmenter
-    if (Segmenter) {
-      const segmenter = new Segmenter(["th", "en"], { granularity: "word" })
-      return Array.from(segmenter.segment(text))
-        .map((part) => part.segment)
-        .filter((segment) => segment.length > 0)
-    }
-    return text.match(/\s+|\S+/g) ?? []
+    return segmentTextWithIntlWordBreaker(text)
   },
 }

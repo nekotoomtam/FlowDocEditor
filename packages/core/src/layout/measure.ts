@@ -302,11 +302,10 @@ function shouldSplitWordToFillLine(segment: SourceLineSegment, availableWidth: n
   const graphemes = splitTextGraphemes(segment.text)
   if (graphemes.length < 8) return false
 
-  const containsThai = /[\u0E00-\u0E7F]/.test(segment.text)
   const repeatedRun = hasRepeatedGraphemeRun(graphemes, 4)
   const nearFullLine = segment.width >= availableWidth * 0.75
 
-  return containsThai || repeatedRun || nearFullLine
+  return repeatedRun || nearFullLine
 }
 
 function splitSourceSegmentToGraphemes(

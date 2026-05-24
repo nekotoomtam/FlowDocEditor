@@ -2,7 +2,7 @@ import { LineCapStyle, PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, Stand
 import type { PDFFont, PDFPage } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
 import type { PaginatedDocument, PaginatedLine, PaginatedPage, PageFragment, ResolvedBorderSide } from "../../pagination"
-import { resolveFragmentBoxLayoutPrimitives, resolveParagraphBoxLayoutPrimitives } from "../../pagination"
+import { resolveFragmentBoxLayoutPrimitives, resolvePaginatedLinePdfBaselineY, resolveParagraphBoxLayoutPrimitives } from "../../pagination"
 import { resolveFontVariantCacheKey, resolveFontVariantKeyForStyle } from "../../font-registry"
 import type { FontVariantKey } from "../../font-registry"
 import type { RenderResult, Renderer, FontProvider } from "../shared"
@@ -392,7 +392,7 @@ export class PdfRenderer implements Renderer {
       const isJustify = fragment.renderProps.align === "justify"
       for (const line of fragment.lines) {
         if (line.text.trim() === "") continue
-        const lineY = flipY(line.y, line.height, page.height)
+        const lineY = resolvePaginatedLinePdfBaselineY(line, page.height)
         const fontSize = line.fontSize ?? defaultFontSize
         if (line.runs?.length) {
           await this.drawRichTextRuns(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, pdfPage, line, lineY)
