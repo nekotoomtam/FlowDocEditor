@@ -37,8 +37,10 @@ decisions.
 - fail closed with a non-200 JSON response and code `FONT_FALLBACK_BLOCKED`
   when the default runtime font is unavailable
 - fail closed with a non-200 JSON response and code `LAYOUT_WARNINGS_BLOCKED`
-  when authoritative server pagination emits layout warnings such as forced
-  table split overflow
+  when authoritative server pagination emits blocking layout warnings such as
+  forced table split overflow
+- allow non-blocking layout warnings, including header/footer reserved overflow
+  where PDF clips the overflow and DOCX may reflow or show extra content
 - return a visible failure instead of silently producing invalid output when
   layout assertions fail
 
@@ -52,6 +54,9 @@ continuations, line wrapping, split boundaries, or tracked geometry across
 body, header, footer, or TOC fragments, when layout fragment warnings such as
 forced table split overflow are present, or when Fill mode has blocking
 data-readiness errors or missing required values.
+Header/footer reserved overflow should be visible as a warning but should not
+block export by itself: PDF clips to the reserved zone, while DOCX preserves the
+header/footer structure and may reflow in Word.
 After `/api/paginate` reconciles the current preview document, editor export
 readiness should use the server-returned layout warnings as authoritative
 instead of stale or optimistic browser-preview warnings.

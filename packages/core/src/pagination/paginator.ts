@@ -308,8 +308,12 @@ function paginateSection(
   if (pages.length === 0) pages.push(createEmptyPage(startPageIndex, metrics))
 
   // ─── Header / Footer ─────────────────────────────────────────────────────────
-  const headerY = contentTop - Math.max(0, section.page.headerReserved ?? 0)
+  const headerReserved = Math.max(0, section.page.headerReserved ?? 0)
+  const footerReserved = Math.max(0, section.page.footerReserved ?? 0)
+  const headerY = contentTop - headerReserved
   const footerY = contentBottom
+  const headerZoneBox = { x: zoneHorizontalBox.x, y: headerY, width: zoneHorizontalBox.width, height: headerReserved }
+  const footerZoneBox = { x: zoneHorizontalBox.x, y: footerY, width: zoneHorizontalBox.width, height: footerReserved }
 
   const defaultHeaderBox = flowZone(section, section.headerRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker)
   const defaultFooterBox = flowZone(section, section.footerRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker)
@@ -343,6 +347,8 @@ function paginateSection(
     const fFrags = isFirst ? firstPageFooterFragments : defaultFooterFragments
     page.headerFragments = cloneZoneFragmentsForPage(hFrags, page.index, pageNumberOffset)
     page.footerFragments = cloneZoneFragmentsForPage(fFrags, page.index, pageNumberOffset)
+    page.headerZoneBox = { ...headerZoneBox }
+    page.footerZoneBox = { ...footerZoneBox }
   })
 
   return { sectionId: section.id, pages: densePages }

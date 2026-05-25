@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { DEFAULT_HEADER_FOOTER_RESERVED_PT, DEFAULT_PARAGRAPH_PROPS } from "@/document"
+import { DEFAULT_HEADER_FOOTER_RESERVED_PT, DEFAULT_PARAGRAPH_PROPS, MAX_HEADER_FOOTER_RESERVED_RATIO, MIN_HEADER_FOOTER_RESERVED_PT } from "@/document"
+import { getPageDimensions } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import { pt } from "@/schema"
 import { createInitialEditorState, reducer } from "../editorReducer"
@@ -153,5 +154,25 @@ describe("editorReducer header/footer authoring hydration", () => {
     expect(section.page.headerReserved).toBe(0)
     expect(section.headerRootId).toBeUndefined()
     expect(next.past).toHaveLength(2)
+  })
+
+  it("preserves footer reserved height when committing a footer-priority resize", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const section = state.doc.document.sections[0]
+    const { height } = getPageDimensions(section.page)
+    const usableHeight = height - section.page.margin.top.value - section.page.margin.bottom.value
+    const maxReserved = Math.round(usableHeight * MAX_HEADER_FOOTER_RESERVED_RATIO * 100) / 100
+
+    const next = reducer(state, {
+      type: "UPDATE_RESERVED_ZONES",
+      sectionIndex: 0,
+      reserved: { headerReserved: 200, footerReserved: 500 },
+      priority: "footerReserved",
+    })
+    const page = next.doc.document.sections[0].page
+
+    expect(page.headerReserved).toBe(MIN_HEADER_FOOTER_RESERVED_PT)
+    expect(page.footerReserved).toBe(maxReserved - MIN_HEADER_FOOTER_RESERVED_PT)
+    expect(next.past).toHaveLength(1)
   })
 })

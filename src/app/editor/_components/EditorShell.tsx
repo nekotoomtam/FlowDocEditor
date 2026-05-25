@@ -2742,6 +2742,7 @@ export default function EditorShell() {
           type: "UPDATE_RESERVED_ZONES",
           sectionIndex: activeHeaderFooterReservedDrag.sectionIndex,
           reserved: activeHeaderFooterReservedDrag.currentReserved,
+          priority: activeHeaderFooterReservedDrag.zone === "header" ? "headerReserved" : "footerReserved",
         })
         setHeaderFooterReservedDrag(null)
         return
@@ -3358,9 +3359,9 @@ export default function EditorShell() {
                       if (!isTemplateMode) return
                       dispatch({ type: "UPDATE_MARGIN", sectionIndex, margin })
                     }}
-                    onUpdateReservedZones={(sectionIndex, reserved) => {
+                    onUpdateReservedZones={(sectionIndex, reserved, priority) => {
                       if (!isTemplateMode) return
-                      dispatch({ type: "UPDATE_RESERVED_ZONES", sectionIndex, reserved })
+                      dispatch({ type: "UPDATE_RESERVED_ZONES", sectionIndex, reserved, priority })
                     }}
                     onToggleReservedZone={(sectionIndex, zone, enabled) => {
                       if (!isTemplateMode) return

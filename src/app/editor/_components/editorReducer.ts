@@ -32,6 +32,7 @@ import {
   updateSectionReservedZones,
 } from "@/document"
 import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
+import type { ReservedZonePriority } from "@/document"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import type { DragSource, PlacementOperation, PlacementPreview } from "@/placement/types"
 import { loadDocumentFromStorage } from "./documentPersistence"
@@ -103,7 +104,7 @@ type EditorAction =
   | { type: "RESIZE_TABLE_COLUMN_PAIR"; tableId: string; leftColIndex: number; leftWidth: number; rightWidth: number; paginated?: PaginatedDocument }
   | { type: "RESIZE_ROW_MIN_HEIGHT"; rowId: string; minHeight: number }
   | { type: "UPDATE_MARGIN"; sectionIndex: number; margin: { top: number; right: number; bottom: number; left: number } }
-  | { type: "UPDATE_RESERVED_ZONES"; sectionIndex: number; reserved: { headerReserved: number; footerReserved: number } }
+  | { type: "UPDATE_RESERVED_ZONES"; sectionIndex: number; reserved: { headerReserved: number; footerReserved: number }; priority?: ReservedZonePriority }
   | { type: "ENSURE_HEADER_FOOTER_ZONE_VISIBLE"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE"; sectionIndex: number; mode: "body" | "full" }
@@ -353,7 +354,7 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
     case "UPDATE_MARGIN":
       return pushDoc(state, updateSectionMargin(state.doc, action.sectionIndex, action.margin))
     case "UPDATE_RESERVED_ZONES": {
-      const nextDoc = updateSectionReservedZones(state.doc, action.sectionIndex, action.reserved)
+      const nextDoc = updateSectionReservedZones(state.doc, action.sectionIndex, action.reserved, action.priority)
       return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
     }
     case "ENSURE_HEADER_FOOTER_ZONE_VISIBLE": {

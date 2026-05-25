@@ -5,8 +5,9 @@ import {
   DEFAULT_HEADER_FOOTER_RESERVED_PT,
   MIN_HEADER_FOOTER_RESERVED_PT,
 } from "@/document"
+import { toAbstractUnit } from "@/layout"
 import { getPageDimensions } from "@/pagination"
-import type { DocumentNode } from "@/schema"
+import type { DocumentNode, UnitValue } from "@/schema"
 import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
 
 type PageMarginSide = "top" | "right" | "bottom" | "left"
@@ -78,7 +79,11 @@ function formatPageMarginSummary(margin: PageMarginDraft): string {
 }
 
 function formatReservedZoneValue(value: number | undefined): string {
-  return `${Math.max(0, value ?? 0)} pt`
+  return `${Math.round(Math.max(0, value ?? 0) * 100) / 100} pt`
+}
+
+function resolveUnitValuePt(value: UnitValue): number {
+  return Math.max(0, toAbstractUnit(value.value, value.unit))
 }
 
 function formatHeaderFooterSummary(reserved: PageReservedDraft): string {
@@ -87,8 +92,8 @@ function formatHeaderFooterSummary(reserved: PageReservedDraft): string {
 
 export function resolveHeaderFooterMiniMap(section: DocumentSection, reserved: PageReservedDraft) {
   const { width, height } = getPageDimensions(section.page)
-  const marginTop = section.page.margin.top.value
-  const marginBottom = section.page.margin.bottom.value
+  const marginTop = resolveUnitValuePt(section.page.margin.top)
+  const marginBottom = resolveUnitValuePt(section.page.margin.bottom)
   const usableHeight = Math.max(1, height - marginTop - marginBottom)
   const headerHeight = Math.max(0, reserved.headerReserved)
   const footerHeight = Math.max(0, reserved.footerReserved)
@@ -421,7 +426,7 @@ export function PagePanel({
   sectionIndex: number
   editable: boolean
   onUpdateMargin: (sectionIndex: number, margin: PageMarginDraft) => void
-  onUpdateReservedZones: (sectionIndex: number, reserved: PageReservedDraft) => void
+  onUpdateReservedZones: (sectionIndex: number, reserved: PageReservedDraft, priority: PageReservedZone) => void
   onToggleReservedZone: (sectionIndex: number, zone: "header" | "footer", enabled: boolean) => void
   onUpdateHeaderFooterMode: (sectionIndex: number, mode: PageHeaderFooterHorizontalMode) => void
 }) {
@@ -465,7 +470,7 @@ export function PagePanel({
     const current = readSectionReserved(section)
     setReservedDraft(next)
     if (arePageReservedZonesEqual(next, current)) return
-    onUpdateReservedZones(sectionIndex, next)
+    onUpdateReservedZones(sectionIndex, next, reservedPriority)
   }, [editable, onUpdateReservedZones, reservedDraft, reservedPriority, section, sectionIndex])
 
   const resetReservedDraft = useCallback(() => {
@@ -495,7 +500,7 @@ export function PagePanel({
     const current = readSectionReserved(section)
     setReservedDraft(next)
     if (arePageReservedZonesEqual(next, current)) return
-    onUpdateReservedZones(sectionIndex, next)
+    onUpdateReservedZones(sectionIndex, next, zone)
   }, [editable, onUpdateReservedZones, reservedDraft, section, sectionIndex])
 
   const setReservedZoneEnabled = (zone: PageReservedZone, enabled: boolean) => {

@@ -84,6 +84,22 @@ describe("assertDocument general invariants", () => {
 
     expect(() => assertDocument(doc)).not.toThrow()
   })
+
+  it("walks first-page header and footer roots when checking reachability", () => {
+    const doc = bodyDoc({
+      "first-header-root": { id: "first-header-root", type: "stack", props: {}, childIds: ["first-header-row"] },
+      "first-header-row": { id: "first-header-row", type: "flow-row", props: {}, childIds: ["first-header-stack"] },
+      "first-header-stack": { id: "first-header-stack", type: "flow-stack", props: { widthShare: 100 }, childIds: ["first-header-p"] },
+      "first-header-p": paragraph("first-header-p", "First page header"),
+      "first-footer-root": { id: "first-footer-root", type: "stack", props: {}, childIds: ["first-footer-p"] },
+      "first-footer-p": paragraph("first-footer-p", "First page footer"),
+    }, [])
+    const section = doc.document.sections[0]
+    section.headerFirstPageRootId = "first-header-root"
+    section.footerFirstPageRootId = "first-footer-root"
+
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
 })
 
 describe("assertDocument flow-table invariants", () => {

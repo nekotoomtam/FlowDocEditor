@@ -51,6 +51,7 @@ interface Props {
   pageKey: string
   clipPathId?: string
   scale: number
+  visualOffsetY?: number
   pageContentBottom?: number | null
   textMeasurer?: TextMeasurer
   isEditing: boolean
@@ -466,6 +467,15 @@ function fontStyleForLineRun(run: RenderableLineRun): "italic" | undefined {
 
 function textColorForRenderProps(renderProps: ParagraphRenderProps | undefined): string {
   return `#${renderProps?.textColor ?? "000000"}`
+}
+
+function shiftFragmentVisualY(fragment: PageFragment, offsetY: number): PageFragment {
+  if (Math.abs(offsetY) < 0.01) return fragment
+  return {
+    ...fragment,
+    y: fragment.y + offsetY,
+    lines: fragment.lines?.map((line) => ({ ...line, y: line.y + offsetY })),
+  }
 }
 
 function textDecorationForRenderProps(renderProps: ParagraphRenderProps | undefined): string | undefined {
@@ -2581,6 +2591,7 @@ export function ParagraphTextSurface({
   pageKey,
   clipPathId,
   scale,
+  visualOffsetY = 0,
   pageContentBottom,
   textMeasurer,
   isEditing,
@@ -2619,6 +2630,9 @@ export function ParagraphTextSurface({
     isWysiwygPerfTraceRuntimeEnabled(WYSIWYG_PERF_TRACE_ENABLED)
   ), [])
   const renderProps = fragment.renderProps
+  const displayFragment = useMemo(() => (
+    shiftFragmentVisualY(fragment, visualOffsetY)
+  ), [fragment, visualOffsetY])
   const editHeight = Math.max(fragment.height * scale, 1)
   const fontSize = (renderProps?.fontSize ?? 12) * scale
   const lineHeight = (renderProps?.lineHeight ?? (renderProps?.fontSize ?? 12) * 1.5) * scale
@@ -2670,13 +2684,13 @@ export function ParagraphTextSurface({
     const el = event.currentTarget
     const rect = el.getBoundingClientRect()
     const point = {
-      x: fragment.x + (event.clientX - rect.left - EDIT_CHROME_X) / scale,
-      y: fragment.y + (event.clientY - rect.top - EDIT_CHROME_Y) / scale,
+      x: displayFragment.x + (event.clientX - rect.left - EDIT_CHROME_X) / scale,
+      y: displayFragment.y + (event.clientY - rect.top - EDIT_CHROME_Y) / scale,
     }
-    const candidate = resolveCaretOffsetFromPointInFragment(fragment, point, { textMeasurer })
+    const candidate = resolveCaretOffsetFromPointInFragment(displayFragment, point, { textMeasurer })
     if (!candidate) return null
     return Math.max(0, Math.min(editText.length, candidate.offset - preText.length))
-  }, [editText.length, fragment, preText.length, scale, textMeasurer])
+  }, [displayFragment, editText.length, preText.length, scale, textMeasurer])
 
   const setTextareaPointerSelection = useCallback((
     el: HTMLTextAreaElement,
@@ -2697,19 +2711,19 @@ export function ParagraphTextSurface({
 
   const editPreview = useMemo(() => {
     if (!isEditing) return null
-    return { lines: fragment.lines ?? [], height: fragment.height }
-  }, [fragment.height, fragment.lines, isEditing])
+    return { lines: displayFragment.lines ?? [], height: fragment.height }
+  }, [displayFragment.lines, fragment.height, isEditing])
   const editPreviewHeight = (editPreview?.height ?? 0) * scale
   const activeEditHeight = Math.max(editHeight, minimumEditHeight, editPreviewHeight)
   const selectionOverlayRects = useMemo(() => {
     if (!selectionSnapshot || selectionSnapshot.isCollapsed) return []
     return resolveSelectionOverlayRectsInFragment(
-      fragment,
+      displayFragment,
       selectionSnapshot.anchorOffset,
       selectionSnapshot.focusOffset,
       { textMeasurer },
     )
-  }, [fragment, selectionSnapshot, textMeasurer])
+  }, [displayFragment, selectionSnapshot, textMeasurer])
   const hasSelectionOverlay = selectionOverlayRects.length > 0
   const canUseDocumentVisual = wysiwygInlineEditEnabled && shouldUseInlineEditDocumentVisual(
     isEditing,
@@ -2720,9 +2734,9 @@ export function ParagraphTextSurface({
   )
   const customCaret = useMemo(() => (
     canUseDocumentVisual && isSelectionCollapsed
-      ? renderCollapsedCaret(fragment, pageKey, scale, initialCaretIndex, textMeasurer, clipPathId)
+      ? renderCollapsedCaret(displayFragment, pageKey, scale, initialCaretIndex, textMeasurer, clipPathId)
       : null
-  ), [canUseDocumentVisual, clipPathId, fragment, initialCaretIndex, isSelectionCollapsed, pageKey, scale, textMeasurer])
+  ), [canUseDocumentVisual, clipPathId, displayFragment, initialCaretIndex, isSelectionCollapsed, pageKey, scale, textMeasurer])
   const visualMode = getInlineEditVisualMode({
     isEditing,
     isVisualFresh,
@@ -2796,7 +2810,7 @@ export function ParagraphTextSurface({
   const textEngineSelectionOverlayRects = useMemo(() => {
     if (!useWysiwygTextEngineLayer || !wysiwygTextSelection) return []
     if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
-    const visualFragment = textEngineVisualDraftLines ? { ...fragment, lines: textEngineVisualDraftLines } : fragment
+    const visualFragment = textEngineVisualDraftLines ? { ...displayFragment, lines: textEngineVisualDraftLines } : displayFragment
     return resolveSelectionOverlayRectsInFragmentWithPerf({
       fragment: visualFragment,
       anchorOffset: wysiwygTextSelection.anchorOffset,
@@ -2805,11 +2819,11 @@ export function ParagraphTextSurface({
       tracePerf: traceHotPathPerf,
       source: "active",
     })
-  }, [fragment, textEngineVisualDraftLines, textMeasurer, traceHotPathPerf, useWysiwygTextEngineLayer, wysiwygTextSelection])
+  }, [displayFragment, textEngineVisualDraftLines, textMeasurer, traceHotPathPerf, useWysiwygTextEngineLayer, wysiwygTextSelection])
   const passiveTextEngineSelectionOverlayRects = useMemo(() => {
     if (isEditing || !wysiwygTextEngineEnabled || !wysiwygTextSelection) return []
     if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
-    const visualFragment = wysiwygTextVisualDraftLines ? { ...fragment, lines: wysiwygTextVisualDraftLines } : fragment
+    const visualFragment = wysiwygTextVisualDraftLines ? { ...displayFragment, lines: wysiwygTextVisualDraftLines } : displayFragment
     return resolveSelectionOverlayRectsInFragmentWithPerf({
       fragment: visualFragment,
       anchorOffset: wysiwygTextSelection.anchorOffset,
@@ -2818,10 +2832,10 @@ export function ParagraphTextSurface({
       tracePerf: traceHotPathPerf,
       source: "passive",
     })
-  }, [fragment, isEditing, textMeasurer, traceHotPathPerf, wysiwygTextEngineEnabled, wysiwygTextSelection, wysiwygTextVisualDraftLines])
+  }, [displayFragment, isEditing, textMeasurer, traceHotPathPerf, wysiwygTextEngineEnabled, wysiwygTextSelection, wysiwygTextVisualDraftLines])
   const passiveTextEngineSelectionFragment = wysiwygTextVisualDraftLines
-    ? { ...fragment, lines: wysiwygTextVisualDraftLines }
-    : fragment
+    ? { ...displayFragment, lines: wysiwygTextVisualDraftLines }
+    : displayFragment
   // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
   // Matching padding cancels that expansion so textarea content starts at the
   // same paragraph origin as SVG lines instead of drifting by the chrome size.
@@ -2909,7 +2923,7 @@ export function ParagraphTextSurface({
     if (useWysiwygTextEngineLayer) {
       return (
         <WysiwygTextLayer
-          fragment={fragment}
+          fragment={displayFragment}
           lines={textEngineVisualDraftLines ?? undefined}
           renderProps={renderProps}
           pageKey={pageKey}
@@ -2937,15 +2951,15 @@ export function ParagraphTextSurface({
 
     return (
       <>
-        {visualMode.useDocumentVisual && renderSelectionOverlay(fragment, pageKey, scale, selectionOverlayRects, clipPathId)}
-        {visualMode.useDocumentVisual && fragment.lines?.map((line, index) =>
-          renderLine(line, index, fragment, renderProps, pageKey, scale, undefined, clipPathId),
+        {visualMode.useDocumentVisual && renderSelectionOverlay(displayFragment, pageKey, scale, selectionOverlayRects, clipPathId)}
+        {visualMode.useDocumentVisual && displayFragment.lines?.map((line, index) =>
+          renderLine(line, index, displayFragment, renderProps, pageKey, scale, undefined, clipPathId),
         )}
-        {showTextSegments && renderSegmentDebug(fragment.lines, fragment, renderProps, scale)}
+        {showTextSegments && renderSegmentDebug(displayFragment.lines, displayFragment, renderProps, scale)}
         <foreignObject
-          x={fragment.x * scale - EDIT_CHROME_X}
-          y={fragment.y * scale - EDIT_CHROME_Y}
-          width={fragment.width * scale + EDIT_CHROME_X * 2}
+          x={displayFragment.x * scale - EDIT_CHROME_X}
+          y={displayFragment.y * scale - EDIT_CHROME_Y}
+          width={displayFragment.width * scale + EDIT_CHROME_X * 2}
           height={activeEditHeight + EDIT_CHROME_Y * 2}
         >
           <textarea
@@ -3110,9 +3124,9 @@ export function ParagraphTextSurface({
 
   return [
     ...renderSelectionOverlay(passiveTextEngineSelectionFragment, pageKey, scale, passiveTextEngineSelectionOverlayRects, clipPathId),
-    ...(fragment.lines?.map((line, index) =>
-      renderLine(line, index, fragment, renderProps, pageKey, scale, undefined, clipPathId),
+    ...(displayFragment.lines?.map((line, index) =>
+      renderLine(line, index, displayFragment, renderProps, pageKey, scale, undefined, clipPathId),
     ) ?? []),
-    ...(showTextSegments ? renderSegmentDebug(fragment.lines, fragment, renderProps, scale) ?? [] : []),
+    ...(showTextSegments ? renderSegmentDebug(displayFragment.lines, displayFragment, renderProps, scale) ?? [] : []),
   ]
 }

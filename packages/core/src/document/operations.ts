@@ -17,6 +17,7 @@ import type {
   UnitValue,
 } from "../schema"
 import { pt } from "../schema"
+import { toAbstractUnit } from "../layout"
 import { getPageDimensions, getPageMetrics } from "../pagination/metrics"
 import type { DragSource, PlacementOperation } from "../placement/types"
 import {
@@ -2665,7 +2666,9 @@ export function clampSectionReservedZones(
   const headerActive = hasHeaderRoot(section) || rawHeaderReserved > 0
   const footerActive = hasFooterRoot(section) || rawFooterReserved > 0
   const { height } = getPageDimensions(section.page)
-  const usableHeight = Math.max(0, height - section.page.margin.top.value - section.page.margin.bottom.value)
+  const marginTop = toAbstractUnit(section.page.margin.top.value, section.page.margin.top.unit)
+  const marginBottom = toAbstractUnit(section.page.margin.bottom.value, section.page.margin.bottom.unit)
+  const usableHeight = Math.max(0, height - marginTop - marginBottom)
   const maxTotalReserved = roundPt(usableHeight * MAX_HEADER_FOOTER_RESERVED_RATIO)
   const activeCount = (headerActive ? 1 : 0) + (footerActive ? 1 : 0)
   const minReserved = activeCount > 0

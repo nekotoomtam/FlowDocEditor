@@ -341,6 +341,30 @@ Table-specific interaction rules are defined in
   value. It must not exit header/footer zone mode, must stay above the body exit
   overlay, and must commit through the same reserved-zone update path on drag
   end.
+- Header/footer content that visually exceeds the reserved height should be
+  clipped to the active reserved area in the editor preview, with editor-only
+  dashed cut-edge markers showing where content is hidden outside the visible
+  zone. Before scrolling, the bottom edge marks hidden content below; after
+  scrolling, the top edge also appears while content is hidden above. A compact
+  visible scroll rail/thumb may show that additional zone content is available.
+  Wheel scrolling inside the active zone, or clicking/dragging the compact
+  indicator, may adjust an editor-only scroll offset so authors can inspect
+  overflow content. Indicator pointer and wheel input must not fall through to
+  the canvas behind it, and this offset must not mutate document content,
+  reserved heights, pagination, PDF, or DOCX export.
+- PDF export must clip header/footer drawing to the paginated reserved-zone
+  boxes so exported pages show the same visible header/footer bounds as the
+  editor preview. Overflow inspection scroll is editor-only and must not change
+  the exported clip box.
+- Header/footer content that exceeds the reserved zone should surface a
+  non-blocking layout warning. PDF export clips that overflow; DOCX export keeps
+  the header/footer structure and may reflow or show extra content in Word.
+- If a header/footer paragraph is already in inline edit mode, that active edit
+  surface keeps the visual scroll offset it had when editing began. While the
+  edit remains active, zone overflow scroll input is consumed without changing
+  the zone scroll offset and compact scroll controls are hidden. Authors can
+  click out of the paragraph, while remaining in header/footer mode, before
+  scrolling hidden zone content.
 - Header and Footer switches in the right rail enable zones independently.
   Turning a zero-height zone on assigns the authoring default (`80pt`). Turning
   a zone off is allowed only when its reserved zone roots are empty; authored

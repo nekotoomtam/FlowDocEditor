@@ -11,6 +11,7 @@ import {
   buildWysiwygTableCellDraftVisualChromeFragments,
   EditorCanvas,
   pageViewScopedEditPropsAffectPage,
+  resolveInlineEditVisualOffsetY,
   shouldStartInlineEditOnSingleClick,
 } from "../EditorCanvas"
 import type { DragState } from "../editorReducer"
@@ -634,6 +635,10 @@ function headerFooterHitArea(markup: string, zone: "header" | "footer"): string 
   return markup.match(new RegExp(`<rect[^>]*data-testid="header-footer-zone-hit-area"[^>]*data-zone="${zone}"[^>]*>`))?.[0] ?? ""
 }
 
+function marginDragHandle(markup: string, side: "top" | "right" | "bottom" | "left"): string {
+  return markup.match(new RegExp(`<rect[^>]*data-testid="page-margin-drag-handle"[^>]*data-side="${side}"[^>]*>`))?.[0] ?? ""
+}
+
 describe("EditorCanvas page memoization", () => {
   it("scopes WYSIWYG draft prop changes to pages that render the edited paragraph", () => {
     const activePage = pageWithFragments(0, [textFragment("active-p", "Active", 72)])
@@ -866,6 +871,25 @@ describe("EditorCanvas page margin edit mode", () => {
     expect(markup).toContain("data-testid=\"page-margin-edit-line\"")
     expect(markup).not.toContain("data-testid=\"page-margin-activation-band\"")
   })
+
+  it("keeps top and bottom margin handles on authored page margins when header/footer reserve body space", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0] = {
+      ...paginated.sections[0].pages[0],
+      contentBox: { x: 36, y: 108, width: 228, height: 184 },
+      fragments: [textFragment("body-p", "Body text", 108)],
+      headerFragments: [textFragment("header-p", "Header Preview", 72)],
+      footerFragments: [textFragment("footer-p", "หน้า 7", 292)],
+    }
+
+    const markup = renderCanvas(paginated, makeDoc(), null, {
+      marginEditMode: { sectionIndex: 0 },
+    })
+
+    expect(marginDragHandle(markup, "top")).toContain("y=\"65\"")
+    expect(marginDragHandle(markup, "bottom")).toContain("y=\"321\"")
+    expect(markup).toContain("data-testid=\"page-margin-edit-content-overlay\" x=\"36\" y=\"72\" width=\"228\" height=\"256\"")
+  })
 })
 
 describe("EditorCanvas canvas selection path", () => {
@@ -936,6 +960,20 @@ describe("EditorCanvas canvas selection path", () => {
 })
 
 describe("EditorCanvas header/footer zones", () => {
+  it("freezes active header/footer edit visual offset while the zone scroll changes", () => {
+    expect(resolveInlineEditVisualOffsetY({
+      isInlineEditing: true,
+      storedVisualOffsetY: -18,
+      currentVisualOffsetY: -42,
+    })).toBe(-18)
+
+    expect(resolveInlineEditVisualOffsetY({
+      isInlineEditing: false,
+      storedVisualOffsetY: -18,
+      currentVisualOffsetY: -42,
+    })).toBe(-42)
+  })
+
   it("renders header and footer text as read-only preview content", () => {
     const markup = renderCanvas()
 
@@ -1000,6 +1038,66 @@ describe("EditorCanvas header/footer zones", () => {
 
     expect(markup).toContain("data-zone-editable=\"true\"")
     expect(markup).toContain("data-node-id=\"header-p\"")
+  })
+
+  it("clips overflowing active header content and marks the reserved-height boundary", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].headerFragments = [
+      textFragment("header-p", "Tall header", 72, {
+        height: 64,
+        lines: [
+          { text: "Tall", x: 36, y: 72, width: 40, height: 14 },
+          { text: "header", x: 36, y: 122, width: 54, height: 14 },
+        ],
+      }),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+
+    expect(markup).toContain("data-testid=\"header-footer-zone-clip\"")
+    expect(markup).toContain("data-zone=\"header\"")
+    expect(markup).toContain("data-testid=\"header-footer-zone-overflow-marker\"")
+    expect(markup).toContain("data-edge=\"bottom\"")
+    expect(markup).toContain("data-testid=\"header-footer-zone-scroll-indicator\"")
+    expect(markup).toContain("data-testid=\"header-footer-zone-scroll-rail\"")
+    expect(markup).toContain("data-testid=\"header-footer-zone-scroll-track\"")
+    expect(markup).toContain("data-testid=\"header-footer-zone-scroll-thumb\"")
+    expect(markup).toContain("data-testid=\"header-footer-zone-scroll-hit-area\"")
+    expect(markup).toContain("data-overflow-pt=\"28\"")
+    expect(markup).toContain("data-hidden-pt=\"28\"")
+    expect(markup).toContain("data-scroll-pt=\"0\"")
+    expect(markup).toContain("cursor:ns-resize")
+    expect(markup).toContain("clip-path=\"url(#0-0-header-footer-header-zone-clip)\"")
+  })
+
+  it("suspends header overflow scroll controls while editing a header paragraph", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].headerFragments = [
+      textFragment("header-p", "Tall header", 72, {
+        height: 64,
+        lines: [
+          { text: "Tall", x: 36, y: 72, width: 40, height: 14 },
+          { text: "header", x: 36, y: 122, width: 54, height: 14 },
+        ],
+      }),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+      inlineEditNodeId: "header-p",
+      inlineEditPageIndex: 0,
+      inlineEditVisualFresh: true,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftNodeId: "header-p",
+      wysiwygTextDraftText: "Tall header",
+    })
+
+    expect(markup).toContain("data-testid=\"header-footer-zone-overflow-marker\"")
+    expect(markup).not.toContain("data-testid=\"header-footer-zone-scroll-indicator\"")
+    expect(markup).not.toContain("data-testid=\"header-footer-zone-scroll-hit-area\"")
+    expect(markup).toContain("data-inline-edit-node-id=\"header-p\"")
   })
 
   it("renders an inline editor for the active header paragraph fragment", () => {

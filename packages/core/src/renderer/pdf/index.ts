@@ -1,7 +1,7 @@
-import { LineCapStyle, PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, StandardFonts, rgb } from "pdf-lib"
+import { LineCapStyle, PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, StandardFonts, clip, endPath, popGraphicsState, pushGraphicsState, rectangle, rgb } from "pdf-lib"
 import type { PDFFont, PDFPage } from "pdf-lib"
 import fontkit from "@pdf-lib/fontkit"
-import type { PaginatedDocument, PaginatedLine, PaginatedPage, PageFragment, ResolvedBorderSide } from "../../pagination"
+import type { PaginatedDocument, PaginatedLine, PaginatedPage, PageFragment, PageZoneBox, ResolvedBorderSide } from "../../pagination"
 import { resolveFragmentBoxLayoutPrimitives, resolvePaginatedLinePdfBaselineY, resolveParagraphBoxLayoutPrimitives } from "../../pagination"
 import { resolveFontVariantCacheKey, resolveFontVariantKeyForStyle } from "../../font-registry"
 import type { FontVariantKey } from "../../font-registry"
@@ -41,6 +41,23 @@ type PdfFontCacheEntry = {
 
 function flipY(layoutY: number, elementHeight: number, pageHeight: number): number {
   return pageHeight - layoutY - elementHeight
+}
+
+function isDrawablePdfClipBox(clipBox: PageZoneBox | undefined): clipBox is PageZoneBox {
+  return !!clipBox && clipBox.width > 0 && clipBox.height > 0
+}
+
+function pushPdfClipBox(pdfPage: PDFPage, clipBox: PageZoneBox, pageHeight: number): void {
+  pdfPage.pushOperators(
+    pushGraphicsState(),
+    rectangle(clipBox.x, flipY(clipBox.y, clipBox.height, pageHeight), clipBox.width, clipBox.height),
+    clip(),
+    endPath(),
+  )
+}
+
+function popPdfClipBox(pdfPage: PDFPage): void {
+  pdfPage.pushOperators(popGraphicsState())
 }
 
 function hexToRgb(hex: string) {
@@ -362,72 +379,88 @@ export class PdfRenderer implements Renderer {
   ): Promise<void> {
     const pdfPage = pdfDoc.addPage([page.width, page.height])
 
-    const allFragments = [
-      ...(page.headerFragments ?? []),
-      ...page.fragments,
-      ...(page.footerFragments ?? []),
-    ]
+    await this.renderFragments(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, pdfPage, page, page.headerFragments ?? [], page.headerZoneBox)
+    await this.renderFragments(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, pdfPage, page, page.fragments)
+    await this.renderFragments(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, pdfPage, page, page.footerFragments ?? [], page.footerZoneBox)
+  }
 
-    for (const fragment of allFragments) {
-      if (fragment.nodeType === "flow-stack") {
-        drawFragmentBox(pdfPage, fragment, page.height)
-        continue
-      }
+  private async renderFragments(
+    pdfDoc: PDFDocument,
+    fontCache: Map<string, PdfFontCacheEntry>,
+    zeroAdvanceGlyphIdsByFontName: Map<string, Set<number>>,
+    pdfPage: PDFPage,
+    page: PaginatedPage,
+    fragments: PageFragment[],
+    clipBox?: PageZoneBox,
+  ): Promise<void> {
+    if (fragments.length > 0 && clipBox && (clipBox.width <= 0 || clipBox.height <= 0)) return
+    const shouldClip = fragments.length > 0 && isDrawablePdfClipBox(clipBox)
+    if (shouldClip) pushPdfClipBox(pdfPage, clipBox, page.height)
 
-      if (fragment.nodeType === "flow-table-cell") {
-        drawFragmentBox(pdfPage, fragment, page.height)
-        continue
-      }
+    try {
+      for (const fragment of fragments) {
+        if (fragment.nodeType === "flow-stack") {
+          drawFragmentBox(pdfPage, fragment, page.height)
+          continue
+        }
 
-      if (fragment.nodeType !== "paragraph" && fragment.nodeType !== "toc") continue
-      if (!fragment.lines?.length || !fragment.renderProps) continue
-      if (fragment.nodeType === "paragraph") drawFragmentBox(pdfPage, fragment, page.height)
+        if (fragment.nodeType === "flow-table-cell") {
+          drawFragmentBox(pdfPage, fragment, page.height)
+          continue
+        }
 
-      const fontVariant = resolveFontVariantKeyForStyle(fragment.renderProps.fontWeight, fragment.renderProps.fontStyle)
-      const defaultFontSize = fragment.renderProps.fontSize
-      const shouldUnderline = fragment.renderProps.textDecoration === "underline"
-      const shouldStrike = fragment.renderProps.strikethrough === true
-      const textColor = fragment.renderProps.textColor ? hexToRgb(fragment.renderProps.textColor) : PDF_TEXT_COLOR
+        if (fragment.nodeType !== "paragraph" && fragment.nodeType !== "toc") continue
+        if (!fragment.lines?.length || !fragment.renderProps) continue
+        if (fragment.nodeType === "paragraph") drawFragmentBox(pdfPage, fragment, page.height)
 
-      const isJustify = fragment.renderProps.align === "justify"
-      for (const line of fragment.lines) {
-        if (line.text.trim() === "") continue
-        const lineY = resolvePaginatedLinePdfBaselineY(line, page.height)
-        const fontSize = line.fontSize ?? defaultFontSize
-        if (line.runs?.length) {
-          await this.drawRichTextRuns(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, pdfPage, line, lineY)
-        } else {
-          const font = await this.resolveFont(
-            pdfDoc,
-            fontCache,
-            zeroAdvanceGlyphIdsByFontName,
-            fragment.renderProps.fontFamilyKey,
-            fontVariant,
-            shouldPatchPdfZeroAdvanceGlyphWidthsForText(line.text),
-          )
-          if (isJustify && line.segments?.length) {
-            // Draw word segments individually at their adjusted x positions
-            for (const seg of line.segments) {
-              if (seg.kind === "space" || seg.text.trim() === "") continue
-              pdfPage.drawText(seg.text, { x: line.x + seg.x, y: lineY, size: fontSize, font, color: textColor })
-            }
+        const fontVariant = resolveFontVariantKeyForStyle(fragment.renderProps.fontWeight, fragment.renderProps.fontStyle)
+        const defaultFontSize = fragment.renderProps.fontSize
+        const shouldUnderline = fragment.renderProps.textDecoration === "underline"
+        const shouldStrike = fragment.renderProps.strikethrough === true
+        const textColor = fragment.renderProps.textColor ? hexToRgb(fragment.renderProps.textColor) : PDF_TEXT_COLOR
+
+        const isJustify = fragment.renderProps.align === "justify"
+        for (const line of fragment.lines) {
+          if (line.text.trim() === "") continue
+          const lineY = resolvePaginatedLinePdfBaselineY(line, page.height)
+          const fontSize = line.fontSize ?? defaultFontSize
+          if (line.runs?.length) {
+            await this.drawRichTextRuns(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, pdfPage, line, lineY)
           } else {
-            pdfPage.drawText(line.text, { x: line.x, y: lineY, size: fontSize, font, color: textColor })
-          }
-          if (shouldUnderline || shouldStrike) {
-            const span = resolvePdfUnderlineSpan(line)
-            drawTextDecorations(pdfPage, {
-              x: span.x,
-              width: span.width,
-              y: lineY,
-              fontSize,
-              color: textColor,
-              underline: shouldUnderline,
-              strikethrough: shouldStrike,
-            })
+            const font = await this.resolveFont(
+              pdfDoc,
+              fontCache,
+              zeroAdvanceGlyphIdsByFontName,
+              fragment.renderProps.fontFamilyKey,
+              fontVariant,
+              shouldPatchPdfZeroAdvanceGlyphWidthsForText(line.text),
+            )
+            if (isJustify && line.segments?.length) {
+              // Draw word segments individually at their adjusted x positions
+              for (const seg of line.segments) {
+                if (seg.kind === "space" || seg.text.trim() === "") continue
+                pdfPage.drawText(seg.text, { x: line.x + seg.x, y: lineY, size: fontSize, font, color: textColor })
+              }
+            } else {
+              pdfPage.drawText(line.text, { x: line.x, y: lineY, size: fontSize, font, color: textColor })
+            }
+            if (shouldUnderline || shouldStrike) {
+              const span = resolvePdfUnderlineSpan(line)
+              drawTextDecorations(pdfPage, {
+                x: span.x,
+                width: span.width,
+                y: lineY,
+                fontSize,
+                color: textColor,
+                underline: shouldUnderline,
+                strikethrough: shouldStrike,
+              })
+            }
           }
         }
       }
+    } finally {
+      if (shouldClip) popPdfClipBox(pdfPage)
     }
   }
 

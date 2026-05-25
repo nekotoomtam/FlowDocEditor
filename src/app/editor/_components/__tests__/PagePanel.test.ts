@@ -1,6 +1,7 @@
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
+import { mm } from "@/schema"
 import { makeHeaderFooterZoneDocument } from "../wysiwygStage3StressScenarios"
 import { PagePanel, resolveHeaderFooterMiniMap, resolveHeaderFooterReservedValueFromMiniMapY } from "../PagePanel"
 
@@ -42,6 +43,27 @@ describe("PagePanel", () => {
     expect(map.header.height).toBeGreaterThan(0)
     expect(map.body.height).toBeGreaterThan(map.header.height)
     expect(map.footer.y).toBeGreaterThan(map.body.y)
+  })
+
+  it("resolves header/footer mini page geometry from converted page margins", () => {
+    const doc = makeHeaderFooterZoneDocument()
+    const section = doc.document.sections[0]
+    section.page = {
+      ...section.page,
+      margin: {
+        ...section.page.margin,
+        top: mm(72 / 2.8346),
+        bottom: mm(72 / 2.8346),
+      },
+    }
+
+    const map = resolveHeaderFooterMiniMap(section, {
+      headerReserved: 42,
+      footerReserved: 32,
+    })
+
+    expect(map.labels.body).toBe("624 pt")
+    expect(map.geometry.usableHeight).toBeCloseTo(698)
   })
 
   it("maps mini page drag positions back to reserved heights", () => {

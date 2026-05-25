@@ -14,6 +14,7 @@ import {
 import {
   assertPaginatedDocument,
   collectPaginatedLayoutWarnings,
+  HEADER_FOOTER_RESERVED_OVERFLOW_WARNING_CODE,
   LAYOUT_WARNINGS_BLOCKED_CODE,
   type PaginatedDocument,
 } from "@/pagination"
@@ -163,6 +164,49 @@ function makeForcedOverflowWarningDoc(): DocumentNode {
   }
 }
 
+function makeHeaderFooterReservedOverflowDoc(): DocumentNode {
+  const body = makePara("body-p", "Body content remains exportable while header/footer overflow is advisory.")
+  const header = makePara("header-overflow-p", Array.from({ length: 8 }, (_, index) => `Header overflow ${index}`).join("\n"), {
+    fontSize: pt(12),
+    lineHeight: 1.2,
+    spacingAfter: pt(0),
+  })
+  const footer = makePara("footer-overflow-p", Array.from({ length: 5 }, (_, index) => `Footer overflow ${index}`).join("\n"), {
+    fontSize: pt(12),
+    lineHeight: 1.2,
+    spacingAfter: pt(0),
+  })
+
+  return {
+    version: 1,
+    document: {
+      id: "api-export-header-footer-overflow-doc",
+      sections: [{
+        id: "api-header-footer-overflow-section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+          headerReserved: 28,
+          footerReserved: 24,
+        },
+        bodyRootId: "body",
+        headerRootId: "header-root",
+        footerRootId: "footer-root",
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: [body.id] },
+          "header-root": { id: "header-root", type: "stack", props: {}, childIds: [header.id] },
+          "footer-root": { id: "footer-root", type: "stack", props: {}, childIds: [footer.id] },
+          [body.id]: body,
+          [header.id]: header,
+          [footer.id]: footer,
+        } satisfies Record<string, LayoutNode>,
+      }],
+    },
+  }
+}
+
 async function withTemporaryCwd<T>(fn: () => Promise<T>): Promise<T> {
   const originalCwd = process.cwd()
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "flowdoc-no-runtime-font-"))
@@ -272,6 +316,26 @@ describe("API route contract smoke", () => {
         }),
       ],
     })
+  })
+
+  it.each(["pdf", "docx"] as const)("/api/export allows %s artifacts when only header/footer reserved overflow is present", async (format) => {
+    const doc = makeHeaderFooterReservedOverflowDoc()
+    const paginateResponse = await paginatePost(jsonRequest("http://localhost/api/paginate", doc) as never)
+    const paginated = await paginateResponse.json() as PaginatedDocument
+    const warnings = collectPaginatedLayoutWarnings(paginated)
+
+    expect(warnings).toEqual([expect.objectContaining({
+      code: HEADER_FOOTER_RESERVED_OVERFLOW_WARNING_CODE,
+      message: "header/footer content exceeds reserved height; PDF clips overflow and DOCX may reflow or show extra content",
+    })])
+
+    const response = await exportPost(jsonRequest("http://localhost/api/export", {
+      doc,
+      format,
+    }) as never)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-disposition")).toContain(`filename="document.${format}"`)
   })
 
   it("/api/export renders DOCX with expected headers and editable document XML", async () => {

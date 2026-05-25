@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { assertPaginatedDocument, collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
+import { assertPaginatedDocument, collectPaginatedLayoutWarnings, filterBlockingLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { thaiWordBreaker } from "@/layout/word-breaker"
 import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { PdfRenderer, DocxRenderer } from "@/renderer"
@@ -78,12 +78,13 @@ export async function POST(req: NextRequest) {
   }
 
   const layoutWarnings = collectPaginatedLayoutWarnings(paginated)
-  if (layoutWarnings.length > 0) {
+  const blockingLayoutWarnings = filterBlockingLayoutWarnings(layoutWarnings)
+  if (blockingLayoutWarnings.length > 0) {
     return NextResponse.json(
       {
         error: "Layout warnings block final export",
         code: LAYOUT_WARNINGS_BLOCKED_CODE,
-        warnings: layoutWarnings,
+        warnings: blockingLayoutWarnings,
       },
       { status: 409 },
     )

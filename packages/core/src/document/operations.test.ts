@@ -7,7 +7,7 @@ import type {
   LayoutNode,
   ParagraphNode,
 } from "../schema"
-import { pt } from "../schema"
+import { mm, pt } from "../schema"
 import { getPageDimensions } from "../pagination/metrics"
 import { assertDocument } from "./assert"
 import { resolveFlowTableGrid } from "./flowTableGrid"
@@ -351,6 +351,29 @@ describe("section page settings operations", () => {
     expect(totalReserved).toBe(maxReserved)
     expect(bodyHeight).toBe(minBodyHeight)
     expect(page.footerReserved).toBe(MIN_HEADER_FOOTER_RESERVED_PT)
+    expect(() => assertDocument(next)).not.toThrow()
+  })
+
+  it("uses converted margin units when capping header/footer reserved heights", () => {
+    const doc = makeDoc({}, [])
+    doc.document.sections[0].page = {
+      ...doc.document.sections[0].page,
+      margin: {
+        ...doc.document.sections[0].page.margin,
+        top: mm(25.4),
+        bottom: mm(25.4),
+      },
+    }
+    const section = doc.document.sections[0]
+    const { height } = getPageDimensions(section.page)
+    const usableHeight = height - (25.4 * 2.8346 * 2)
+    const maxReserved = Math.round(usableHeight * MAX_HEADER_FOOTER_RESERVED_RATIO * 100) / 100
+
+    const next = updateSectionReservedZones(doc, 0, { headerReserved: 500, footerReserved: 500 })
+    const page = next.document.sections[0].page
+    const totalReserved = (page.headerReserved ?? 0) + (page.footerReserved ?? 0)
+
+    expect(totalReserved).toBe(maxReserved)
     expect(() => assertDocument(next)).not.toThrow()
   })
 

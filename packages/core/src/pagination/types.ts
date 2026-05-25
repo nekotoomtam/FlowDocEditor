@@ -14,6 +14,13 @@ export interface PageContentBox {
   height: number
 }
 
+export interface PageZoneBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface PageMetrics {
   pageWidth: number
   pageHeight: number
@@ -163,6 +170,8 @@ export interface PaginatedPage {
   fragments: PageFragment[]          // body fragments
   headerFragments: PageFragment[]    // header fragments สำหรับหน้านี้
   footerFragments: PageFragment[]    // footer fragments สำหรับหน้านี้
+  headerZoneBox?: PageZoneBox         // visible header box for render/export clipping
+  footerZoneBox?: PageZoneBox         // visible footer box for render/export clipping
 }
 
 export interface PaginatedSection {

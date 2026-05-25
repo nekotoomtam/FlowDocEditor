@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
+import { inflateSync } from "node:zlib"
 import JSZip from "jszip"
 import { LineCapStyle, PDFArray, PDFDict, PDFDocument as PdfLibDocument, PDFName, PDFNumber } from "pdf-lib"
 import { PdfRenderer, resolveFragmentBoxDrawingPrimitives, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions } from "../pdf"
@@ -207,6 +208,37 @@ async function readDocxXmlParts(buffer: Uint8Array, pathPattern: RegExp): Promis
 function countText(xml: string, text: string): number {
   const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   return xml.match(new RegExp(escaped, "g"))?.length ?? 0
+}
+
+function collectInflatedPdfStreams(buffer: Uint8Array): string[] {
+  const bytes = Buffer.from(buffer)
+  const streamMarker = Buffer.from("stream")
+  const endStreamMarker = Buffer.from("endstream")
+  const streams: string[] = []
+  let offset = 0
+
+  while (offset < bytes.length) {
+    const streamIndex = bytes.indexOf(streamMarker, offset)
+    if (streamIndex < 0) break
+    let start = streamIndex + streamMarker.length
+    if (bytes[start] === 13 && bytes[start + 1] === 10) start += 2
+    else if (bytes[start] === 10) start += 1
+
+    const end = bytes.indexOf(endStreamMarker, start)
+    if (end < 0) break
+    let contents = bytes.subarray(start, end)
+    if (contents[contents.length - 1] === 10) contents = contents.subarray(0, contents.length - 1)
+    if (contents[contents.length - 1] === 13) contents = contents.subarray(0, contents.length - 1)
+
+    try {
+      streams.push(inflateSync(contents).toString("latin1"))
+    } catch {
+      streams.push(contents.toString("latin1"))
+    }
+    offset = end + endStreamMarker.length
+  }
+
+  return streams
 }
 
 function expectedDocxMinimumRowHeightCount(rows: PageFragment[]): number {
@@ -454,11 +486,51 @@ describe("PdfRenderer smoke tests", () => {
     expect(pages.every((page) =>
       page.footerFragments.some((fragment) => fragment.nodeId === "hf-render-footer-row" && fragment.nodeType === "flow-row"),
     )).toBe(true)
+    expect(pages[0].headerZoneBox).toEqual({
+      x: pages[0].contentBox.x,
+      y: pages[0].contentBox.y - 46,
+      width: pages[0].contentBox.width,
+      height: 46,
+    })
+    expect(pages[0].footerZoneBox).toEqual({
+      x: pages[0].contentBox.x,
+      y: pages[0].contentBox.y + pages[0].contentBox.height,
+      width: pages[0].contentBox.width,
+      height: 34,
+    })
 
     const result = await pdf.render(paginated)
+    const exportedPdf = await PdfLibDocument.load(result.buffer)
+    const contentStreams = collectInflatedPdfStreams(result.buffer).join("\n")
 
     expect(result.buffer.length).toBeGreaterThan(0)
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+    expect(exportedPdf.getPageCount()).toBe(pages.length)
+    expect(contentStreams.match(/\bre\s+W\s+n\b/g)?.length ?? 0).toBeGreaterThanOrEqual(pages.length * 2)
+  })
+
+  it("does not draw header fragments when the reserved clip height is zero", async () => {
+    const header = makePara("zero-clip-header-p", "ZERO_CLIP_HEADER", { spacingAfter: pt(0) })
+    const headerRoot: LayoutNode = { id: "zero-clip-header-root", type: "stack", props: {}, childIds: [header.id] }
+    const doc = makeDoc([], {
+      [headerRoot.id]: headerRoot,
+      [header.id]: header,
+    })
+    doc.document.sections[0].headerRootId = headerRoot.id
+    doc.document.sections[0].page = {
+      ...doc.document.sections[0].page,
+      headerReserved: 0,
+    }
+    const paginated = paginate(doc)
+    const firstPage = paginated.sections[0].pages[0]
+
+    expect(firstPage.headerFragments.length).toBeGreaterThan(0)
+    expect(firstPage.headerZoneBox?.height).toBe(0)
+
+    const result = await pdf.render(paginated)
+    const contentStreams = collectInflatedPdfStreams(result.buffer).join("\n")
+
+    expect(contentStreams.match(/\bBT\b/g)?.length ?? 0).toBe(0)
   })
 
   it("renders a flow-table cell box without throwing", async () => {
@@ -1177,6 +1249,30 @@ describe("DocxRenderer smoke tests", () => {
     expect(footerNotoRun.propertiesXml).toContain('w:color w:val="2563EB"')
     expect(footerNotoRun.propertiesXml).toContain("<w:u")
     expect(footerNotoRun.propertiesXml).toContain('w:color="2563EB"')
+  })
+
+  it("projects header/footer flow rows into DOCX header and footer parts", async () => {
+    const doc = makeHeaderFooterFlowHeavyRendererDoc()
+    const paginated = paginate(doc)
+    const firstPage = paginated.sections[0].pages[0]
+
+    expect(firstPage.headerFragments.some((fragment) => fragment.nodeId === "hf-render-header-row" && fragment.nodeType === "flow-row")).toBe(true)
+    expect(firstPage.footerFragments.some((fragment) => fragment.nodeId === "hf-render-footer-row" && fragment.nodeType === "flow-row")).toBe(true)
+
+    const result = await new DocxRenderer({ sourceDocument: doc }).render(paginated)
+    const documentXml = await readDocxXml(result.buffer, "word/document.xml")
+    const headerXml = (await readDocxXmlParts(result.buffer, /^word\/header\d+\.xml$/)).join("\n")
+    const footerXml = (await readDocxXmlParts(result.buffer, /^word\/footer\d+\.xml$/)).join("\n")
+
+    expect(headerXml).toContain("HF_RENDER_HEAVY_HEADER")
+    expect(headerXml).toContain("Document")
+    expect(headerXml).toContain("Page")
+    expect(headerXml).toContain("w:tblLayout")
+    expect(footerXml).toContain("HF_RENDER_HEAVY_FOOTER")
+    expect(footerXml).toContain("Confidential")
+    expect(footerXml).toContain("w:tblLayout")
+    expect(documentXml).not.toContain("HF_RENDER_HEAVY_HEADER")
+    expect(documentXml).not.toContain("HF_RENDER_HEAVY_FOOTER")
   })
 
   it("embeds requested DOCX font variant files from rich text runs", async () => {

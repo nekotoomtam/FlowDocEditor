@@ -1,5 +1,5 @@
 import type { DocumentDataReadinessIssue } from "@/readiness"
-import type { LayoutWarningSummary } from "@/pagination"
+import { filterBlockingLayoutWarnings, type LayoutWarningSummary } from "@/pagination"
 import type { DriftReport } from "./comparePagination"
 import type { LayoutStatus } from "./layoutReconciliation"
 
@@ -90,7 +90,7 @@ export function getExportReadiness({
     reasons.push(layoutPendingReason(layoutStatus))
   }
   if (fontFallback) reasons.push("runtime font fallback is active")
-  for (const warning of layoutWarnings) {
+  for (const warning of filterBlockingLayoutWarnings(layoutWarnings)) {
     reasons.push(`layout warning: ${warning.message}`)
   }
   if (driftReport?.pageBreakChanged) reasons.push("browser/server pagination changes page breaks")

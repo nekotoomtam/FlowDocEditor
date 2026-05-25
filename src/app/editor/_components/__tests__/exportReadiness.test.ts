@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { collectPaginatedLayoutWarnings, type PaginatedDocument } from "@/pagination"
+import { collectPaginatedLayoutWarnings, HEADER_FOOTER_RESERVED_OVERFLOW_WARNING_CODE, type PaginatedDocument } from "@/pagination"
 import type { DriftReport, FragmentDrift, GeometryDrift } from "../comparePagination"
 import { formatExportReadinessMessage, getExportReadiness, selectAuthoritativeLayoutWarnings } from "../exportReadiness"
 
@@ -255,6 +255,53 @@ describe("export readiness", () => {
       count: 3,
       message: "table split used forced overflow",
     }])
+  })
+
+  it("reports header/footer reserved overflow without blocking export", () => {
+    const paginated = {
+      tocEntries: [],
+      sections: [{
+        sectionId: "s1",
+        pages: [{
+          index: 0,
+          width: 595,
+          height: 842,
+          contentBox: { x: 57, y: 100, width: 481, height: 650 },
+          headerZoneBox: { x: 57, y: 60, width: 481, height: 40 },
+          footerZoneBox: { x: 57, y: 750, width: 481, height: 30 },
+          headerFragments: [{
+            nodeId: "header-p",
+            nodeType: "paragraph",
+            pageIndex: 0,
+            x: 57,
+            y: 60,
+            width: 481,
+            height: 52,
+          }],
+          fragments: [],
+          footerFragments: [{
+            nodeId: "footer-p",
+            nodeType: "paragraph",
+            pageIndex: 0,
+            x: 57,
+            y: 750,
+            width: 481,
+            height: 38,
+          }],
+        }],
+      }],
+    } as unknown as PaginatedDocument
+
+    const warnings = collectPaginatedLayoutWarnings(paginated)
+
+    expect(warnings).toContainEqual({
+      code: HEADER_FOOTER_RESERVED_OVERFLOW_WARNING_CODE,
+      count: 2,
+      message: "header/footer content exceeds reserved height; PDF clips overflow and DOCX may reflow or show extra content",
+    })
+    const readiness = getExportReadiness(baseInput({ layoutWarnings: warnings }))
+    expect(readiness.canExport).toBe(true)
+    expect(formatExportReadinessMessage(readiness)).toBeNull()
   })
 
   it("blocks fill mode export on data readiness errors with the field-specific reason", () => {

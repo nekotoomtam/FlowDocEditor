@@ -368,8 +368,10 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
   }
 
   visitRoot(section.headerRootId, "headerRootId", "stack")
+  visitRoot(section.headerFirstPageRootId, "headerFirstPageRootId", "stack")
   visitRoot(section.bodyRootId, "bodyRootId", "body")
   visitRoot(section.footerRootId, "footerRootId", "stack")
+  visitRoot(section.footerFirstPageRootId, "footerFirstPageRootId", "stack")
 
   // ตรวจ orphan nodes
   Object.keys(section.nodes).forEach((nodeId) => {
