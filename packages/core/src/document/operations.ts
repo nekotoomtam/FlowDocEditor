@@ -439,7 +439,7 @@ function clampPaletteTableAxis(value: number | undefined): number {
   return Math.min(6, Math.max(1, Math.floor(numericValue)))
 }
 
-function createNodesForSource(source: DragSource): { insertId: string; newNodes: Nodes } {
+function createNodesForSource(source: DragSource, nodes: Nodes): { insertId: string; newNodes: Nodes } {
   if (source.source === "palette") {
     if (source.blockType === "paragraph") {
       const node = createParagraphNode("New paragraph")
@@ -464,6 +464,10 @@ function createNodesForSource(source: DragSource): { insertId: string; newNodes:
     return createPaletteFlowColumnsSubtree(source, 1)
   }
   if (source.source === "document") return { insertId: source.nodeId, newNodes: {} }
+  if (source.source === "document-copy") {
+    const cloned = cloneLayoutSubtree(nodes, source.nodeId)
+    return cloned ? { insertId: cloned.rootId, newNodes: cloned.nodes } : { insertId: "", newNodes: {} }
+  }
   return { insertId: "", newNodes: {} }
 }
 
@@ -2914,8 +2918,10 @@ export function applyPlacementOperation(
 
   const section = doc.document.sections[sectionIndex]
   let nodes: Nodes = { ...section.nodes }
-  const sourceNodeBeforeRemoval = source.source === "document" ? section.nodes[source.nodeId] : null
-  const sourceParentInfoBeforeRemoval = source.source === "document"
+  const sourceIsDocumentMove = source.source === "document"
+  const sourceIsDocumentPlacement = source.source === "document" || source.source === "document-copy"
+  const sourceNodeBeforeRemoval = sourceIsDocumentMove ? section.nodes[source.nodeId] : null
+  const sourceParentInfoBeforeRemoval = sourceIsDocumentMove
     ? findParentInfo(section.nodes, source.nodeId)
     : null
   const sourceParentBeforeRemoval = sourceParentInfoBeforeRemoval
@@ -2928,17 +2934,18 @@ export function applyPlacementOperation(
   let removedSourceRowParentId: string | null = null
   let removedSourceRowIndex: number | null = null
 
-  // Phase 1: merge new nodes (palette source)
+  // Phase 1: merge nodes created by palette or document-copy sources.
   const { insertId, newNodes } = op.kind === "insert-stacks-into-row"
     ? { insertId: "", newNodes: {} }
-    : createNodesForSource(source)
+    : createNodesForSource(source, nodes)
+  if (op.kind !== "insert-stacks-into-row" && insertId === "") return doc
   if (Object.keys(newNodes).length > 0) {
     nodes = { ...nodes, ...newNodes }
   }
 
   // Phase 2: remove document source from its current location
   let srcIndexInParent: number | null = null
-  if (source.source === "document") {
+  if (sourceIsDocumentMove) {
     const { nodes: afterRemoval, parentInfo } = removeFromParent(nodes, source.nodeId)
     nodes = afterRemoval
     if (parentInfo != null) {
@@ -2966,7 +2973,7 @@ export function applyPlacementOperation(
     case "insert-before":
     case "insert-after": {
       const srcInThisParent =
-        source.source === "document" &&
+        sourceIsDocumentMove &&
         findParentInfo({ ...section.nodes }, source.nodeId)?.parentId === op.parentId
           ? srcIndexInParent
           : null
@@ -2975,7 +2982,7 @@ export function applyPlacementOperation(
     }
     case "insert-into-container": {
       const srcInThisContainer =
-        source.source === "document" &&
+        sourceIsDocumentMove &&
         findParentInfo({ ...section.nodes }, source.nodeId)?.parentId === op.containerId
           ? srcIndexInParent
           : null
@@ -2992,12 +2999,12 @@ export function applyPlacementOperation(
       nodes = doInsertStacksIntoRow(nodes, op.rowId, op.targetStackId, op.index, op.count)
       break
     case "move-flow-stack-into-row":
-      if (source.source === "document") {
+      if (sourceIsDocumentPlacement) {
         nodes = doMoveFlowStackIntoRow(nodes, op.rowId, op.targetStackId, op.position, insertId)
       }
       break
     case "move-flow-stack-to-new-row": {
-      if (source.source === "document") {
+      if (sourceIsDocumentPlacement) {
         const removedIndex = removedSourceRowParentId === op.parentId ? removedSourceRowIndex : null
         nodes = doMoveFlowStackToNewRow(nodes, op.parentId, op.index, insertId, removedIndex)
       }

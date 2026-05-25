@@ -2,7 +2,7 @@
 
 import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
-import { assertDocument, clampSectionReservedZones, createDefaultDocument, normalizeDocument } from "@/document"
+import { assertDocument, canRemoveFlowTableColumn, canRemoveFlowTableRow, clampSectionReservedZones, createDefaultDocument, normalizeDocument } from "@/document"
 import {
   resizeFlowTableColumnPair as resizeFlowTableColumnPairForPreview,
   updateNodeProps,
@@ -22,7 +22,8 @@ import type {
   PlacementZone,
   PlacementIntentType,
 } from "@/placement/types"
-import { EditorCanvas } from "./EditorCanvas"
+import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
+import { EditorCanvas, type CanvasTableAction } from "./EditorCanvas"
 import { PropertyPanel } from "./PropertyPanel"
 import { RichTextToolbar } from "./RichTextToolbar"
 import { FillingPanel } from "./FillingPanel"
@@ -288,6 +289,18 @@ type RightRailResizeDrag = {
   previewWidth: number
 }
 
+type CanvasFlowTableActionScope =
+  | { type: "table"; table: FlowTableNode; tableId: string }
+  | { type: "row"; table: FlowTableNode; tableId: string; rowIndex: number }
+  | { type: "cell"; table: FlowTableNode; tableId: string; columnIndex: number; columnEndIndex: number }
+
+type CanvasFlowTableActionTarget =
+  | { type: "add-row"; tableId: string; afterIndex?: number }
+  | { type: "delete-row"; tableId: string; rowIndex: number }
+  | { type: "add-column"; tableId: string; afterIndex?: number }
+  | { type: "delete-column"; tableId: string; colIndex: number }
+  | { type: "delete-table"; tableId: string }
+
 const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
@@ -306,6 +319,75 @@ const TRANSIENT_EXPORT_READINESS_REASONS = new Set([
   "server layout has not checked the current document",
   "server layout check is still running",
 ])
+
+function resolveCanvasFlowTableActionScope(doc: DocumentNode, nodeId: string): CanvasFlowTableActionScope | null {
+  for (const section of doc.document.sections) {
+    const sectionNode = section.nodes[nodeId]
+    if (sectionNode?.type === "flow-table") {
+      return { type: "table", table: sectionNode as unknown as FlowTableNode, tableId: nodeId }
+    }
+
+    for (const [tableId, node] of Object.entries(section.nodes)) {
+      if (node.type !== "flow-table") continue
+      const table = node as unknown as FlowTableNode
+      const inner = table.nodes[nodeId]
+      if (!inner) continue
+
+      if (inner.type === "flow-table-row") {
+        const rowIndex = table.rowIds.indexOf(nodeId)
+        return rowIndex >= 0 ? { type: "row", table, tableId, rowIndex } : null
+      }
+
+      if (inner.type === "flow-table-cell") {
+        const resolved = tryResolveFlowTableGrid(table)
+        if (!resolved.ok) return null
+        const placement = resolved.grid.placementsByCellId.get(nodeId)
+        return placement
+          ? { type: "cell", table, tableId, columnIndex: placement.columnIndex, columnEndIndex: placement.columnEndIndex }
+          : null
+      }
+    }
+  }
+  return null
+}
+
+function resolveCanvasFlowTableActionTarget(
+  doc: DocumentNode,
+  nodeId: string,
+  action: CanvasTableAction,
+): CanvasFlowTableActionTarget | null {
+  const scope = resolveCanvasFlowTableActionScope(doc, nodeId)
+  if (!scope) return null
+
+  if (action === "delete-table") {
+    return scope.type === "table" ? { type: "delete-table", tableId: scope.tableId } : null
+  }
+
+  const resolved = tryResolveFlowTableGrid(scope.table)
+  if (!resolved.ok) return null
+
+  if (action === "add-row") {
+    if (scope.type === "table") return { type: "add-row", tableId: scope.tableId }
+    if (scope.type === "row") return { type: "add-row", tableId: scope.tableId, afterIndex: scope.rowIndex }
+    return null
+  }
+  if (action === "delete-row") {
+    if (scope.type !== "row") return null
+    return canRemoveFlowTableRow(scope.table, scope.rowIndex)
+      ? { type: "delete-row", tableId: scope.tableId, rowIndex: scope.rowIndex }
+      : null
+  }
+
+  if (action === "add-column") {
+    if (scope.type === "table") return { type: "add-column", tableId: scope.tableId }
+    if (scope.type === "cell") return { type: "add-column", tableId: scope.tableId, afterIndex: scope.columnEndIndex }
+    return null
+  }
+  if (scope.type === "cell" && canRemoveFlowTableColumn(scope.table, scope.columnIndex)) {
+    return { type: "delete-column", tableId: scope.tableId, colIndex: scope.columnIndex }
+  }
+  return null
+}
 
 function clampScale(value: number): number {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, value))
@@ -390,6 +472,7 @@ function describeDragSource(source: DragSource): string {
     return source.blockType
   }
   if (source.source === "field") return source.field.label ?? source.field.key
+  if (source.source === "document-copy") return "Copy"
   return "node"
 }
 
@@ -419,6 +502,9 @@ function DragGhostIcon({ source }: { source: DragSource }) {
   }
   if (source.source === "document") {
     return <span style={dragGhostDocumentIcon}>N</span>
+  }
+  if (source.source === "document-copy") {
+    return <span style={dragGhostDocumentIcon}>C</span>
   }
   if (source.blockType === "paragraph") {
     return <span style={dragGhostDocumentIcon}>¶</span>
@@ -2381,17 +2467,45 @@ export default function EditorShell() {
     setRightRailMode("properties")
   }, [finalizeInlineEditBeforeAction, state.selectionAnchorNodeId])
 
-  const duplicateNodeFromCanvas = useCallback((nodeId: string) => {
-    finalizeInlineEditBeforeAction()
-    dispatch({ type: "DUPLICATE_NODE", nodeId })
-    setRightRailMode("properties")
-  }, [finalizeInlineEditBeforeAction])
+  const startCloneDragPointerDown = useCallback((nodeId: string, e: React.PointerEvent<SVGGElement>) => {
+    startNodePointerDown({ source: "document-copy", nodeId }, e)
+  }, [startNodePointerDown])
 
   const deleteNodeFromCanvas = useCallback((nodeId: string) => {
     finalizeInlineEditBeforeAction()
     dispatch({ type: "DELETE_NODE", nodeId })
     setRightRailMode("page")
   }, [finalizeInlineEditBeforeAction])
+
+  const applyCanvasTableAction = useCallback((nodeId: string, action: CanvasTableAction) => {
+    finalizeInlineEditBeforeAction()
+    const target = resolveCanvasFlowTableActionTarget(state.doc, nodeId, action)
+    if (!target) return
+    if (target.type === "add-row") {
+      dispatch({ type: "TABLE_ADD_ROW", tableId: target.tableId, afterIndex: target.afterIndex })
+      setRightRailMode("properties")
+      return
+    }
+    if (target.type === "delete-row") {
+      dispatch({ type: "TABLE_REMOVE_ROW", tableId: target.tableId, rowIndex: target.rowIndex })
+      dispatch({ type: "SELECT_NODE", nodeId: target.tableId, anchorNodeId: target.tableId })
+      setRightRailMode("properties")
+      return
+    }
+    if (target.type === "add-column") {
+      dispatch({ type: "TABLE_ADD_COL", tableId: target.tableId, afterIndex: target.afterIndex })
+      setRightRailMode("properties")
+      return
+    }
+    if (target.type === "delete-column") {
+      dispatch({ type: "TABLE_REMOVE_COL", tableId: target.tableId, colIndex: target.colIndex })
+      dispatch({ type: "SELECT_NODE", nodeId: target.tableId, anchorNodeId: target.tableId })
+      setRightRailMode("properties")
+      return
+    }
+    dispatch({ type: "DELETE_NODE", nodeId: target.tableId })
+    setRightRailMode("page")
+  }, [finalizeInlineEditBeforeAction, state.doc])
 
   const activateWorkflowMode = useCallback((nextMode: WorkflowMode) => {
     finalizeInlineEditBeforeAction()
@@ -3215,8 +3329,9 @@ export default function EditorShell() {
                 onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
                 onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
                 onSelectContextNode={isTemplateMode ? selectContextNode : () => undefined}
-                onDuplicateNode={isTemplateMode ? duplicateNodeFromCanvas : () => undefined}
+                onStartCloneDrag={isTemplateMode ? startCloneDragPointerDown : () => undefined}
                 onDeleteNode={isTemplateMode ? deleteNodeFromCanvas : () => undefined}
+                onTableAction={isTemplateMode ? applyCanvasTableAction : () => undefined}
                 onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
                 onTableColumnResizeStart={isTemplateMode ? handleTableColumnResizeStart : () => undefined}
                 resizeDrag={isTemplateMode ? resizeDrag : null}

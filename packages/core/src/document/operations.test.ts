@@ -1486,6 +1486,77 @@ describe("node duplication operations", () => {
     if (clonedParagraph.type !== "paragraph") return
     expect(clonedParagraph.children[0]?.id).not.toBe("cell-t")
   })
+
+  it("copies a paragraph through placement without moving the source", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Original" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Target" }])
+    const doc = makeDoc({ p1, p2 }, ["p1", "p2"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "insert-after", parentId: "body", parentType: "body", index: 2, anchorNodeId: "p2" },
+      { source: "document-copy", nodeId: "p1" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+    expect(body.childIds).toHaveLength(3)
+    expect(body.childIds.slice(0, 2)).toEqual(["p1", "p2"])
+    const cloneId = body.childIds[2]
+    expect(cloneId).not.toBe("p1")
+
+    const clone = section.nodes[cloneId]
+    expect(clone.type).toBe("paragraph")
+    if (clone.type !== "paragraph") return
+    expect(clone.children[0]?.id).not.toBe("t1")
+    expect(clone.children[0]).toMatchObject({ type: "text", text: "Original" })
+  })
+
+  it("copies a flow-stack into a flow-row without removing the source stack", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Right" }])
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] },
+      p1,
+      p2,
+    }, ["fr1"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "move-flow-stack-into-row", rowId: "fr1", targetStackId: "fs2", position: "before" },
+      { source: "document-copy", nodeId: "fs1" },
+    )
+    const section = updated.document.sections[0]
+    const row = section.nodes.fr1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(row.type).toBe("flow-row")
+    if (row.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(3)
+    expect(row.childIds[0]).toBe("fs1")
+    expect(row.childIds[2]).toBe("fs2")
+    const cloneId = row.childIds[1]
+    expect(cloneId).not.toBe("fs1")
+
+    const source = section.nodes.fs1
+    const target = section.nodes.fs2
+    const clone = section.nodes[cloneId]
+    expect(source.type).toBe("flow-stack")
+    expect(target.type).toBe("flow-stack")
+    expect(clone.type).toBe("flow-stack")
+    if (source.type !== "flow-stack" || target.type !== "flow-stack" || clone.type !== "flow-stack") return
+    expect(source.props.widthShare).toBe(50)
+    expect(target.props.widthShare).toBe(25)
+    expect(clone.props.widthShare).toBe(25)
+    expect(clone.childIds[0]).not.toBe("p1")
+  })
 })
 
 describe("flow-row / flow-stack operations", () => {

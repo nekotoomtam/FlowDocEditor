@@ -27,6 +27,7 @@ export type DragSource =
   | { source: "palette"; blockType: PaletteBlockType; columnShares?: number[]; tableSize?: PaletteTableSize }
   | { source: "field"; field: FieldDragData }
   | { source: "document"; nodeId: string }
+  | { source: "document-copy"; nodeId: string }
 
 // ─── Hit Zone ─────────────────────────────────────────────────────────────────
 

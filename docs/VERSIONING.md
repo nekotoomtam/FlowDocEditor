@@ -3,7 +3,7 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.13`: suitable for self-use with accepted
+The current baseline is `0.6.15`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -22,7 +22,10 @@ readable Thai word-segment wrapping with compound and thanthakhat boundary repai
 intentional page margin edit mode with passive guides and explicit drag handles,
 the first header/footer authoring foundation, scoped header/footer add palette,
 editable header/footer paragraphs, right-rail header/footer setup controls,
-mini page reserved-height controls, and canvas boundary reserved-height dragging,
+mini page reserved-height controls, canvas boundary reserved-height dragging,
+selected table row/column add-delete controls, drag-to-copy canvas node cloning,
+and cleaner active header/footer authoring chrome with selected path/action
+tools, outside-left header/footer action rails, and top-left path placement,
 but not yet a general-user `v1`.
 
 ## Version Meaning
@@ -51,6 +54,8 @@ but not yet a general-user `v1`.
 | `0.6.11` | Patch baseline for intentional page margin edit mode, passive margin guides, explicit edit overlays/drag handles, and right-rail recovery semantics without changing persisted document or package schema versions. |
 | `0.6.12` | Patch baseline for header/footer authoring foundation, active header/footer zone behavior, scoped header/footer-safe add choices, root hydration, and first paragraph editing support without changing persisted document or package schema versions. |
 | `0.6.13` | Patch baseline for right-rail header/footer switches, horizontal mode controls, mini page reserved-height inputs and drag handles, and canvas boundary reserved-height dragging without changing persisted document or package schema versions. |
+| `0.6.14` | Patch baseline for selected Flow Table canvas add/delete actions and drag-to-copy selected node cloning without changing persisted document or package schema versions. |
+| `0.6.15` | Patch baseline for cleaner active header/footer authoring chrome, selected path/action tools inside active header/footer zones, outside-left header/footer action rails, and top-left path placement without changing persisted document or package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

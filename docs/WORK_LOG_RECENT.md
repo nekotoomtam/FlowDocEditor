@@ -22,6 +22,65 @@ Each entry should include:
 
 ---
 
+## 2026-05-25
+
+### Bump Header/Footer Canvas Authoring Baseline To 0.6.15
+
+Goal: Record the accepted selected table actions, clone-drag behavior, and
+header/footer canvas authoring chrome as the next patch baseline before
+starting the Divider/Page break design work.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.14` to `0.6.15`.
+- Aligned the root lockfile and project version marker test with `0.6.15`.
+- Updated versioning docs so the current baseline points at `0.6.15`.
+- Kept `0.6.14` documented as the selected Flow Table action and clone-drag
+  baseline because the root package marker had already moved there.
+- Captured the active header/footer authoring polish in the baseline: no colored
+  zone fills, selected `HEADER`/`FOOTER` paths, selected delete rail inside the
+  active zone, outside-left header/footer action rails, top-left path placement,
+  and footer resize hit-area overlap protection.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/selectionContext.ts`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `packages/core/src/placement/types.ts`
+- `packages/core/src/placement/law.ts`
+- `packages/core/src/placement/geometry.ts`
+
+Verification:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run type-check`
+- Browser smoke on `/editor?flowdocTestScenario=header-footer-zones`: active
+  header/footer selected path and delete rail render once, old zone fills stay
+  absent, header/footer rails avoid content overlap, and header path stays above
+  the selected fragment.
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+
+Notes:
+
+- This is a patch release marker only; it does not change `DocumentNode.version`,
+  FlowDoc package version, storage package version, pagination semantics, or
+  export behavior.
+- Divider and Page break remain design/implementation follow-ups after this
+  version marker.
+
+---
+
 ## 2026-05-24
 
 ### Bump Page Margin Edit Mode Baseline To 0.6.11

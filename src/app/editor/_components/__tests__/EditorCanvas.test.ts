@@ -225,6 +225,29 @@ function makeTableCellDoc(text = "A"): DocumentNode {
   } as unknown as DocumentNode
 }
 
+function makeTwoRowTableCellDoc(): DocumentNode {
+  const doc = makeTableCellDoc() as unknown as {
+    document: {
+      sections: Array<{
+        nodes: Record<string, {
+          type?: string
+          rowIds?: string[]
+          nodes?: Record<string, unknown>
+        }>
+      }>
+    }
+  }
+  const table = doc.document.sections[0].nodes.tbl1
+  const secondParagraph = paragraphNode("cell-p-2", "B")
+  table.rowIds?.push("tr2")
+  if (table.nodes) {
+    table.nodes.tr2 = { id: "tr2", type: "flow-table-row", props: {}, cellIds: ["tc2"] }
+    table.nodes.tc2 = { id: "tc2", type: "flow-table-cell", props: {}, childIds: ["cell-p-2"] }
+    table.nodes["cell-p-2"] = secondParagraph
+  }
+  return doc as unknown as DocumentNode
+}
+
 function makeFlowTableCellDoc(text = "A"): DocumentNode {
   const cellParagraph = paragraphNode("cell-p", text)
   return {
@@ -444,6 +467,24 @@ function makeTableCellPaginated(kind: "short-ids" | "flow-table" = "short-ids"):
   }
 }
 
+function makeTwoRowTableCellPaginated(): PaginatedDocument {
+  const paginated = makeTableCellPaginated()
+  paginated.sections[0].pages[0] = {
+    ...paginated.sections[0].pages[0],
+    contentBox: { x: 36, y: 72, width: 228, height: 56 },
+    fragments: [
+      { nodeId: "tbl1", nodeType: "flow-table", pageIndex: 0, x: 36, y: 72, width: 120, height: 56 },
+      { nodeId: "tr1", nodeType: "flow-table-row", parentNodeId: "tbl1", pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+      { nodeId: "tc1", nodeType: "flow-table-cell", parentNodeId: "tr1", pageIndex: 0, x: 36, y: 72, width: 120, height: 28 },
+      textFragment("cell-p", "A", 72, { parentNodeId: "tc1", width: 120 }),
+      { nodeId: "tr2", nodeType: "flow-table-row", parentNodeId: "tbl1", pageIndex: 0, x: 36, y: 100, width: 120, height: 28 },
+      { nodeId: "tc2", nodeType: "flow-table-cell", parentNodeId: "tr2", pageIndex: 0, x: 36, y: 100, width: 120, height: 28 },
+      textFragment("cell-p-2", "B", 100, { parentNodeId: "tc2", width: 120 }),
+    ],
+  }
+  return paginated
+}
+
 function makeTwoColumnTableCellPaginated(kind: "short-ids" | "flow-table" = "short-ids"): PaginatedDocument {
   const useFlowIds = kind === "flow-table"
   const tableId = useFlowIds ? "ft1" : "tbl1"
@@ -606,8 +647,9 @@ function renderCanvas(
     onNodePointerDown: noop,
     onBackgroundPointerDown: noop,
     onSelectContextNode: noop,
-    onDuplicateNode: noop,
+    onStartCloneDrag: noop,
     onDeleteNode: noop,
+    onTableAction: noop,
     onResizeStart: noop,
     onTableColumnResizeStart: noop,
     onMinHeightResizeStart: noop,
@@ -633,6 +675,23 @@ function renderCanvas(
 
 function headerFooterHitArea(markup: string, zone: "header" | "footer"): string {
   return markup.match(new RegExp(`<rect[^>]*data-testid="header-footer-zone-hit-area"[^>]*data-zone="${zone}"[^>]*>`))?.[0] ?? ""
+}
+
+function headerFooterResizeHandle(markup: string, zone: "header" | "footer"): string {
+  return markup.match(new RegExp(`<rect[^>]*data-testid="header-footer-zone-resize-handle"[^>]*data-zone="${zone}"[^>]*>`))?.[0] ?? ""
+}
+
+function svgNumberAttr(markup: string, attr: string): number | null {
+  const match = markup.match(new RegExp(`(?:^|\\s)${attr}="([^"]+)"`))
+  return match ? Number(match[1]) : null
+}
+
+function canvasActionRailChrome(markup: string): string {
+  return markup.match(/<g[^>]*data-testid="canvas-action-rail"[^>]*><rect[^>]*>/)?.[0] ?? ""
+}
+
+function canvasSelectedPathChrome(markup: string): string {
+  return markup.match(/<g[^>]*data-testid="canvas-selected-path"[^>]*><rect[^>]*>/)?.[0] ?? ""
 }
 
 function marginDragHandle(markup: string, side: "top" | "right" | "bottom" | "left"): string {
@@ -925,9 +984,9 @@ describe("EditorCanvas canvas selection path", () => {
 
     expect(markup).toContain("data-testid=\"canvas-action-rail\"")
     expect(markup).toContain("data-testid=\"canvas-action-drag\"")
-    expect(markup).toContain("data-testid=\"canvas-action-duplicate\"")
+    expect(markup).toContain("data-testid=\"canvas-action-clone-drag\"")
     expect(markup).toContain("data-testid=\"canvas-action-delete\"")
-    expect(markup).toContain("aria-label=\"Duplicate block\"")
+    expect(markup).toContain("aria-label=\"Drag copy\"")
     expect(markup).toContain("aria-label=\"Delete block\"")
   })
 
@@ -938,12 +997,49 @@ describe("EditorCanvas canvas selection path", () => {
     expect(markup).toContain("data-testid=\"canvas-action-drag\"")
   })
 
-  it("does not render the action rail for internal flow-table cells", () => {
-    const markup = renderCanvas(makeTableCellPaginated(), makeTableCellDoc(), "tc1", {
+  it("renders table-scope add row and add column actions for selected flow tables", () => {
+    const markup = renderCanvas(makeTableCellPaginated(), makeTableCellDoc(), "tbl1")
+
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-add-column\"")
+    expect(markup).toContain("data-testid=\"canvas-action-add-row\"")
+    expect(markup).toContain("data-testid=\"canvas-action-drag\"")
+    expect(markup).toContain("data-testid=\"canvas-action-delete-table\"")
+    expect(markup).toContain("aria-label=\"Add table column\"")
+    expect(markup).toContain("aria-label=\"Add table row\"")
+    expect(markup).toContain("aria-label=\"Delete table\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-clone-drag\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-delete\"")
+  })
+
+  it("renders row-scope add row action for selected flow-table rows", () => {
+    const markup = renderCanvas(makeTwoRowTableCellPaginated(), makeTwoRowTableCellDoc(), "tr1", {
       selectionAnchorNodeId: "cell-p",
     })
 
-    expect(markup).not.toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-add-row\"")
+    expect(markup).toContain("data-testid=\"canvas-action-delete-row\"")
+    expect(markup).toContain("aria-label=\"Delete table row\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-add-column\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-clone-drag\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-delete\"")
+  })
+
+  it("renders cell-scope add column action for selected flow-table cells", () => {
+    const markup = renderCanvas(
+      makeTwoColumnTableCellPaginated(),
+      makeTwoColumnTableCellDoc(),
+      "tc1",
+    )
+
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-add-column\"")
+    expect(markup).toContain("data-testid=\"canvas-action-delete-column\"")
+    expect(markup).toContain("aria-label=\"Delete table column\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-add-row\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-clone-drag\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-delete\"")
   })
 
   it("keeps the selected action rail available while inline editing", () => {
@@ -955,7 +1051,7 @@ describe("EditorCanvas canvas selection path", () => {
     })
 
     expect(markup).toContain("data-testid=\"canvas-action-rail\"")
-    expect(markup).toContain("data-testid=\"canvas-action-duplicate\"")
+    expect(markup).toContain("data-testid=\"canvas-action-clone-drag\"")
   })
 })
 
@@ -983,6 +1079,17 @@ describe("EditorCanvas header/footer zones", () => {
     expect(markup).toContain("Header Preview")
     expect(markup).toContain("หน้า 7")
     expect(markup).toContain("pointer-events:none")
+  })
+
+  it("renders header and footer preview chrome without colored zone fills", () => {
+    const passiveMarkup = renderCanvas()
+    const activeMarkup = renderCanvas(makePaginated(), makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+
+    expect(passiveMarkup).not.toContain("#fef9c3")
+    expect(passiveMarkup).not.toContain("#fce7f3")
+    expect(activeMarkup).not.toContain("#e0f2fe")
   })
 
   it("renders passive header and footer activation zones", () => {
@@ -1031,6 +1138,22 @@ describe("EditorCanvas header/footer zones", () => {
     expect(activeMarkup).toContain("cursor:ns-resize")
   })
 
+  it("keeps the active footer resize hit area above the footer content zone", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), null, {
+      headerFooterEditMode: { sectionIndex: 0, zone: "footer" },
+    })
+    const footerHitArea = headerFooterHitArea(markup, "footer")
+    const footerResizeHandle = headerFooterResizeHandle(markup, "footer")
+    const footerZoneY = svgNumberAttr(footerHitArea, "y")
+    const handleY = svgNumberAttr(footerResizeHandle, "y")
+    const handleHeight = svgNumberAttr(footerResizeHandle, "height")
+
+    expect(footerZoneY).not.toBeNull()
+    expect(handleY).not.toBeNull()
+    expect(handleHeight).not.toBeNull()
+    expect((handleY ?? 0) + (handleHeight ?? 0)).toBeLessThanOrEqual(footerZoneY ?? 0)
+  })
+
   it("marks active header paragraph fragments as editable zone content", () => {
     const markup = renderCanvas(makePaginated(), makeDoc(), null, {
       headerFooterEditMode: { sectionIndex: 0, zone: "header" },
@@ -1038,6 +1161,96 @@ describe("EditorCanvas header/footer zones", () => {
 
     expect(markup).toContain("data-zone-editable=\"true\"")
     expect(markup).toContain("data-node-id=\"header-p\"")
+  })
+
+  it("renders selected path and delete rail for an active header paragraph", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), "header-p", {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+
+    expect(markup).toContain("data-testid=\"canvas-selected-path\"")
+    expect(markup.match(/data-testid="canvas-path-item"/g)).toHaveLength(2)
+    expect(markup).toContain(">HEADER</text>")
+    expect(markup).toContain(">PARAGRAPH</text>")
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-delete\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-drag\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-clone-drag\"")
+  })
+
+  it("keeps header selection path pinned to the top edge when there is no room above", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].headerFragments = [
+      textFragment("header-p", "Header Preview", 0, { height: 80 }),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc(), "header-p", {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+    const pathY = svgNumberAttr(canvasSelectedPathChrome(markup), "y")
+
+    expect(pathY).toBe(4)
+  })
+
+  it("keeps full-width header action rail outside the page instead of over content", () => {
+    const doc = makeDoc()
+    doc.document.sections[0].page.headerFooterHorizontalMode = "full"
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].headerFragments = [
+      textFragment("header-p", "Header Preview", 36, { x: 0, width: 300 }),
+    ]
+
+    const markup = renderCanvas(paginated, doc, "header-p", {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+    const actionRailX = svgNumberAttr(canvasActionRailChrome(markup), "x")
+
+    expect(actionRailX).not.toBeNull()
+    expect(actionRailX ?? 0).toBeLessThan(0)
+  })
+
+  it("anchors active header selection chrome to the inline edit page when the header repeats", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages.push({
+      ...paginated.sections[0].pages[0],
+      index: 1,
+      fragments: [textFragment("body-p", "Body text", 72, { pageIndex: 1 })],
+      headerFragments: [textFragment("header-p", "Header Preview", 36, { pageIndex: 1 })],
+      footerFragments: [textFragment("footer-p", "หน้า 8", 340, { pageIndex: 1 })],
+    })
+
+    const markup = renderCanvas(paginated, makeDoc(), "header-p", {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+      inlineEditNodeId: "header-p",
+      inlineEditPageIndex: 0,
+    })
+
+    expect(markup.match(/data-testid="canvas-selected-path"/g)).toHaveLength(1)
+    expect(markup.match(/data-testid="canvas-action-rail"/g)).toHaveLength(1)
+  })
+
+  it("renders selected path and delete rail for an active footer paragraph", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), "footer-p", {
+      headerFooterEditMode: { sectionIndex: 0, zone: "footer" },
+    })
+
+    expect(markup).toContain("data-testid=\"canvas-selected-path\"")
+    expect(markup.match(/data-testid="canvas-path-item"/g)).toHaveLength(2)
+    expect(markup).toContain(">FOOTER</text>")
+    expect(markup).toContain(">PARAGRAPH</text>")
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+    expect(markup).toContain("data-testid=\"canvas-action-delete\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-drag\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-clone-drag\"")
+  })
+
+  it("keeps body selection path and rail suppressed while header/footer mode is active", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), "body-p", {
+      headerFooterEditMode: { sectionIndex: 0, zone: "header" },
+    })
+
+    expect(markup).not.toContain("data-testid=\"canvas-selected-path\"")
+    expect(markup).not.toContain("data-testid=\"canvas-action-rail\"")
   })
 
   it("clips overflowing active header content and marks the reserved-height boundary", () => {

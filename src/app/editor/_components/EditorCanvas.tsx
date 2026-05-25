@@ -12,8 +12,9 @@ import {
   type ParagraphRenderProps,
   type ResolvedBorderSide,
 } from "@/pagination"
-import { getTextRunParagraphText, isPlainTextParagraph, isTextRunOnlyParagraph } from "@/document"
-import type { DocumentNode, FlowTableCellNode, FlowTableNode, LayoutNode, ParagraphNode } from "@/schema"
+import { canRemoveFlowTableColumn, canRemoveFlowTableRow, getTextRunParagraphText, isPlainTextParagraph, isTextRunOnlyParagraph } from "@/document"
+import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag, MarginEditMode, HeaderFooterEditMode, HeaderFooterReservedDrag } from "./EditorShell"
 import type { FragmentDrift } from "./comparePagination"
@@ -101,10 +102,6 @@ const PARAGRAPH_LIVE_PREVIEW_GAP_Y = 2
 const DROP_PREVIEW_FILL = "#99f6e4"
 const DROP_PREVIEW_STROKE = "#0f766e"
 const DROP_INSERTION_STROKE = "#0d9488"
-const READ_ONLY_ZONE_FILL: Record<"header" | "footer", string> = {
-  header: "#fef9c3",
-  footer: "#fce7f3",
-}
 const CANVAS_PATH_HOVER_DELAY_MS = 240
 const CANVAS_PATH_BAR_HEIGHT = 18
 const CANVAS_PATH_BAR_GAP = 4
@@ -127,6 +124,8 @@ const CANVAS_PATH_LABELS: Record<SelectionContextItem["type"], string> = {
   "flow-table-cell": "CELL",
   toc: "TOC",
 }
+
+export type CanvasTableAction = "add-column" | "add-row" | "delete-column" | "delete-row" | "delete-table"
 
 function fragmentSliceIdentity(fragment: PageFragment): string {
   return [
@@ -300,6 +299,8 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function canvasPathLabel(item: SelectionContextItem): string {
+  if (item.zone === "header") return "HEADER"
+  if (item.zone === "footer") return "FOOTER"
   return CANVAS_PATH_LABELS[item.type] ?? item.label.toUpperCase()
 }
 
@@ -350,9 +351,8 @@ function CanvasNodePathOverlay({
   const maxX = Math.max(CANVAS_PATH_MIN_EDGE_GAP, pageWidth * scale - totalWidth - CANVAS_PATH_MIN_EDGE_GAP)
   const x = clamp(anchorFragment.x * scale, CANVAS_PATH_MIN_EDGE_GAP, maxX)
   const aboveY = anchorFragment.y * scale - CANVAS_PATH_BAR_HEIGHT - CANVAS_PATH_BAR_GAP
-  const belowY = (anchorFragment.y + anchorFragment.height) * scale + CANVAS_PATH_BAR_GAP
   const maxY = Math.max(CANVAS_PATH_MIN_EDGE_GAP, pageHeight * scale - CANVAS_PATH_BAR_HEIGHT - CANVAS_PATH_MIN_EDGE_GAP)
-  const y = clamp(aboveY >= CANVAS_PATH_MIN_EDGE_GAP ? aboveY : belowY, CANVAS_PATH_MIN_EDGE_GAP, maxY)
+  const y = clamp(aboveY, CANVAS_PATH_MIN_EDGE_GAP, maxY)
   const interactive = variant === "selected" && onSelectNode != null
   const bg = variant === "selected" ? "#0f172a" : "#334155"
   const textFill = variant === "selected" ? "#e5edf6" : "#e2e8f0"
@@ -525,6 +525,28 @@ function DeleteIcon({ x, y }: { x: number; y: number }) {
   )
 }
 
+function AddColumnIcon({ x, y }: { x: number; y: number }) {
+  return (
+    <g fill="none" stroke="#475569" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "none" }}>
+      <rect x={x + 5.5} y={y + 6} width={5} height={10} rx={1} />
+      <rect x={x + 11.5} y={y + 6} width={5} height={10} rx={1} />
+      <path d={`M ${x + 11} ${y + 18} H ${x + 16}`} />
+      <path d={`M ${x + 13.5} ${y + 15.5} V ${y + 20.5}`} />
+    </g>
+  )
+}
+
+function AddRowIcon({ x, y }: { x: number; y: number }) {
+  return (
+    <g fill="none" stroke="#475569" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "none" }}>
+      <rect x={x + 6} y={y + 5.5} width={10} height={5} rx={1} />
+      <rect x={x + 6} y={y + 11.5} width={10} height={5} rx={1} />
+      <path d={`M ${x + 18} ${y + 11} V ${y + 16}`} />
+      <path d={`M ${x + 15.5} ${y + 13.5} H ${x + 20.5}`} />
+    </g>
+  )
+}
+
 function CanvasNodeActionRail({
   nodeId,
   anchorFragment,
@@ -534,9 +556,12 @@ function CanvasNodeActionRail({
   canDrag,
   canDuplicate,
   canDelete,
+  tableActions,
+  allowOutsideLeft = false,
   onStartDrag,
-  onDuplicateNode,
+  onStartCloneDrag,
   onDeleteNode,
+  onTableAction,
 }: {
   nodeId: string
   anchorFragment: PageFragment
@@ -546,15 +571,19 @@ function CanvasNodeActionRail({
   canDrag: boolean
   canDuplicate: boolean
   canDelete: boolean
+  tableActions: CanvasTableAction[]
+  allowOutsideLeft?: boolean
   onStartDrag: (nodeId: string, e: React.PointerEvent<SVGGElement>) => void
-  onDuplicateNode: (nodeId: string) => void
+  onStartCloneDrag: (nodeId: string, e: React.PointerEvent<SVGGElement>) => void
   onDeleteNode: (nodeId: string) => void
+  onTableAction: (nodeId: string, action: CanvasTableAction) => void
 }) {
   const actions = [
     canDrag ? "drag" as const : null,
+    ...tableActions,
     canDuplicate ? "duplicate" as const : null,
     canDelete ? "delete" as const : null,
-  ].filter((action): action is "drag" | "duplicate" | "delete" => action !== null)
+  ].filter((action): action is "drag" | CanvasTableAction | "duplicate" | "delete" => action !== null)
   if (actions.length === 0) return null
 
   const railWidth = CANVAS_ACTION_RAIL_BUTTON_SIZE + CANVAS_ACTION_RAIL_PADDING * 2
@@ -566,6 +595,8 @@ function CanvasNodeActionRail({
   const maxX = Math.max(CANVAS_PATH_MIN_EDGE_GAP, pageWidth * scale - railWidth - CANVAS_PATH_MIN_EDGE_GAP)
   const x = preferredX >= CANVAS_PATH_MIN_EDGE_GAP
     ? preferredX
+    : allowOutsideLeft
+      ? preferredX
     : clamp(fallbackX, CANVAS_PATH_MIN_EDGE_GAP, maxX)
   const maxY = Math.max(CANVAS_PATH_MIN_EDGE_GAP, pageHeight * scale - railHeight - CANVAS_PATH_MIN_EDGE_GAP)
   const y = clamp(anchorFragment.y * scale, CANVAS_PATH_MIN_EDGE_GAP, maxY)
@@ -612,13 +643,84 @@ function CanvasNodeActionRail({
           return (
             <CanvasActionButton
               key={action}
-              label="Duplicate block"
-              testId="canvas-action-duplicate"
+              label="Drag copy"
+              testId="canvas-action-clone-drag"
               x={buttonX}
               y={buttonY}
-              onPointerDown={() => onDuplicateNode(nodeId)}
+              cursor="copy"
+              onPointerDown={(e) => onStartCloneDrag(nodeId, e)}
             >
               <DuplicateIcon x={buttonX} y={buttonY} />
+            </CanvasActionButton>
+          )
+        }
+        if (action === "add-column") {
+          return (
+            <CanvasActionButton
+              key={action}
+              label="Add table column"
+              testId="canvas-action-add-column"
+              x={buttonX}
+              y={buttonY}
+              onPointerDown={() => onTableAction(nodeId, action)}
+            >
+              <AddColumnIcon x={buttonX} y={buttonY} />
+            </CanvasActionButton>
+          )
+        }
+        if (action === "add-row") {
+          return (
+            <CanvasActionButton
+              key={action}
+              label="Add table row"
+              testId="canvas-action-add-row"
+              x={buttonX}
+              y={buttonY}
+              onPointerDown={() => onTableAction(nodeId, action)}
+            >
+              <AddRowIcon x={buttonX} y={buttonY} />
+            </CanvasActionButton>
+          )
+        }
+        if (action === "delete-column") {
+          return (
+            <CanvasActionButton
+              key={action}
+              label="Delete table column"
+              testId="canvas-action-delete-column"
+              x={buttonX}
+              y={buttonY}
+              onPointerDown={() => onTableAction(nodeId, action)}
+            >
+              <DeleteIcon x={buttonX} y={buttonY} />
+            </CanvasActionButton>
+          )
+        }
+        if (action === "delete-row") {
+          return (
+            <CanvasActionButton
+              key={action}
+              label="Delete table row"
+              testId="canvas-action-delete-row"
+              x={buttonX}
+              y={buttonY}
+              onPointerDown={() => onTableAction(nodeId, action)}
+            >
+              <DeleteIcon x={buttonX} y={buttonY} />
+            </CanvasActionButton>
+          )
+        }
+        if (action === "delete-table") {
+          return (
+            <CanvasActionButton
+              key={action}
+              label="Delete table"
+              testId="canvas-action-delete-table"
+              x={buttonX}
+              y={buttonY}
+              onPointerDown={() => onTableAction(nodeId, action)}
+            >
+              <DeleteIcon x={buttonX} y={buttonY} />
             </CanvasActionButton>
           )
         }
@@ -645,6 +747,7 @@ function lineVisualLeft(line: PaginatedLine): number {
 }
 
 type TableLikeNode = FlowTableNode
+type PageViewDocNode = LayoutNode | FlowTableRowNode | FlowTableCellNode
 type TableCellLikeNode = FlowTableCellNode
 
 interface TableColumnResizeHandle {
@@ -782,7 +885,7 @@ function resolveTableColumnResizeHandles(input: {
 }
 
 interface PageViewDocLookup {
-  nodeById: Map<string, LayoutNode>
+  nodeById: Map<string, PageViewDocNode>
   plainTextParagraphIds: Set<string>
   textRunParagraphIds: Set<string>
   tableCellIds: Set<string>
@@ -790,7 +893,7 @@ interface PageViewDocLookup {
 }
 
 function buildPageViewDocLookup(doc: DocumentNode): PageViewDocLookup {
-  const nodeById = new Map<string, LayoutNode>()
+  const nodeById = new Map<string, PageViewDocNode>()
   const plainTextParagraphIds = new Set<string>()
   const textRunParagraphIds = new Set<string>()
   const tableCellIds = new Set<string>()
@@ -810,6 +913,9 @@ function buildPageViewDocLookup(doc: DocumentNode): PageViewDocLookup {
       }
       if (!isTableLikeNode(node)) continue
       for (const inner of Object.values((node as unknown as TableLikeNode).nodes)) {
+        if (inner?.type === "flow-table-row" || inner?.type === "flow-table-cell") {
+          nodeById.set(inner.id, inner)
+        }
         if (isTableCellLikeNode(inner)) tableCellIds.add(inner.id)
         if (inner?.type === "paragraph" && isPlainTextParagraph(inner as ParagraphNode)) {
           plainTextParagraphIds.add(inner.id)
@@ -822,6 +928,41 @@ function buildPageViewDocLookup(doc: DocumentNode): PageViewDocLookup {
   }
 
   return { nodeById, plainTextParagraphIds, textRunParagraphIds, tableCellIds, flowStackParagraphIds }
+}
+
+function resolveCanvasTableActions(doc: DocumentNode, node: PageViewDocNode | null): CanvasTableAction[] {
+  if (!node) return []
+  if (node.type === "flow-table") {
+    const gridOk = tryResolveFlowTableGrid(node as unknown as FlowTableNode).ok
+    return gridOk ? ["add-column", "add-row", "delete-table"] : ["delete-table"]
+  }
+
+  for (const section of doc.document.sections) {
+    for (const candidate of Object.values(section.nodes)) {
+      if (candidate.type !== "flow-table") continue
+      const table = candidate as unknown as FlowTableNode
+      const inner = table.nodes[node.id]
+      if (!inner) continue
+
+      const resolved = tryResolveFlowTableGrid(table)
+      if (!resolved.ok) return []
+      if (inner.type === "flow-table-row") {
+        const rowIndex = table.rowIds.indexOf(inner.id)
+        const actions: CanvasTableAction[] = ["add-row"]
+        if (rowIndex >= 0 && canRemoveFlowTableRow(table, rowIndex)) actions.push("delete-row")
+        return actions
+      }
+      if (inner.type === "flow-table-cell") {
+        const placement = resolved.grid.placementsByCellId.get(inner.id)
+        if (!placement) return []
+        const actions: CanvasTableAction[] = ["add-column"]
+        if (canRemoveFlowTableColumn(table, placement.columnIndex)) actions.push("delete-column")
+        return actions
+      }
+    }
+  }
+
+  return []
 }
 
 function cssHex(hex: string): string {
@@ -1232,10 +1373,10 @@ function ZoneFragments({
           y={visualDisplayFragment.y * scale}
           width={visualDisplayFragment.width * scale}
           height={Math.max(visualDisplayFragment.height * scale, 2)}
-          fill={isInlineEditing ? INLINE_EDIT_CHROME_FILL : READ_ONLY_ZONE_FILL[zone]}
-          stroke={isInlineEditing ? "#2563eb" : editableParagraph ? "#38bdf8" : "#9ca3af"}
+          fill={isInlineEditing ? INLINE_EDIT_CHROME_FILL : "transparent"}
+          stroke={isInlineEditing ? "#2563eb" : editableParagraph ? "#64748b" : "#cbd5e1"}
           strokeWidth={isInlineEditing ? 1.25 : editableParagraph ? 0.9 : 0.5}
-          opacity={canRenderText ? (active ? 0.34 : 0.24) : 0.45}
+          opacity={canRenderText ? (active ? 0.72 : 0.5) : 0.45}
         />
         {canRenderText && (
           <ParagraphTextSurface
@@ -1306,10 +1447,10 @@ function HeaderFooterZoneLayer({
         y={y}
         width={width}
         height={height}
-        fill={active ? "#e0f2fe" : "transparent"}
-        opacity={active ? 0.2 : 1}
-        stroke={active ? "#0284c7" : "transparent"}
-        strokeWidth={active ? 1.25 : 0}
+        fill="transparent"
+        opacity={1}
+        stroke={active ? "#94a3b8" : "transparent"}
+        strokeWidth={active ? 1 : 0}
         strokeDasharray={active ? "5 3" : "none"}
         style={{ cursor: active ? "default" : "pointer", touchAction: "none" }}
         onDoubleClick={(event) => {
@@ -1331,7 +1472,7 @@ function HeaderFooterZoneLayer({
           x={x + 8}
           y={y + 14}
           fontSize={10}
-          fill="#0369a1"
+          fill="#475569"
           style={{ pointerEvents: "none", userSelect: "none" }}
         >
           {zone === "header" ? "HEADER" : "FOOTER"}
@@ -1375,6 +1516,7 @@ function HeaderFooterZoneResizeHandle({
 }) {
   if (width <= 0) return null
   const stroke = zone === "header" ? "#2563eb" : "#db2777"
+  const handleY = zone === "footer" ? y - 14 : y - 7
   return (
     <g data-testid="header-footer-zone-resize-layer" data-zone={zone} data-active={active ? "true" : "false"}>
       <line
@@ -1393,7 +1535,7 @@ function HeaderFooterZoneResizeHandle({
         data-testid="header-footer-zone-resize-handle"
         data-zone={zone}
         x={x}
-        y={y - 7}
+        y={handleY}
         width={width}
         height={14}
         fill="transparent"
@@ -1690,7 +1832,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 function PageView({
   page, doc, drag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading, inlineEditVisualFresh,
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
-  pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode,
+  pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction,
   resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, headerFooterZoneScroll, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onHeaderFooterZoneScroll, onHeaderFooterZoneScrollTo, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygRichTextShortcut, onWysiwygTextReflowDecision,
@@ -1731,8 +1873,9 @@ function PageView({
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   onSelectContextNode: (nodeId: string) => void
-  onDuplicateNode: (nodeId: string) => void
+  onStartCloneDrag: (nodeId: string, e: React.PointerEvent<SVGGElement>) => void
   onDeleteNode: (nodeId: string) => void
+  onTableAction: (nodeId: string, action: CanvasTableAction) => void
   resizeDrag: ResizeDrag | null
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, gapWidthPt: number, startClientX: number, pageKey: string, rowFragY: number, rowFragHeight: number) => void
   onTableColumnResizeStart: (tableId: string, leftColIndex: number, pairX: number, pairWidth: number, leftWidthOriginal: number, rightWidthOriginal: number, startClientX: number, pageKey: string, tableFragY: number, tableFragHeight: number) => void
@@ -1911,22 +2054,6 @@ function PageView({
     () => buildSelectionContext(doc, hoverPathNodeId),
     [doc, hoverPathNodeId],
   )
-  const suppressPathOverlays = Boolean(drag || resizeDrag || minHeightDrag || marginDrag || marginEditMode || headerFooterEditMode)
-  const selectedPathFragment = suppressPathOverlays ? null : findCanvasPathFragment(
-    renderFragments,
-    selectedNodeId,
-    selectedPathAnchorNodeId,
-  )
-  const hoverPathFragment = suppressPathOverlays || hoverPathNodeId === selectedPathAnchorNodeId
-    ? null
-    : findCanvasPathFragment(renderFragments, hoverPathNodeId)
-  const selectedActionNode = selectedNodeId ? nodeById.get(selectedNodeId) ?? null : null
-  const selectedActionFragment = suppressPathOverlays || !selectedActionNode
-    ? null
-    : findCanvasPathFragment(renderFragments, selectedNodeId)
-  const selectedActionCanDrag = Boolean(selectedActionNode && DRAGGABLE_TYPES.has(selectedActionNode.type))
-  const selectedActionCanDuplicate = Boolean(selectedActionNode && selectedActionNode.type !== "body")
-  const selectedActionCanDelete = selectedActionCanDuplicate
   const isMarginDragSection = marginDrag?.sectionIndex === sectionIndex
   const isMarginEditSection = marginEditMode?.sectionIndex === sectionIndex
   const isHeaderFooterEditSection = headerFooterEditMode?.sectionIndex === sectionIndex
@@ -2051,6 +2178,62 @@ function PageView({
     event.preventDefault()
     onHeaderFooterZoneScroll(sectionIndex, "footer", normalizeHeaderFooterWheelDeltaPt(event, scale), footerOverflowPt)
   }
+  const headerFooterChromePageIsActive = !isHeaderFooterEditSection ||
+    activeInlineEditPageIndex == null ||
+    page.index === activeInlineEditPageIndex
+  const activeHeaderFooterChromeFragments = !headerFooterChromePageIsActive
+    ? []
+    : isHeaderEditActive
+    ? headerFragments.map((fragment) => headerScrollPt === 0 ? fragment : shiftPageFragmentY(fragment, -headerScrollPt))
+    : isFooterEditActive
+      ? footerFragments.map((fragment) => footerScrollPt === 0 ? fragment : shiftPageFragmentY(fragment, -footerScrollPt))
+      : []
+  const selectedOverlayFragments = isHeaderFooterEditSection
+    ? activeHeaderFooterChromeFragments
+    : renderFragments
+  const suppressPathOverlays = Boolean(
+    drag ||
+    resizeDrag ||
+    minHeightDrag ||
+    marginDrag ||
+    marginEditMode ||
+    (headerFooterEditMode && !isHeaderFooterEditSection),
+  )
+  const selectedPathFragment = suppressPathOverlays ? null : findCanvasPathFragment(
+    selectedOverlayFragments,
+    selectedNodeId,
+    selectedPathAnchorNodeId,
+  )
+  const hoverPathFragment = suppressPathOverlays || isHeaderFooterEditSection || hoverPathNodeId === selectedPathAnchorNodeId
+    ? null
+    : findCanvasPathFragment(renderFragments, hoverPathNodeId)
+  const selectedActionNode = selectedNodeId ? nodeById.get(selectedNodeId) ?? null : null
+  const selectedActionFragment = suppressPathOverlays || !selectedActionNode
+    ? null
+    : findCanvasPathFragment(selectedOverlayFragments, selectedNodeId)
+  const selectedActionIsHeaderFooterZone = isHeaderFooterEditSection && selectedActionFragment != null
+  const selectedActionTableActions = selectedActionIsHeaderFooterZone
+    ? []
+    : resolveCanvasTableActions(doc, selectedActionNode)
+  const selectedActionUsesTableScope = selectedActionTableActions.length > 0
+  const selectedActionIsInternalTableScope =
+    selectedActionNode?.type === "flow-table-row" ||
+    selectedActionNode?.type === "flow-table-cell"
+  const selectedActionCanDrag = Boolean(
+    selectedActionNode &&
+    !selectedActionIsHeaderFooterZone &&
+    !selectedActionIsInternalTableScope &&
+    DRAGGABLE_TYPES.has(selectedActionNode.type),
+  )
+  const selectedActionCanDuplicate = Boolean(
+    selectedActionNode &&
+    !selectedActionIsHeaderFooterZone &&
+    !selectedActionUsesTableScope &&
+    selectedActionNode.type !== "body",
+  )
+  const selectedActionCanDelete = selectedActionIsHeaderFooterZone
+    ? Boolean(selectedActionNode && selectedActionNode.type !== "body")
+    : selectedActionCanDuplicate
 
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
@@ -2875,9 +3058,12 @@ function PageView({
           canDrag={selectedActionCanDrag}
           canDuplicate={selectedActionCanDuplicate}
           canDelete={selectedActionCanDelete}
+          tableActions={selectedActionTableActions}
+          allowOutsideLeft={selectedActionIsHeaderFooterZone}
           onStartDrag={(nodeId, e) => onNodePointerDown({ source: "document", nodeId }, e)}
-          onDuplicateNode={onDuplicateNode}
+          onStartCloneDrag={onStartCloneDrag}
           onDeleteNode={onDeleteNode}
+          onTableAction={onTableAction}
         />
       )}
       {selectedPathFragment && selectedPathItems.length > 0 && (
@@ -3094,8 +3280,9 @@ interface Props {
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   onSelectContextNode: (nodeId: string) => void
-  onDuplicateNode: (nodeId: string) => void
+  onStartCloneDrag: (nodeId: string, e: React.PointerEvent<SVGGElement>) => void
   onDeleteNode: (nodeId: string) => void
+  onTableAction: (nodeId: string, action: CanvasTableAction) => void
   onResizeStart: (rowId: string, leftStackId: string, rightStackId: string, pairX: number, pairWidth: number, gapWidthPt: number, startClientX: number, pageKey: string, rowFragY: number, rowFragHeight: number) => void
   onTableColumnResizeStart: (tableId: string, leftColIndex: number, pairX: number, pairWidth: number, leftWidthOriginal: number, rightWidthOriginal: number, startClientX: number, pageKey: string, tableFragY: number, tableFragHeight: number) => void
   onMinHeightResizeStart: (rowId: string, rowFragY: number, pageKey: string) => void
@@ -3219,7 +3406,7 @@ export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
   textMeasurer,
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
-  setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onDuplicateNode, onDeleteNode, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, onScaleChange,
+  setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled,
@@ -3452,8 +3639,9 @@ export function EditorCanvas({
                   onNodePointerDown={onNodePointerDown}
                   onBackgroundPointerDown={onBackgroundPointerDown}
                   onSelectContextNode={onSelectContextNode}
-                  onDuplicateNode={onDuplicateNode}
+                  onStartCloneDrag={onStartCloneDrag}
                   onDeleteNode={onDeleteNode}
+                  onTableAction={onTableAction}
                   resizeDrag={resizeDrag}
                   onResizeStart={onResizeStart}
                   onTableColumnResizeStart={onTableColumnResizeStart}

@@ -168,7 +168,7 @@ function makeIntent(
 // ─── Source Helpers ───────────────────────────────────────────────────────────
 
 function getSourceNodeId(source?: DragSource | null): string | null {
-  return source?.source === "document" ? source.nodeId : null
+  return source?.source === "document" || source?.source === "document-copy" ? source.nodeId : null
 }
 
 function getSourceBlockType(document: DocumentNode, source?: DragSource | null): LayoutNode["type"] | null {

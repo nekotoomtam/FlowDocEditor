@@ -12,6 +12,7 @@ export interface SelectionContextItem {
   nodeId: string
   type: SelectionContextNode["type"]
   label: string
+  zone?: "header" | "footer"
 }
 
 const NODE_LABELS: Record<SelectionContextNode["type"], string> = {
@@ -85,7 +86,17 @@ function shouldShowContextNode(node: SelectionContextNode): boolean {
   return node.type !== "body"
 }
 
-function labelSelectionContextNode(node: SelectionContextNode): string {
+function selectionContextZoneForNodeId(doc: DocumentNode, nodeId: string): "header" | "footer" | null {
+  for (const section of doc.document.sections) {
+    if (section.headerRootId === nodeId || section.headerFirstPageRootId === nodeId) return "header"
+    if (section.footerRootId === nodeId || section.footerFirstPageRootId === nodeId) return "footer"
+  }
+  return null
+}
+
+function labelSelectionContextNode(node: SelectionContextNode, zone?: "header" | "footer" | null): string {
+  if (zone === "header") return "Header"
+  if (zone === "footer") return "Footer"
   return NODE_LABELS[node.type] ?? node.type
 }
 
@@ -102,10 +113,12 @@ export function buildSelectionContext(doc: DocumentNode, anchorNodeId: string | 
     if (!node) break
 
     if (shouldShowContextNode(node)) {
+      const zone = selectionContextZoneForNodeId(doc, currentId)
       chain.push({
         nodeId: currentId,
         type: node.type,
-        label: labelSelectionContextNode(node),
+        label: labelSelectionContextNode(node, zone),
+        zone: zone ?? undefined,
       })
     }
 

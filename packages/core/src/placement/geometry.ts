@@ -177,7 +177,7 @@ function isRowLikeDragSource(document: DocumentNode, source?: DragSource | null)
 }
 
 function isFlowStackDragSource(document: DocumentNode, source?: DragSource | null): boolean {
-  if (source?.source !== "document") return false
+  if (source?.source !== "document" && source?.source !== "document-copy") return false
   for (const section of document.document.sections) {
     const node = section.nodes[source.nodeId]
     if (node != null) return node.type === "flow-stack"
