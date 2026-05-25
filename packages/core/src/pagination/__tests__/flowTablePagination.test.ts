@@ -5,7 +5,7 @@ import { assertPaginatedDocument, paginateDocument } from "../index"
 import { collectPaginatedLayoutWarnings } from "../warnings"
 import { pt } from "../../schema"
 import type { PageFragment } from "../types"
-import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode, SpacerNode } from "../../schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ListStyleDefinition, ParagraphNode, SpacerNode } from "../../schema"
 
 const PAGE = {
   size: "A4" as const,
@@ -60,6 +60,25 @@ function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): Doc
           ...nodes,
         },
       }],
+    },
+  }
+}
+
+const TOR_LIST_STYLE: ListStyleDefinition = {
+  id: "tor-clause",
+  levels: [
+    { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
+    { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+  ],
+}
+
+function withListDefinitions(doc: DocumentNode): DocumentNode {
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      listStyles: { "tor-clause": TOR_LIST_STYLE },
+      listInstances: { "tor-main": { id: "tor-main", styleId: "tor-clause" } },
     },
   }
 }
@@ -151,6 +170,61 @@ describe("flow-table static pagination", () => {
     expect(leftParagraph?.x).toBe(72 + 6)
     expect(leftParagraph?.y).toBe(72 + 6)
     expect(leftParagraph?.lines?.[0]?.text).toBe("Left")
+  })
+
+  it("emits generated list marker metadata for flow-table cell paragraphs", () => {
+    const p1 = makePara("p1", "Table list item", {
+      list: { instanceId: "tor-main", level: 0, itemId: "table-list-item" },
+    })
+    const c1 = makeCell("c1", [p1.id])
+    const r1 = makeRow("r1", [c1.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(180) }],
+      rowIds: [r1.id],
+      nodes: { r1, c1, p1 },
+    }
+
+    const result = paginate(withListDefinitions(makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })))
+    const paragraph = fragmentsFor(result, "p1", "paragraph")[0]
+
+    expect(paragraph.listMarker).toMatchObject({
+      text: "1.",
+      markerX: paragraph.x,
+      bodyX: paragraph.x + 18,
+    })
+    expect(paragraph.lines?.map((line) => line.text)).toEqual(["Table list item"])
+    expect(paragraph.lines?.[0]?.x).toBeCloseTo(paragraph.x + 18, 2)
+  })
+
+  it("keeps flow-table list markers only on the first split paragraph fragment", () => {
+    const lines = Array.from({ length: 120 }, (_, index) => `table-list-${index}`)
+    const p1 = makePara("p1", lines.join("\n"), {
+      list: { instanceId: "tor-main", level: 0, itemId: "long-table-list-item" },
+    })
+    const c1 = makeCell("c1", [p1.id])
+    const r1 = makeRow("r1", [c1.id])
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(220) }],
+      rowIds: [r1.id],
+      nodes: { r1, c1, p1 },
+    }
+
+    const result = paginate(withListDefinitions(makeDoc([table.id], { [table.id]: table as unknown as LayoutNode })))
+    const paragraphFragments = fragmentsFor(result, "p1", "paragraph")
+
+    expect(paragraphFragments.length).toBeGreaterThan(1)
+    expect(paragraphFragments[0].listMarker?.text).toBe("1.")
+    expect(paragraphFragments.slice(1).every((fragment) => fragment.listMarker == null)).toBe(true)
+    expect(paragraphFragments.flatMap((fragment) => fragment.lines?.map((line) => line.text) ?? [])).toEqual(lines)
+    expect(paragraphFragments.every((fragment) =>
+      fragment.lines?.every((line) => line.x >= fragment.x + 18 - 0.01) ?? true
+    )).toBe(true)
   })
 
   it("aligns a narrow flow-table inside the page content box without stretching authored columns", () => {

@@ -37,6 +37,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | FlowDoc-owned WYSIWYG text engine plan | `docs/WYSIWYG_TEXT_ENGINE_PLAN.md` |
 | End-to-end WYSIWYG edit/show parity plan | `docs/WYSIWYG_PARITY_PLAN.md` |
 | Rich text draft lane decision | `docs/RICH_TEXT_DRAFT_DECISION.md` |
+| List numbering model | `docs/LIST_NUMBERING_CONTRACT.md` |
 | WYSIWYG whitespace contract and Tab decision | `docs/WYSIWYG_WHITESPACE_MATRIX.md` |
 | WYSIWYG typing smoothness probe and thresholds | `docs/WYSIWYG_SMOOTHNESS_PROBE.md` |
 | WYSIWYG edit re-entry line-geometry drift probe | `docs/WYSIWYG_REENTER_DRIFT_PROBE.md` |
@@ -111,6 +112,7 @@ Start with:
 
 - `docs/CROSS_PAGE_BEHAVIOR.md`
 - `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/LIST_NUMBERING_CONTRACT.md` when paragraph list numbering or marker continuation is in scope
 - `docs/TEST_STRATEGY.md`
 
 Any page-boundary behavior change should update the relevant contract and add or adjust focused tests.

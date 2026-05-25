@@ -1,8 +1,10 @@
 import type { DocumentNode, DocumentSection } from "../schema"
+import { resolveListMarkers } from "../document/listNumbering"
 import {
   flowSection,
   flowZone,
   measureParagraph,
+  paragraphBoxLeftInset,
   paragraphBoxTopInset,
 } from "../layout"
 import type { FlowBox, TextMeasurer, WordBreaker } from "../layout"
@@ -36,6 +38,7 @@ import { paginatePageBreak } from "./paginator/pageBreak"
 import { paginateRow } from "./paginator/row"
 import { paginateFlowRow } from "./paginator/flowRow"
 import { paginateFlowTable } from "./paginator/flowTable"
+import { toListMarkerRenderProps, withListBodyIndent, type ListNumberingPaginationContext } from "./paginator/listMarker"
 
 /**
  * paginator — รับ FlowBox จาก layout แล้วตัดเป็น pages
@@ -48,7 +51,7 @@ import { paginateFlowTable } from "./paginator/flowTable"
  * - spacer ไม่แตก — move ทั้งก้อน
  */
 
-export { buildPaginatedLines } from "./paginator/paragraph"
+export { buildPaginatedLines, buildPositionedParagraphLines } from "./paginator/paragraph"
 
 // ─── Paragraph Pagination ─────────────────────────────────────────────────────
 
@@ -64,6 +67,7 @@ function paginateParagraph(
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   let current = cursor
 
@@ -81,18 +85,23 @@ function paginateParagraph(
     return { ...current, cursorY: current.cursorY + box.height }
   }
 
-  const measured = measureParagraph(node, box.width, measurer, wordBreaker)
-  const renderProps = buildRenderProps(node, measured.lineHeight, measured.box)
+  const resolvedListMarker = listNumbering?.markers.get(node.id)
+  const layoutNode = withListBodyIndent(node, resolvedListMarker, listNumbering)
+  const measured = measureParagraph(layoutNode, box.width, measurer, wordBreaker)
+  const renderProps = buildRenderProps(layoutNode, measured.lineHeight, measured.box)
   const spacingBefore = measured.spacingBefore
+  const paragraphContentX = box.x + paragraphBoxLeftInset(measured.box)
+  const listMarker = toListMarkerRenderProps(resolvedListMarker, listNumbering, paragraphContentX)
 
   // Fast path: whole paragraph fits on the current page without splitting
   if (current.cursorY + measured.totalHeight <= contentBottom) {
-    const rawLines = buildPositionedParagraphLines(measured, measured.lines, box.x, current.cursorY, 0, node.props.align, true)
+    const rawLines = buildPositionedParagraphLines(measured, measured.lines, box.x, current.cursorY, 0, layoutNode.props.align, true)
     const lines = resolvePageNumbers(rawLines, current.pageIndex + 1 + current.pageNumberOffset)
     pushFragment(pages, template, {
       nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
       pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
       width: box.width, height: measured.totalHeight, lines, renderProps,
+      listMarker,
       fragmentIndex: 0, lineStart: 0, lineEnd: measured.lines.length,
       continuesFrom: false, isContinued: false,
     })
@@ -170,12 +179,13 @@ function paginateParagraph(
     const resolvedLineEnd = lineOffset + fragLines.length
     const fragHeight = paragraphFragmentHeight(measured, fragLines, lineOffset, resolvedLineEnd)
 
-    const rawPositioned = buildPositionedParagraphLines(measured, fragLines, box.x, current.cursorY, lineOffset, node.props.align, isLastFragment)
+    const rawPositioned = buildPositionedParagraphLines(measured, fragLines, box.x, current.cursorY, lineOffset, layoutNode.props.align, isLastFragment)
     const positionedLines = resolvePageNumbers(rawPositioned, current.pageIndex + 1 + current.pageNumberOffset)
     pushFragment(pages, template, {
       nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
       pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
       width: box.width, height: fragHeight, lines: positionedLines, renderProps,
+      listMarker: lineOffset === 0 ? listMarker : undefined,
       fragmentIndex, lineStart: lineOffset, lineEnd: resolvedLineEnd,
       continuesFrom: !isFirstFragment, isContinued: !isLastFragment,
     })
@@ -212,6 +222,7 @@ function paginateVerticalContainer(
   cursor: PageFlowCursor,
   wordBreaker: WordBreaker = defaultWordBreaker,
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   let current = cursor
 
@@ -234,7 +245,7 @@ function paginateVerticalContainer(
       }
     }
 
-    current = paginateFlowBox(child, section, measurer, pages, template, contentTop, contentBottom, current, box.nodeId, wordBreaker, onSplitDecision)
+    current = paginateFlowBox(child, section, measurer, pages, template, contentTop, contentBottom, current, box.nodeId, wordBreaker, onSplitDecision, listNumbering)
   })
 
   return current
@@ -254,10 +265,11 @@ function paginateFlowBox(
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   switch (box.nodeType) {
     case "paragraph":
-      return paginateParagraph(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, onSplitDecision)
+      return paginateParagraph(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, onSplitDecision, listNumbering)
     case "spacer":
       return paginateSpacer(box, pages, template, contentTop, contentBottom, cursor, parentNodeId)
     case "divider":
@@ -265,16 +277,16 @@ function paginateFlowBox(
     case "page-break":
       return paginatePageBreak(box, pages, template, contentTop, cursor, parentNodeId)
     case "row":
-      return paginateRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
+      return paginateRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering)
     case "flow-row":
-      return paginateFlowRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
+      return paginateFlowRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering)
     case "flow-stack":
       throw new Error(`${box.nodeType} pagination is not implemented yet`)
     case "body":
     case "stack":
-      return paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision)
+      return paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision, listNumbering)
     case "flow-table":
-      return paginateFlowTable(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
+      return paginateFlowTable(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering)
     case "flow-table-row":
     case "flow-table-cell":
       throw new Error(`${box.nodeType} pagination is owned by flow-table`)
@@ -292,6 +304,7 @@ function paginateSection(
   wordBreaker: WordBreaker = defaultWordBreaker,
   tocHeightOverrides?: Map<string, number>,
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
+  listNumbering?: ListNumberingPaginationContext,
 ): PaginatedSection {
   const metrics = getPageMetrics(section.page)
   const template = createEmptyPage(startPageIndex, metrics)
@@ -309,7 +322,7 @@ function paginateSection(
     ? section.page.pageNumberStart - startPageIndex - 1
     : 0
   const cursor: PageFlowCursor = { pageIndex: startPageIndex, cursorY: contentTop, pageNumberOffset }
-  paginateFlowBox(flowBox, section, measurer, pages, template, contentTop, contentBottom, cursor, undefined, wordBreaker, onSplitDecision)
+  paginateFlowBox(flowBox, section, measurer, pages, template, contentTop, contentBottom, cursor, undefined, wordBreaker, onSplitDecision, listNumbering)
 
   if (pages.length === 0) pages.push(createEmptyPage(startPageIndex, metrics))
 
@@ -368,12 +381,13 @@ function runAllSections(
   wb: WordBreaker,
   tocHeightOverrides?: Map<string, number>,
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
+  listNumbering?: ListNumberingPaginationContext,
 ): PaginatedSection[] {
   let pageIndex = 0
   const sections: PaginatedSection[] = []
   doc.document.sections.forEach((section, index) => {
     if (index > 0) pageIndex += 1
-    const paginated = paginateSection(section, pageIndex, measurer, wb, tocHeightOverrides, onSplitDecision)
+    const paginated = paginateSection(section, pageIndex, measurer, wb, tocHeightOverrides, onSplitDecision, listNumbering)
     sections.push(paginated)
     pageIndex += paginated.pages.length - 1
   })
@@ -387,15 +401,19 @@ export function paginateDocument(
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
 ): PaginatedDocument {
   const wb = wordBreaker ?? defaultWordBreaker
+  const listNumbering: ListNumberingPaginationContext = {
+    markers: resolveListMarkers(doc),
+    styles: doc.document.listStyles ?? {},
+  }
 
   // Pass 1: paginate with estimated TOC heights
-  const sections1 = runAllSections(doc, measurer, wb, undefined, onSplitDecision)
+  const sections1 = runAllSections(doc, measurer, wb, undefined, onSplitDecision, listNumbering)
   const entries1 = collectTocEntries(sections1, doc)
   const overrides = computeTocOverrides(sections1, doc, entries1)
 
   if (overrides.size > 0) {
     // Pass 2: repaginate with corrected TOC heights; page numbers may shift
-    const sections2 = runAllSections(doc, measurer, wb, overrides, onSplitDecision)
+    const sections2 = runAllSections(doc, measurer, wb, overrides, onSplitDecision, listNumbering)
     const entries2 = collectTocEntries(sections2, doc)
     fillTocFragments(sections2, doc, entries2)
     return { sections: sections2, tocEntries: entries2 }

@@ -28,6 +28,7 @@ import {
   flowTableRowspanGroupAllowsRowBoundarySplit,
   paginateFlowTableRowspanGroupSplit,
 } from "./flowTableRowspan"
+import type { ListNumberingPaginationContext } from "./listMarker"
 // ─── Flow Table Pagination ───────────────────────────────────────────────────
 
 export function paginateFlowTable(
@@ -41,6 +42,7 @@ export function paginateFlowTable(
   cursor: PageFlowCursor,
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   const tableNode = section.nodes[box.nodeId] as unknown as FlowTableNode
   if (!tableNode || tableNode.type !== "flow-table") return cursor
@@ -80,6 +82,7 @@ export function paginateFlowTable(
         wordBreaker,
         flowTableGridProps,
         flowTableCellGridPropsById,
+        listNumbering,
       )
     }
     return c
@@ -151,6 +154,7 @@ export function paginateFlowTable(
           flowTableGridProps,
           flowTableCellGridPropsById,
           shouldRepeatHeaders ? placeHeaders : undefined,
+          listNumbering,
         )
         continue
       }
@@ -177,6 +181,7 @@ export function paginateFlowTable(
           wordBreaker,
           flowTableGridProps,
           flowTableCellGridPropsById,
+          listNumbering,
         )
       }
       continue
@@ -202,6 +207,7 @@ export function paginateFlowTable(
         wordBreaker,
         flowTableGridProps,
         flowTableCellGridPropsById,
+        listNumbering,
       )
     } else if (allowBreak && !isHeaderGroup) {
       current = paginateFlowTableRowSplit(
@@ -219,6 +225,7 @@ export function paginateFlowTable(
         flowTableCellGridPropsById,
         shouldRepeatHeaders ? placeHeaders : undefined,
         shouldRepeatHeaders ? headerHeight : 0,
+        listNumbering,
       )
     } else {
       const nextPage = advancePage(current, contentTop)
@@ -238,6 +245,7 @@ export function paginateFlowTable(
         wordBreaker,
         flowTableGridProps,
         flowTableCellGridPropsById,
+        listNumbering,
       )
     }
   }

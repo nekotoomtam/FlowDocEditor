@@ -2,12 +2,14 @@ import {
   defaultWordBreaker,
   measureDivider,
   measureParagraph,
+  paragraphBoxLeftInset,
 } from "../../layout"
 import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
 import type { DocumentSection } from "../../schema"
 import type {
   PageFlowCursor,
   DividerRenderProps,
+  PageFragment,
   PaginatedLine,
   PaginatedPage,
   ParagraphRenderProps,
@@ -24,6 +26,7 @@ import {
   buildRenderProps,
   resolvePageNumbers,
 } from "./paragraph"
+import { toListMarkerRenderProps, withListBodyIndent, type ListNumberingPaginationContext } from "./listMarker"
 
 function pushStackContents(
   stackBox: FlowBox,
@@ -35,6 +38,7 @@ function pushStackContents(
   pageY: number,
   wordBreaker: WordBreaker = defaultWordBreaker,
   pageNumberOffset: number = 0,
+  listNumbering?: ListNumberingPaginationContext,
 ): void {
   const offsetY = pageY - stackBox.y
   stackBox.children.forEach((child) => {
@@ -42,14 +46,18 @@ function pushStackContents(
     let lines: PaginatedLine[] | undefined
     let renderProps: ParagraphRenderProps | undefined
     let dividerRenderProps: DividerRenderProps | undefined
+    let listMarker: PageFragment["listMarker"]
 
     if (child.nodeType === "paragraph") {
       const node = section.nodes[child.nodeId]
       if (node?.type === "paragraph") {
-        const measured = measureParagraph(node, child.width, measurer, wordBreaker)
-        const rawLines = buildPositionedParagraphLines(measured, measured.lines, child.x, childPageY, 0, node.props.align)
+        const resolvedListMarker = listNumbering?.markers.get(node.id)
+        const layoutNode = withListBodyIndent(node, resolvedListMarker, listNumbering)
+        const measured = measureParagraph(layoutNode, child.width, measurer, wordBreaker)
+        const rawLines = buildPositionedParagraphLines(measured, measured.lines, child.x, childPageY, 0, layoutNode.props.align)
         lines = resolvePageNumbers(rawLines, pageIndex + 1 + pageNumberOffset)
-        renderProps = buildRenderProps(node, measured.lineHeight, measured.box)
+        renderProps = buildRenderProps(layoutNode, measured.lineHeight, measured.box)
+        listMarker = toListMarkerRenderProps(resolvedListMarker, listNumbering, child.x + paragraphBoxLeftInset(measured.box))
       }
     }
     if (child.nodeType === "divider") {
@@ -77,6 +85,7 @@ function pushStackContents(
       height: child.height,
       lines,
       renderProps,
+      listMarker,
       dividerRenderProps,
     })
   })
@@ -93,6 +102,7 @@ export function paginateRow(
   cursor: PageFlowCursor,
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   let current = cursor
 
@@ -129,7 +139,7 @@ export function paginateRow(
       width: stackBox.width,
       height: box.height,
     })
-    pushStackContents(stackBox, section, measurer, pages, template, current.pageIndex, current.cursorY, wordBreaker, current.pageNumberOffset)
+    pushStackContents(stackBox, section, measurer, pages, template, current.pageIndex, current.cursorY, wordBreaker, current.pageNumberOffset, listNumbering)
   })
 
   return { ...current, cursorY: current.cursorY + box.height }

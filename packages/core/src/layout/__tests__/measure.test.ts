@@ -109,6 +109,43 @@ describe("English text", () => {
   })
 })
 
+describe("paragraph indents", () => {
+  it("wraps text against the effective left and right indent width", () => {
+    const result = measureParagraph(
+      makeParagraph("Hello world", {
+        indentLeft: { value: 10, unit: "pt" },
+        indentRight: { value: 5, unit: "pt" },
+      }),
+      55,
+      defaultTextMeasurer,
+      spaceBreaker,
+    )
+
+    expect(result.contentWidth).toBe(55)
+    expect(result.lineOffset).toBe(10)
+    expect(result.lineContentWidth).toBe(40)
+    expect(result.lines.map((line) => line.text)).toEqual(["Hello", "world"])
+  })
+
+  it("uses textIndent only for the first visual line", () => {
+    const result = measureParagraph(
+      makeParagraph("Hello world", {
+        indentLeft: { value: 10, unit: "pt" },
+        textIndent: { value: 20, unit: "pt" },
+      }),
+      55,
+      defaultTextMeasurer,
+      spaceBreaker,
+    )
+
+    expect(result.firstLineOffset).toBe(30)
+    expect(result.lineOffset).toBe(10)
+    expect(result.firstLineContentWidth).toBe(25)
+    expect(result.lineContentWidth).toBe(45)
+    expect(result.lines.map((line) => line.text)).toEqual(["Hello", "world"])
+  })
+})
+
 // ─── Rich text runs ───────────────────────────────────────────────────────────
 
 describe("rich text runs", () => {

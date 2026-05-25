@@ -688,6 +688,69 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("fill=\"#2563EB\"")
   })
 
+  it("renders generated list markers separately from paragraph line text", () => {
+    const fragment = makeFragment({
+      lines: [{
+        text: "List body",
+        x: 30,
+        y: 20,
+        width: 90,
+        height: 12,
+        segments: [{ kind: "word", text: "List body", start: 0, end: 9, x: 0, width: 90, breakableAfter: false }],
+      }],
+      listMarker: {
+        text: "1.",
+        level: 0,
+        ordinal: 1,
+        instanceId: "tor-main",
+        styleId: "tor-clause",
+        itemId: "list-body",
+        markerIndent: 0,
+        textIndent: 20,
+        markerX: 10,
+        bodyX: 30,
+      },
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "sarabun",
+        fontSize: 12,
+        lineHeight: 12,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("List body"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: false,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: false,
+      showTextSegments: false,
+      initialCaretIndex: null,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+
+    expect(markup).toContain("data-list-marker=\"true\"")
+    expect(markup).toContain("data-list-marker-node-id=\"p1\"")
+    expect(markup).toContain("data-list-marker-level=\"0\"")
+    expect(markup).toContain("x=\"10\"")
+    expect(markup).toContain(">1.</text>")
+    expect(markup).toContain(">List body</text>")
+  })
+
   it("keeps textarea text visible while visual lines are stale", () => {
     expect(inlineEditTextareaTextColor(false)).toBe("#1e40af")
     expect(inlineEditTextareaTextColor(true)).toBe("transparent")

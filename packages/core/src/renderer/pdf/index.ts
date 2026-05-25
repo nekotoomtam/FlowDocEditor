@@ -366,6 +366,35 @@ function drawDivider(pdfPage: PDFPage, fragment: PageFragment, pageHeight: numbe
   })
 }
 
+export interface PdfListMarkerDrawingPrimitive {
+  text: string
+  x: number
+  y: number
+  fontFamilyKey: string
+  fontVariant: FontVariantKey
+  fontSize: number
+  color: string
+}
+
+export function resolvePdfListMarkerDrawingPrimitive(
+  fragment: PageFragment,
+  pageHeight: number,
+): PdfListMarkerDrawingPrimitive | null {
+  if (fragment.nodeType !== "paragraph" || !fragment.listMarker || !fragment.renderProps) return null
+  const firstLine = fragment.lines?.[0]
+  if (!firstLine || fragment.listMarker.text.trim() === "") return null
+
+  return {
+    text: fragment.listMarker.text,
+    x: fragment.listMarker.markerX,
+    y: resolvePaginatedLinePdfBaselineY(firstLine, pageHeight),
+    fontFamilyKey: fragment.renderProps.fontFamilyKey,
+    fontVariant: resolveFontVariantKeyForStyle(fragment.renderProps.fontWeight, fragment.renderProps.fontStyle),
+    fontSize: firstLine.fontSize ?? fragment.renderProps.fontSize,
+    color: fragment.renderProps.textColor ?? "000000",
+  }
+}
+
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 
 export class PdfRenderer implements Renderer {
@@ -433,7 +462,10 @@ export class PdfRenderer implements Renderer {
 
         if (fragment.nodeType !== "paragraph" && fragment.nodeType !== "toc") continue
         if (!fragment.lines?.length || !fragment.renderProps) continue
-        if (fragment.nodeType === "paragraph") drawFragmentBox(pdfPage, fragment, page.height)
+        if (fragment.nodeType === "paragraph") {
+          drawFragmentBox(pdfPage, fragment, page.height)
+          await this.drawListMarker(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, pdfPage, fragment, page.height)
+        }
 
         const fontVariant = resolveFontVariantKeyForStyle(fragment.renderProps.fontWeight, fragment.renderProps.fontStyle)
         const defaultFontSize = fragment.renderProps.fontSize
@@ -484,6 +516,34 @@ export class PdfRenderer implements Renderer {
     } finally {
       if (shouldClip) popPdfClipBox(pdfPage)
     }
+  }
+
+  private async drawListMarker(
+    pdfDoc: PDFDocument,
+    fontCache: Map<string, PdfFontCacheEntry>,
+    zeroAdvanceGlyphIdsByFontName: Map<string, Set<number>>,
+    pdfPage: PDFPage,
+    fragment: PageFragment,
+    pageHeight: number,
+  ): Promise<void> {
+    const marker = resolvePdfListMarkerDrawingPrimitive(fragment, pageHeight)
+    if (!marker) return
+
+    const font = await this.resolveFont(
+      pdfDoc,
+      fontCache,
+      zeroAdvanceGlyphIdsByFontName,
+      marker.fontFamilyKey,
+      marker.fontVariant,
+      shouldPatchPdfZeroAdvanceGlyphWidthsForText(marker.text),
+    )
+    pdfPage.drawText(marker.text, {
+      x: marker.x,
+      y: marker.y,
+      size: marker.fontSize,
+      font,
+      color: hexToRgb(marker.color),
+    })
   }
 
   private async drawRichTextRuns(

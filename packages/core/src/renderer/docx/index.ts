@@ -20,6 +20,8 @@ import {
   VerticalAlignTable,
   CharacterSet,
   UnderlineType,
+  Tab,
+  TabStopType,
 } from "docx"
 import JSZip from "jszip"
 import type { PaginatedDocument, PageFragment, ResolvedBorderSide } from "../../pagination"
@@ -526,11 +528,54 @@ function buildTextRunsFromSlice(slice: DocxTextRunSlice): TextRun[] {
   }))
 }
 
+function buildListMarkerTextRuns(fragment: PageFragment, props: ParagraphRenderProps): TextRun[] {
+  const marker = fragment.listMarker
+  if (!marker) return []
+  const style = styleFromParagraphProps(props)
+  const bold = style.fontWeight === "bold" || undefined
+  const italics = style.fontStyle === "italic" || undefined
+  const color = style.textColor
+  const underline = style.textDecoration === "underline"
+    ? { type: UnderlineType.SINGLE, color }
+    : undefined
+  return [new TextRun({
+    children: [marker.text, new Tab()],
+    size: ptToHalfPoints(style.fontSize),
+    font: resolveDocxFontName(style.fontFamilyKey),
+    bold,
+    boldComplexScript: bold,
+    italics,
+    italicsComplexScript: italics,
+    underline,
+    strike: style.strikethrough || undefined,
+    color,
+  })]
+}
+
 function buildTextRuns(slices: DocxTextRunSlice[], props: ParagraphRenderProps): TextRun[] {
   const content = slices.length > 0
     ? slices
     : [{ text: "", style: styleFromParagraphProps(props) }]
   return content.flatMap(buildTextRunsFromSlice)
+}
+
+function buildParagraphIndent(fragment: PageFragment, props: ParagraphRenderProps) {
+  const marker = fragment.listMarker
+  if (!marker) {
+    return {
+      left: ptToTwips(props.indentLeft),
+      right: ptToTwips(props.indentRight),
+      firstLine: ptToTwips(props.textIndent),
+    }
+  }
+
+  const markerToBodyDelta = marker.textIndent - marker.markerIndent
+  return {
+    left: ptToTwips(marker.textIndent),
+    right: ptToTwips(props.indentRight),
+    hanging: markerToBodyDelta >= 0 ? ptToTwips(markerToBodyDelta) : undefined,
+    firstLine: markerToBodyDelta < 0 ? ptToTwips(-markerToBodyDelta) : undefined,
+  }
 }
 
 function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxRenderContext = EMPTY_RENDER_CONTEXT): Paragraph | null {
@@ -539,8 +584,9 @@ function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxR
   if (!firstFragment?.renderProps) return null
   const props = firstFragment.renderProps
   const textRuns = buildParagraphTextRunSlices(paragraphFragments, context, props)
+  const listMarkerRuns = buildListMarkerTextRuns(firstFragment, props)
   const text = textRuns.map((run) => run.text).join("")
-  if (!text && !props.box) return null
+  if (!text && listMarkerRuns.length === 0 && !props.box) return null
   const boxFragment: PageFragment = {
     ...firstFragment,
     continuesFrom: firstFragment.continuesFrom,
@@ -549,7 +595,7 @@ function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxR
 
   return new Paragraph({
     includeIfEmpty: Boolean(props.box),
-    children: buildTextRuns(textRuns, props),
+    children: [...listMarkerRuns, ...buildTextRuns(textRuns, props)],
     alignment: ALIGNMENT[props.align] as any,
     spacing: {
       before: ptToTwips(props.spacingBefore),
@@ -557,11 +603,10 @@ function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxR
       line: ptToTwips(props.lineHeight),
       lineRule: "exact" as const,
     },
-    indent: {
-      left: ptToTwips(props.indentLeft),
-      right: ptToTwips(props.indentRight),
-      firstLine: ptToTwips(props.textIndent),
-    },
+    indent: buildParagraphIndent(firstFragment, props),
+    tabStops: firstFragment.listMarker
+      ? [{ type: TabStopType.LEFT, position: ptToTwips(firstFragment.listMarker.textIndent) }]
+      : undefined,
     border: buildParagraphBorders(boxFragment),
     shading: buildParagraphShading(boxFragment),
   })

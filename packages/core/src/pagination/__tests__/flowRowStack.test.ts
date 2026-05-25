@@ -3,7 +3,7 @@ import { paginateDocument } from "../index"
 import { assertPaginatedDocument } from "../assertPaginated"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { pt } from "../../schema"
-import type { DocumentNode, LayoutNode, PageSettings, ParagraphNode } from "../../schema"
+import type { DocumentNode, LayoutNode, ListStyleDefinition, PageSettings, ParagraphNode } from "../../schema"
 import type { PageFragment } from "../types"
 
 const CX = 72
@@ -50,6 +50,25 @@ function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>, page
           ...nodes,
         },
       }],
+    },
+  }
+}
+
+const TOR_LIST_STYLE: ListStyleDefinition = {
+  id: "tor-clause",
+  levels: [
+    { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
+    { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+  ],
+}
+
+function withListDefinitions(doc: DocumentNode): DocumentNode {
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      listStyles: { "tor-clause": TOR_LIST_STYLE },
+      listInstances: { "tor-main": { id: "tor-main", styleId: "tor-clause" } },
     },
   }
 }
@@ -104,6 +123,47 @@ describe("flow-row / flow-stack pagination", () => {
     expect(fragments.some((f) => f.nodeId === "fr1" && f.nodeType === "flow-row")).toBe(true)
     expect(fragments.some((f) => f.nodeId === "fs1" && f.nodeType === "flow-stack" && f.parentNodeId === "fr1")).toBe(true)
     expect(fragments.some((f) => f.nodeId === "p1" && f.nodeType === "paragraph" && f.parentNodeId === "fs1")).toBe(true)
+  })
+
+  it("emits generated list marker metadata for flow-stack paragraphs", () => {
+    const p1 = makePara("p1", "Flow list item")
+    p1.props.list = { instanceId: "tor-main", level: 0, itemId: "flow-list-item" }
+    const fragments = allFragments(withListDefinitions(makeDoc(["fr1"], {
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1,
+    })))
+
+    const paragraph = fragments.find((fragment) => fragment.nodeId === "p1" && fragment.nodeType === "paragraph")!
+    expect(paragraph.listMarker).toMatchObject({
+      text: "1.",
+      markerX: paragraph.x,
+      bodyX: paragraph.x + 18,
+    })
+    expect(paragraph.lines?.map((line) => line.text)).toEqual(["Flow list item"])
+    expect(paragraph.lines?.[0]?.x).toBeCloseTo(paragraph.x + 18, 2)
+  })
+
+  it("keeps flow-row list markers only on the first split paragraph fragment", () => {
+    const lines = Array.from({ length: 150 }, (_, index) => `flow-list-${index}`)
+    const p1 = makePara("p1", lines.join("\n"))
+    p1.props.list = { instanceId: "tor-main", level: 0, itemId: "long-flow-list-item" }
+    const result = paginate(withListDefinitions(makeDoc(["fr1"], {
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1,
+    })))
+
+    const fragments = result.sections[0].pages
+      .flatMap((page) => page.fragments)
+      .filter((fragment) => fragment.nodeId === "p1" && fragment.nodeType === "paragraph")
+    expect(fragments.length).toBeGreaterThan(1)
+    expect(fragments[0].listMarker?.text).toBe("1.")
+    expect(fragments.slice(1).every((fragment) => fragment.listMarker == null)).toBe(true)
+    expect(paragraphLineTexts(fragments, "p1")).toEqual(lines)
+    expect(fragments.every((fragment) =>
+      fragment.lines?.every((line) => line.x >= fragment.x + 18 - 0.01) ?? true
+    )).toBe(true)
   })
 
   it("carries flow-stack box render props and insets child paragraph geometry", () => {

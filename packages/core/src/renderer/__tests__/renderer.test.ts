@@ -4,14 +4,14 @@ import { fileURLToPath } from "node:url"
 import { inflateSync } from "node:zlib"
 import JSZip from "jszip"
 import { LineCapStyle, PDFArray, PDFDict, PDFDocument as PdfLibDocument, PDFName, PDFNumber } from "pdf-lib"
-import { PdfRenderer, resolveFragmentBoxDrawingPrimitives, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions } from "../pdf"
+import { PdfRenderer, resolveFragmentBoxDrawingPrimitives, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions, resolvePdfListMarkerDrawingPrimitive } from "../pdf"
 import { DocxRenderer } from "../docx"
-import { paginateDocument, type PageFragment } from "../../pagination"
+import { paginateDocument, resolvePaginatedLinePdfBaselineY, type PageFragment } from "../../pagination"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { ptToTwips } from "../shared"
 import type { FontProvider } from "../shared"
 import { pt } from "../../schema"
-import type { DividerNode, DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, PageBreakNode, ParagraphNode, SpacerNode } from "../../schema"
+import type { DividerNode, DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ListStyleDefinition, PageBreakNode, ParagraphNode, SpacerNode } from "../../schema"
 
 // ─── Document Helpers ─────────────────────────────────────────────────────────
 
@@ -89,6 +89,25 @@ function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): Doc
           ...nodes,
         },
       }],
+    },
+  }
+}
+
+const TOR_LIST_STYLE: ListStyleDefinition = {
+  id: "tor-clause",
+  levels: [
+    { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
+    { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+  ],
+}
+
+function withListDefinitions(doc: DocumentNode): DocumentNode {
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      listStyles: { "tor-clause": TOR_LIST_STYLE },
+      listInstances: { "tor-main": { id: "tor-main", styleId: "tor-clause" } },
     },
   }
 }
@@ -411,6 +430,40 @@ describe("PdfRenderer smoke tests", () => {
 
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
     expect(requests).toContainEqual({ key: "sarabun", variant: "boldItalic" })
+  })
+
+  it("resolves PDF list marker drawing geometry from generated marker metadata", () => {
+    const p = makePara("p1", "PDF list body", {
+      fontFamilyKey: "sarabun",
+      fontSize: pt(14),
+      fontWeight: "bold",
+      textColor: "2563EB",
+      list: { instanceId: "tor-main", level: 1, itemId: "pdf-list-item" },
+    })
+    const paginated = paginate(withListDefinitions(makeDoc(["p1"], { p1: p })))
+    const page = paginated.sections[0].pages[0]
+    const fragment = page.fragments.find((candidate) => candidate.nodeId === "p1")!
+    const firstLine = fragment.lines![0]
+
+    expect(resolvePdfListMarkerDrawingPrimitive(fragment, page.height)).toEqual({
+      text: "1.1",
+      x: fragment.listMarker!.markerX,
+      y: resolvePaginatedLinePdfBaselineY(firstLine, page.height),
+      fontFamilyKey: "sarabun",
+      fontVariant: "bold",
+      fontSize: 14,
+      color: "2563EB",
+    })
+  })
+
+  it("draws generated list markers as separate PDF text operations", async () => {
+    const p = makePara("p1", "PDF_LIST_BODY", {
+      list: { instanceId: "tor-main", level: 0, itemId: "pdf-list-item" },
+    })
+    const result = await pdf.render(paginate(withListDefinitions(makeDoc(["p1"], { p1: p }))))
+    const contentStreams = collectInflatedPdfStreams(result.buffer).join("\n")
+
+    expect(contentStreams.match(/\bBT\b/g)?.length ?? 0).toBe(2)
   })
 
   it("keeps shaped Thai tone-mark glyphs zero-width in embedded PDF fonts", async () => {
@@ -1020,6 +1073,22 @@ describe("DocxRenderer smoke tests", () => {
     // DOCX is a ZIP — starts with PK magic bytes (0x50 0x4B)
     expect(result.buffer[0]).toBe(0x50)
     expect(result.buffer[1]).toBe(0x4b)
+  })
+
+  it("exports generated list markers without mutating paragraph text", async () => {
+    const p = makePara("p1", "DOCX_LIST_BODY", {
+      list: { instanceId: "tor-main", level: 0, itemId: "docx-list-item" },
+    })
+    const result = await docx.render(paginate(withListDefinitions(makeDoc(["p1"], { p1: p }))))
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+    const paragraphs = docxParagraphsContaining(xml, "DOCX_LIST_BODY")
+    const runs = docxTextRuns(paragraphs[0])
+
+    expect(runs[0].text).toBe("1.")
+    expect(runs.some((run) => run.text.includes("DOCX_LIST_BODY"))).toBe(true)
+    expect(paragraphs[0]).toContain('w:left="360"')
+    expect(paragraphs[0]).toContain('w:hanging="360"')
+    expect(paragraphs[0]).toContain("<w:tab/>")
   })
 
   it("emits divider borders and hard page breaks in DOCX", async () => {

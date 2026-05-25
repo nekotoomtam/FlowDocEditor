@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { UnitValueSchema } from "./units"
 import { InlineNodeSchema } from "./inline"
+import { ParagraphListPropsSchema } from "./list"
 import { BorderStyleSchema, FlowTableNodeSchema } from "./table"
 
 // ─── Alignment ───────────────────────────────────────────────────────────────
@@ -91,6 +92,7 @@ export const ParagraphPropsSchema = z.object({
   indentRight: UnitValueSchema,
   headingLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   keepWithNext: z.boolean().optional(),  // keep this paragraph on the same page as the next sibling
+  list: ParagraphListPropsSchema.optional(),
   box: ParagraphBoxStyleSchema.optional(),
 })
 

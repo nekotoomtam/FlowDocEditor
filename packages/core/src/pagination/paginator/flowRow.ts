@@ -2,6 +2,7 @@ import {
   defaultWordBreaker,
   measureDivider,
   measureParagraph,
+  paragraphBoxLeftInset,
   paragraphBoxBottomInset,
   paragraphBoxTopInset,
   resolveParagraphBoxStyle,
@@ -30,10 +31,24 @@ import {
   paragraphLineTopOffset,
   resolvePageNumbers,
 } from "./paragraph"
+import { toListMarkerRenderProps, withListBodyIndent, type ListNumberingPaginationContext } from "./listMarker"
 
 interface FlowSplitPoint {
   childIdx: number
   lineIdx: number
+}
+
+function measureFlowParagraph(
+  node: ParagraphNode,
+  child: FlowBox,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  listNumbering?: ListNumberingPaginationContext,
+) {
+  const resolvedListMarker = listNumbering?.markers.get(node.id)
+  const layoutNode = withListBodyIndent(node, resolvedListMarker, listNumbering)
+  const measured = measureParagraph(layoutNode, child.width, measurer, wordBreaker)
+  return { measured, layoutNode, resolvedListMarker }
 }
 
 function endFlowSplitPoint(stackBox: FlowBox, to: FlowSplitPoint | null): FlowSplitPoint {
@@ -99,6 +114,7 @@ function flowStackHasRemainingContent(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   from: FlowSplitPoint,
+  listNumbering?: ListNumberingPaginationContext,
 ): boolean {
   for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
     const child = stackBox.children[ci]
@@ -109,7 +125,7 @@ function flowStackHasRemainingContent(
     const node = section.nodes[child.nodeId]
     if (node?.type !== "paragraph") continue
     const lineStart = ci === from.childIdx ? from.lineIdx : 0
-    const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+    const { measured } = measureFlowParagraph(node, child, measurer, wordBreaker, listNumbering)
     if (lineStart < measured.lines.length) return true
   }
 
@@ -122,6 +138,7 @@ function forceOneFlowUnitProgress(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   from: FlowSplitPoint,
+  listNumbering?: ListNumberingPaginationContext,
 ): FlowSplitPoint | null {
   for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
     const child = stackBox.children[ci]
@@ -132,7 +149,7 @@ function forceOneFlowUnitProgress(
     const node = section.nodes[child.nodeId]
     if (node?.type !== "paragraph") continue
     const lineStart = ci === from.childIdx ? from.lineIdx : 0
-    const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+    const { measured } = measureFlowParagraph(node, child, measurer, wordBreaker, listNumbering)
     if (lineStart < measured.lines.length) return { childIdx: ci, lineIdx: lineStart + 1 }
   }
 
@@ -146,8 +163,9 @@ function flowParagraphSliceHeight(
   wordBreaker: WordBreaker,
   lineStart: number,
   lineEnd?: number,
+  listNumbering?: ListNumberingPaginationContext,
 ): number {
-  const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+  const { measured } = measureFlowParagraph(node, child, measurer, wordBreaker, listNumbering)
   const resolvedLineEnd = lineEnd ?? measured.lines.length
   const lines = measured.lines.slice(lineStart, resolvedLineEnd)
   if (lines.length === 0) return 0
@@ -161,6 +179,7 @@ function flowStackSliceHeight(
   wordBreaker: WordBreaker,
   from: FlowSplitPoint,
   to: FlowSplitPoint | null,
+  listNumbering?: ListNumberingPaginationContext,
 ): number {
   let height = flowStackSliceTopInset(section, stackBox, from)
   for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
@@ -177,7 +196,7 @@ function flowStackSliceHeight(
       if (node?.type !== "paragraph") { if (isAtTo) break; continue }
       const lineStart = ci === from.childIdx ? from.lineIdx : 0
       const lineEnd = isAtTo ? to.lineIdx : undefined
-      height += flowParagraphSliceHeight(node, child, measurer, wordBreaker, lineStart, lineEnd)
+      height += flowParagraphSliceHeight(node, child, measurer, wordBreaker, lineStart, lineEnd, listNumbering)
     }
 
     if (isAtTo) break
@@ -193,6 +212,7 @@ function computeFlowStackSplitPointFrom(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   from: FlowSplitPoint,
+  listNumbering?: ListNumberingPaginationContext,
 ): FlowSplitPoint | null {
   let heightUsed = flowStackSliceTopInset(section, stackBox, from)
   const bottomInset = paragraphBoxBottomInset(flowStackMeasuredBox(section, stackBox))
@@ -209,9 +229,9 @@ function computeFlowStackSplitPointFrom(
     } else if (child.nodeType === "paragraph") {
       const node = section.nodes[child.nodeId]
       if (node?.type !== "paragraph") continue
-      const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+      const { measured } = measureFlowParagraph(node, child, measurer, wordBreaker, listNumbering)
       const lineStart = ci === from.childIdx ? from.lineIdx : 0
-      const remainingHeight = flowParagraphSliceHeight(node, child, measurer, wordBreaker, lineStart)
+      const remainingHeight = flowParagraphSliceHeight(node, child, measurer, wordBreaker, lineStart, undefined, listNumbering)
       const trailingInset = isLastStackChild ? bottomInset : 0
 
       if (heightUsed + remainingHeight + trailingInset <= availH) {
@@ -248,6 +268,7 @@ function buildFlowStackSliceFragments(
   wordBreaker: WordBreaker,
   pageNumberOffset: number,
   paragraphFragmentIndexes: Map<string, number>,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFragment[] {
   const fragments: PageFragment[] = []
   let curY = stackPageY + flowStackSliceTopInset(section, stackBox, from)
@@ -304,7 +325,7 @@ function buildFlowStackSliceFragments(
       const node = section.nodes[child.nodeId]
       if (node?.type !== "paragraph") { if (isAtTo) break; continue }
 
-      const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+      const { measured, layoutNode, resolvedListMarker } = measureFlowParagraph(node, child, measurer, wordBreaker, listNumbering)
       const lineStart = ci === from.childIdx ? from.lineIdx : 0
       const lineEnd = isAtTo ? to.lineIdx : undefined
       const lines = lineEnd !== undefined
@@ -317,6 +338,8 @@ function buildFlowStackSliceFragments(
         const paraH = paragraphFragmentHeight(measured, lines, lineStart, resolvedLineEnd)
         const fragmentIndex = paragraphFragmentIndexes.get(child.nodeId) ?? 0
         paragraphFragmentIndexes.set(child.nodeId, fragmentIndex + 1)
+        const paragraphContentX = child.x + paragraphBoxLeftInset(measured.box)
+        const listMarker = toListMarkerRenderProps(resolvedListMarker, listNumbering, paragraphContentX)
         fragments.push({
           nodeId: child.nodeId,
           nodeType: "paragraph",
@@ -327,10 +350,11 @@ function buildFlowStackSliceFragments(
           width: child.width,
           height: paraH,
           lines: resolvePageNumbers(
-            buildPositionedParagraphLines(measured, lines, child.x, curY, lineStart, node.props.align, isLastLines),
+            buildPositionedParagraphLines(measured, lines, child.x, curY, lineStart, layoutNode.props.align, isLastLines),
             pageIndex + 1 + pageNumberOffset,
           ),
-          renderProps: buildRenderProps(node, measured.lineHeight, measured.box),
+          renderProps: buildRenderProps(layoutNode, measured.lineHeight, measured.box),
+          listMarker: lineStart === 0 ? listMarker : undefined,
           fragmentIndex,
           lineStart,
           lineEnd: resolvedLineEnd,
@@ -358,6 +382,7 @@ export function paginateFlowRow(
   cursor: PageFlowCursor,
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   const fromSplits = new Map<string, FlowSplitPoint>()
   for (const stackBox of box.children) fromSplits.set(stackBox.nodeId, { childIdx: 0, lineIdx: 0 })
@@ -371,7 +396,7 @@ export function paginateFlowRow(
   const firstSliceMinHeight = rowNode?.type === "flow-row" ? rowNode.props.minHeight ?? 0 : 0
 
   const hasRemaining = (): boolean => box.children.some((stackBox) =>
-    flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, fromSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }),
+    flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, fromSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }, listNumbering),
   )
 
   if (!hasRemaining() && box.children.length > 0) {
@@ -433,7 +458,7 @@ export function paginateFlowRow(
     }
 
     const activeStacks = box.children.filter((stackBox) =>
-      flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, fromSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }),
+      flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, fromSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }, listNumbering),
     )
     const toSplits = new Map<string, FlowSplitPoint | null>()
     let hasContentProgress = false
@@ -449,12 +474,12 @@ export function paginateFlowRow(
 
     for (const stackBox of activeStacks) {
       const from = fromSplits.get(stackBox.nodeId)!
-      const to = computeFlowStackSplitPointFrom(stackBox, section, Math.max(0, availH), measurer, wordBreaker, from)
+      const to = computeFlowStackSplitPointFrom(stackBox, section, Math.max(0, availH), measurer, wordBreaker, from, listNumbering)
       toSplits.set(stackBox.nodeId, to)
       if (flowSplitPointProgressed(from, to, stackBox)) {
         hasContentProgress = true
       }
-      rowSliceHeight = Math.max(rowSliceHeight, flowStackSliceHeight(stackBox, section, measurer, wordBreaker, from, to))
+      rowSliceHeight = Math.max(rowSliceHeight, flowStackSliceHeight(stackBox, section, measurer, wordBreaker, from, to, listNumbering))
     }
 
     if (!hasContentProgress) {
@@ -473,12 +498,13 @@ export function paginateFlowRow(
           measurer,
           wordBreaker,
           fromSplits.get(forcedStack.nodeId)!,
+          listNumbering,
         )
         if (forcedSplit) {
           toSplits.set(forcedStack.nodeId, forcedSplit)
           rowSliceHeight = Math.max(
             rowSliceHeight,
-            flowStackSliceHeight(forcedStack, section, measurer, wordBreaker, fromSplits.get(forcedStack.nodeId)!, forcedSplit),
+            flowStackSliceHeight(forcedStack, section, measurer, wordBreaker, fromSplits.get(forcedStack.nodeId)!, forcedSplit, listNumbering),
           )
           const warning: PageFragmentWarning = {
             code: "forced-flow-row-split-overflow",
@@ -498,7 +524,7 @@ export function paginateFlowRow(
       nextSplits.set(stackBox.nodeId, endFlowSplitPoint(stackBox, to))
     }
     const continuesAfter = box.children.some((stackBox) =>
-      flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, nextSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }),
+      flowStackHasRemainingContent(stackBox, section, measurer, wordBreaker, nextSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 }, listNumbering),
     )
 
     pushFragment(pages, template, {
@@ -526,6 +552,7 @@ export function paginateFlowRow(
         measurer,
         wordBreaker,
         nextSplits.get(stackBox.nodeId) ?? { childIdx: 0, lineIdx: 0 },
+        listNumbering,
       )
       stackFragmentIndexes.set(stackBox.nodeId, stackFragmentIndex + 1)
 
@@ -559,6 +586,7 @@ export function paginateFlowRow(
         wordBreaker,
         current.pageNumberOffset,
         paragraphFragmentIndexes,
+        listNumbering,
       ))
     }
 

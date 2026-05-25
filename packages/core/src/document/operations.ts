@@ -7,16 +7,19 @@ import type {
   FlowStackNode,
   InlineNode,
   LayoutNode,
+  ListInstance,
+  ListStyleDefinition,
   ParagraphBoxBorder,
   ParagraphBoxBorderSide,
   ParagraphBoxPadding,
   ParagraphBoxStyle,
+  ParagraphListProps,
   ParagraphNode,
   PageSettings,
   TextRun,
   UnitValue,
 } from "../schema"
-import { pt } from "../schema"
+import { MAX_LIST_LEVEL, pt } from "../schema"
 import { toAbstractUnit } from "../layout"
 import { getPageDimensions, getPageMetrics } from "../pagination/metrics"
 import type { DragSource, PlacementOperation } from "../placement/types"
@@ -100,6 +103,13 @@ export type FlowTableCellMergeDirection = "left" | "right" | "up" | "down"
 export interface FlowTableCellMergeTarget {
   cellId: string
   changes: FlowTableCellSpanChanges
+}
+
+export interface ParagraphListAssignment {
+  instanceId: string
+  level?: number
+  itemId?: string
+  startAt?: number | null
 }
 
 const MIN_TABLE_COLUMN_RESIZE_WIDTH_PT = 24
@@ -779,6 +789,182 @@ function cloneFlowTableNode(table: FlowTableNode, id = createId("flow-table")): 
     rowIds: table.rowIds.map(mapId),
     nodes,
   }
+}
+
+// ─── List Numbering Operations ───────────────────────────────────────────────
+
+function clampListLevel(level: number): number {
+  if (!Number.isFinite(level)) return 0
+  return Math.max(0, Math.min(MAX_LIST_LEVEL, Math.trunc(level)))
+}
+
+function normalizeStartAt(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+function sameParagraphListProps(
+  a: ParagraphListProps | undefined,
+  b: ParagraphListProps,
+): boolean {
+  return a?.instanceId === b.instanceId &&
+    a.level === b.level &&
+    a.itemId === b.itemId &&
+    a.startAt === b.startAt
+}
+
+function updateParagraphNodeById(
+  doc: DocumentNode,
+  paragraphId: string,
+  update: (node: ParagraphNode) => ParagraphNode | null,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[paragraphId]
+    if (node?.type === "paragraph") {
+      const updated = update(node)
+      if (!updated) return doc
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [paragraphId]: updated as LayoutNode } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
+      const inner = table.nodes[paragraphId]
+      if (inner?.type !== "paragraph") continue
+      const updated = update(inner as ParagraphNode)
+      if (!updated) return doc
+      const newTable = { ...table, nodes: { ...table.nodes, [paragraphId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
+function updateParagraphNodesById(
+  doc: DocumentNode,
+  paragraphIds: string | string[],
+  update: (node: ParagraphNode) => ParagraphNode | null,
+): DocumentNode {
+  const ids = Array.isArray(paragraphIds) ? paragraphIds : [paragraphIds]
+  return ids.reduce((current, paragraphId) => updateParagraphNodeById(current, paragraphId, update), doc)
+}
+
+function findParagraphListProps(doc: DocumentNode, paragraphId: string): ParagraphListProps | null {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[paragraphId]
+    if (node?.type === "paragraph") return node.props.list ?? null
+    for (const n of Object.values(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const inner = (n as unknown as FlowTableNode).nodes[paragraphId]
+      if (inner?.type === "paragraph") return (inner as ParagraphNode).props.list ?? null
+    }
+  }
+  return null
+}
+
+export function upsertListStyleDefinition(doc: DocumentNode, style: ListStyleDefinition): DocumentNode {
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      listStyles: {
+        ...(doc.document.listStyles ?? {}),
+        [style.id]: clonePlainData(style),
+      },
+    },
+  }
+}
+
+export function upsertListInstance(doc: DocumentNode, instance: ListInstance): DocumentNode {
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      listInstances: {
+        ...(doc.document.listInstances ?? {}),
+        [instance.id]: clonePlainData(instance),
+      },
+    },
+  }
+}
+
+export function applyParagraphList(
+  doc: DocumentNode,
+  paragraphIds: string | string[],
+  assignment: ParagraphListAssignment,
+): DocumentNode {
+  if (assignment.instanceId.length === 0) return doc
+  return updateParagraphNodesById(doc, paragraphIds, (node) => {
+    const current = node.props.list
+    const startAt = Object.prototype.hasOwnProperty.call(assignment, "startAt")
+      ? normalizeStartAt(assignment.startAt)
+      : current?.startAt
+    const nextList: ParagraphListProps = {
+      instanceId: assignment.instanceId,
+      level: clampListLevel(assignment.level ?? current?.level ?? 0),
+      itemId: assignment.itemId && assignment.itemId.length > 0 ? assignment.itemId : current?.itemId ?? node.id,
+      ...(startAt ? { startAt } : {}),
+    }
+    if (sameParagraphListProps(current, nextList)) return null
+    return { ...node, props: { ...node.props, list: nextList } }
+  })
+}
+
+export function clearParagraphList(doc: DocumentNode, paragraphIds: string | string[]): DocumentNode {
+  return updateParagraphNodesById(doc, paragraphIds, (node) => {
+    if (!node.props.list) return null
+    const { list: _list, ...props } = node.props
+    return { ...node, props }
+  })
+}
+
+export function changeParagraphListLevel(doc: DocumentNode, paragraphId: string, level: number): DocumentNode {
+  return updateParagraphNodeById(doc, paragraphId, (node) => {
+    const current = node.props.list
+    if (!current) return null
+    const nextList = { ...current, level: clampListLevel(level) }
+    if (sameParagraphListProps(current, nextList)) return null
+    return { ...node, props: { ...node.props, list: nextList } }
+  })
+}
+
+export function indentListItem(doc: DocumentNode, paragraphId: string): DocumentNode {
+  const current = findParagraphListProps(doc, paragraphId)
+  if (!current) return doc
+  return changeParagraphListLevel(doc, paragraphId, current.level + 1)
+}
+
+export function outdentListItem(doc: DocumentNode, paragraphId: string): DocumentNode {
+  const current = findParagraphListProps(doc, paragraphId)
+  if (!current) return doc
+  return changeParagraphListLevel(doc, paragraphId, current.level - 1)
+}
+
+export function restartParagraphListAt(
+  doc: DocumentNode,
+  paragraphId: string,
+  startAt: number | null,
+): DocumentNode {
+  return updateParagraphNodeById(doc, paragraphId, (node) => {
+    const current = node.props.list
+    if (!current) return null
+    const normalizedStartAt = normalizeStartAt(startAt)
+    const nextList: ParagraphListProps = {
+      instanceId: current.instanceId,
+      level: current.level,
+      itemId: current.itemId,
+      ...(normalizedStartAt ? { startAt: normalizedStartAt } : {}),
+    }
+    if (sameParagraphListProps(current, nextList)) return null
+    return { ...node, props: { ...node.props, list: nextList } }
+  })
 }
 
 function cloneLayoutSubtree(nodes: Nodes, rootId: string): { rootId: string; nodes: Nodes } | null {

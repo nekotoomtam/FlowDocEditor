@@ -129,6 +129,88 @@ describe("normalizeDocument", () => {
     expect(paragraph.props.keepWithNext).toBe(true)
   })
 
+  it("normalizes paragraph list metadata and falls back itemId to the paragraph id", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "Listed"),
+        props: {
+          ...paragraph("p1", "Listed").props,
+          list: {
+            instanceId: "tor-main",
+            level: 2,
+            startAt: 3,
+          },
+        },
+      } as unknown as ParagraphNode,
+    }, ["p1"])
+
+    const normalized = normalizeDocument(doc).document.sections[0].nodes.p1
+    expect(normalized.type).toBe("paragraph")
+    if (normalized.type !== "paragraph") return
+    expect(normalized.props.list).toEqual({
+      instanceId: "tor-main",
+      level: 2,
+      itemId: "p1",
+      startAt: 3,
+    })
+  })
+
+  it("drops malformed paragraph list metadata", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "Unsafe list"),
+        props: {
+          ...paragraph("p1", "Unsafe list").props,
+          list: {
+            instanceId: "",
+            level: 8,
+            itemId: "bad",
+          },
+        },
+      } as unknown as ParagraphNode,
+    }, ["p1"])
+
+    const normalized = normalizeDocument(doc).document.sections[0].nodes.p1
+    expect(normalized.type).toBe("paragraph")
+    if (normalized.type !== "paragraph") return
+    expect(normalized.props.list).toBeUndefined()
+  })
+
+  it("normalizes paragraph list metadata inside flow-table cells", () => {
+    const p1 = {
+      ...paragraph("p1", "Cell listed"),
+      props: {
+        ...paragraph("p1", "Cell listed").props,
+        list: {
+          instanceId: "tor-main",
+          level: 1,
+        },
+      },
+    } as unknown as ParagraphNode
+    const cell: FlowTableCellNode = { id: "c1", type: "flow-table-cell", props: {}, childIds: [p1.id] }
+    const row: FlowTableRowNode = { id: "r1", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+    const table: FlowTableNode = {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }],
+      rowIds: [row.id],
+      nodes: { [row.id]: row, [cell.id]: cell, [p1.id]: p1 },
+    }
+
+    const normalized = normalizeDocument(makeDoc({ [table.id]: table as unknown as LayoutNode }, [table.id]))
+    const normalizedTable = normalized.document.sections[0].nodes.ft1 as unknown as FlowTableNode
+    const normalizedParagraph = normalizedTable.nodes.p1
+
+    expect(normalizedParagraph.type).toBe("paragraph")
+    if (normalizedParagraph.type !== "paragraph") return
+    expect(normalizedParagraph.props.list).toEqual({
+      instanceId: "tor-main",
+      level: 1,
+      itemId: "p1",
+    })
+  })
+
   it("normalizes paragraph-level font style props", () => {
     const doc = makeDoc({
       p1: {

@@ -5,6 +5,7 @@ import type {
   FlowTableNode,
   FlowTableRowNode,
   LayoutNode,
+  ListStyleDefinition,
   ParagraphNode,
 } from "../schema"
 import { mm, pt } from "../schema"
@@ -15,6 +16,7 @@ import {
   applyTextRunStyleRange,
   applyParagraphTextStyle,
   applyPlacementOperation,
+  applyParagraphList,
   addFlowTableColumn,
   addFlowTableRow,
   addFlowStackColumn,
@@ -24,6 +26,7 @@ import {
   canDisableSectionReservedZone,
   clampSectionReservedZones,
   DEFAULT_HEADER_FOOTER_RESERVED_PT,
+  clearParagraphList,
   deleteTextRunRange,
   deleteNode,
   disableSectionReservedZoneIfEmpty,
@@ -31,12 +34,14 @@ import {
   ensureReservedZoneRoots,
   ensureSectionReservedZoneVisibleForAuthoring,
   fitFlowTableToSectionWidth,
+  indentListItem,
   isPlainTextParagraph,
   mergeParagraphWithPrevious,
   mergeTextRunParagraphWithPrevious,
   MAX_HEADER_FOOTER_RESERVED_RATIO,
   MIN_BODY_CONTENT_HEIGHT_RATIO,
   MIN_HEADER_FOOTER_RESERVED_PT,
+  outdentListItem,
   removeFlowTableColumn,
   removeFlowTableRow,
   replaceTextRunParagraphText,
@@ -44,6 +49,7 @@ import {
   replaceTextRunRange,
   resolveTextRunParagraphTextReplacement,
   reorderBodyChild,
+  restartParagraphListAt,
   resizeFlowTableColumnPair,
   resolveFlowTableCellMergeTarget,
   splitParagraphAtIndex,
@@ -55,6 +61,8 @@ import {
   updateParagraphText,
   updateSectionHeaderFooterHorizontalMode,
   updateSectionReservedZones,
+  upsertListInstance,
+  upsertListStyleDefinition,
 } from "./operations"
 
 function makeParagraph(id: string, children: ParagraphNode["children"]): ParagraphNode {
@@ -203,6 +211,19 @@ function flowTableWidth(table: FlowTableNode): number {
 
 function paragraphText(node: ParagraphNode): string {
   return node.children.filter((child) => child.type === "text").map((child) => child.text).join("")
+}
+
+function getParagraph(doc: DocumentNode, paragraphId: string): ParagraphNode {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[paragraphId]
+    if (node?.type === "paragraph") return node
+    for (const candidate of Object.values(section.nodes)) {
+      if (candidate.type !== "flow-table") continue
+      const inner = (candidate as unknown as FlowTableNode).nodes[paragraphId]
+      if (inner?.type === "paragraph") return inner as ParagraphNode
+    }
+  }
+  throw new Error(`Missing paragraph ${paragraphId}`)
 }
 
 function textRunSummary(node: ParagraphNode) {
@@ -434,6 +455,96 @@ describe("body child reorder operations", () => {
     expect(reorderBodyChild(doc, "section", "nested", "p1", "before")).toBe(doc)
     expect(reorderBodyChild(doc, "missing-section", "row", "p1", "before")).toBe(doc)
     expect(reorderBodyChild(doc, "section", "row", "missing-target", "after")).toBe(doc)
+  })
+})
+
+describe("paragraph list operations", () => {
+  const torListStyle: ListStyleDefinition = {
+    id: "tor-clause",
+    levels: Array.from({ length: 8 }, (_, level) => ({
+      level,
+      format: "decimal",
+      pattern: Array.from({ length: level + 1 }, (_value, index) => `%${index + 1}`).join(".") + (level === 0 ? "." : ""),
+      startAt: 1,
+      markerIndent: pt(level * 18),
+      textIndent: pt((level + 1) * 18),
+    })),
+  }
+
+  function withTorListDefinitions(doc: DocumentNode): DocumentNode {
+    return upsertListInstance(
+      upsertListStyleDefinition(doc, torListStyle),
+      { id: "tor-main", styleId: "tor-clause" },
+    )
+  }
+
+  it("adds list definitions and applies list metadata without editing paragraph children", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Two" }])
+    const doc = withTorListDefinitions(makeDoc({ p1, p2 }, ["p1", "p2"]))
+
+    const result = applyParagraphList(doc, ["p1", "p2"], { instanceId: "tor-main", level: 1 })
+
+    expect(getParagraph(result, "p1").props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "p1" })
+    expect(getParagraph(result, "p2").props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "p2" })
+    expect(getParagraph(result, "p1").children).toEqual(p1.children)
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("applies list metadata to flow-table paragraphs through the same operation", () => {
+    const p = makeParagraph("cell-p", [{ id: "cell-t", type: "text", text: "Cell item" }])
+    const doc = withTorListDefinitions(makeFlowTableDoc(p))
+
+    const result = applyParagraphList(doc, "cell-p", { instanceId: "tor-main", level: 0, itemId: "cell-item" })
+
+    expect(getParagraph(result, "cell-p").props.list).toEqual({
+      instanceId: "tor-main",
+      level: 0,
+      itemId: "cell-item",
+    })
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("indents, outdents, and clamps list levels to the supported range", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", level: 7 })
+
+    doc = indentListItem(doc, "p1")
+    expect(getParagraph(doc, "p1").props.list?.level).toBe(7)
+
+    doc = outdentListItem(doc, "p1")
+    expect(getParagraph(doc, "p1").props.list?.level).toBe(6)
+
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", level: -5 })
+    expect(getParagraph(doc, "p1").props.list?.level).toBe(0)
+
+    doc = outdentListItem(doc, "p1")
+    expect(getParagraph(doc, "p1").props.list?.level).toBe(0)
+  })
+
+  it("sets and clears numbering restart metadata", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main" })
+
+    doc = restartParagraphListAt(doc, "p1", 3)
+    expect(getParagraph(doc, "p1").props.list?.startAt).toBe(3)
+
+    doc = restartParagraphListAt(doc, "p1", null)
+    expect(getParagraph(doc, "p1").props.list?.startAt).toBeUndefined()
+  })
+
+  it("clears list metadata without changing authored text", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", itemId: "one" })
+
+    const result = clearParagraphList(doc, "p1")
+
+    expect(getParagraph(result, "p1").props.list).toBeUndefined()
+    expect(getParagraph(result, "p1").children).toEqual(p.children)
+    expect(() => assertDocument(result)).not.toThrow()
   })
 })
 

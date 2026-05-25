@@ -20,12 +20,14 @@ import type {
   ParagraphProps,
   RowNode,
   PageNumberInline,
+  ParagraphListProps,
   SpacerNode,
   StackNode,
   TextRun,
   TextRunStyle,
   UnitValue,
 } from "../schema"
+import { MAX_LIST_LEVEL } from "../schema"
 import {
   DEFAULT_DIVIDER_PROPS,
   DEFAULT_PARAGRAPH_PROPS,
@@ -230,7 +232,24 @@ function normalizeParagraphBoxStyle(input: unknown): ParagraphBoxStyle | undefin
   return Object.keys(box).length > 0 ? box : undefined
 }
 
-function normalizeParagraphProps(input: unknown): ParagraphProps {
+function normalizeParagraphListProps(input: unknown, fallbackItemId: string): ParagraphListProps | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const instanceId = raw["instanceId"]
+  const itemId = raw["itemId"]
+  const level = raw["level"]
+  if (typeof instanceId !== "string" || instanceId.length === 0) return undefined
+  if (typeof level !== "number" || !Number.isInteger(level) || level < 0 || level > MAX_LIST_LEVEL) return undefined
+  const startAt = raw["startAt"]
+  return {
+    instanceId,
+    level,
+    itemId: typeof itemId === "string" && itemId.length > 0 ? itemId : fallbackItemId,
+    ...(typeof startAt === "number" && Number.isInteger(startAt) && startAt > 0 ? { startAt } : {}),
+  }
+}
+
+function normalizeParagraphProps(input: unknown, paragraphId: string): ParagraphProps {
   const raw = (typeof input === "object" && input != null ? input : {}) as Record<string, unknown>
   const align = raw["align"]
 
@@ -257,6 +276,7 @@ function normalizeParagraphProps(input: unknown): ParagraphProps {
       ? raw["headingLevel"]
       : undefined,
     keepWithNext: typeof raw["keepWithNext"] === "boolean" ? raw["keepWithNext"] : undefined,
+    list: normalizeParagraphListProps(raw["list"], paragraphId),
     box: normalizeParagraphBoxStyle(raw["box"]),
   }
 }
@@ -265,7 +285,7 @@ function normalizeParagraphNode(input: LayoutNode & { type: "paragraph" }): Para
   return {
     id: input.id,
     type: "paragraph",
-    props: normalizeParagraphProps(input.props),
+    props: normalizeParagraphProps(input.props, input.id),
     children: normalizeInlineChildren(input.children),
   }
 }
@@ -523,7 +543,15 @@ function normalizeFlowTableCellNode(input: FlowTableCellNode): FlowTableCellNode
 function normalizeFlowTableNode(input: FlowTableNode): FlowTableNode {
   const nodes: FlowTableNode["nodes"] = {}
   Object.entries(input.nodes).forEach(([id, node]) => {
-    nodes[id] = node.type === "flow-table-cell" ? normalizeFlowTableCellNode(node) : node
+    if (node.type === "flow-table-cell") {
+      nodes[id] = normalizeFlowTableCellNode(node)
+      return
+    }
+    if (node.type === "paragraph") {
+      nodes[id] = normalizeParagraphNode(node as LayoutNode & { type: "paragraph" })
+      return
+    }
+    nodes[id] = node
   })
   const rawProps = (input.props ?? {}) as Record<string, unknown>
   const props: FlowTableNode["props"] = { ...input.props }

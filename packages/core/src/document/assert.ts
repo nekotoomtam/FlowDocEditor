@@ -7,7 +7,7 @@ import {
   ParagraphNodeSchema,
   SpacerNodeSchema,
 } from "../schema"
-import type { DocumentNode, DocumentSection, FlowRowNode, FlowTableCellNode, FlowTableNode, LayoutNode, RowNode } from "../schema"
+import type { DocumentNode, DocumentSection, FlowRowNode, FlowTableCellNode, FlowTableNode, LayoutNode, ListStyleDefinition, ParagraphNode, RowNode } from "../schema"
 import { FlowTableGridError, resolveFlowTableGrid } from "./flowTableGrid"
 
 // ─── Error Types ──────────────────────────────────────────────────────────────
@@ -99,6 +99,75 @@ function assertNodeIdMatchesKey(node: { id: string }, key: string, path: string)
   if (node.id !== key) {
     fail(path, `node id "${node.id}" must match map key "${key}"`)
   }
+}
+
+// ─── List Numbering ───────────────────────────────────────────────────────────
+
+function assertListStyle(style: ListStyleDefinition, key: string, path: string): void {
+  if (style.id !== key) fail(path, `list style id "${style.id}" must match map key "${key}"`)
+
+  const levels = new Set<number>()
+  style.levels.forEach((level, index) => {
+    const levelPath = `${path}.levels[${index}]`
+    if (levels.has(level.level)) fail(`${levelPath}.level`, `duplicate list level ${level.level}`)
+    levels.add(level.level)
+    if (level.restartAfterLevel != null && level.restartAfterLevel >= level.level) {
+      fail(`${levelPath}.restartAfterLevel`, "restartAfterLevel must be shallower than the level it restarts")
+    }
+  })
+}
+
+function collectSectionParagraphs(section: DocumentSection): ParagraphNode[] {
+  const paragraphs: ParagraphNode[] = []
+  Object.values(section.nodes).forEach((node) => {
+    if (node.type === "paragraph") {
+      paragraphs.push(node)
+      return
+    }
+    if (node.type !== "flow-table") return
+    const table = node as unknown as FlowTableNode
+    Object.values(table.nodes).forEach((inner) => {
+      if (inner.type === "paragraph") paragraphs.push(inner)
+    })
+  })
+  return paragraphs
+}
+
+function assertListReferences(doc: DocumentNode): void {
+  const styles = doc.document.listStyles ?? {}
+  const instances = doc.document.listInstances ?? {}
+
+  Object.entries(styles).forEach(([key, style]) => {
+    assertListStyle(style, key, `document.listStyles.${key}`)
+  })
+
+  Object.entries(instances).forEach(([key, instance]) => {
+    if (instance.id !== key) fail(`document.listInstances.${key}`, `list instance id "${instance.id}" must match map key "${key}"`)
+    if (styles[instance.styleId] == null) {
+      fail(`document.listInstances.${key}.styleId`, `missing list style "${instance.styleId}"`)
+    }
+  })
+
+  const seenItemIds = new Set<string>()
+  doc.document.sections.forEach((section, sectionIndex) => {
+    collectSectionParagraphs(section).forEach((paragraph) => {
+      const list = paragraph.props.list
+      if (!list) return
+      const path = `document.sections[${sectionIndex}].nodes.${paragraph.id}.props.list`
+      const instance = instances[list.instanceId]
+      if (!instance) fail(`${path}.instanceId`, `missing list instance "${list.instanceId}"`)
+      const style = styles[instance.styleId]
+      if (!style) fail(`${path}.instanceId`, `missing list style "${instance.styleId}"`)
+      if (!style.levels.some((level) => level.level === list.level)) {
+        fail(`${path}.level`, `list style "${style.id}" does not define level ${list.level}`)
+      }
+      const itemKey = `${list.instanceId}:${list.itemId}`
+      if (seenItemIds.has(itemKey)) {
+        fail(`${path}.itemId`, `duplicate list itemId "${list.itemId}" in instance "${list.instanceId}"`)
+      }
+      seenItemIds.add(itemKey)
+    })
+  })
 }
 
 // ─── Flow Table Internals ────────────────────────────────────────────────────
@@ -392,7 +461,10 @@ export function assertDocument(doc: unknown): asserts doc is DocumentNode {
   // Pass 1: Zod schema validation
   assertSchema(doc)
 
-  // Pass 2: Graph invariants (tree law, orphans, cycles, widthShare sum)
+  // Pass 2: List numbering references
+  assertListReferences(doc)
+
+  // Pass 3: Graph invariants (tree law, orphans, cycles, widthShare sum)
   doc.document.sections.forEach((section, index) => {
     assertSectionGraph(section, `document.sections[${index}]`)
   })

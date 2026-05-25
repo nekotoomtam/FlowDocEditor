@@ -30,6 +30,7 @@ import {
   computeFlowTableSplitPointFrom,
   flowTableCellSliceTopInset,
 } from "./flowTableCell"
+import type { ListNumberingPaginationContext } from "./listMarker"
 
 export function paginateFlowTableRowFull(
   rowBox: FlowBox,
@@ -42,6 +43,7 @@ export function paginateFlowTableRowFull(
   wordBreaker: WordBreaker,
   flowTableGridProps: FlowTableGridRenderProps,
   flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   pushFragment(pages, template, {
     nodeId: rowBox.nodeId,
@@ -78,7 +80,7 @@ export function paginateFlowTableRowFull(
   }
 
   cellBoxes
-    .flatMap((cellBox) => collectFlowTableCellContents(cellBox, tableNode, measurer, cursor.pageIndex, cursor.cursorY, wordBreaker, cursor.pageNumberOffset))
+    .flatMap((cellBox) => collectFlowTableCellContents(cellBox, tableNode, measurer, cursor.pageIndex, cursor.cursorY, wordBreaker, cursor.pageNumberOffset, listNumbering))
     .sort((a, b) => a.y - b.y || a.x - b.x || a.nodeId.localeCompare(b.nodeId))
     .forEach((fragment) => pushFragment(pages, template, fragment))
 
@@ -100,6 +102,7 @@ export function paginateFlowTableRowSplit(
   flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
   repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
   repeatedHeaderHeight: number = 0,
+  listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   const fromSplits = new Map<string, SplitPoint>()
   for (const cellBox of rowBox.children) fromSplits.set(cellBox.nodeId, { childIdx: 0, lineIdx: 0 })
@@ -126,14 +129,14 @@ export function paginateFlowTableRowSplit(
     if (!sliceIsLast) {
       for (const cellBox of rowBox.children) {
         const from = fromSplits.get(cellBox.nodeId)!
-        toSplits.set(cellBox.nodeId, computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, sliceH), measurer, wordBreaker, from))
+        toSplits.set(cellBox.nodeId, computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, sliceH), measurer, wordBreaker, from, listNumbering))
       }
 
       let hasRemainingContent = false
       let hasContentProgress = false
       for (const cellBox of rowBox.children) {
         const from = fromSplits.get(cellBox.nodeId)!
-        const hasRemaining = cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, from)
+        const hasRemaining = cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, from, listNumbering)
         hasRemainingContent = hasRemainingContent || hasRemaining
         hasContentProgress = hasContentProgress ||
           (hasRemaining && splitPointProgressed(from, toSplits.get(cellBox.nodeId) ?? null, cellBox))
@@ -150,7 +153,7 @@ export function paginateFlowTableRowSplit(
         }
 
         const forcedCell = rowBox.children.find((cellBox) =>
-          cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, fromSplits.get(cellBox.nodeId)!),
+          cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, fromSplits.get(cellBox.nodeId)!, listNumbering),
         )
         if (forcedCell) {
           const from = fromSplits.get(forcedCell.nodeId)!
@@ -160,6 +163,7 @@ export function paginateFlowTableRowSplit(
             measurer,
             wordBreaker,
             from,
+            listNumbering,
           )
           if (forcedSplit) {
             toSplits.set(forcedCell.nodeId, forcedSplit)
@@ -174,6 +178,7 @@ export function paginateFlowTableRowSplit(
               wordBreaker,
               from,
               forcedSplit,
+              listNumbering,
             )
             const forcedSliceHeight = forcedTopInset + forcedContentHeight
             sliceH = Math.max(sliceH, Math.min(totalHeight - heightPlaced, forcedSliceHeight))
@@ -228,6 +233,7 @@ export function paginateFlowTableRowSplit(
         to,
         wordBreaker,
         current.pageNumberOffset,
+        listNumbering,
       )
       for (const fragment of cellContentFragments) {
         renderedSliceH = Math.max(renderedSliceH, fragment.y + fragment.height - current.cursorY)

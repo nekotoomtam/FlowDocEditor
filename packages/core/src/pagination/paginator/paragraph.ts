@@ -78,6 +78,13 @@ export function buildPositionedParagraphLines(
     align,
     measured.contentWidth,
     isLastFragment,
+    {
+      lineStart,
+      lineOffset: measured.lineOffset,
+      firstLineOffset: measured.firstLineOffset,
+      lineContentWidth: measured.lineContentWidth,
+      firstLineContentWidth: measured.firstLineContentWidth,
+    },
   )
 }
 
@@ -158,17 +165,31 @@ export function buildPaginatedLines(
   align: "left" | "center" | "right" | "justify" = "left",
   fragmentWidth: number = 0,
   isLastFragment: boolean = true,
+  options: {
+    lineStart?: number
+    lineOffset?: number
+    firstLineOffset?: number
+    lineContentWidth?: number
+    firstLineContentWidth?: number
+  } = {},
 ): PaginatedLine[] {
   let lineY = fragmentY + spacingBefore
   return lines.map((line, lineIndex) => {
     const isLastLine = isLastFragment && lineIndex === lines.length - 1
-    let x = fragmentX
+    const sourceLineIndex = (options.lineStart ?? 0) + lineIndex
+    const lineOffset = sourceLineIndex === 0
+      ? options.firstLineOffset ?? options.lineOffset ?? 0
+      : options.lineOffset ?? 0
+    const lineContentWidth = sourceLineIndex === 0
+      ? options.firstLineContentWidth ?? Math.max(0, fragmentWidth - lineOffset)
+      : options.lineContentWidth ?? Math.max(0, fragmentWidth - lineOffset)
+    let x = fragmentX + lineOffset
     let segments = line.segments
     let runs = line.runs
-    if (align === "center") x = fragmentX + (fragmentWidth - line.width) / 2
-    else if (align === "right") x = fragmentX + fragmentWidth - line.width
+    if (align === "center") x = fragmentX + lineOffset + (lineContentWidth - line.width) / 2
+    else if (align === "right") x = fragmentX + lineOffset + lineContentWidth - line.width
     else if (align === "justify" && !isLastLine && segments?.length) {
-      segments = justifySegments(segments, line.width, fragmentWidth)
+      segments = justifySegments(segments, line.width, lineContentWidth)
       runs = buildRunsFromSegments(segments)
     }
     const result: PaginatedLine = { text: line.text, x, y: lineY, width: line.width, height: line.height, segments, runs }

@@ -149,6 +149,71 @@ describe("assertDocument general invariants", () => {
   })
 })
 
+describe("assertDocument list numbering invariants", () => {
+  function listedParagraph(id: string, instanceId = "tor-main", itemId = id, level = 0): ParagraphNode {
+    return {
+      ...paragraph(id, "List item"),
+      props: {
+        ...paragraph(id, "List item").props,
+        list: { instanceId, itemId, level },
+      },
+    }
+  }
+
+  function addListDefinitions(doc: DocumentNode): DocumentNode {
+    doc.document.listStyles = {
+      "tor-clause": {
+        id: "tor-clause",
+        levels: [
+          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
+          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+        ],
+      },
+    }
+    doc.document.listInstances = {
+      "tor-main": { id: "tor-main", styleId: "tor-clause" },
+    }
+    return doc
+  }
+
+  it("allows paragraph list metadata that references a known instance and defined level", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1"),
+      p2: listedParagraph("p2", "tor-main", "p2", 1),
+    }, ["p1", "p2"]))
+
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("rejects paragraph list metadata that references a missing instance", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1", "missing-instance"),
+    }, ["p1"]))
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow('missing list instance "missing-instance"')
+  })
+
+  it("rejects paragraph list metadata when the style does not define the requested level", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1", "tor-main", "p1", 2),
+    }, ["p1"]))
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow('list style "tor-clause" does not define level 2')
+  })
+
+  it("rejects duplicate itemId values inside the same list instance", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1", "tor-main", "same"),
+      p2: listedParagraph("p2", "tor-main", "same"),
+    }, ["p1", "p2"]))
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow('duplicate list itemId "same" in instance "tor-main"')
+  })
+})
+
 describe("assertDocument flow-table invariants", () => {
   it("allows a valid flow-table with cell box styling and rowspan occupancy", () => {
     const p1 = paragraph("p1")

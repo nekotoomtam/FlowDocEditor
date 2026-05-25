@@ -7,8 +7,23 @@ import {
   paragraphLinesHeight,
 } from "./paragraph"
 import type { SplitPoint } from "./cellSplit"
+import { withListBodyIndent, type ListNumberingPaginationContext } from "./listMarker"
 
 type CellSplitOwner = Pick<FlowTableNode, "nodes">
+
+function measureSplitParagraph(
+  cellBox: FlowBox,
+  tableNode: CellSplitOwner,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  listNumbering: ListNumberingPaginationContext | undefined,
+) {
+  const node = tableNode.nodes[cellBox.nodeId]
+  if (node?.type !== "paragraph") return null
+  const marker = listNumbering?.markers.get(node.id)
+  const layoutNode = withListBodyIndent(node, marker, listNumbering)
+  return measureParagraph(layoutNode, cellBox.width, measurer, wordBreaker)
+}
 
 export function cellHasRemainingSplitContent(
   cellBox: FlowBox,
@@ -16,6 +31,7 @@ export function cellHasRemainingSplitContent(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   from: SplitPoint,
+  listNumbering?: ListNumberingPaginationContext,
 ): boolean {
   for (let ci = from.childIdx; ci < cellBox.children.length; ci++) {
     const child = cellBox.children[ci]
@@ -23,10 +39,9 @@ export function cellHasRemainingSplitContent(
     if (child.nodeType === "spacer") return true
     if (child.nodeType !== "paragraph") continue
 
-    const node = tableNode.nodes[child.nodeId]
-    if (node?.type !== "paragraph") continue
     const lineStart = ci === from.childIdx ? from.lineIdx : 0
-    const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+    const measured = measureSplitParagraph(child, tableNode, measurer, wordBreaker, listNumbering)
+    if (!measured) continue
     if (lineStart < measured.lines.length) return true
   }
 
@@ -39,6 +54,7 @@ export function forceOneSplitUnitProgress(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   from: SplitPoint,
+  listNumbering?: ListNumberingPaginationContext,
 ): SplitPoint | null {
   for (let ci = from.childIdx; ci < cellBox.children.length; ci++) {
     const child = cellBox.children[ci]
@@ -46,10 +62,9 @@ export function forceOneSplitUnitProgress(
     if (child.nodeType === "spacer") return { childIdx: ci + 1, lineIdx: 0 }
     if (child.nodeType !== "paragraph") continue
 
-    const node = tableNode.nodes[child.nodeId]
-    if (node?.type !== "paragraph") continue
     const lineStart = ci === from.childIdx ? from.lineIdx : 0
-    const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+    const measured = measureSplitParagraph(child, tableNode, measurer, wordBreaker, listNumbering)
+    if (!measured) continue
     if (lineStart < measured.lines.length) return { childIdx: ci, lineIdx: lineStart + 1 }
   }
 
@@ -63,16 +78,15 @@ export function forcedSplitUnitHeight(
   wordBreaker: WordBreaker,
   from: SplitPoint,
   to: SplitPoint,
+  listNumbering?: ListNumberingPaginationContext,
 ): number {
   const child = cellBox.children[from.childIdx]
   if (!child) return 0
   if (child.nodeType === "spacer") return child.height
   if (child.nodeType !== "paragraph") return 0
 
-  const node = tableNode.nodes[child.nodeId]
-  if (node?.type !== "paragraph") return 0
-
-  const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+  const measured = measureSplitParagraph(child, tableNode, measurer, wordBreaker, listNumbering)
+  if (!measured) return 0
   const lineStart = from.lineIdx
   const lineEnd = to.childIdx === from.childIdx ? to.lineIdx : measured.lines.length
   const lines = measured.lines.slice(lineStart, lineEnd)
@@ -88,6 +102,7 @@ export function computeCellSplitPointFrom(
   wordBreaker: WordBreaker,
   from: SplitPoint,
   initialHeight: number = 0,
+  listNumbering?: ListNumberingPaginationContext,
 ): SplitPoint | null {
   let heightUsed = initialHeight
 
@@ -99,9 +114,8 @@ export function computeCellSplitPointFrom(
       if (heightUsed + child.height <= availH) heightUsed += child.height
       else return { childIdx: ci, lineIdx: 0 }
     } else if (child.nodeType === "paragraph") {
-      const node = tableNode.nodes[child.nodeId]
-      if (node?.type !== "paragraph") continue
-      const measured = measureParagraph(node, child.width, measurer, wordBreaker)
+      const measured = measureSplitParagraph(child, tableNode, measurer, wordBreaker, listNumbering)
+      if (!measured) continue
       const lineStart = ci === from.childIdx ? from.lineIdx : 0
       const remainingLines = measured.lines.slice(lineStart)
       const remainH = paragraphLineTopOffset(measured, lineStart) + paragraphLinesHeight(remainingLines)

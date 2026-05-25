@@ -99,6 +99,10 @@ export interface MeasuredParagraph {
   spacingAfter: number
   width: number
   contentWidth: number
+  lineOffset: number
+  firstLineOffset: number
+  lineContentWidth: number
+  firstLineContentWidth: number
   box?: MeasuredParagraphBox
   totalHeight: number  // spacing + optional box insets + sum(lines)
 }

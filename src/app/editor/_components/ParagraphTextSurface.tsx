@@ -7,7 +7,7 @@ import {
 } from "@/document"
 import { measureParagraph, nextTextGraphemeBoundary, previousTextGraphemeBoundary, snapToGraphemeBoundary } from "@/layout"
 import type { TextMeasurer } from "@/layout"
-import { buildPaginatedLines, resolvePaginatedLineBaselineY } from "@/pagination"
+import { buildPositionedParagraphLines, resolvePaginatedLineBaselineY } from "@/pagination"
 import type { DocumentNode, FlowTableNode, ParagraphNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily, resolveFontVariantKeyForStyle } from "@/font-registry"
@@ -421,7 +421,7 @@ function textAlignForParagraph(align: ParagraphRenderProps["align"] | undefined)
   return "left"
 }
 
-// line.x now contains the alignment offset (baked in by buildPaginatedLines).
+// line.x now contains the alignment and paragraph-indent offset from pagination.
 // lineX computes the SVG anchor point: center/right shift by half/full line width
 // to match SVG textAnchor="middle"/"end" behavior.
 function lineX(line: PaginatedLine, align: ParagraphRenderProps["align"] | undefined): number {
@@ -589,6 +589,47 @@ function renderLine(
       style={SVG_TEXT_PRESERVE_WHITESPACE_STYLE}
     >
       {line.text}
+    </text>
+  )
+}
+
+function renderListMarker(
+  fragment: PageFragment,
+  renderProps: ParagraphRenderProps | undefined,
+  pageKey: string,
+  scale: number,
+  clipPathId?: string,
+) {
+  const marker = fragment.listMarker
+  const firstLine = fragment.lines?.[0]
+  if (!marker || !firstLine) return null
+
+  const fontSize = (firstLine.fontSize ?? renderProps?.fontSize ?? 8) * scale
+  const baseY = lineBaselineY(firstLine) * scale
+  const fontFamily = resolveFontCssFamily(renderProps?.fontFamilyKey)
+  const fontWeight = fontWeightForRenderProps(renderProps)
+  const fontStyle = fontStyleForRenderProps(renderProps)
+  const textColor = textColorForRenderProps(renderProps)
+  const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
+
+  return (
+    <text
+      key="list-marker"
+      data-list-marker="true"
+      data-list-marker-node-id={fragment.nodeId}
+      data-list-marker-level={marker.level}
+      x={marker.markerX * scale}
+      y={baseY}
+      fontSize={fontSize}
+      fontFamily={fontFamily}
+      fontWeight={fontWeight}
+      fontStyle={fontStyle}
+      fill={textColor}
+      clipPath={clip}
+      xmlSpace="preserve"
+      style={SVG_TEXT_PRESERVE_WHITESPACE_STYLE}
+    >
+      {marker.text}
     </text>
   )
 }
@@ -1004,15 +1045,7 @@ export function buildWysiwygDraftParagraphLayout(
     })
   }
   return {
-    lines: buildPaginatedLines(
-      measured.lines,
-      fragment.x,
-      fragment.y,
-      measured.spacingBefore,
-      node.props.align,
-      fragment.width,
-      true,
-    ),
+    lines: buildPositionedParagraphLines(measured, measured.lines, fragment.x, fragment.y, 0, node.props.align, true),
     height: measured.totalHeight,
   }
 }
@@ -2572,6 +2605,7 @@ export function WysiwygTextLayer({
         pointerEvents="all"
       />
       {renderSelectionOverlay(visualFragment, pageKey, scale, activeSelectionOverlayRects, clipPathId)}
+      {renderListMarker(visualFragment, renderProps, pageKey, scale, clipPathId)}
       {visualFragment.lines?.map((line, index) =>
         renderLine(line, index, visualFragment, renderProps, pageKey, scale, undefined, clipPathId),
       )}
@@ -2918,6 +2952,7 @@ export function ParagraphTextSurface({
     textEngineReflowDecision,
     useWysiwygTextEngineLayer,
   ])
+  const listMarkerVisual = renderListMarker(displayFragment, renderProps, pageKey, scale, clipPathId)
 
   if (isEditing && canPlainTextEdit) {
     if (useWysiwygTextEngineLayer) {
@@ -2951,6 +2986,7 @@ export function ParagraphTextSurface({
 
     return (
       <>
+        {listMarkerVisual}
         {visualMode.useDocumentVisual && renderSelectionOverlay(displayFragment, pageKey, scale, selectionOverlayRects, clipPathId)}
         {visualMode.useDocumentVisual && displayFragment.lines?.map((line, index) =>
           renderLine(line, index, displayFragment, renderProps, pageKey, scale, undefined, clipPathId),
@@ -3123,6 +3159,7 @@ export function ParagraphTextSurface({
   }
 
   return [
+    listMarkerVisual,
     ...renderSelectionOverlay(passiveTextEngineSelectionFragment, pageKey, scale, passiveTextEngineSelectionOverlayRects, clipPathId),
     ...(displayFragment.lines?.map((line, index) =>
       renderLine(line, index, displayFragment, renderProps, pageKey, scale, undefined, clipPathId),

@@ -101,6 +101,19 @@ export interface DividerRenderProps {
   style: "solid" | "dashed" | "dotted"
 }
 
+export interface ListMarkerRenderProps {
+  text: string
+  level: number
+  ordinal: number
+  instanceId: string
+  styleId: string
+  itemId: string
+  markerIndent: number
+  textIndent: number
+  markerX: number
+  bodyX: number
+}
+
 // ─── Page Fragments ───────────────────────────────────────────────────────────
 
 export interface PageFragment {
@@ -127,6 +140,7 @@ export interface PageFragment {
   height: number
   lines?: PaginatedLine[]
   renderProps?: ParagraphRenderProps
+  listMarker?: ListMarkerRenderProps
   dividerRenderProps?: DividerRenderProps
   boxRenderProps?: ParagraphBoxRenderProps
   flowTableGridProps?: FlowTableGridRenderProps

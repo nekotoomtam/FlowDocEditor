@@ -464,21 +464,26 @@ function buildLine(segments: SourceLineSegment[], fallbackStyle: TextRunLayoutSt
 
 function wrapLines(
   text: string,
-  availableWidth: number,
+  firstLineWidth: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   richTextRanges: RichTextRange[],
   fallbackStyle: TextRunLayoutStyle,
   offsetBase: number = 0,
+  lineWidth: number = firstLineWidth,
 ): MeasuredLine[] {
   if (text.length === 0) {
     return [{ text: "", width: 0, height: fallbackStyle.lineHeight }]
   }
 
-  const segments = createSourceSegments(text, availableWidth, measurer, wordBreaker, richTextRanges, fallbackStyle, offsetBase)
+  const segmentWidth = Math.max(firstLineWidth, lineWidth, 0)
+  const segments = createSourceSegments(text, segmentWidth, measurer, wordBreaker, richTextRanges, fallbackStyle, offsetBase)
   const lines: MeasuredLine[] = []
   let currentLine: SourceLineSegment[] = []
   let currentWidth = 0
+
+  const currentAvailableWidth = () =>
+    lines.length === 0 ? firstLineWidth : lineWidth
 
   const pushCurrentLine = () => {
     const line = buildLine(currentLine, fallbackStyle)
@@ -491,6 +496,7 @@ function wrapLines(
     if (segment.text.length === 0) return
     if (currentLine.length === 0 && segment.kind === "space") return
 
+    const availableWidth = currentAvailableWidth()
     const candidateWidth = currentWidth + segment.width
 
     if (candidateWidth <= availableWidth || currentLine.length === 0) {
@@ -561,7 +567,8 @@ function buildParagraphTextModel(node: ParagraphNode, measurer: TextMeasurer): {
 
 function measureHardLines(
   fullText: string,
-  availableWidth: number,
+  firstLineWidth: number,
+  lineWidth: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   richTextRanges: RichTextRange[],
@@ -580,11 +587,40 @@ function measureHardLines(
     }
     const lineEnd = hardLineEnd
     const lineRanges = richTextRanges.filter((r) => r.end > globalOffset && r.start < lineEnd)
-    const wrapped = wrapLines(hardLine, availableWidth, measurer, wordBreaker, lineRanges, fallbackStyle, globalOffset)
+    const wrapped = wrapLines(
+      hardLine,
+      globalOffset === 0 ? firstLineWidth : lineWidth,
+      measurer,
+      wordBreaker,
+      lineRanges,
+      fallbackStyle,
+      globalOffset,
+      lineWidth,
+    )
     rawLines.push(...wrapped)
     globalOffset += hardLine.length + 1
   }
   return rawLines
+}
+
+function resolveParagraphIndent(node: ParagraphNode, contentWidth: number): {
+  lineOffset: number
+  firstLineOffset: number
+  lineContentWidth: number
+  firstLineContentWidth: number
+} {
+  const indentLeft = Math.max(0, toAbstractUnit(node.props.indentLeft.value, node.props.indentLeft.unit))
+  const indentRight = Math.max(0, toAbstractUnit(node.props.indentRight.value, node.props.indentRight.unit))
+  const textIndent = toAbstractUnit(node.props.textIndent.value, node.props.textIndent.unit)
+  const rightEdge = Math.max(0, contentWidth - indentRight)
+  const lineOffset = Math.max(0, Math.min(indentLeft, rightEdge))
+  const firstLineOffset = Math.max(0, Math.min(indentLeft + textIndent, rightEdge))
+  return {
+    lineOffset,
+    firstLineOffset,
+    lineContentWidth: Math.max(0, rightEdge - lineOffset),
+    firstLineContentWidth: Math.max(0, rightEdge - firstLineOffset),
+  }
 }
 
 export function measureParagraph(
@@ -600,14 +636,34 @@ export function measureParagraph(
   const spacingAfter = toAbstractUnit(node.props.spacingAfter.value, node.props.spacingAfter.unit)
   const box = resolveParagraphBox(node, availableWidth)
   const contentWidth = box?.contentWidth ?? availableWidth
+  const indent = resolveParagraphIndent(node, contentWidth)
 
   const { fullText, richTextRanges, fallbackStyle } = buildParagraphTextModel(node, measurer)
-  const rawLines = measureHardLines(fullText, contentWidth, measurer, wordBreaker, richTextRanges, fallbackStyle)
+  const rawLines = measureHardLines(
+    fullText,
+    indent.firstLineContentWidth,
+    indent.lineContentWidth,
+    measurer,
+    wordBreaker,
+    richTextRanges,
+    fallbackStyle,
+  )
   const lines: MeasuredLine[] = rawLines
   const contentHeight = lines.reduce((sum, line) => sum + line.height, 0)
   const totalHeight = spacingBefore + paragraphBoxTopInset(box) + contentHeight + paragraphBoxBottomInset(box) + spacingAfter
 
-  return { nodeId: node.id, lines, lineHeight, spacingBefore, spacingAfter, width: availableWidth, contentWidth, box, totalHeight }
+  return {
+    nodeId: node.id,
+    lines,
+    lineHeight,
+    spacingBefore,
+    spacingAfter,
+    width: availableWidth,
+    contentWidth,
+    ...indent,
+    box,
+    totalHeight,
+  }
 }
 
 // Measures only the lines starting from the hard-line that contains `fromOffset`.
@@ -624,8 +680,18 @@ export function measureParagraphFrom(
   const lineHeight = measurer.measureLineHeight(fontFamilyKey, fontSize, node.props.lineHeight)
   const box = resolveParagraphBox(node, availableWidth)
   const contentWidth = box?.contentWidth ?? availableWidth
+  const indent = resolveParagraphIndent(node, contentWidth)
   const { fullText, richTextRanges, fallbackStyle } = buildParagraphTextModel(node, measurer)
-  const tailLines = measureHardLines(fullText, contentWidth, measurer, wordBreaker, richTextRanges, fallbackStyle, fromOffset)
+  const tailLines = measureHardLines(
+    fullText,
+    indent.firstLineContentWidth,
+    indent.lineContentWidth,
+    measurer,
+    wordBreaker,
+    richTextRanges,
+    fallbackStyle,
+    fromOffset,
+  )
   return { tailLines, lineHeight }
 }
 

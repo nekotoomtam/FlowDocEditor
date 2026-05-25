@@ -3,7 +3,7 @@ import { paginateDocument } from "../index"
 import { assertPaginatedDocument } from "../assertPaginated"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { pt } from "../../schema"
-import type { DividerNode, DocumentNode, FlowTableNode, PageBreakNode, ParagraphNode, SpacerNode, LayoutNode } from "../../schema"
+import type { DividerNode, DocumentNode, FlowTableNode, ListStyleDefinition, PageBreakNode, ParagraphNode, SpacerNode, LayoutNode } from "../../schema"
 import type { PageFragment } from "../types"
 
 // ─── Page Metrics ────────────────────────────────────────────────────────────
@@ -20,6 +20,7 @@ const CB = CY + CH  // contentBottom = 770
 // lineHeight ratio 1.2: 10 * 1.2 = 12
 const FS = 10
 const LH = FS * 1.2  // = 12
+const LINES_PER_PAGE = Math.floor(CH / LH)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,25 @@ function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): Doc
           ...nodes,
         },
       }],
+    },
+  }
+}
+
+const TOR_LIST_STYLE: ListStyleDefinition = {
+  id: "tor-clause",
+  levels: [
+    { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
+    { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+  ],
+}
+
+function withListDefinitions(doc: DocumentNode): DocumentNode {
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      listStyles: { "tor-clause": TOR_LIST_STYLE },
+      listInstances: { "tor-main": { id: "tor-main", styleId: "tor-clause" } },
     },
   }
 }
@@ -192,6 +212,22 @@ describe("paginator — geometry", () => {
     expect(f.renderProps?.box?.fill).toBe("F5F7FA")
     expect(f.renderProps?.box?.padding.left).toBe(6)
     expect(f.renderProps?.box?.border.left?.width).toBe(2)
+  })
+
+  it("positions paragraph lines with authored indents", () => {
+    const p = makePara("p1", "First\nSecond", {
+      indentLeft: pt(18),
+      indentRight: pt(10),
+      textIndent: pt(6),
+    })
+    const frags = getFragments(makeDoc(["p1"], { p1: p }))
+    const f = frags.find((fragment) => fragment.nodeId === "p1")!
+
+    expect(f.lines?.[0]?.x).toBe(CX + 24)
+    expect(f.lines?.[1]?.x).toBe(CX + 18)
+    expect(f.renderProps?.indentLeft).toBe(18)
+    expect(f.renderProps?.indentRight).toBe(10)
+    expect(f.renderProps?.textIndent).toBe(6)
   })
 })
 
@@ -333,6 +369,24 @@ describe("paginator — fragment relationships", () => {
     expect(pFrag.parentNodeId).toBe("st")
   })
 
+  it("paragraph inside static row stack carries generated list marker metadata", () => {
+    const p = makePara("p1", "Row list item", {
+      list: { instanceId: "tor-main", level: 0, itemId: "row-list-item" },
+    })
+    const stack: LayoutNode = { id: "st", type: "stack", props: { widthShare: 100, minHeight: 24 }, childIds: ["p1"] }
+    const row: LayoutNode = { id: "r1", type: "row", props: {}, childIds: ["st"] }
+    const frags = getFragments(withListDefinitions(makeDoc(["r1"], { r1: row, st: stack, p1: p })))
+    const pFrag = frags.find((f) => f.nodeId === "p1")!
+
+    expect(pFrag.listMarker).toMatchObject({
+      text: "1.",
+      markerX: pFrag.x,
+      bodyX: pFrag.x + 18,
+    })
+    expect(pFrag.lines?.[0]?.text).toBe("Row list item")
+    expect(pFrag.lines?.[0]?.x).toBeCloseTo(pFrag.x + 18, 2)
+  })
+
   it("two-column row produces two stacks with correct widths", () => {
     const p1 = makePara("p1", "Left")
     const p2 = makePara("p2", "Right")
@@ -378,12 +432,80 @@ describe("paginator — line metadata", () => {
   })
 })
 
+describe("paginator — list marker metadata", () => {
+  it("attaches generated list marker metadata without changing line text", () => {
+    const p1 = makePara("p1", "First item", {
+      list: { instanceId: "tor-main", level: 0, itemId: "first" },
+    })
+    const p2 = makePara("p2", "Nested item", {
+      list: { instanceId: "tor-main", level: 1, itemId: "nested" },
+    })
+    const doc = withListDefinitions(makeDoc(["p1", "p2"], { p1, p2 }))
+    const frags = getFragments(doc)
+
+    const p1Frag = frags.find((f) => f.nodeId === "p1")!
+    const p2Frag = frags.find((f) => f.nodeId === "p2")!
+
+    expect(p1Frag.listMarker).toEqual({
+      text: "1.",
+      level: 0,
+      ordinal: 1,
+      instanceId: "tor-main",
+      styleId: "tor-clause",
+      itemId: "first",
+      markerIndent: 0,
+      textIndent: 18,
+      markerX: CX,
+      bodyX: CX + 18,
+    })
+    expect(p2Frag.listMarker?.text).toBe("1.1")
+    expect(p2Frag.listMarker?.markerX).toBe(CX + 18)
+    expect(p2Frag.listMarker?.bodyX).toBe(CX + 36)
+    expect(p1Frag.lines?.[0]?.x).toBe(CX + 18)
+    expect(p2Frag.lines?.[0]?.x).toBe(CX + 36)
+    expect(p1Frag.lines?.map((line) => line.text)).toEqual(["First item"])
+    expect(p2Frag.lines?.map((line) => line.text)).toEqual(["Nested item"])
+  })
+
+  it("positions marker geometry from the paragraph content edge", () => {
+    const p = makePara("p1", "Boxed list item", {
+      list: { instanceId: "tor-main", level: 1, itemId: "boxed" },
+      box: {
+        padding: { top: pt(0), right: pt(0), bottom: pt(0), left: pt(6) },
+        border: { left: { style: "solid", width: pt(2), color: "111111" } },
+      },
+    })
+    const [fragment] = getFragments(withListDefinitions(makeDoc(["p1"], { p1: p })))
+
+    expect(fragment.listMarker).toMatchObject({
+      text: "1.1",
+      markerIndent: 18,
+      textIndent: 36,
+      markerX: CX + 2 + 6 + 18,
+      bodyX: CX + 2 + 6 + 36,
+    })
+    expect(fragment.lines?.[0]?.x).toBe(CX + 2 + 6 + 36)
+    expect(fragment.lines?.[0]?.text).toBe("Boxed list item")
+  })
+
+  it("keeps list marker metadata only on the first split fragment", () => {
+    const text = Array.from({ length: LINES_PER_PAGE + 5 }, () => "A").join("\n")
+    const p = makePara("p1", text, {
+      list: { instanceId: "tor-main", level: 0, itemId: "long-item" },
+    })
+    const pages = getPages(withListDefinitions(makeDoc(["p1"], { p1: p })))
+    const fragments = pages.flatMap((page) => page.fragments).filter((f) => f.nodeId === "p1")
+
+    expect(fragments.length).toBeGreaterThan(1)
+    expect(fragments[0].listMarker?.text).toBe("1.")
+    expect(fragments.slice(1).every((fragment) => fragment.listMarker == null)).toBe(true)
+    expect(fragments.flatMap((fragment) => fragment.lines ?? []).map((line) => line.text).join("\n")).toBe(text)
+  })
+})
+
 // ─── Paragraph split across pages ────────────────────────────────────────────
 
 describe("paginator — paragraph split across pages", () => {
-  // A4 + 72pt margins: contentHeight=698, LH=12 → floor(698/12)=58 lines per page
-  const LINES_PER_PAGE = Math.floor(698 / LH)  // = 58
-
   it("paragraph split preserves total line count", () => {
     const lineCount = LINES_PER_PAGE + 10  // spans 2 pages
     const p = makePara("p1", Array.from({ length: lineCount }, () => "A").join("\n"))

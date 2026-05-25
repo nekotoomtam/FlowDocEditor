@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { UnitValueSchema } from "./units"
 import { LayoutNodeSchema } from "./block"
+import { ListInstanceSchema, ListStyleDefinitionSchema } from "./list"
 
 // ─── Page Settings ────────────────────────────────────────────────────────────
 
@@ -50,6 +51,8 @@ export const DocumentNodeSchema = z.object({
   document: z.object({
     id: z.string().min(1),
     meta: DocumentMetaSchema.optional(),
+    listStyles: z.record(z.string().min(1), ListStyleDefinitionSchema).optional(),
+    listInstances: z.record(z.string().min(1), ListInstanceSchema).optional(),
     sections: z.array(DocumentSectionSchema).min(1),
   }),
 })
