@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createDefaultFlowTable, createId } from "./defaults"
+import { createDefaultFlowTable, createDividerNode, createId, createPageBreakNode } from "./defaults"
 
 describe("createId", () => {
   afterEach(() => {
@@ -81,5 +81,23 @@ describe("createDefaultFlowTable", () => {
     expect(paragraph.type).toBe("paragraph")
     if (paragraph.type !== "paragraph") return
     expect(paragraph.children[0]?.type === "text" ? paragraph.children[0].text : "").toBe("")
+  })
+})
+
+describe("default divider and page-break nodes", () => {
+  it("creates authored divider defaults and empty page-break props", () => {
+    const divider = createDividerNode()
+    const pageBreak = createPageBreakNode({ unexpected: true } as never)
+
+    expect(divider.type).toBe("divider")
+    expect(divider.props).toEqual({
+      color: "CBD5E1",
+      thickness: { value: 1, unit: "pt" },
+      marginBefore: { value: 6, unit: "pt" },
+      marginAfter: { value: 6, unit: "pt" },
+      style: "solid",
+    })
+    expect(pageBreak.type).toBe("page-break")
+    expect(pageBreak.props).toEqual({})
   })
 })

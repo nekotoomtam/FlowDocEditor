@@ -100,6 +100,18 @@ export const SpacerPropsSchema = z.object({
   height: z.number().positive(),
 })
 
+export const DividerLineStyleSchema = z.enum(["solid", "dashed", "dotted"])
+
+export const DividerPropsSchema = z.object({
+  color: HexColorSchema.default("CBD5E1"),
+  thickness: NonNegativeUnitValueSchema.default({ value: 1, unit: "pt" }),
+  marginBefore: NonNegativeUnitValueSchema.default({ value: 6, unit: "pt" }),
+  marginAfter: NonNegativeUnitValueSchema.default({ value: 6, unit: "pt" }),
+  style: DividerLineStyleSchema.default("solid"),
+})
+
+export const PageBreakPropsSchema = z.object({})
+
 // ─── Nodes ───────────────────────────────────────────────────────────────────
 
 export const BodyNodeSchema = z.object({
@@ -150,6 +162,18 @@ export const SpacerNodeSchema = z.object({
   props: SpacerPropsSchema,
 })
 
+export const DividerNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("divider"),
+  props: DividerPropsSchema,
+})
+
+export const PageBreakNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("page-break"),
+  props: PageBreakPropsSchema,
+})
+
 export const TocPropsSchema = z.object({
   title: z.string().optional(),
   maxLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
@@ -171,6 +195,8 @@ export const LayoutNodeSchema = z.discriminatedUnion("type", [
   FlowRowNodeSchema,
   ParagraphNodeSchema,
   SpacerNodeSchema,
+  DividerNodeSchema,
+  PageBreakNodeSchema,
   FlowTableNodeSchema,
   TocNodeSchema,
 ])
@@ -186,6 +212,9 @@ export type ParagraphBoxBorderSide = z.infer<typeof ParagraphBoxBorderSideSchema
 export type ParagraphBoxBorder = z.infer<typeof ParagraphBoxBorderSchema>
 export type ParagraphBoxStyle = z.infer<typeof ParagraphBoxStyleSchema>
 export type SpacerProps = z.infer<typeof SpacerPropsSchema>
+export type DividerLineStyle = z.infer<typeof DividerLineStyleSchema>
+export type DividerProps = z.infer<typeof DividerPropsSchema>
+export type PageBreakProps = z.infer<typeof PageBreakPropsSchema>
 
 export type BodyNode = z.infer<typeof BodyNodeSchema>
 export type StackNode = z.infer<typeof StackNodeSchema>
@@ -194,6 +223,8 @@ export type FlowStackNode = z.infer<typeof FlowStackNodeSchema>
 export type FlowRowNode = z.infer<typeof FlowRowNodeSchema>
 export type ParagraphNode = z.infer<typeof ParagraphNodeSchema>
 export type SpacerNode = z.infer<typeof SpacerNodeSchema>
+export type DividerNode = z.infer<typeof DividerNodeSchema>
+export type PageBreakNode = z.infer<typeof PageBreakNodeSchema>
 export type TocProps = z.infer<typeof TocPropsSchema>
 export type TocNode = z.infer<typeof TocNodeSchema>
 export type LayoutNode = z.infer<typeof LayoutNodeSchema>

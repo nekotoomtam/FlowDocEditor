@@ -73,6 +73,27 @@ function flowOutlineDoc(): DocumentNode {
   return doc
 }
 
+function dividerPageBreakOutlineDoc(): DocumentNode {
+  const doc = outlineDoc()
+  const section = doc.document.sections[0]
+  section.nodes.body = { id: "body", type: "body", props: {}, childIds: ["divider-1", "page-break-1"] }
+  section.nodes["divider-1"] = {
+    id: "divider-1",
+    type: "divider",
+    props: {
+      color: "334155",
+      thickness: { value: 1, unit: "pt" },
+      marginBefore: { value: 4, unit: "pt" },
+      marginAfter: { value: 4, unit: "pt" },
+      style: "solid",
+    },
+  }
+  section.nodes["page-break-1"] = { id: "page-break-1", type: "page-break", props: {} }
+  delete section.nodes.p1
+  delete section.nodes.p2
+  return doc
+}
+
 describe("OutlinePanel", () => {
   it("uses the shared panel header and compact outline rows", () => {
     const markup = renderToStaticMarkup(createElement(OutlinePanel, {
@@ -112,6 +133,17 @@ describe("OutlinePanel", () => {
     expect(markup).toContain("1 คอลัมน์")
     expect(markup).toContain("คอลัมน์ 1")
     expect(markup).toContain("First paragraph")
+  })
+
+  it("shows divider and page-break outline labels", () => {
+    const markup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: dividerPageBreakOutlineDoc(),
+      selectedNodeId: "divider-1",
+      onSelect: () => undefined,
+    }))
+
+    expect(markup).toContain("เส้นแบ่ง")
+    expect(markup).toContain("ขึ้นหน้าใหม่")
   })
 
   it("shows reorder grips for direct body children only when reorder is wired", () => {

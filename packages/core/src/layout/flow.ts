@@ -3,6 +3,7 @@ import { DEFAULT_STACK_MIN_HEIGHT } from "../document/defaults"
 import { resolveFlowTableGrid } from "../document/flowTableGrid"
 import {
   measureParagraph,
+  measureDivider,
   measureSpacer,
   paragraphBoxBottomInset,
   paragraphBoxLeftInset,
@@ -135,6 +136,29 @@ function flowNode(
         y,
         width,
         height: measured.height,
+        children: [],
+      }
+    }
+    case "divider": {
+      const measured = measureDivider(node, width)
+      return {
+        nodeId: node.id,
+        nodeType: "divider",
+        x,
+        y,
+        width,
+        height: measured.height,
+        children: [],
+      }
+    }
+    case "page-break": {
+      return {
+        nodeId: node.id,
+        nodeType: "page-break",
+        x,
+        y,
+        width,
+        height: 0,
         children: [],
       }
     }

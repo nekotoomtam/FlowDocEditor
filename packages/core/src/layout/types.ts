@@ -110,6 +110,17 @@ export interface MeasuredSpacer {
   width: number
 }
 
+export interface MeasuredDivider {
+  nodeId: string
+  width: number
+  height: number
+  color: string
+  thickness: number
+  marginBefore: number
+  marginAfter: number
+  style: "solid" | "dashed" | "dotted"
+}
+
 // ─── Flow Results ─────────────────────────────────────────────────────────────
 
 // position ของ node หลัง flow — relative to parent
@@ -123,6 +134,8 @@ export interface FlowBox {
     | "flow-stack"
     | "paragraph"
     | "spacer"
+    | "divider"
+    | "page-break"
     | "flow-table"
     | "flow-table-row"
     | "flow-table-cell"

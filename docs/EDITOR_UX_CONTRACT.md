@@ -46,6 +46,9 @@ Users should be able to:
 - The `Outline` header may expose a compact add shortcut that switches the left
   rail into `Add`; item-level contextual add remains deferred until its
   interaction rules are explicitly designed.
+- The Add panel may expose `Divider` as an authored visible block in document
+  and header/footer-safe scopes. It may expose `Page break` only in document
+  body scope until non-body semantics are designed.
 - Outline reorder is limited to direct children of a section `body`, within the
   same section body. It mutates only the logical `body.childIds` order through a
   core document operation.
@@ -88,6 +91,14 @@ Users should be able to:
   rail is action-focused, separate from the path, and should stay selected-only
   so hover remains preview-only. Drag, duplicate, and delete actions must route
   through the normal editor lifecycle and history behavior.
+- Divider and page-break fragments should be selectable and draggable like other
+  authored body blocks. The page-break marker is editor chrome for an authored
+  control node; it is not PDF output text and must not be confused with computed
+  page-boundary drift.
+- While dragging content, the same-page area below an authored page-break marker
+  should render as a blocked drop area. Content after a page break starts on the
+  next page, so the editor must not show a normal same-page insertion affordance
+  there.
 - Background clicks should clear selection and close inline edit through the
   normal edit transaction path.
 
@@ -97,6 +108,10 @@ Users should be able to:
   hover help.
 - Repeated explanatory rule text may use a compact `InfoHint` beside the
   relevant label when showing the full text would clutter the panel.
+- Divider line color, style, and width controls should use the same compact
+  visual language as paragraph/box border controls. Divider spacing should be
+  presented as above/below spacing around the line, with bounded UI controls so
+  authoring cannot accidentally create extreme gaps from normal panel edits.
 - `InfoHint` should explain constraints, consequences, or safer alternatives.
   It must not hide required field names, current authored values, or destructive
   action warnings.
@@ -390,8 +405,9 @@ Table-specific interaction rules are defined in
   column stacks must continue rejecting nested row-like insertions.
 - While header/footer zone mode is active, Add panel block choices must be
   scoped to header/footer-safe blocks. The first supported palette sources are
-  Paragraph and explicit Flow Columns presets; table, field, and body-only
-  structural sources stay hidden or disabled until their semantics are designed.
+  Paragraph, Divider, and explicit Flow Columns presets; table, field, Page
+  break, and other body-only structural sources stay hidden or disabled until
+  their semantics are designed.
 - Header/footer drop preview and commit must target only the active zone root:
   Header mode inserts into the header root, Footer mode inserts into the footer
   root. If a section has reserved space but no corresponding root node, editor

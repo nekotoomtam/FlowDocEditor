@@ -1,4 +1,4 @@
-import { measureParagraph } from "../../layout"
+import { measureDivider, measureParagraph } from "../../layout"
 import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
 import type { DocumentSection } from "../../schema"
 import type { PageFragment } from "../types"
@@ -34,6 +34,19 @@ function collectZoneFragments(
       const measured = measureParagraph(node, box.width, measurer, wordBreaker)
       fragment.lines = buildPositionedParagraphLines(measured, measured.lines, box.x, box.y, 0, node.props.align)
       fragment.renderProps = buildRenderProps(node, measured.lineHeight, measured.box)
+    }
+  }
+  if (box.nodeType === "divider") {
+    const node = section.nodes[box.nodeId]
+    if (node?.type === "divider") {
+      const measured = measureDivider(node, box.width)
+      fragment.dividerRenderProps = {
+        color: measured.color,
+        thickness: measured.thickness,
+        marginBefore: measured.marginBefore,
+        marginAfter: measured.marginAfter,
+        style: measured.style,
+      }
     }
   }
 

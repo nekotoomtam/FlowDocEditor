@@ -1,4 +1,4 @@
-import type { ParagraphBoxBorderSide, ParagraphBoxStyle, ParagraphNode, SpacerNode, TextRun } from "../schema"
+import type { DividerNode, ParagraphBoxBorderSide, ParagraphBoxStyle, ParagraphNode, SpacerNode, TextRun } from "../schema"
 import type { FontVariantKey } from "../font-registry"
 import { resolveFontVariantKeyForStyle } from "../font-registry"
 import { resolveTextRunStyle } from "../document/richText"
@@ -6,6 +6,7 @@ import type {
   LineRun,
   LineSegment,
   MeasuredBoxEdges,
+  MeasuredDivider,
   MeasuredLine,
   MeasuredParagraph,
   MeasuredParagraphBorderSide,
@@ -635,5 +636,21 @@ export function measureSpacer(node: SpacerNode, availableWidth: number): Measure
     nodeId: node.id,
     height: node.props.height,
     width: availableWidth,
+  }
+}
+
+export function measureDivider(node: DividerNode, availableWidth: number): MeasuredDivider {
+  const thickness = toAbstractUnit(node.props.thickness.value, node.props.thickness.unit)
+  const marginBefore = toAbstractUnit(node.props.marginBefore.value, node.props.marginBefore.unit)
+  const marginAfter = toAbstractUnit(node.props.marginAfter.value, node.props.marginAfter.unit)
+  return {
+    nodeId: node.id,
+    width: availableWidth,
+    height: marginBefore + thickness + marginAfter,
+    color: node.props.color,
+    thickness,
+    marginBefore,
+    marginAfter,
+    style: node.props.style,
   }
 }

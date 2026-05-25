@@ -335,6 +335,13 @@ Current policy direction:
 
 - paragraph: may split by measured line boundaries
 - spacer: atomic whole-block move
+- divider: authored visible block; measured as line thickness plus before/after
+  margins and placed atomically. It may appear in body flow, `stack`, and
+  `flow-stack`; Flow Table cell support is intentionally not enabled in this
+  slice.
+- page-break: authored control block that emits a zero-height marker fragment
+  and forces following body content to the next page. It is body-flow-only in
+  the current model and is distinct from computed pagination breaks.
 - row / stack: atomic for now; paragraphs inside stacks are bounded by the row
   height and do not split independently
 - table row: single-row groups split by default; `allowBreak=false` keeps a row

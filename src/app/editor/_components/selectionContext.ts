@@ -19,6 +19,8 @@ const NODE_LABELS: Record<SelectionContextNode["type"], string> = {
   body: "Body",
   paragraph: "Paragraph",
   spacer: "Spacer",
+  divider: "Divider",
+  "page-break": "Page break",
   row: "Row",
   stack: "Stack",
   "flow-row": "Row",

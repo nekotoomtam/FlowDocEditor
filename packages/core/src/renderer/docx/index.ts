@@ -2,6 +2,7 @@ import {
   Document,
   Header,
   Footer,
+  PageBreak,
   Packer,
   Paragraph,
   TextRun,
@@ -53,6 +54,8 @@ interface TableGroup { tableFragment: PageFragment; rows: TableRowGroup[] }
 type RenderItem =
   | { kind: "paragraph"; fragment: PageFragment }
   | { kind: "spacer"; fragment: PageFragment }
+  | { kind: "divider"; fragment: PageFragment }
+  | { kind: "page-break"; fragment: PageFragment }
   | { kind: "row"; group: RowGroup }
   | { kind: "table"; group: TableGroup }
   | { kind: "toc"; fragment: PageFragment }
@@ -167,6 +170,14 @@ function groupPageFragments(fragments: PageFragment[]): RenderItem[] {
       if (parentCell) parentCell.children.push(fragment)
       else if (parentStack) parentStack.children.push(fragment)
       else items.push({ kind: "spacer", fragment })
+    } else if (fragment.nodeType === "divider") {
+      const parentCell = fragment.parentNodeId ? tableCellMap.get(fragment.parentNodeId) : undefined
+      const parentStack = fragment.parentNodeId ? stackMap.get(fragment.parentNodeId) : undefined
+      if (parentCell) parentCell.children.push(fragment)
+      else if (parentStack) parentStack.children.push(fragment)
+      else items.push({ kind: "divider", fragment })
+    } else if (fragment.nodeType === "page-break") {
+      items.push({ kind: "page-break", fragment })
     } else if (fragment.nodeType === "toc") {
       items.push({ kind: "toc", fragment })
     }
@@ -560,6 +571,33 @@ function buildSpacer(fragment: PageFragment): Paragraph {
   return new Paragraph({ children: [], spacing: { after: ptToTwips(fragment.height) } })
 }
 
+function buildDivider(fragment: PageFragment): Paragraph {
+  const props = fragment.dividerRenderProps
+  if (!props || props.thickness <= 0) return new Paragraph({ children: [] })
+  return new Paragraph({
+    children: [],
+    spacing: {
+      before: ptToTwips(props.marginBefore),
+      after: ptToTwips(props.marginAfter),
+    },
+    border: {
+      bottom: {
+        style: props.style === "dashed"
+          ? BorderStyle.DASHED
+          : props.style === "dotted"
+            ? BorderStyle.DOTTED
+            : BorderStyle.SINGLE,
+        size: Math.max(1, Math.round(props.thickness * 8)),
+        color: props.color,
+      },
+    },
+  })
+}
+
+function buildPageBreak(): Paragraph {
+  return new Paragraph({ children: [new PageBreak()] })
+}
+
 function unitValueToPt(value: UnitValue | undefined): number {
   return value ? Math.max(0, toAbstractUnit(value.value, value.unit)) : 0
 }
@@ -591,6 +629,7 @@ function buildCellChildren(children: PageFragment[], context: DocxRenderContext)
 
     paragraphGroup = flushParagraphGroup(output, paragraphGroup, context)
     if (child.nodeType === "spacer") output.push(buildSpacer(child))
+    if (child.nodeType === "divider") output.push(buildDivider(child))
   }
 
   flushParagraphGroup(output, paragraphGroup, context)
@@ -813,6 +852,8 @@ function buildItems(items: RenderItem[], context: DocxRenderContext): ParagraphB
 
     paragraphGroup = flushParagraphItems(output, paragraphGroup, context)
     if (item.kind === "spacer") output.push(buildSpacer(item.fragment))
+    else if (item.kind === "divider") output.push(buildDivider(item.fragment))
+    else if (item.kind === "page-break") output.push(buildPageBreak())
     else if (item.kind === "row") output.push(buildLayoutTable(item.group, context))
     else if (item.kind === "table") {
       const props = context.flowTablePropsById.get(item.group.tableFragment.nodeId)

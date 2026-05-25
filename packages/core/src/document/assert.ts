@@ -1,7 +1,9 @@
 import {
   DocumentNodeSchema,
+  DividerNodeSchema,
   FlowTableCellNodeSchema,
   FlowTableRowNodeSchema,
+  PageBreakNodeSchema,
   ParagraphNodeSchema,
   SpacerNodeSchema,
 } from "../schema"
@@ -107,6 +109,8 @@ function assertFlowTableInternalSchema(node: { type: string }, path: string): vo
     node.type === "flow-table-cell" ? FlowTableCellNodeSchema :
     node.type === "paragraph" ? ParagraphNodeSchema :
     node.type === "spacer" ? SpacerNodeSchema :
+    node.type === "divider" ? DividerNodeSchema :
+    node.type === "page-break" ? PageBreakNodeSchema :
     null
 
   if (schema == null) {
@@ -277,7 +281,7 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
       return
     }
 
-    if (node.type === "paragraph" || node.type === "spacer" || node.type === "toc") return
+    if (node.type === "paragraph" || node.type === "spacer" || node.type === "divider" || node.type === "page-break" || node.type === "toc") return
 
     active.add(nodeId)
 
@@ -296,8 +300,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
 
       // Tree law enforcement
       if (node.type === "body") {
-        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "flow-row" && child.type !== "spacer" && child.type !== "flow-table" && child.type !== "toc") {
-          fail(childPath, `body child must be paragraph, row, flow-row, spacer, flow-table, or toc — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "row" && child.type !== "flow-row" && child.type !== "spacer" && child.type !== "divider" && child.type !== "page-break" && child.type !== "flow-table" && child.type !== "toc") {
+          fail(childPath, `body child must be paragraph, row, flow-row, spacer, divider, page-break, flow-table, or toc — got "${child.type}"`)
         }
       }
 
@@ -316,11 +320,12 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
         const validStackChild = child.type === "paragraph" ||
           child.type === "row" ||
           child.type === "spacer" ||
+          child.type === "divider" ||
           child.type === "flow-table" ||
           child.type === "toc" ||
           (isZoneRoot && child.type === "flow-row")
         if (!validStackChild) {
-          fail(childPath, `stack child must be paragraph, row, spacer, flow-table, or toc${isZoneRoot ? ", or flow-row" : ""} — got "${child.type}"`)
+          fail(childPath, `stack child must be paragraph, row, spacer, divider, flow-table, or toc${isZoneRoot ? ", or flow-row" : ""} — got "${child.type}"`)
         }
       }
 
@@ -334,8 +339,8 @@ function assertSectionGraph(section: DocumentSection, path: string): void {
       }
 
       if (node.type === "flow-stack") {
-        if (child.type !== "paragraph" && child.type !== "spacer") {
-          fail(childPath, `flow-stack child must be paragraph or spacer — got "${child.type}"`)
+        if (child.type !== "paragraph" && child.type !== "spacer" && child.type !== "divider") {
+          fail(childPath, `flow-stack child must be paragraph, spacer, or divider — got "${child.type}"`)
         }
       }
 

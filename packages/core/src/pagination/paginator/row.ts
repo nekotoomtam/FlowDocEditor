@@ -1,11 +1,13 @@
 import {
   defaultWordBreaker,
+  measureDivider,
   measureParagraph,
 } from "../../layout"
 import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
 import type { DocumentSection } from "../../schema"
 import type {
   PageFlowCursor,
+  DividerRenderProps,
   PaginatedLine,
   PaginatedPage,
   ParagraphRenderProps,
@@ -39,6 +41,7 @@ function pushStackContents(
     const childPageY = child.y + offsetY
     let lines: PaginatedLine[] | undefined
     let renderProps: ParagraphRenderProps | undefined
+    let dividerRenderProps: DividerRenderProps | undefined
 
     if (child.nodeType === "paragraph") {
       const node = section.nodes[child.nodeId]
@@ -47,6 +50,19 @@ function pushStackContents(
         const rawLines = buildPositionedParagraphLines(measured, measured.lines, child.x, childPageY, 0, node.props.align)
         lines = resolvePageNumbers(rawLines, pageIndex + 1 + pageNumberOffset)
         renderProps = buildRenderProps(node, measured.lineHeight, measured.box)
+      }
+    }
+    if (child.nodeType === "divider") {
+      const node = section.nodes[child.nodeId]
+      if (node?.type === "divider") {
+        const measured = measureDivider(node, child.width)
+        dividerRenderProps = {
+          color: measured.color,
+          thickness: measured.thickness,
+          marginBefore: measured.marginBefore,
+          marginAfter: measured.marginAfter,
+          style: measured.style,
+        }
       }
     }
 
@@ -61,6 +77,7 @@ function pushStackContents(
       height: child.height,
       lines,
       renderProps,
+      dividerRenderProps,
     })
   })
 }

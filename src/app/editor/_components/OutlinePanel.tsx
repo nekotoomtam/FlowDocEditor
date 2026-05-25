@@ -390,6 +390,24 @@ function OutlineNode({
     )
   }
 
+  if (node.type === "divider") {
+    return (
+      <NodeRow icon="-" label="เส้นแบ่ง" depth={depth} nodeId={nodeId}
+        selectedNodeId={selectedNodeId} onClick={onSelect}
+        reorderItem={reorderItem} dragState={dragState}
+        onDragStateChange={onDragStateChange} onReorder={onReorder} />
+    )
+  }
+
+  if (node.type === "page-break") {
+    return (
+      <NodeRow icon="PB" label="ขึ้นหน้าใหม่" depth={depth} nodeId={nodeId}
+        selectedNodeId={selectedNodeId} onClick={onSelect}
+        reorderItem={reorderItem} dragState={dragState}
+        onDragStateChange={onDragStateChange} onReorder={onReorder} />
+    )
+  }
+
   if (node.type === "toc") {
     return (
       <NodeRow icon="☰" label="สารบัญ" depth={depth} nodeId={nodeId}

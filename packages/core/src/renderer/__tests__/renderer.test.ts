@@ -11,7 +11,7 @@ import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { ptToTwips } from "../shared"
 import type { FontProvider } from "../shared"
 import { pt } from "../../schema"
-import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode, SpacerNode } from "../../schema"
+import type { DividerNode, DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, PageBreakNode, ParagraphNode, SpacerNode } from "../../schema"
 
 // ─── Document Helpers ─────────────────────────────────────────────────────────
 
@@ -45,6 +45,25 @@ function makePara(id: string, text: string, overrides: Partial<ParagraphNode["pr
 
 function makeSpacer(id: string, height = 20): SpacerNode {
   return { id, type: "spacer", props: { height } }
+}
+
+function makeDivider(id: string, props: Partial<DividerNode["props"]> = {}): DividerNode {
+  return {
+    id,
+    type: "divider",
+    props: {
+      color: "334155",
+      thickness: pt(2),
+      marginBefore: pt(3),
+      marginAfter: pt(5),
+      style: "dotted",
+      ...props,
+    },
+  }
+}
+
+function makePageBreak(id: string): PageBreakNode {
+  return { id, type: "page-break", props: {} }
 }
 
 function makeFlowTableCell(id: string, childIds: string[], props: FlowTableCellNode["props"] = {}): FlowTableCellNode {
@@ -451,6 +470,22 @@ describe("PdfRenderer smoke tests", () => {
     const p2 = makePara("p2", "After spacer")
     const result = await pdf.render(paginate(makeDoc(["p1", "s1", "p2"], { p1, s1, p2 })))
     expect(result.buffer.length).toBeGreaterThan(0)
+  })
+
+  it("draws divider fragments and respects page-break pagination", async () => {
+    const p1 = makePara("p1", "Before divider")
+    const divider = makeDivider("d1")
+    const pageBreak = makePageBreak("pb1")
+    const p2 = makePara("p2", "After page break")
+    const paginated = paginate(makeDoc(["p1", "d1", "pb1", "p2"], { p1, d1: divider, pb1: pageBreak, p2 }))
+    const result = await pdf.render(paginated)
+    const renderedPdf = await PdfLibDocument.load(result.buffer)
+    const streams = collectInflatedPdfStreams(result.buffer).join("\n")
+
+    expect(paginated.sections[0].pages).toHaveLength(2)
+    expect(renderedPdf.getPageCount()).toBe(2)
+    expect(result.buffer.length).toBeGreaterThan(0)
+    expect(streams).not.toContain("PAGE BREAK")
   })
 
   it("renders document with row and two columns without throwing", async () => {
@@ -985,6 +1020,20 @@ describe("DocxRenderer smoke tests", () => {
     // DOCX is a ZIP — starts with PK magic bytes (0x50 0x4B)
     expect(result.buffer[0]).toBe(0x50)
     expect(result.buffer[1]).toBe(0x4b)
+  })
+
+  it("emits divider borders and hard page breaks in DOCX", async () => {
+    const p1 = makePara("p1", "Before divider")
+    const divider = makeDivider("d1", { style: "dashed", color: "334155" })
+    const pageBreak = makePageBreak("pb1")
+    const p2 = makePara("p2", "After page break")
+    const result = await docx.render(paginate(makeDoc(["p1", "d1", "pb1", "p2"], { p1, d1: divider, pb1: pageBreak, p2 })))
+    const xml = await readDocxXml(result.buffer, "word/document.xml")
+
+    expect(xml).toContain('w:val="dashed"')
+    expect(xml).toContain('w:color="334155"')
+    expect(xml).toContain('w:type="page"')
+    expect(xml.indexOf("Before divider")).toBeLessThan(xml.indexOf("After page break"))
   })
 
   it("keeps DOCX fonts name-only when no font provider is supplied", async () => {

@@ -24,6 +24,100 @@ Each entry should include:
 
 ## 2026-05-25
 
+### Add Authored Divider And Page Break Nodes
+
+Goal: Add the first explicit document-level Divider and Page break node support
+without treating either feature as editor-only chrome.
+
+Completed:
+
+- Added `divider` and `page-break` authored nodes to schema defaults,
+  normalization, document assertions, placement operations, and palette drag
+  sources.
+- Added divider measurement and atomic pagination with renderer-facing
+  `dividerRenderProps`.
+- Added authored page-break pagination as a zero-height marker fragment that
+  advances following body content to the next page.
+- Kept Page break body-flow-only in placement/assert rules; kept Divider out of
+  Flow Table cells for this slice.
+- Updated PDF rendering to draw Divider fragments and skip Page break marker
+  chrome while preserving paginated page count.
+- Updated DOCX rendering to serialize Divider as a paragraph border and Page
+  break as a hard Word page break.
+- Exposed Divider and Page break in the editor palette/canvas/property/outline
+  surfaces, with Page break hidden from header/footer palette scope.
+- Aligned Divider line color/style/width property controls with the existing
+  paragraph/box border control language and replaced raw before/after fields
+  with a bounded above/below spacing control.
+- Added same-page blocked drop feedback below authored Page break markers so
+  dragging content does not imply it can land under the marker on that page.
+- Bumped the project version marker from `0.6.15` to `0.6.16` after accepting
+  this Divider/Page break baseline.
+- Updated layout, cross-page, export, and editor UX contracts for the new
+  authored node semantics.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `packages/core/src/schema/block.ts`
+- `packages/core/src/document/defaults.ts`
+- `packages/core/src/document/assert.ts`
+- `packages/core/src/document/normalize.ts`
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/placement/types.ts`
+- `packages/core/src/placement/law.ts`
+- `packages/core/src/layout/types.ts`
+- `packages/core/src/layout/measure.ts`
+- `packages/core/src/layout/flow.ts`
+- `packages/core/src/pagination/types.ts`
+- `packages/core/src/pagination/paginator.ts`
+- `packages/core/src/pagination/paginator/divider.ts`
+- `packages/core/src/pagination/paginator/pageBreak.ts`
+- `packages/core/src/pagination/paginator/flowRow.ts`
+- `packages/core/src/pagination/paginator/row.ts`
+- `packages/core/src/pagination/paginator/zone.ts`
+- `packages/core/src/renderer/pdf/index.ts`
+- `packages/core/src/renderer/docx/index.ts`
+- focused core/app tests under `packages/core/src/**/__tests__` and
+  `src/app/editor/_components/__tests__`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorPalette.tsx`
+- `src/app/editor/_components/PropertyPanel.tsx`
+- `src/app/editor/_components/OutlinePanel.tsx`
+- `src/app/editor/_components/selectionContext.ts`
+- `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/CROSS_PAGE_BEHAVIOR.md`
+- `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification:
+
+- `npm.cmd test -w packages/core -- src/pagination/__tests__/paginator.test.ts src/document/defaults.test.ts src/document/assert.test.ts src/document/normalize.test.ts src/document/operations.test.ts src/placement/law.test.ts`
+- `npm.cmd test -w packages/core -- src/renderer/__tests__/renderer.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorPalette.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts src/app/editor/_components/__tests__/OutlinePanel.test.ts`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts src/app/editor/_components/__tests__/EditorPalette.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/PropertyPanel.test.ts src/app/editor/_components/__tests__/OutlinePanel.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/PropertyPanel.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd test -w packages/core -- src/document/assert.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+
+Notes:
+
+- Project version marker is now `0.6.16`.
+- Page break remains unsupported in header/footer, flow-stack, row, and Flow
+  Table cell scopes until those semantics are explicitly designed.
+- Divider is supported in body/stack/flow-stack/header-footer-safe authoring
+  paths, but not Flow Table cells.
+
+---
+
 ### Bump Header/Footer Canvas Authoring Baseline To 0.6.15
 
 Goal: Record the accepted selected table actions, clone-drag behavior, and

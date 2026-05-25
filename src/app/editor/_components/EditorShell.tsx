@@ -441,17 +441,26 @@ function zoneToIntent(zone: PlacementZone): PlacementIntentType {
   }
 }
 
+const PAGE_BREAK_INTERACTION_HEIGHT = 18
+
+function fragmentInteractionHeightForPlacement(fragment: PageFragment): number {
+  return fragment.nodeType === "page-break"
+    ? PAGE_BREAK_INTERACTION_HEIGHT
+    : fragment.height
+}
+
 function findSmallestFragmentAt(fragments: PageFragment[], docX: number, docY: number): PageFragment | null {
   let hit: PageFragment | null = null
   let hitArea = Infinity
   for (const fragment of fragments) {
+    const height = fragmentInteractionHeightForPlacement(fragment)
     if (
       docX >= fragment.x &&
       docX <= fragment.x + fragment.width &&
       docY >= fragment.y &&
-      docY <= fragment.y + fragment.height
+      docY <= fragment.y + height
     ) {
-      const area = fragment.width * fragment.height
+      const area = fragment.width * Math.max(height, 1)
       if (area < hitArea) {
         hit = fragment
         hitArea = area
@@ -461,11 +470,50 @@ function findSmallestFragmentAt(fragments: PageFragment[], docX: number, docY: n
   return hit
 }
 
+function findPageBreakDropBlocker(
+  fragments: PageFragment[],
+  contentBox: { x: number; y: number; width: number; height: number },
+  docX: number,
+  docY: number,
+): PageFragment | null {
+  if (
+    docX < contentBox.x ||
+    docX > contentBox.x + contentBox.width ||
+    docY < contentBox.y ||
+    docY > contentBox.y + contentBox.height
+  ) {
+    return null
+  }
+
+  let blocker: PageFragment | null = null
+  for (const fragment of fragments) {
+    if (fragment.nodeType !== "page-break") continue
+    if (docX < fragment.x || docX > fragment.x + fragment.width) continue
+
+    const visualBottom = fragment.y + PAGE_BREAK_INTERACTION_HEIGHT
+    if (docY < visualBottom) continue
+    if (blocker == null || fragment.y > blocker.y) blocker = fragment
+  }
+  return blocker
+}
+
+function pageBreakBlockedPreview(fragment: PageFragment): PlacementPreview {
+  return {
+    hoverNodeId: fragment.nodeId,
+    zone: "bottom",
+    target: { kind: "node", nodeId: fragment.nodeId, nodeType: "page-break" },
+    placement: null,
+    isValid: false,
+  }
+}
+
 function describeDragSource(source: DragSource): string {
   if (source.source === "palette") {
     if (source.tableSize) return `Table ${source.tableSize.rows} x ${source.tableSize.columns}`
     if (source.columnShares && source.columnShares.length > 1) return source.columnShares.map((share) => Math.round(share)).join(" | ")
     if (source.blockType === "paragraph") return "Paragraph"
+    if (source.blockType === "divider") return "Divider"
+    if (source.blockType === "page-break") return "Page break"
     if (source.blockType === "row") return "Row"
     if (source.blockType === "flow-columns" || source.blockType === "columns") return "Column"
     if (source.blockType === "flow-table") return "Table"
@@ -508,6 +556,12 @@ function DragGhostIcon({ source }: { source: DragSource }) {
   }
   if (source.blockType === "paragraph") {
     return <span style={dragGhostDocumentIcon}>¶</span>
+  }
+  if (source.blockType === "divider") {
+    return <span style={dragGhostDocumentIcon}>-</span>
+  }
+  if (source.blockType === "page-break") {
+    return <span style={dragGhostDocumentIcon}>PB</span>
   }
   if (source.blockType === "flow-table") {
     return (
@@ -2661,6 +2715,11 @@ export default function EditorShell() {
           }
 
           const allFragments = page.fragments
+          const pageBreakBlocker = findPageBreakDropBlocker(allFragments, page.contentBox, docX, docY)
+          if (pageBreakBlocker) {
+            return { preview: pageBreakBlockedPreview(pageBreakBlocker), sectionId: section.sectionId }
+          }
+
           const hit = findSmallestFragmentAt(allFragments, docX, docY)
 
           if (!hit) {
@@ -2685,13 +2744,18 @@ export default function EditorShell() {
 
           const localX = docX - hit.x
           const localY = docY - hit.y
+          const interactionHeight = fragmentInteractionHeightForPlacement(hit)
+          if (hit.nodeType === "page-break" && localY >= interactionHeight / 2) {
+            return { preview: pageBreakBlockedPreview(hit), sectionId: section.sectionId }
+          }
+
           const targetResult = detectPlacementTarget({
             document: doc,
             hoveredNodeId: hit.nodeId,
             hoveredNodeType: hit.nodeType,
             localX, localY,
             width: hit.width,
-            height: hit.height,
+            height: interactionHeight,
             source: dragSource,
           })
 

@@ -84,6 +84,7 @@ function displayFragmentNodeType(nodeType: PageFragment["nodeType"]): string {
   if (nodeType === "flow-table") return "flow table"
   if (nodeType === "flow-table-row") return "flow row"
   if (nodeType === "flow-table-cell") return "flow cell"
+  if (nodeType === "page-break") return "page break"
   return nodeType
 }
 
@@ -94,14 +95,17 @@ export function shouldStartInlineEditOnSingleClick(input: {
   return input.canInlineEditParagraph
 }
 
-const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "flow-table", "toc"])
-const SELECTABLE_NODE_TYPES = new Set(["paragraph", "spacer", "row", "flow-row", "flow-stack", "flow-table", "flow-table-row", "flow-table-cell", "toc"])
+const DRAGGABLE_TYPES = new Set(["paragraph", "spacer", "divider", "page-break", "row", "flow-row", "flow-stack", "flow-table", "toc"])
+const SELECTABLE_NODE_TYPES = new Set(["paragraph", "spacer", "divider", "page-break", "row", "flow-row", "flow-stack", "flow-table", "flow-table-row", "flow-table-cell", "toc"])
 const PARAGRAPH_CHROME_Y = 3
 const FLOW_STACK_PARAGRAPH_CHROME_Y = 0
 const PARAGRAPH_LIVE_PREVIEW_GAP_Y = 2
+const PAGE_BREAK_MARKER_HEIGHT = 18
 const DROP_PREVIEW_FILL = "#99f6e4"
 const DROP_PREVIEW_STROKE = "#0f766e"
 const DROP_INSERTION_STROKE = "#0d9488"
+const DROP_BLOCKED_FILL = "#fee2e2"
+const DROP_BLOCKED_STROKE = "#dc2626"
 const CANVAS_PATH_HOVER_DELAY_MS = 240
 const CANVAS_PATH_BAR_HEIGHT = 18
 const CANVAS_PATH_BAR_GAP = 4
@@ -115,6 +119,8 @@ const CANVAS_PATH_LABELS: Record<SelectionContextItem["type"], string> = {
   body: "BODY",
   paragraph: "PARAGRAPH",
   spacer: "SPACER",
+  divider: "DIVIDER",
+  "page-break": "PAGE BREAK",
   row: "ROW",
   stack: "STACK",
   "flow-row": "ROW",
@@ -976,6 +982,142 @@ function paragraphBoxStrokeDashArray(border: ResolvedBorderSide, scale: number):
   return undefined
 }
 
+function fragmentInteractionHeight(fragment: PageFragment): number {
+  return fragment.nodeType === "page-break"
+    ? PAGE_BREAK_MARKER_HEIGHT
+    : fragment.height
+}
+
+function renderDividerFragment(fragment: PageFragment, scale: number) {
+  const props = fragment.dividerRenderProps
+  if (!props || props.thickness <= 0) return null
+  const y = (fragment.y + props.marginBefore + props.thickness / 2) * scale
+  const strokeWidth = Math.max(props.thickness * scale, 0.75)
+  return (
+    <line
+      data-testid="editor-divider-line"
+      x1={fragment.x * scale}
+      y1={y}
+      x2={(fragment.x + fragment.width) * scale}
+      y2={y}
+      stroke={cssHex(props.color)}
+      strokeWidth={strokeWidth}
+      strokeDasharray={paragraphBoxStrokeDashArray({
+        style: props.style,
+        width: props.thickness,
+        color: props.color,
+      }, scale)}
+      strokeLinecap={props.style === "dotted" ? "round" : "butt"}
+      style={{ pointerEvents: "none" }}
+    />
+  )
+}
+
+function renderPageBreakMarker(fragment: PageFragment, scale: number) {
+  const markerY = fragment.y * scale + PAGE_BREAK_MARKER_HEIGHT * scale / 2
+  const label = "PAGE BREAK"
+  return (
+    <g data-testid="editor-page-break-marker" style={{ pointerEvents: "none" }}>
+      <line
+        x1={fragment.x * scale}
+        y1={markerY}
+        x2={(fragment.x + fragment.width) * scale}
+        y2={markerY}
+        stroke="#94a3b8"
+        strokeWidth={1}
+        strokeDasharray="5 4"
+      />
+      <rect
+        x={(fragment.x + fragment.width / 2) * scale - 36}
+        y={markerY - 7}
+        width={72}
+        height={14}
+        rx={3}
+        fill="#f8fafc"
+        stroke="#cbd5e1"
+        strokeWidth={0.75}
+      />
+      <text
+        x={(fragment.x + fragment.width / 2) * scale}
+        y={markerY + 3}
+        textAnchor="middle"
+        fontSize={7}
+        fill="#64748b"
+        fontWeight={700}
+        style={{ userSelect: "none" }}
+      >
+        {label}
+      </text>
+    </g>
+  )
+}
+
+function renderPageBreakBlockedDropArea(
+  fragment: PageFragment,
+  scale: number,
+  contentBox: { x: number; y: number; width: number; height: number },
+) {
+  const blockTop = Math.max(contentBox.y, fragment.y + PAGE_BREAK_MARKER_HEIGHT)
+  const blockBottom = contentBox.y + contentBox.height
+  const blockHeight = Math.max(0, blockBottom - blockTop)
+  if (blockHeight <= 0) return null
+
+  const label = "Starts on next page"
+  const x = contentBox.x * scale
+  const y = blockTop * scale
+  const width = contentBox.width * scale
+  const height = blockHeight * scale
+  const labelWidth = Math.min(132, Math.max(94, width - 16))
+  const labelX = x + width / 2
+  const labelY = y + Math.min(22, Math.max(13, height / 2))
+
+  return (
+    <g data-testid="drop-highlight-page-break-blocked" style={{ pointerEvents: "none" }}>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        fill={DROP_BLOCKED_FILL}
+        fillOpacity={0.42}
+        stroke={DROP_BLOCKED_STROKE}
+        strokeWidth={1.2}
+        strokeDasharray="6 4"
+        rx={3}
+      />
+      <line
+        x1={x}
+        y1={y}
+        x2={x + width}
+        y2={y}
+        stroke={DROP_BLOCKED_STROKE}
+        strokeWidth={2}
+      />
+      <rect
+        x={labelX - labelWidth / 2}
+        y={labelY - 8}
+        width={labelWidth}
+        height={16}
+        rx={4}
+        fill="#fff1f2"
+        stroke="#fb7185"
+        strokeWidth={0.8}
+      />
+      <text
+        x={labelX}
+        y={labelY + 3}
+        textAnchor="middle"
+        fontSize={8}
+        fontWeight={700}
+        fill="#be123c"
+        style={{ userSelect: "none" }}
+      >
+        {label}
+      </text>
+    </g>
+  )
+}
+
 function renderFragmentBox(fragment: PageFragment, scale: number) {
   const primitives = resolveFragmentBoxLayoutPrimitives(fragment)
   if (!primitives) return null
@@ -1178,7 +1320,7 @@ function isStackInsideRow(doc: DocumentNode, stackId: string | null | undefined)
 }
 
 function fragmentVisualBottom(fragment: PageFragment): number {
-  const fragmentBottom = fragment.y + Math.max(fragment.height, 1)
+  const fragmentBottom = fragment.y + Math.max(fragmentInteractionHeight(fragment), 1)
   const lineBottom = fragment.lines?.reduce((bottom, line) => (
     Math.max(bottom, line.y + line.height)
   ), fragmentBottom) ?? fragmentBottom
@@ -1411,6 +1553,7 @@ function ZoneFragments({
             onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
           />
         )}
+        {fragment.nodeType === "divider" && renderDividerFragment(visualDisplayFragment, scale)}
       </g>
     )
   })
@@ -1751,7 +1894,14 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
   doc: DocumentNode; drag: DragState | null; fragments: PageFragment[]; scale: number
   contentBox: { x: number; y: number; width: number; height: number }
 }) {
-  if (!drag?.preview?.isValid || !drag.preview.placement) return null
+  if (!drag?.preview) return null
+  if (!drag.preview.isValid) {
+    const blocker = drag.preview.hoverNodeId
+      ? fragments.find((fragment) => fragment.nodeId === drag.preview?.hoverNodeId && fragment.nodeType === "page-break")
+      : null
+    return blocker ? renderPageBreakBlockedDropArea(blocker, scale, contentBox) : null
+  }
+  if (!drag.preview.placement) return null
   const { hoverNodeId, zone, target } = drag.preview
   if (!hoverNodeId || !zone || !target) return null
 
@@ -2375,7 +2525,7 @@ function PageView({
         const docNode = nodeById.get(f.nodeId)
         const isEmpty = (f.nodeType === "stack" || f.nodeType === "flow-stack") && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
         // visual override ระหว่าง resize
-        let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = displayFragment.height
+        let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = fragmentInteractionHeight(displayFragment)
         if (resizeDrag?.type === "stack" && (f.nodeType === "stack" || f.nodeType === "flow-stack")) {
           if (f.nodeId === resizeDrag.leftStackId) {
             fragWidth = resizeDrag.currentDocX - f.x
@@ -2492,6 +2642,8 @@ function PageView({
               opacity={chromeOpacity}
             />
             {(f.nodeType === "paragraph" || f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && renderFragmentBox(resizedDisplayFragment, scale)}
+            {f.nodeType === "divider" && renderDividerFragment(displayFragment, scale)}
+            {f.nodeType === "page-break" && renderPageBreakMarker(displayFragment, scale)}
             {isSelected && !isInlineEditing && !isFlowTableRowVisualOnly && (
               isContinuationFlowTableCellFragment
                 ? renderFlowTableCellSelectionOutline(displayFragment, scale, chromeY, chromeHeight, selectionPad)

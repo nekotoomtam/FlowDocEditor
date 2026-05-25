@@ -354,6 +354,89 @@ function makePaginated(): PaginatedDocument {
   }
 }
 
+function makeDividerPageBreakDoc(): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 36, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 36, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["divider-1", "page-break-1"] },
+          "divider-1": {
+            id: "divider-1",
+            type: "divider",
+            props: {
+              color: "334155",
+              thickness: { value: 2, unit: "pt" },
+              marginBefore: { value: 4, unit: "pt" },
+              marginAfter: { value: 6, unit: "pt" },
+              style: "dashed",
+            },
+          },
+          "page-break-1": { id: "page-break-1", type: "page-break", props: {} },
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
+function makeDividerPageBreakPaginated(): PaginatedDocument {
+  return {
+    sections: [{
+      sectionId: "section",
+      pages: [{
+        index: 0,
+        width: 300,
+        height: 400,
+        contentBox: { x: 36, y: 72, width: 228, height: 256 },
+        fragments: [
+          {
+            nodeId: "divider-1",
+            nodeType: "divider",
+            pageIndex: 0,
+            x: 36,
+            y: 72,
+            width: 228,
+            height: 12,
+            dividerRenderProps: {
+              color: "334155",
+              thickness: 2,
+              marginBefore: 4,
+              marginAfter: 6,
+              style: "dashed",
+            },
+          },
+          {
+            nodeId: "page-break-1",
+            nodeType: "page-break",
+            pageIndex: 0,
+            x: 36,
+            y: 96,
+            width: 228,
+            height: 0,
+          },
+        ],
+        headerFragments: [],
+        footerFragments: [],
+      }],
+    }],
+    tocEntries: [],
+  }
+}
+
 function makeFlowPaginated(): PaginatedDocument {
   return {
     sections: [{
@@ -952,6 +1035,45 @@ describe("EditorCanvas page margin edit mode", () => {
 })
 
 describe("EditorCanvas canvas selection path", () => {
+  it("renders divider and page-break authoring fragments", () => {
+    const markup = renderCanvas(
+      makeDividerPageBreakPaginated(),
+      makeDividerPageBreakDoc(),
+      "page-break-1",
+    )
+
+    expect(markup).toContain("data-testid=\"editor-divider-line\"")
+    expect(markup).toContain("stroke=\"#334155\"")
+    expect(markup).toContain("data-testid=\"editor-page-break-marker\"")
+    expect(markup).toContain(">PAGE BREAK</text>")
+    expect(markup).toContain("data-testid=\"canvas-action-rail\"")
+  })
+
+  it("shows a blocked drop area below a page-break marker on the same page", () => {
+    const drag: DragState = {
+      source: { source: "palette", blockType: "paragraph" },
+      clientX: 0,
+      clientY: 0,
+      preview: {
+        hoverNodeId: "page-break-1",
+        zone: "bottom",
+        target: { kind: "node", nodeId: "page-break-1", nodeType: "page-break" },
+        placement: null,
+        isValid: false,
+      },
+    }
+    const markup = renderCanvas(
+      makeDividerPageBreakPaginated(),
+      makeDividerPageBreakDoc(),
+      null,
+      { drag },
+    )
+
+    expect(markup).toContain("data-testid=\"drop-highlight-page-break-blocked\"")
+    expect(markup).toContain("Starts on next page")
+    expect(markup).toContain("stroke=\"#dc2626\"")
+  })
+
   it("renders a clickable selected path from the stored selection context", () => {
     const markup = renderCanvas(makeFlowPaginated(), makeFlowDoc(), "body-p")
 

@@ -3,7 +3,7 @@ import { paginateDocument } from "../index"
 import { assertPaginatedDocument } from "../assertPaginated"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { pt } from "../../schema"
-import type { DocumentNode, FlowTableNode, ParagraphNode, SpacerNode, LayoutNode } from "../../schema"
+import type { DividerNode, DocumentNode, FlowTableNode, PageBreakNode, ParagraphNode, SpacerNode, LayoutNode } from "../../schema"
 import type { PageFragment } from "../types"
 
 // ─── Page Metrics ────────────────────────────────────────────────────────────
@@ -51,6 +51,28 @@ function makePara(id: string, text: string, overrides: Partial<ParagraphNode["pr
 
 function makeSpacer(id: string, height: number): SpacerNode {
   return { id, type: "spacer", props: { height } }
+}
+
+function makeDivider(
+  id: string,
+  props: Partial<DividerNode["props"]> = {},
+): DividerNode {
+  return {
+    id,
+    type: "divider",
+    props: {
+      color: "334155",
+      thickness: pt(2),
+      marginBefore: pt(4),
+      marginAfter: pt(6),
+      style: "dashed",
+      ...props,
+    },
+  }
+}
+
+function makePageBreak(id: string): PageBreakNode {
+  return { id, type: "page-break", props: {} }
 }
 
 function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): DocumentNode {
@@ -124,6 +146,25 @@ describe("paginator — geometry", () => {
     expect(sp.width).toBe(CW)
   })
 
+  it("divider occupies authored margins and carries render props", () => {
+    const p = makePara("p1", "A")
+    const divider = makeDivider("d1")
+    const frags = getFragments(makeDoc(["p1", "d1"], { p1: p, d1: divider }))
+    const d = frags.find((f) => f.nodeId === "d1")!
+
+    expect(d.nodeType).toBe("divider")
+    expect(d.y).toBe(CY + LH)
+    expect(d.height).toBe(12)
+    expect(d.width).toBe(CW)
+    expect(d.dividerRenderProps).toEqual({
+      color: "334155",
+      thickness: 2,
+      marginBefore: 4,
+      marginAfter: 6,
+      style: "dashed",
+    })
+  })
+
   it("places paragraph text inside paragraph box padding and border", () => {
     const p = makePara("p1", "Hi", {
       box: {
@@ -191,6 +232,35 @@ describe("paginator — page breaks", () => {
     expect(pages.length).toBeGreaterThanOrEqual(2)
     const spacerPage = pages.findIndex((pg) => pg.fragments.some((f) => f.nodeId === "s1"))
     expect(spacerPage).toBeGreaterThan(0)
+  })
+
+  it("page-break marker forces following body content onto the next page", () => {
+    const before = makePara("p1", "Before")
+    const pageBreak = makePageBreak("pb1")
+    const after = makePara("p2", "After")
+    const result = paginateDocument(makeDoc(["p1", "pb1", "p2"], { p1: before, pb1: pageBreak, p2: after }), defaultTextMeasurer, defaultWordBreaker)
+    const pages = result.sections[0].pages
+    const marker = pages[0].fragments.find((f) => f.nodeId === "pb1")!
+    const afterFragment = pages[1].fragments.find((f) => f.nodeId === "p2")!
+
+    expect(pages).toHaveLength(2)
+    expect(marker).toMatchObject({
+      nodeType: "page-break",
+      height: 0,
+      pageIndex: 0,
+    })
+    expect(afterFragment.y).toBe(CY)
+    expect(() => assertPaginatedDocument(result)).not.toThrow()
+  })
+
+  it("trailing page-break creates an intentional blank following page", () => {
+    const before = makePara("p1", "Before")
+    const pageBreak = makePageBreak("pb1")
+    const pages = getPages(makeDoc(["p1", "pb1"], { p1: before, pb1: pageBreak }))
+
+    expect(pages).toHaveLength(2)
+    expect(pages[0].fragments.some((f) => f.nodeId === "pb1")).toBe(true)
+    expect(pages[1].fragments).toEqual([])
   })
 
   it("paragraph at top of page is not moved even if tall", () => {

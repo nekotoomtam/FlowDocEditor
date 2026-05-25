@@ -100,6 +100,53 @@ describe("assertDocument general invariants", () => {
 
     expect(() => assertDocument(doc)).not.toThrow()
   })
+
+  it("allows divider and page-break nodes in body flow", () => {
+    const doc = bodyDoc({
+      divider: {
+        id: "divider",
+        type: "divider",
+        props: {
+          color: "334155",
+          thickness: pt(1),
+          marginBefore: pt(4),
+          marginAfter: pt(4),
+          style: "solid",
+        },
+      },
+      "page-break": { id: "page-break", type: "page-break", props: {} },
+    }, ["divider", "page-break"])
+
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("allows divider but rejects page-break inside flow-stack content", () => {
+    const divider = {
+      id: "divider",
+      type: "divider",
+      props: {
+        color: "334155",
+        thickness: pt(1),
+        marginBefore: pt(4),
+        marginAfter: pt(4),
+        style: "solid",
+      },
+    } satisfies LayoutNode
+    const valid = bodyDoc({
+      row: { id: "row", type: "flow-row", props: {}, childIds: ["stack"] },
+      stack: { id: "stack", type: "flow-stack", props: { widthShare: 100 }, childIds: ["divider"] },
+      divider,
+    }, ["row"])
+    const invalid = bodyDoc({
+      row: { id: "row", type: "flow-row", props: {}, childIds: ["stack"] },
+      stack: { id: "stack", type: "flow-stack", props: { widthShare: 100 }, childIds: ["page-break"] },
+      "page-break": { id: "page-break", type: "page-break", props: {} },
+    }, ["row"])
+
+    expect(() => assertDocument(valid)).not.toThrow()
+    expect(() => assertDocument(invalid)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(invalid)).toThrow('flow-stack child must be paragraph, spacer, or divider — got "page-break"')
+  })
 })
 
 describe("assertDocument flow-table invariants", () => {
@@ -138,6 +185,52 @@ describe("assertDocument flow-table invariants", () => {
     }
 
     expect(() => assertDocument(flowTableDoc(table))).not.toThrow()
+  })
+
+  it("rejects divider and page-break content in flow-table cells for now", () => {
+    const divider = {
+      id: "cell-divider",
+      type: "divider",
+      props: {
+        color: "334155",
+        thickness: pt(1),
+        marginBefore: pt(4),
+        marginAfter: pt(4),
+        style: "solid",
+      },
+    } satisfies LayoutNode
+    const row = flowRow("row", ["cell"])
+    const dividerTable = {
+      id: "flow-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }],
+      rowIds: [row.id],
+      nodes: {
+        [row.id]: row,
+        cell: { id: "cell", type: "flow-table-cell", props: {}, childIds: [divider.id] },
+        [divider.id]: divider,
+      },
+    } as unknown as FlowTableNode
+
+    const pageBreakTable = {
+      id: "flow-table",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(100) }],
+      rowIds: [row.id],
+      nodes: {
+        [row.id]: row,
+        cell: { id: "cell", type: "flow-table-cell", props: {}, childIds: ["cell-page-break"] },
+        "cell-page-break": { id: "cell-page-break", type: "page-break", props: {} },
+      },
+    } as unknown as FlowTableNode
+
+    expect(() => assertDocument(flowTableDoc(dividerTable))).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(flowTableDoc(dividerTable))).toThrow('flow-table cell child must be paragraph or spacer — got "divider"')
+
+    expect(() => assertDocument(flowTableDoc(pageBreakTable))).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(flowTableDoc(pageBreakTable))).toThrow('flow-table cell child must be paragraph or spacer — got "page-break"')
   })
 
   it("allows a flow-table cell mergeMap that maps current children inside the span", () => {
@@ -342,7 +435,7 @@ describe("assertDocument flow-row / flow-stack invariants", () => {
     }, ["fs1"])
 
     expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
-    expect(() => assertDocument(doc)).toThrow("body child must be paragraph, row, flow-row, spacer, flow-table, or toc")
+    expect(() => assertDocument(doc)).toThrow("body child must be paragraph, row, flow-row, spacer, divider, page-break, flow-table, or toc")
   })
 
   it("rejects non-paragraph and non-spacer children inside flow-stack", () => {
@@ -356,7 +449,7 @@ describe("assertDocument flow-row / flow-stack invariants", () => {
     }, ["fr1"])
 
     expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
-    expect(() => assertDocument(doc)).toThrow("flow-stack child must be paragraph or spacer")
+    expect(() => assertDocument(doc)).toThrow("flow-stack child must be paragraph, spacer, or divider")
   })
 
   it("rejects a flow-stack without widthShare inside flow-row", () => {

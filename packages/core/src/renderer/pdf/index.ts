@@ -349,6 +349,23 @@ function drawFragmentBox(pdfPage: PDFPage, fragment: PageFragment, pageHeight: n
   })
 }
 
+function drawDivider(pdfPage: PDFPage, fragment: PageFragment, pageHeight: number): void {
+  const props = fragment.dividerRenderProps
+  if (!props || props.thickness <= 0) return
+  const y = pageHeight - (fragment.y + props.marginBefore + props.thickness / 2)
+  pdfPage.drawLine({
+    start: { x: fragment.x, y },
+    end: { x: fragment.x + fragment.width, y },
+    thickness: props.thickness,
+    color: hexToRgb(props.color),
+    ...resolvePdfBorderLineOptions({
+      style: props.style,
+      width: props.thickness,
+      color: props.color,
+    }),
+  })
+}
+
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 
 export class PdfRenderer implements Renderer {
@@ -406,6 +423,11 @@ export class PdfRenderer implements Renderer {
 
         if (fragment.nodeType === "flow-table-cell") {
           drawFragmentBox(pdfPage, fragment, page.height)
+          continue
+        }
+
+        if (fragment.nodeType === "divider") {
+          drawDivider(pdfPage, fragment, page.height)
           continue
         }
 

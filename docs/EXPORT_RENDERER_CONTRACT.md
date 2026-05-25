@@ -106,6 +106,9 @@ PDF should:
   `page.footerFragments` in the same pagination output the editor preview shows
 - draw paragraph, row, stack, table, table-row, and table-cell fragments from
   paginated geometry
+- draw authored divider fragments from `dividerRenderProps`
+- skip authored page-break marker chrome while preserving the page count and
+  fragment order produced by pagination
 - draw authored paragraph box fill, padding, and border from paginated paragraph
   metadata when paragraph box style is enabled
 - draw authored Flow Table cell box fill and border from paginated
@@ -156,11 +159,13 @@ DOCX should:
 - preserve Flow Table span semantics where possible from renderer-facing
   pagination metadata, mapping `colspan` to Word `gridSpan` and `rowspan` to
   Word vertical merge metadata
+- preserve authored divider nodes as Word paragraph borders with compatible
+  before/after spacing
+- preserve authored page-break nodes as hard Word page breaks, while continuing
+  to ignore computed pagination breaks
 - emit valid DOCX ZIP output
 - keep page/section structure useful for review workflows
 - document where Word/LibreOffice may reflow content after opening
-- preserve explicit authored page-break nodes if the document model adds them
-  in the future, while continuing to ignore computed pagination breaks
 - embed catalog font files through the DOCX font table when the server export
   API provides a renderer `fontProvider`, including bold, italic, and
   bold-italic variants when the catalog provides those files and the document
@@ -258,6 +263,7 @@ Choose the smallest verification that protects the changed layer.
 Current automated coverage includes API route contract smoke, PDF/DOCX smoke,
 source, paginated, multi-page body, Flow Table cell, header, and footer DOCX
 rich text run property checks, server DOCX font variant embedding checks,
+authored divider/page-break PDF and DOCX checks,
 product PDF page-count parity smoke, product DOCX table-row structure smoke,
 multi-section DOCX structure tests, focused paragraph box PDF drawing primitive
 tests, and an opt-in PDF raster visual regression gate for paragraph box fill,

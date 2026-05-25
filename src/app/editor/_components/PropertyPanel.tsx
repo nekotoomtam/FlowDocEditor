@@ -32,6 +32,8 @@ import { buildSelectionContext } from "./selectionContext"
 import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
 
 type DocNode = LayoutNode | FlowTableRowNode | FlowTableCellNode
+type DividerNode = Extract<LayoutNode, { type: "divider" }>
+type DividerLineStyle = DividerNode["props"]["style"]
 type ParagraphPanelTab = "text" | "box"
 type FlowContainerPanelTab = "layout" | "box"
 
@@ -88,6 +90,8 @@ function displayNodeType(nodeType: DocNode["type"]): string {
   if (nodeType === "flow-table") return "Flow table"
   if (nodeType === "flow-table-row") return "Flow table row"
   if (nodeType === "flow-table-cell") return "Flow table cell"
+  if (nodeType === "divider") return "Divider"
+  if (nodeType === "page-break") return "Page break"
   return nodeType
 }
 
@@ -177,6 +181,10 @@ const DEFAULT_BOX_BORDER_COLOR = "1F2937"
 const DEFAULT_BOX_BORDER_WIDTH = 1
 const BOX_BORDER_WIDTH_MAX = 5
 const BOX_BORDER_WIDTH_STEP = 0.25
+const DEFAULT_DIVIDER_COLOR = "CBD5E1"
+const DIVIDER_THICKNESS_SLIDER_MAX = 12
+const DIVIDER_SPACING_SLIDER_MAX = 72
+const DIVIDER_SPACING_INPUT_MAX = 144
 const DOCUMENT_COLOR_PALETTE = [
   "F8FAFC", "DBEAFE", "DCFCE7", "FEF3C7", "FCE7F3",
   "E2E8F0", "BFDBFE", "BBF7D0", "FDE68A", "FBCFE8",
@@ -184,6 +192,7 @@ const DOCUMENT_COLOR_PALETTE = [
   "111827", "1E3A8A", "166534", "92400E", "831843",
 ] as const
 const BOX_BORDER_STYLE_OPTIONS: ParagraphBoxBorderStyle[] = ["none", "solid", "dashed", "dotted"]
+const DIVIDER_LINE_STYLE_OPTIONS: DividerLineStyle[] = ["solid", "dashed", "dotted"]
 const PARAGRAPH_FONT_OPTIONS = listSelectableFontEntries()
 
 function sanitizeHexColorInput(value: string): string {
@@ -196,6 +205,12 @@ function isCompleteHexColor(value: string): boolean {
 
 function numericPtInput(value: string): number {
   return Math.max(0, Number(value) || 0)
+}
+
+function clampedPtInput(value: string | number, max: number): number {
+  const numeric = typeof value === "number" ? value : Number(value)
+  if (!Number.isFinite(numeric)) return 0
+  return Math.max(0, Math.min(max, numeric))
 }
 
 function clampedBorderWidthInput(value: string | number): number {
@@ -472,6 +487,337 @@ function ColorPaletteTray({
         </div>
       )}
     </div>
+  )
+}
+
+function DividerControls({
+  node,
+  onUpdateProps,
+}: {
+  node: DividerNode
+  onUpdateProps: (nodeId: string, changes: Record<string, unknown>) => void
+}) {
+  const color = node.props.color.toUpperCase()
+  const thickness = unitValueToPtNumber(node.props.thickness)
+  const marginBefore = unitValueToPtNumber(node.props.marginBefore)
+  const marginAfter = unitValueToPtNumber(node.props.marginAfter)
+  const [colorDraft, setColorDraft] = useState(color)
+  const [thicknessDraft, setThicknessDraft] = useState(thickness)
+  const [thicknessDraftDirty, setThicknessDraftDirty] = useState(false)
+  const [marginBeforeDraft, setMarginBeforeDraft] = useState(marginBefore)
+  const [marginAfterDraft, setMarginAfterDraft] = useState(marginAfter)
+  const [marginBeforeDraftDirty, setMarginBeforeDraftDirty] = useState(false)
+  const [marginAfterDraftDirty, setMarginAfterDraftDirty] = useState(false)
+
+  useEffect(() => {
+    setColorDraft(color)
+  }, [color, node.id])
+
+  useEffect(() => {
+    setThicknessDraft(thickness)
+    setThicknessDraftDirty(false)
+  }, [thickness, node.id])
+
+  useEffect(() => {
+    setMarginBeforeDraft(marginBefore)
+    setMarginBeforeDraftDirty(false)
+  }, [marginBefore, node.id])
+
+  useEffect(() => {
+    setMarginAfterDraft(marginAfter)
+    setMarginAfterDraftDirty(false)
+  }, [marginAfter, node.id])
+
+  const commitColor = (nextColor: string) => {
+    const hex = sanitizeHexColorInput(nextColor)
+    if (!isCompleteHexColor(hex)) return
+    if (hex !== color) onUpdateProps(node.id, { color: hex })
+    setColorDraft(hex)
+  }
+
+  const commitColorDraft = () => {
+    const hex = sanitizeHexColorInput(colorDraft)
+    if (!isCompleteHexColor(hex)) {
+      setColorDraft(color)
+      return
+    }
+    commitColor(hex)
+  }
+
+  const setThicknessDraftValue = (value: string | number) => {
+    const next = Math.max(0, Number(value) || 0)
+    setThicknessDraft(next)
+    setThicknessDraftDirty(next !== thickness)
+  }
+
+  const commitThicknessDraft = () => {
+    const next = Math.max(0, Number(thicknessDraft) || 0)
+    if (thicknessDraftDirty && next !== thickness) onUpdateProps(node.id, { thickness: pt(next) })
+    setThicknessDraft(next)
+    setThicknessDraftDirty(false)
+  }
+
+  const spacingInputMax = Math.max(
+    DIVIDER_SPACING_INPUT_MAX,
+    Math.ceil(marginBefore),
+    Math.ceil(marginAfter),
+  )
+  const spacingSliderMax = Math.max(
+    DIVIDER_SPACING_SLIDER_MAX,
+    Math.ceil(marginBeforeDraft),
+    Math.ceil(marginAfterDraft),
+  )
+
+  const setSpacingDraftValue = (edge: "before" | "after", value: string | number) => {
+    const next = clampedPtInput(value, spacingInputMax)
+    if (edge === "before") {
+      setMarginBeforeDraft(next)
+      setMarginBeforeDraftDirty(next !== marginBefore)
+      return
+    }
+    setMarginAfterDraft(next)
+    setMarginAfterDraftDirty(next !== marginAfter)
+  }
+
+  const commitSpacingDraft = (edge: "before" | "after") => {
+    if (edge === "before") {
+      const next = clampedPtInput(marginBeforeDraft, spacingInputMax)
+      if (marginBeforeDraftDirty && next !== marginBefore) onUpdateProps(node.id, { marginBefore: pt(next) })
+      setMarginBeforeDraft(next)
+      setMarginBeforeDraftDirty(false)
+      return
+    }
+    const next = clampedPtInput(marginAfterDraft, spacingInputMax)
+    if (marginAfterDraftDirty && next !== marginAfter) onUpdateProps(node.id, { marginAfter: pt(next) })
+    setMarginAfterDraft(next)
+    setMarginAfterDraftDirty(false)
+  }
+
+  const resetSpacingDraft = (edge: "before" | "after") => {
+    if (edge === "before") {
+      setMarginBeforeDraft(marginBefore)
+      setMarginBeforeDraftDirty(false)
+      return
+    }
+    setMarginAfterDraft(marginAfter)
+    setMarginAfterDraftDirty(false)
+  }
+
+  const renderSpacingControl = (edge: "before" | "after") => {
+    const isBefore = edge === "before"
+    const draft = isBefore ? marginBeforeDraft : marginAfterDraft
+    const labelText = isBefore ? "\u2191 Above" : "\u2193 Below"
+    const testIdPrefix = isBefore ? "divider-spacing-above" : "divider-spacing-below"
+    return (
+      <label key={edge} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <span style={{ fontSize: 9, color: "#9ca3af" }}>{labelText}</span>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 52px", gap: 6, alignItems: "center" }}>
+          <input
+            data-testid={`${testIdPrefix}-slider`}
+            aria-label={`Divider spacing ${isBefore ? "above" : "below"}`}
+            type="range"
+            min={0}
+            max={spacingSliderMax}
+            step={1}
+            value={draft}
+            onChange={(e) => setSpacingDraftValue(edge, e.target.value)}
+            onPointerUp={() => commitSpacingDraft(edge)}
+            onBlur={() => commitSpacingDraft(edge)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitSpacingDraft(edge)
+              if (e.key === "Escape") resetSpacingDraft(edge)
+            }}
+            style={{ width: "100%" }}
+          />
+          <input
+            data-testid={testIdPrefix}
+            type="number"
+            min={0}
+            max={spacingInputMax}
+            step={1}
+            value={draft}
+            onChange={(e) => setSpacingDraftValue(edge, e.target.value)}
+            onBlur={() => commitSpacingDraft(edge)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitSpacingDraft(edge)
+              if (e.key === "Escape") resetSpacingDraft(edge)
+            }}
+            style={input}
+          />
+        </div>
+      </label>
+    )
+  }
+
+  const renderLineStyleButton = (style: DividerLineStyle) => {
+    const active = node.props.style === style
+    const label = `Set divider line style ${style}`
+    return (
+      <button
+        key={style}
+        type="button"
+        data-testid={`divider-line-style-${style}`}
+        aria-label={label}
+        aria-pressed={active}
+        title={label}
+        onClick={() => onUpdateProps(node.id, { style })}
+        style={{
+          ...borderStyleButton,
+          background: active ? "#dbeafe" : "#f8fafc",
+          borderColor: active ? "#93c5fd" : "#e5e7eb",
+        }}
+      >
+        <BorderStyleIcon style={style} />
+      </button>
+    )
+  }
+
+  const previewColor = isCompleteHexColor(colorDraft) ? colorDraft : color
+  const previewWidth = Math.max(1, thicknessDraft)
+  const sliderMax = Math.max(DIVIDER_THICKNESS_SLIDER_MAX, Math.ceil(thicknessDraft))
+
+  return (
+    <section data-testid="divider-line-controls" style={sectionBox}>
+      <CollapsibleCard title="Line" summary={`${node.props.style}, ${thickness} pt`} testId="divider-line-card">
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            <span style={{ fontSize: 9, color: "#9ca3af" }}>Style</span>
+            <div data-testid="divider-line-style-group" style={{ ...borderStyleGroup, gridTemplateColumns: "repeat(3, 1fr)" }}>
+              {DIVIDER_LINE_STYLE_OPTIONS.map(renderLineStyleButton)}
+            </div>
+          </div>
+          <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            <span style={{ fontSize: 9, color: "#9ca3af" }}>Width</span>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 52px", gap: 6, alignItems: "center" }}>
+              <input
+                data-testid="divider-line-width-slider"
+                aria-label="Divider line width"
+                type="range"
+                min={0}
+                max={sliderMax}
+                step={BOX_BORDER_WIDTH_STEP}
+                value={thicknessDraft}
+                onChange={(e) => setThicknessDraftValue(e.target.value)}
+                onPointerUp={commitThicknessDraft}
+                onBlur={commitThicknessDraft}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitThicknessDraft()
+                  if (e.key === "Escape") {
+                    setThicknessDraft(thickness)
+                    setThicknessDraftDirty(false)
+                  }
+                }}
+                style={{ width: "100%" }}
+              />
+              <input
+                data-testid="divider-line-width"
+                type="number"
+                min={0}
+                step={BOX_BORDER_WIDTH_STEP}
+                value={thicknessDraft}
+                onChange={(e) => setThicknessDraftValue(e.target.value)}
+                onBlur={commitThicknessDraft}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitThicknessDraft()
+                  if (e.key === "Escape") {
+                    setThicknessDraft(thickness)
+                    setThicknessDraftDirty(false)
+                  }
+                }}
+                style={input}
+              />
+            </div>
+          </label>
+        </div>
+        <div
+          data-testid="divider-line-preview"
+          style={{
+            height: 20,
+            display: "flex",
+            alignItems: "center",
+            marginTop: 6,
+            marginBottom: 6,
+          }}
+        >
+          <span
+            style={{
+              width: "100%",
+              borderTop: `${previewWidth}px ${node.props.style} #${previewColor}`,
+            }}
+          />
+        </div>
+        <ColorPaletteTray
+          colors={DOCUMENT_COLOR_PALETTE}
+          selectedColor={color}
+          displayValue={`#${color}`}
+          onSelectColor={commitColor}
+          testIdPrefix="divider-line-color-palette"
+          labelPrefix="Divider line"
+          wellStyle={{ background: `#${previewColor}` }}
+          actionControl={(
+            <button
+              type="button"
+              data-testid="divider-line-color-default"
+              aria-label="Set divider line default color"
+              onClick={() => commitColor(DEFAULT_DIVIDER_COLOR)}
+              style={paletteActionButton}
+            >
+              <span style={{ ...paletteActionSwatch, background: `#${DEFAULT_DIVIDER_COLOR}` }} />
+              Default
+            </button>
+          )}
+          customControls={(
+            <div style={customColorRow}>
+              <input
+                type="color"
+                aria-label="Divider line color"
+                value={`#${previewColor}`}
+                onChange={(e) => {
+                  const hex = sanitizeHexColorInput(e.target.value)
+                  setColorDraft(hex)
+                }}
+                onBlur={commitColorDraft}
+                style={{ width: 28, height: 24, padding: 0, border: "1px solid #e5e7eb", borderRadius: 4, background: "white" }}
+              />
+              <input
+                data-testid="divider-line-color"
+                value={colorDraft}
+                maxLength={6}
+                onChange={(e) => {
+                  const hex = sanitizeHexColorInput(e.target.value)
+                  setColorDraft(hex)
+                }}
+                onBlur={commitColorDraft}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitColorDraft()
+                  if (e.key === "Escape") setColorDraft(color)
+                }}
+                style={input}
+              />
+            </div>
+          )}
+          swatchWidth={20}
+          swatchHeight={18}
+        />
+      </CollapsibleCard>
+      <CollapsibleCard title="Spacing" summary={`${marginBefore} / ${marginAfter} pt`} testId="divider-spacing-card">
+        <div data-testid="divider-spacing-preview" style={dividerSpacingPreview}>
+          <span style={dividerSpacingLabel}>{"\u2191"} Above</span>
+          <span
+            aria-hidden="true"
+            style={{
+              width: "100%",
+              borderTop: `${previewWidth}px ${node.props.style} #${previewColor}`,
+            }}
+          />
+          <span style={dividerSpacingLabel}>{"\u2193"} Below</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {renderSpacingControl("before")}
+          {renderSpacingControl("after")}
+        </div>
+      </CollapsibleCard>
+    </section>
   )
 }
 
@@ -1321,6 +1667,25 @@ const borderStyleIconLine: React.CSSProperties = {
   top: 8,
   height: 0,
 }
+const dividerSpacingPreview: React.CSSProperties = {
+  minHeight: 58,
+  display: "grid",
+  gridTemplateRows: "1fr auto 1fr",
+  alignItems: "center",
+  justifyItems: "center",
+  padding: "6px 8px",
+  marginBottom: 8,
+  border: "1px solid #e5e7eb",
+  borderRadius: 4,
+  background: "#f8fafc",
+  color: "#64748b",
+  boxSizing: "border-box",
+}
+const dividerSpacingLabel: React.CSSProperties = {
+  fontSize: 10,
+  lineHeight: 1.2,
+  color: "#64748b",
+}
 
 function normalizeHeaderRowCount(rowCount: number, value: number): number {
   if (!Number.isFinite(value)) return 0
@@ -2004,6 +2369,20 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
               value={node.props.height}
               onChange={(e) => onUpdateProps(selectedNodeId, { height: Number(e.target.value) })}
               style={input} />
+          </div>
+        )}
+
+        {/* ── Divider ── */}
+        {node.type === "divider" && (
+          <>
+            <DividerControls node={node} onUpdateProps={onUpdateProps} />
+          </>
+        )}
+
+        {/* ── Page break ── */}
+        {node.type === "page-break" && (
+          <div style={{ fontSize: 11, color: "#6b7280", lineHeight: 1.5 }}>
+            Following body content starts on the next page.
           </div>
         )}
 

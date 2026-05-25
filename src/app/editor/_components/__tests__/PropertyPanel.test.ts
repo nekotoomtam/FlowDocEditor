@@ -267,6 +267,87 @@ function docWithMergedFlowTableCellContent(): DocumentNode {
 }
 
 describe("PropertyPanel selection context", () => {
+  it("renders divider and page-break controls from authored document nodes", () => {
+    const noop = () => undefined
+    const doc = docWithFlowParagraph()
+    const section = doc.document.sections[0]
+    section.nodes.body = { id: "body", type: "body", props: {}, childIds: ["divider-1", "page-break-1"] }
+    section.nodes["divider-1"] = {
+      id: "divider-1",
+      type: "divider",
+      props: {
+        color: "334155",
+        thickness: { value: 2, unit: "pt" },
+        marginBefore: { value: 4, unit: "pt" },
+        marginAfter: { value: 6, unit: "pt" },
+        style: "dashed",
+      },
+    }
+    section.nodes["page-break-1"] = { id: "page-break-1", type: "page-break", props: {} }
+    delete section.nodes.fr1
+    delete section.nodes.fs1
+    delete section.nodes.p1
+
+    const dividerMarkup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc,
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "divider-1",
+      selectionAnchorNodeId: "divider-1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+        fitToWidth: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+    const pageBreakMarkup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc,
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "page-break-1",
+      selectionAnchorNodeId: "page-break-1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+        fitToWidth: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(dividerMarkup).toContain("Divider")
+    expect(dividerMarkup).toContain("divider-line-controls")
+    expect(dividerMarkup).toContain("divider-line-style-dashed")
+    expect(dividerMarkup).toContain("divider-line-width")
+    expect(dividerMarkup).toContain("#334155")
+    expect(dividerMarkup).toContain("divider-spacing-card")
+    expect(dividerMarkup).toContain("divider-spacing-above")
+    expect(dividerMarkup).toContain("divider-spacing-below")
+    expect(dividerMarkup).toContain("max=\"144\"")
+    expect(pageBreakMarkup).toContain("Page break")
+    expect(pageBreakMarkup).toContain("Following body content starts on the next page.")
+  })
+
   it("shows a compact context trigger when the selected node has visible parents", () => {
     const noop = () => undefined
     const markup = renderToStaticMarkup(createElement(PropertyPanel, {

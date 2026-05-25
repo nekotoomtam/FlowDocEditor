@@ -1,5 +1,6 @@
 import type {
   BodyNode,
+  DividerNode,
   DocumentNode,
   DocumentSection,
   FieldRefInline,
@@ -10,6 +11,7 @@ import type {
   FlowTableNode,
   InlineNode,
   LayoutNode,
+  PageBreakNode,
   ParagraphBoxBorder,
   ParagraphBoxBorderSide,
   ParagraphBoxPadding,
@@ -25,6 +27,7 @@ import type {
   UnitValue,
 } from "../schema"
 import {
+  DEFAULT_DIVIDER_PROPS,
   DEFAULT_PARAGRAPH_PROPS,
   DEFAULT_SPACER_HEIGHT,
   DEFAULT_STACK_MIN_HEIGHT,
@@ -279,6 +282,37 @@ function normalizeSpacerNode(input: LayoutNode & { type: "spacer" }): SpacerNode
   }
 }
 
+// ─── Divider / Page Break ───────────────────────────────────────────────────
+
+function normalizeDividerLineStyle(value: unknown): DividerNode["props"]["style"] {
+  return value === "dashed" || value === "dotted" || value === "solid"
+    ? value
+    : DEFAULT_DIVIDER_PROPS.style
+}
+
+function normalizeDividerNode(input: LayoutNode & { type: "divider" }): DividerNode {
+  const raw = (input.props ?? {}) as Record<string, unknown>
+  return {
+    id: input.id,
+    type: "divider",
+    props: {
+      color: normalizeHexColor(raw["color"], DEFAULT_DIVIDER_PROPS.color)!,
+      thickness: normalizeNonNegativeUnitValue(raw["thickness"], DEFAULT_DIVIDER_PROPS.thickness),
+      marginBefore: normalizeNonNegativeUnitValue(raw["marginBefore"], DEFAULT_DIVIDER_PROPS.marginBefore),
+      marginAfter: normalizeNonNegativeUnitValue(raw["marginAfter"], DEFAULT_DIVIDER_PROPS.marginAfter),
+      style: normalizeDividerLineStyle(raw["style"]),
+    },
+  }
+}
+
+function normalizePageBreakNode(input: LayoutNode & { type: "page-break" }): PageBreakNode {
+  return {
+    id: input.id,
+    type: "page-break",
+    props: {},
+  }
+}
+
 // ─── Stack ────────────────────────────────────────────────────────────────────
 
 function normalizeWidthShare(value: unknown): number | undefined {
@@ -513,6 +547,8 @@ function normalizeNode(node: LayoutNode): LayoutNode {
     case "flow-row": return normalizeFlowRowNode(node)
     case "paragraph": return normalizeParagraphNode(node)
     case "spacer": return normalizeSpacerNode(node)
+    case "divider": return normalizeDividerNode(node)
+    case "page-break": return normalizePageBreakNode(node)
     case "flow-table": return normalizeFlowTableNode(node as unknown as FlowTableNode) as unknown as LayoutNode
     case "toc": return node
   }

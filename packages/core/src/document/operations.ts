@@ -32,10 +32,12 @@ import {
   DEFAULT_STACK_MIN_HEIGHT,
   createDefaultFlowTable,
   createDefaultFlowTableCellBox,
+  createDividerNode,
   createFlowTableCellNode,
   createFlowTableRowNode,
   createFieldRefInline,
   createId,
+  createPageBreakNode,
 } from "./defaults"
 import { tryResolveFlowTableGrid } from "./flowTableGrid"
 import {
@@ -445,6 +447,14 @@ function createNodesForSource(source: DragSource, nodes: Nodes): { insertId: str
       const node = createParagraphNode("New paragraph")
       return { insertId: node.id, newNodes: { [node.id]: node } }
     }
+    if (source.blockType === "divider") {
+      const node = createDividerNode()
+      return { insertId: node.id, newNodes: { [node.id]: node } }
+    }
+    if (source.blockType === "page-break") {
+      const node = createPageBreakNode()
+      return { insertId: node.id, newNodes: { [node.id]: node } }
+    }
     if (source.blockType === "row") {
       return createPaletteFlowColumnsSubtree(source, 1)
     }
@@ -782,6 +792,16 @@ function cloneLayoutSubtree(nodes: Nodes, rootId: string): { rootId: string; nod
 
   if (node.type === "spacer") {
     const clone: LayoutNode = { ...node, id: createId("spacer"), props: clonePlainData(node.props) }
+    return { rootId: clone.id, nodes: { [clone.id]: clone } }
+  }
+
+  if (node.type === "divider") {
+    const clone: LayoutNode = { ...node, id: createId("divider"), props: clonePlainData(node.props) }
+    return { rootId: clone.id, nodes: { [clone.id]: clone } }
+  }
+
+  if (node.type === "page-break") {
+    const clone: LayoutNode = { ...node, id: createId("page-break"), props: {} }
     return { rootId: clone.id, nodes: { [clone.id]: clone } }
   }
 

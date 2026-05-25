@@ -1,6 +1,8 @@
 import type {
   BodyNode,
   BodyProps,
+  DividerNode,
+  DividerProps,
   DocumentNode,
   DocumentSection,
   FlowRowNode,
@@ -13,6 +15,8 @@ import type {
   FlowTableRowNode,
   LayoutNode,
   PageSettings,
+  PageBreakNode,
+  PageBreakProps,
   ParagraphNode,
   ParagraphProps,
   RowNode,
@@ -75,6 +79,13 @@ export const DEFAULT_PARAGRAPH_PROPS: ParagraphProps = {
 }
 
 export const DEFAULT_SPACER_HEIGHT = 20
+export const DEFAULT_DIVIDER_PROPS: DividerProps = {
+  color: "CBD5E1",
+  thickness: pt(1),
+  marginBefore: pt(6),
+  marginAfter: pt(6),
+  style: "solid",
+}
 export const DEFAULT_STACK_MIN_HEIGHT = 24
 export const DEFAULT_STACK_WIDTH_SHARE = 100
 
@@ -132,6 +143,28 @@ export function createSpacerNode(props: Partial<SpacerProps> = {}): SpacerNode {
     id: createId("spacer"),
     type: "spacer",
     props: { height: DEFAULT_SPACER_HEIGHT, ...props },
+  }
+}
+
+export function createDividerNode(props: Partial<DividerProps> = {}): DividerNode {
+  return {
+    id: createId("divider"),
+    type: "divider",
+    props: {
+      ...DEFAULT_DIVIDER_PROPS,
+      thickness: { ...DEFAULT_DIVIDER_PROPS.thickness },
+      marginBefore: { ...DEFAULT_DIVIDER_PROPS.marginBefore },
+      marginAfter: { ...DEFAULT_DIVIDER_PROPS.marginAfter },
+      ...props,
+    },
+  }
+}
+
+export function createPageBreakNode(_props: Partial<PageBreakProps> = {}): PageBreakNode {
+  return {
+    id: createId("page-break"),
+    type: "page-break",
+    props: {},
   }
 }
 

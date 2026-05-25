@@ -44,6 +44,8 @@ remain true:
 | Structure | Current page-boundary behavior | Tests |
 |---|---|---|
 | Body paragraph | Splits by measured line boundaries across any number of pages. `spacingBefore` applies only to the first fragment; `spacingAfter` applies only to the last fragment. Widow/orphan and `keepWithNext` rules are applied by pagination. | `paginator.test.ts`, `fragmentMeta.test.ts`, `widowOrphan.test.ts`, `keepWithNext.test.ts` |
+| Divider | Authored visible block. Pagination measures thickness plus before/after margins, places the divider atomically, and emits `dividerRenderProps` for editor/PDF/DOCX renderers. Divider may be authored in body flow and flow/legacy stack containers; Flow Table cells remain out of scope. | `paginator.test.ts`, `assert.test.ts`, `operations.test.ts`, `renderer.test.ts`, `EditorCanvas.test.ts` |
+| Authored page-break | Body-flow-only authored control node. Pagination emits a zero-height `page-break` marker fragment at the current cursor, advances to the next page, and intentionally allows a trailing page-break to create a blank following page. Renderers must distinguish authored page-breaks from computed pagination breaks. | `paginator.test.ts`, `law.test.ts`, `operations.test.ts`, `renderer.test.ts`, `EditorCanvas.test.ts` |
 | Stack/column paragraph | Does not split independently today. The containing row is atomic; paragraph content is placed as one fragment inside the row's allocated height. If the row is taller than one content page, overflow is documented. | `rowStack.test.ts` |
 | Row/stack group | Moves as a whole row when it fits on the next page. Very tall rows stay at page content top and may overflow to force progress. | `rowStack.test.ts`, `resizeConvergence.test.ts` |
 | Flow-row / flow-stack group | Static pagination may split a `flow-row` into page slices. Each `flow-stack` slice keeps parent/child traceability and sibling stack heights align to the row slice. During flagged WYSIWYG text-engine editing, same-page `flow-stack` paragraph growth and shrink may use a local editor preview; once the active paragraph reaches a page boundary, the editor accelerates draft pagination for that `flow-stack` paragraph instead of extending the same-page preview past the content bottom. The accelerated path coalesces pending pagination instead of repeatedly resetting the timer, so key-repeat Backspace can shrink continuation slices while the key is still held. Re-entering an already split `flow-stack` paragraph keeps draft changes on the same responsive draft-pagination path. Full live cross-page caret/selection behavior inside `flow-stack` remains deferred. | `flowRowStack.test.ts`, `inlineEditHeightPreview.test.ts`, `wysiwygReflow.test.ts`, `wysiwygDraftPreview.test.ts` |
@@ -115,5 +117,5 @@ Overflow is allowed only as an explicit fallback.
 Any change to page-boundary behavior should update this document, add or adjust a
 focused fixture, and keep the full test suite green. High-risk areas are body
 paragraph splitting, widow/orphan rules, `keepWithNext`, Flow Table row
-splitting, rowspan groups, repeating headers, page numbers, and TOC
-repagination.
+splitting, rowspan groups, repeating headers, authored divider/page-break nodes,
+page numbers, and TOC repagination.

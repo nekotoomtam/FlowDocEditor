@@ -93,6 +93,14 @@ export interface ParagraphRenderProps {
   box?: ParagraphBoxRenderProps
 }
 
+export interface DividerRenderProps {
+  color: string
+  thickness: number
+  marginBefore: number
+  marginAfter: number
+  style: "solid" | "dashed" | "dotted"
+}
+
 // ─── Page Fragments ───────────────────────────────────────────────────────────
 
 export interface PageFragment {
@@ -100,6 +108,8 @@ export interface PageFragment {
   nodeType:
     | "paragraph"
     | "spacer"
+    | "divider"
+    | "page-break"
     | "stack"
     | "flow-stack"
     | "flow-table-cell"
@@ -117,6 +127,7 @@ export interface PageFragment {
   height: number
   lines?: PaginatedLine[]
   renderProps?: ParagraphRenderProps
+  dividerRenderProps?: DividerRenderProps
   boxRenderProps?: ParagraphBoxRenderProps
   flowTableGridProps?: FlowTableGridRenderProps
   flowTableCellGridProps?: FlowTableCellGridRenderProps

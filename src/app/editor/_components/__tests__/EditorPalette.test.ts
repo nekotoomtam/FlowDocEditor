@@ -21,6 +21,8 @@ describe("EditorPalette", () => {
     expect(markup).toContain("Table")
     expect(markup).toContain("aria-expanded=\"false\"")
     expect(markup).toContain("Paragraph")
+    expect(markup).toContain("Divider")
+    expect(markup).toContain("Page break")
     expect(markup).not.toContain("Flow cols")
   })
 
@@ -38,6 +40,8 @@ describe("EditorPalette", () => {
     expect(markup).toContain("33 | 33 | 33")
     expect(markup).toContain("25 | 25 | 25 | 25")
     expect(markup).toContain("Paragraph")
+    expect(markup).toContain("Divider")
+    expect(markup).not.toContain("Page break")
     expect(markup).not.toContain("data-testid=\"palette-block-row\"")
     expect(markup).not.toContain("data-testid=\"palette-block-column\"")
     expect(markup).not.toContain("data-testid=\"palette-table-picker-toggle\"")

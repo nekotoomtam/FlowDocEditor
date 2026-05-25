@@ -1828,6 +1828,72 @@ describe("flow-row / flow-stack operations", () => {
     expect(section.nodes[stack.childIds[0]]?.type).toBe("paragraph")
   })
 
+  it("inserts divider and page-break palette blocks with authored defaults", () => {
+    const doc = makeDoc({}, [])
+
+    const withDivider = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "insert-into-container", containerId: "body", containerType: "body", index: 0 },
+      { source: "palette", blockType: "divider" },
+    )
+    const dividerSection = withDivider.document.sections[0]
+    const dividerBody = dividerSection.nodes.body
+
+    expect(() => assertDocument(withDivider)).not.toThrow()
+    expect(dividerBody.type).toBe("body")
+    if (dividerBody.type !== "body") return
+    const divider = dividerSection.nodes[dividerBody.childIds[0]]
+    expect(divider.type).toBe("divider")
+    if (divider.type !== "divider") return
+    expect(divider.props).toMatchObject({
+      color: "CBD5E1",
+      thickness: pt(1),
+      marginBefore: pt(6),
+      marginAfter: pt(6),
+      style: "solid",
+    })
+
+    const withPageBreak = applyPlacementOperation(
+      withDivider,
+      "section",
+      { kind: "insert-after", parentId: "body", parentType: "body", index: 1, anchorNodeId: divider.id },
+      { source: "palette", blockType: "page-break" },
+    )
+    const pageBreakSection = withPageBreak.document.sections[0]
+    const pageBreakBody = pageBreakSection.nodes.body
+
+    expect(() => assertDocument(withPageBreak)).not.toThrow()
+    expect(pageBreakBody.type).toBe("body")
+    if (pageBreakBody.type !== "body") return
+    const pageBreak = pageBreakSection.nodes[pageBreakBody.childIds[1]]
+    expect(pageBreak.type).toBe("page-break")
+    if (pageBreak.type !== "page-break") return
+    expect(pageBreak.props).toEqual({})
+  })
+
+  it("inserts a divider into an empty flow-stack", () => {
+    const doc = makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: [] },
+    }, ["fr1"])
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "insert-into-container", containerId: "fs1", containerType: "flow-stack", index: 0 },
+      { source: "palette", blockType: "divider" },
+    )
+    const section = updated.document.sections[0]
+    const stack = section.nodes.fs1
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(stack.type).toBe("flow-stack")
+    if (stack.type !== "flow-stack") return
+    expect(stack.childIds).toHaveLength(1)
+    expect(section.nodes[stack.childIds[0]]?.type).toBe("divider")
+  })
+
   it("inserts a paragraph into the second flow-stack without moving sibling content", () => {
     const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Left" }])
     const doc = makeDoc({

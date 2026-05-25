@@ -1,5 +1,6 @@
 import {
   defaultWordBreaker,
+  measureDivider,
   measureParagraph,
   paragraphBoxBottomInset,
   paragraphBoxTopInset,
@@ -9,6 +10,7 @@ import type { FlowBox, MeasuredParagraphBox, TextMeasurer, WordBreaker } from ".
 import type { DocumentSection, ParagraphNode } from "../../schema"
 import type {
   PageFlowCursor,
+  DividerRenderProps,
   PageFragment,
   PageFragmentWarning,
   PaginatedPage,
@@ -101,7 +103,7 @@ function flowStackHasRemainingContent(
   for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
     const child = stackBox.children[ci]
     if (!child) continue
-    if (child.nodeType === "spacer") return true
+    if (child.nodeType === "spacer" || child.nodeType === "divider") return true
     if (child.nodeType !== "paragraph") continue
 
     const node = section.nodes[child.nodeId]
@@ -124,7 +126,7 @@ function forceOneFlowUnitProgress(
   for (let ci = from.childIdx; ci < stackBox.children.length; ci++) {
     const child = stackBox.children[ci]
     if (!child) continue
-    if (child.nodeType === "spacer") return { childIdx: ci + 1, lineIdx: 0 }
+    if (child.nodeType === "spacer" || child.nodeType === "divider") return { childIdx: ci + 1, lineIdx: 0 }
     if (child.nodeType !== "paragraph") continue
 
     const node = section.nodes[child.nodeId]
@@ -168,7 +170,7 @@ function flowStackSliceHeight(
     const isAtTo = to !== null && ci === to.childIdx
     if (isAtTo && to.lineIdx === 0) break
 
-    if (child.nodeType === "spacer") {
+    if (child.nodeType === "spacer" || child.nodeType === "divider") {
       if (!isAtTo) height += child.height
     } else if (child.nodeType === "paragraph") {
       const node = section.nodes[child.nodeId]
@@ -200,7 +202,7 @@ function computeFlowStackSplitPointFrom(
     if (heightUsed >= availH) return { childIdx: ci, lineIdx: 0 }
     const isLastStackChild = ci === stackBox.children.length - 1
 
-    if (child.nodeType === "spacer") {
+    if (child.nodeType === "spacer" || child.nodeType === "divider") {
       const trailingInset = isLastStackChild ? bottomInset : 0
       if (heightUsed + child.height + trailingInset <= availH) heightUsed += child.height + trailingInset
       else return { childIdx: ci, lineIdx: 0 }
@@ -268,6 +270,33 @@ function buildFlowStackSliceFragments(
           y: curY,
           width: child.width,
           height: child.height,
+        })
+        curY += child.height
+      }
+    } else if (child.nodeType === "divider") {
+      if (!isAtTo) {
+        const node = section.nodes[child.nodeId]
+        let dividerRenderProps: DividerRenderProps | undefined
+        if (node?.type === "divider") {
+          const measured = measureDivider(node, child.width)
+          dividerRenderProps = {
+            color: measured.color,
+            thickness: measured.thickness,
+            marginBefore: measured.marginBefore,
+            marginAfter: measured.marginAfter,
+            style: measured.style,
+          }
+        }
+        fragments.push({
+          nodeId: child.nodeId,
+          nodeType: "divider",
+          parentNodeId: stackBox.nodeId,
+          pageIndex,
+          x: child.x,
+          y: curY,
+          width: child.width,
+          height: child.height,
+          dividerRenderProps,
         })
         curY += child.height
       }

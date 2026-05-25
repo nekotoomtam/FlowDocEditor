@@ -31,6 +31,8 @@ import {
 import { collectTocEntries, computeTocOverrides, fillTocFragments, paginateTocPlaceholder } from "./paginator/toc"
 import { buildZoneFragments, cloneZoneFragmentsForPage } from "./paginator/zone"
 import { paginateSpacer } from "./paginator/spacer"
+import { paginateDivider } from "./paginator/divider"
+import { paginatePageBreak } from "./paginator/pageBreak"
 import { paginateRow } from "./paginator/row"
 import { paginateFlowRow } from "./paginator/flowRow"
 import { paginateFlowTable } from "./paginator/flowTable"
@@ -258,6 +260,10 @@ function paginateFlowBox(
       return paginateParagraph(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, onSplitDecision)
     case "spacer":
       return paginateSpacer(box, pages, template, contentTop, contentBottom, cursor, parentNodeId)
+    case "divider":
+      return paginateDivider(box, section, pages, template, contentTop, contentBottom, cursor, parentNodeId)
+    case "page-break":
+      return paginatePageBreak(box, pages, template, contentTop, cursor, parentNodeId)
     case "row":
       return paginateRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker)
     case "flow-row":

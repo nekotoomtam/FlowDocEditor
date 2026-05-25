@@ -47,6 +47,43 @@ function paragraph(id: string, text: string): ParagraphNode {
 }
 
 describe("normalizeDocument", () => {
+  it("normalizes divider props and keeps page-break props empty", () => {
+    const doc = makeDoc({
+      d1: {
+        id: "d1",
+        type: "divider",
+        props: {
+          color: "bad-color",
+          thickness: { value: -1, unit: "pt" },
+          marginBefore: { value: 2, unit: "mm" },
+          marginAfter: { value: -4, unit: "pt" },
+          style: "double",
+        },
+      } as unknown as LayoutNode,
+      pb1: {
+        id: "pb1",
+        type: "page-break",
+        props: { unexpected: true },
+      } as unknown as LayoutNode,
+    }, ["d1", "pb1"])
+
+    const nodes = normalizeDocument(doc).document.sections[0].nodes
+    const divider = nodes.d1
+    const pageBreak = nodes.pb1
+
+    expect(divider.type).toBe("divider")
+    if (divider.type !== "divider") return
+    expect(divider.props.color).toBe("CBD5E1")
+    expect(divider.props.thickness).toEqual({ value: 1, unit: "pt" })
+    expect(divider.props.marginBefore).toEqual({ value: 2, unit: "mm" })
+    expect(divider.props.marginAfter).toEqual({ value: 6, unit: "pt" })
+    expect(divider.props.style).toBe("solid")
+
+    expect(pageBreak.type).toBe("page-break")
+    if (pageBreak.type !== "page-break") return
+    expect(pageBreak.props).toEqual({})
+  })
+
   it("normalizes old paragraph font keys to the active Sarabun default", () => {
     const doc = makeDoc({
       p1: {

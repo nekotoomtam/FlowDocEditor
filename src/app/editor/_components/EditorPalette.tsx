@@ -6,7 +6,7 @@ interface PaletteItem {
   type: PaletteBlockType
   label: string
   desc: string
-  icon: "paragraph" | "row" | "column" | "two-even" | "two-left" | "two-right" | "three" | "four" | "table"
+  icon: "paragraph" | "divider" | "page-break" | "row" | "column" | "two-even" | "two-left" | "two-right" | "three" | "four" | "table"
   columnShares?: number[]
 }
 
@@ -22,6 +22,11 @@ const LAYOUT_ITEMS: PaletteItem[] = [
 
 const TEXT_ITEMS: PaletteItem[] = [
   { type: "paragraph", label: "Paragraph", icon: "paragraph", desc: "Text block" },
+  { type: "divider", label: "Divider", icon: "divider", desc: "Horizontal line" },
+]
+
+const DOCUMENT_ITEMS: PaletteItem[] = [
+  { type: "page-break", label: "Page break", icon: "page-break", desc: "Start next page" },
 ]
 
 const HEADER_FOOTER_LAYOUT_ITEMS = LAYOUT_ITEMS.filter((item) =>
@@ -94,6 +99,18 @@ function PaletteCard({
 function PaletteIcon({ icon }: { icon: PaletteItem["icon"] }) {
   if (icon === "paragraph") {
     return <span style={paragraphIcon}>¶</span>
+  }
+
+  if (icon === "divider") {
+    return (
+      <span style={dividerIcon}>
+        <span style={dividerIconLine} />
+      </span>
+    )
+  }
+
+  if (icon === "page-break") {
+    return <span style={paragraphIcon}>PB</span>
   }
 
   if (icon === "table") {
@@ -217,6 +234,21 @@ export function EditorPalette({ onDragStart, isDragging, scope = "document" }: P
         </PaletteSection>
       )}
 
+      {scope === "document" && (
+        <PaletteSection title="Document">
+          <div style={singleColumnList}>
+            {DOCUMENT_ITEMS.map((item) => (
+              <PaletteCard
+                key={item.type}
+                item={item}
+                isDragging={isDragging}
+                onDragStart={onDragStart}
+              />
+            ))}
+          </div>
+        </PaletteSection>
+      )}
+
       <PaletteSection title="Text">
         <div style={singleColumnList}>
           {TEXT_ITEMS.map((item) => (
@@ -315,6 +347,22 @@ const paragraphIcon: CSSProperties = {
   borderRadius: 3,
   color: "#64748b",
   fontSize: 18,
+}
+
+const dividerIcon: CSSProperties = {
+  width: 46,
+  height: 34,
+  display: "grid",
+  placeItems: "center",
+  border: "1px solid #94a3b8",
+  borderRadius: 3,
+}
+
+const dividerIconLine: CSSProperties = {
+  width: 30,
+  height: 2,
+  borderRadius: 1,
+  background: "#64748b",
 }
 
 const rowIcon: CSSProperties = {
