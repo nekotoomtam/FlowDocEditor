@@ -577,6 +577,7 @@ describe("ParagraphTextSurface continuation editing", () => {
 
   it("lets inline textareas keep native multiline Enter editing", () => {
     expect(shouldUseNativeInlineEditEnter()).toBe(true)
+    expect(shouldUseNativeInlineEditEnter(true)).toBe(false)
     expect(shouldUseNativeTableCellBoundaryBackspace(true, "")).toBe(true)
     expect(shouldUseNativeTableCellBoundaryBackspace(true, "Hello")).toBe(false)
     expect(shouldUseNativeTableCellBoundaryBackspace(false, "")).toBe(false)
@@ -1654,6 +1655,73 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("<textarea")
   })
 
+  it("starts legacy textarea fallback at generated list body geometry", () => {
+    const doc = makeDoc("List text")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    paragraph.props.list = { instanceId: "tor-main", level: 1, itemId: "tor.item" }
+    const fragment = makeFragment({
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 24,
+      listMarker: {
+        text: "1.1",
+        level: 1,
+        ordinal: 1,
+        instanceId: "tor-main",
+        styleId: "tor-clause",
+        itemId: "tor.item",
+        markerIndent: 18,
+        textIndent: 36,
+        markerX: 28,
+        bodyX: 46,
+      },
+      lines: [{
+        text: "List text",
+        x: 46,
+        y: 20,
+        width: 80,
+        height: 14,
+        segments: [{ kind: "word", text: "List text", start: 0, end: 9, x: 0, width: 80, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 36,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc,
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: false,
+      showTextSegments: false,
+      initialCaretIndex: 0,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+
+    expect(markup).toContain("<textarea")
+    expect(markup).toContain("<foreignObject x=\"43\"")
+    expect(markup).toContain("width=\"70\"")
+  })
+
   it("uses the text-engine lane for table-cell paragraphs while keeping cell boundary rules separate", () => {
     const fragment = makeFragment({
       parentNodeId: "c1",
@@ -2483,6 +2551,103 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(layout?.lines.map((line) => line.x)).toEqual([45, 40])
   })
 
+  it("builds list item draft layout from generated body indent without mutating paragraph props", () => {
+    const doc = makeDoc("A\nBC")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    paragraph.props.list = { instanceId: "tor-main", level: 1, itemId: "tor.item" }
+    const fragment = makeFragment({
+      x: 10,
+      y: 20,
+      width: 100,
+      listMarker: {
+        text: "1.1",
+        level: 1,
+        ordinal: 1,
+        instanceId: "tor-main",
+        styleId: "tor-clause",
+        itemId: "tor.item",
+        markerIndent: 18,
+        textIndent: 36,
+        markerX: 28,
+        bodyX: 46,
+      },
+    })
+
+    const layout = buildWysiwygDraftParagraphLayout(fragment, paragraph, "A\nBC", fixedMeasurer)
+
+    expect(layout?.lines.map((line) => line.text)).toEqual(["A", "BC"])
+    expect(layout?.lines.map((line) => line.x)).toEqual([46, 46])
+    expect(paragraph.props.indentLeft.value).toBe(0)
+    expect(paragraph.props.textIndent.value).toBe(0)
+  })
+
+  it("wraps list item draft lines from the generated body start", () => {
+    const doc = makeDoc("ก".repeat(12))
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    paragraph.props.list = { instanceId: "tor-main", level: 1, itemId: "tor.item" }
+    const fragment = makeFragment({
+      x: 10,
+      y: 20,
+      width: 90,
+      listMarker: {
+        text: "1.1",
+        level: 1,
+        ordinal: 1,
+        instanceId: "tor-main",
+        styleId: "tor-clause",
+        itemId: "tor.item",
+        markerIndent: 18,
+        textIndent: 36,
+        markerX: 28,
+        bodyX: 46,
+      },
+    })
+
+    const layout = buildWysiwygDraftParagraphLayout(fragment, paragraph, "ก".repeat(12), fixedMeasurer)
+
+    expect(layout?.lines.length).toBeGreaterThan(1)
+    expect(layout?.lines.map((line) => line.x)).toEqual(layout?.lines.map(() => 46))
+    expect(layout?.lines.every((line) => line.width <= 54)).toBe(true)
+    expect(layout?.lines.map((line) => line.text).join("")).toBe("ก".repeat(12))
+  })
+
+  it("uses list marker bodyX as the draft body truth", () => {
+    const doc = makeDoc("ABCD")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    paragraph.props.box = {
+      padding: {
+        top: { value: 0, unit: "pt" },
+        right: { value: 0, unit: "pt" },
+        bottom: { value: 0, unit: "pt" },
+        left: { value: 5, unit: "pt" },
+      },
+    }
+    paragraph.props.list = { instanceId: "tor-main", level: 1, itemId: "tor.item" }
+    const fragment = makeFragment({
+      x: 10,
+      y: 20,
+      width: 90,
+      listMarker: {
+        text: "1.1",
+        level: 1,
+        ordinal: 1,
+        instanceId: "tor-main",
+        styleId: "tor-clause",
+        itemId: "tor.item",
+        markerIndent: 18,
+        textIndent: 36,
+        markerX: 28,
+        bodyX: 44,
+      },
+    })
+
+    const layout = buildWysiwygDraftParagraphLayout(fragment, paragraph, "ABCD", fixedMeasurer)
+
+    expect(layout?.lines.map((line) => line.x)).toEqual([44])
+    expect(paragraph.props.indentLeft.value).toBe(0)
+    expect(paragraph.props.textIndent.value).toBe(0)
+  })
+
   it("builds styled text-run draft layout without flattening run styles", () => {
     const doc = makeDoc("Hello world")
     const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
@@ -2554,6 +2719,50 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     const secondCounting = makeCountingMeasurer()
     buildCachedWysiwygDraftParagraphLayout(cache, { ...fragment, width: 70 }, styledParagraph, "Hello!!", secondCounting.measurer)
     expect(secondCounting.totalCalls()).toBeGreaterThan(0)
+  })
+
+  it("invalidates cached draft measurements when generated list body geometry changes", () => {
+    const doc = makeDoc("Hello")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    paragraph.props.list = { instanceId: "tor-main", level: 0, itemId: "tor.item" }
+    const fragment = makeFragment({
+      x: 10,
+      y: 20,
+      width: 100,
+      listMarker: {
+        text: "1.",
+        level: 0,
+        ordinal: 1,
+        instanceId: "tor-main",
+        styleId: "tor-clause",
+        itemId: "tor.item",
+        markerIndent: 0,
+        textIndent: 18,
+        markerX: 10,
+        bodyX: 28,
+      },
+    })
+    const cache = createWysiwygDraftParagraphLayoutCache()
+    const counting = makeCountingMeasurer()
+
+    const first = buildCachedWysiwygDraftParagraphLayout(cache, fragment, paragraph, "Hello", counting.measurer)
+    const callsAfterFirst = counting.totalCalls()
+    const second = buildCachedWysiwygDraftParagraphLayout(cache, {
+      ...fragment,
+      listMarker: {
+        ...fragment.listMarker!,
+        level: 1,
+        text: "1.1",
+        markerIndent: 18,
+        textIndent: 36,
+        markerX: 28,
+        bodyX: 46,
+      },
+    }, paragraph, "Hello", counting.measurer)
+
+    expect(first?.lines[0]?.x).toBe(28)
+    expect(second?.lines[0]?.x).toBe(46)
+    expect(counting.totalCalls()).toBeGreaterThan(callsAfterFirst)
   })
 
   it("does not collapse continuation fragments into one local draft layout", () => {

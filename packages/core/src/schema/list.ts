@@ -37,6 +37,7 @@ export const ListStyleDefinitionSchema = z.object({
 export const ListInstanceSchema = z.object({
   id: z.string().min(1),
   styleId: z.string().min(1),
+  startAt: PositiveIntegerSchema.optional(),
 })
 
 export const ParagraphListPropsSchema = z.object({

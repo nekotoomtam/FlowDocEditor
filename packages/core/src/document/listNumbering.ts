@@ -1,7 +1,9 @@
+import { LIST_LEVEL_COUNT } from "../schema"
 import type {
   DocumentNode,
   DocumentSection,
   FlowTableNode,
+  ListInstance,
   ListLevelDefinition,
   ListMarkerFormat,
   ParagraphNode,
@@ -115,26 +117,60 @@ function formatOrdinal(value: number, format: ListMarkerFormat): string {
   }
 }
 
-function renderMarkerText(level: ListLevelDefinition, levels: ListLevelDefinition[], counters: CounterState): string {
+function initialCounterValue(
+  levels: ListLevelDefinition[],
+  levelIndex: number,
+  instance: ListInstance,
+): number {
+  if (levelIndex === 0 && instance.startAt != null) return instance.startAt
+  return levelByIndex(levels, levelIndex)?.startAt ?? 1
+}
+
+function renderMarkerText(
+  level: ListLevelDefinition,
+  levels: ListLevelDefinition[],
+  counters: CounterState,
+  instance: ListInstance,
+): string {
   if (!level.pattern.includes("%")) return level.pattern
   return level.pattern.replace(/%([1-8])/g, (_match, rawIndex: string) => {
     const levelIndex = Number(rawIndex) - 1
     const referencedLevel = levelByIndex(levels, levelIndex)
-    const value = counters[levelIndex] || referencedLevel?.startAt || 1
+    const value = counters[levelIndex] || initialCounterValue(levels, levelIndex, instance)
     return formatOrdinal(value, referencedLevel?.format ?? "decimal")
   })
 }
 
-function ensureParentCounters(levels: ListLevelDefinition[], counters: CounterState, level: number): void {
+function ensureParentCounters(
+  levels: ListLevelDefinition[],
+  counters: CounterState,
+  level: number,
+  instance: ListInstance,
+): void {
   for (let index = 0; index < level; index++) {
     if (counters[index] > 0) continue
-    counters[index] = levelByIndex(levels, index)?.startAt ?? 1
+    counters[index] = initialCounterValue(levels, index, instance)
   }
 }
 
-function resetDeeperCounters(counters: CounterState, level: number): void {
-  for (let index = level + 1; index < counters.length; index++) {
-    counters[index] = 0
+function shouldResetAfterLevelAdvance(
+  level: ListLevelDefinition | undefined,
+  advancedLevel: number,
+): boolean {
+  if (!level) return true
+  if (level.restartAfterLevel == null) return true
+  return advancedLevel <= level.restartAfterLevel
+}
+
+function resetDeeperCounters(
+  levels: ListLevelDefinition[],
+  counters: CounterState,
+  advancedLevel: number,
+): void {
+  for (let index = advancedLevel + 1; index < counters.length; index++) {
+    if (shouldResetAfterLevelAdvance(levelByIndex(levels, index), advancedLevel)) {
+      counters[index] = 0
+    }
   }
 }
 
@@ -153,10 +189,11 @@ export function resolveListMarkers(doc: DocumentNode): Map<string, ResolvedListM
     const level = style ? levelByIndex(style.levels, list.level) : undefined
     if (!instance || !style || !level) continue
 
-    const counters = countersByInstance.get(instance.id) ?? Array.from({ length: 8 }, () => 0)
-    ensureParentCounters(style.levels, counters, list.level)
-    counters[list.level] = list.startAt ?? (counters[list.level] > 0 ? counters[list.level] + 1 : level.startAt)
-    resetDeeperCounters(counters, list.level)
+    const counters = countersByInstance.get(instance.id) ?? Array.from({ length: LIST_LEVEL_COUNT }, () => 0)
+    ensureParentCounters(style.levels, counters, list.level, instance)
+    counters[list.level] = list.startAt ??
+      (counters[list.level] > 0 ? counters[list.level] + 1 : initialCounterValue(style.levels, list.level, instance))
+    resetDeeperCounters(style.levels, counters, list.level)
     countersByInstance.set(instance.id, counters)
 
     markers.set(paragraph.id, {
@@ -166,7 +203,7 @@ export function resolveListMarkers(doc: DocumentNode): Map<string, ResolvedListM
       itemId: list.itemId,
       level: list.level,
       ordinal: counters[list.level],
-      markerText: renderMarkerText(level, style.levels, counters),
+      markerText: renderMarkerText(level, style.levels, counters, instance),
     })
   }
 

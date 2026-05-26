@@ -3,6 +3,7 @@
 import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
 import { assertDocument, canRemoveFlowTableColumn, canRemoveFlowTableRow, clampSectionReservedZones, createDefaultDocument, normalizeDocument } from "@/document"
+import type { FlowDocListStylePresetId } from "@/document"
 import {
   resizeFlowTableColumnPair as resizeFlowTableColumnPairForPreview,
   updateNodeProps,
@@ -24,6 +25,7 @@ import type {
 } from "@/placement/types"
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import { EditorCanvas, type CanvasTableAction } from "./EditorCanvas"
+import { ListToolbar } from "./ListToolbar"
 import { PropertyPanel } from "./PropertyPanel"
 import { RichTextToolbar } from "./RichTextToolbar"
 import { FillingPanel } from "./FillingPanel"
@@ -137,6 +139,7 @@ import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardSho
 import { useAnimationFrameState } from "./useAnimationFrameState"
 import { createInitialEditorState, reducer, resizeColumnsDocument, type DragState } from "./editorReducer"
 import { buildSelectionContext } from "./selectionContext"
+import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import { EditorCanvasColumn } from "./shell/EditorCanvasColumn"
 import {
   collectEditorPageNavItems,
@@ -1856,31 +1859,121 @@ export default function EditorShell() {
     zoomByWheel(event.deltaY)
   }, [zoomByWheel])
 
-  const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number) => {
+  const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number, text?: string) => {
     const history = consumeInlineEditHistory(nodeId)
-    dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex, history })
-  }, [consumeInlineEditHistory])
+    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
+    }
+    dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex, text, history })
+  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
 
   const handleMergeParagraph = useCallback((nodeId: string) => {
     const history = consumeInlineEditHistory(nodeId)
     dispatch({ type: "MERGE_PARAGRAPH", nodeId, history })
   }, [consumeInlineEditHistory])
 
+  const handleExitListItem = useCallback((nodeId: string, text?: string) => {
+    const history = consumeInlineEditHistory(nodeId)
+    dispatch({ type: "EXIT_LIST_ITEM", nodeId, text, history })
+  }, [consumeInlineEditHistory])
+
+  const handleChangeListItemLevel = useCallback((
+    nodeId: string,
+    direction: ListLevelChangeDirection,
+    text?: string,
+    caretIndex?: number | null,
+  ) => {
+    const history = consumeInlineEditHistory(nodeId)
+    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
+    }
+    dispatch({ type: "CHANGE_LIST_ITEM_LEVEL", nodeId, direction, text, caretIndex, history })
+  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
+
+  const handleBackspaceListItemAtStart = useCallback((nodeId: string, text?: string, caretIndex?: number | null) => {
+    const history = consumeInlineEditHistory(nodeId)
+    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
+    }
+    dispatch({ type: "BACKSPACE_LIST_ITEM_AT_START", nodeId, text, caretIndex, history })
+  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
+
+  const handleToggleListPreset = useCallback((
+    nodeId: string,
+    styleId: FlowDocListStylePresetId,
+    instanceId: string,
+    level: number,
+  ) => {
+    const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
+    const finalized = finalizeInlineEditBeforeAction()
+    if (hadWysiwygTextSession && !finalized) return
+    dispatch({ type: "TOGGLE_LIST_PRESET", nodeId, styleId, instanceId, level })
+    setRightRailMode("properties")
+  }, [finalizeInlineEditBeforeAction])
+
+  const handleToolbarChangeListItemLevel = useCallback((nodeId: string, direction: ListLevelChangeDirection) => {
+    const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
+    const finalized = finalizeInlineEditBeforeAction()
+    if (hadWysiwygTextSession && !finalized) return
+    dispatch({ type: "CHANGE_LIST_ITEM_LEVEL", nodeId, direction, refocus: false })
+    setRightRailMode("properties")
+  }, [finalizeInlineEditBeforeAction])
+
+  const startInlineEditAfterModelStructuralChange = useCallback((nodeId: string, caretIndex: number | null) => {
+    startInlineEditAfterStructuralChange(nodeId, caretIndex)
+    if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
+    if (!isWysiwygTextEngineFragmentEligible({
+      doc: docRef.current,
+      paginated: paginatedRef.current,
+      nodeId,
+    })) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
+      return
+    }
+    startWysiwygTextSession(nodeId, caretIndex, null)
+  }, [
+    clearWysiwygDraftPagination,
+    endWysiwygTextSession,
+    startInlineEditAfterStructuralChange,
+    startWysiwygTextSession,
+  ])
+
   // Focus the new paragraph after a split
   useEffect(() => {
     if (!state.lastSplitNodeId) return
     const nodeId = state.lastSplitNodeId
-    startInlineEditAfterStructuralChange(nodeId, 0)
+    startInlineEditAfterModelStructuralChange(nodeId, 0)
     dispatch({ type: "CLEAR_SPLIT_NODE_ID" })
-  }, [startInlineEditAfterStructuralChange, state.lastSplitNodeId])
+  }, [startInlineEditAfterModelStructuralChange, state.lastSplitNodeId])
 
   // Focus the previous paragraph after a merge, caret at join point
   useEffect(() => {
     if (!state.mergeResult) return
     const nodeId = state.mergeResult.prevNodeId
-    startInlineEditAfterStructuralChange(nodeId, state.mergeResult.caretIndex)
+    startInlineEditAfterModelStructuralChange(nodeId, state.mergeResult.caretIndex)
     dispatch({ type: "CLEAR_MERGE_RESULT" })
-  }, [startInlineEditAfterStructuralChange, state.mergeResult])
+  }, [startInlineEditAfterModelStructuralChange, state.mergeResult])
+
+  // Keep editing the same paragraph after empty Enter exits a list item.
+  useEffect(() => {
+    if (!state.listExitNodeId) return
+    startInlineEditAfterModelStructuralChange(state.listExitNodeId, 0)
+    dispatch({ type: "CLEAR_LIST_EXIT_NODE_ID" })
+  }, [startInlineEditAfterModelStructuralChange, state.listExitNodeId])
+
+  // Keep editing the same paragraph after Tab/Shift+Tab changes list level.
+  useEffect(() => {
+    if (!state.listLevelChangeResult) return
+    startInlineEditAfterModelStructuralChange(
+      state.listLevelChangeResult.nodeId,
+      state.listLevelChangeResult.caretIndex,
+    )
+    dispatch({ type: "CLEAR_LIST_LEVEL_CHANGE_RESULT" })
+  }, [startInlineEditAfterModelStructuralChange, state.listLevelChangeResult])
 
   // ─── Editor preview layout ─────────────────────────────────────────────────
   const [isLayoutLoading, setIsLayoutLoading] = useState(false)
@@ -3282,35 +3375,44 @@ export default function EditorShell() {
         onExportJson={handleExportJson}
       >
         {isTemplateMode && (
-          <RichTextToolbar
-            doc={state.doc}
-            selectedNodeId={state.selectedNodeId}
-            draftParagraph={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
-              richWysiwygDraftSessionState.nodeId === state.selectedNodeId
-              ? richWysiwygDraftSessionState.draft?.paragraph ?? null
-              : null}
-            pendingStyle={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
-              richWysiwygDraftSessionState.nodeId === state.selectedNodeId
-              ? richWysiwygDraftSessionState.draft?.pendingStyle ?? null
-              : null}
-            textSelection={richTextToolbarSelection}
-            commandTextSelection={richTextToolbarLiveSelection}
-            editable={isTemplateMode}
-            onUpdateParagraphTextStyle={(nodeId, changes) => {
-              if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
-              const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
-              const finalized = finalizeInlineEditBeforeAction()
-              if (hadWysiwygTextSession && !finalized) return
-              dispatch({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })
-            }}
-            onUpdateTextRunStyleRange={(nodeId, start, end, changes) => {
-              if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
-              const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
-              const finalized = finalizeInlineEditBeforeAction()
-              if (hadWysiwygTextSession && !finalized) return
-              dispatch({ type: "UPDATE_TEXT_RUN_STYLE_RANGE", nodeId, start, end, changes })
-            }}
-          />
+          <>
+            <ListToolbar
+              doc={state.doc}
+              selectedNodeId={state.selectionAnchorNodeId ?? state.selectedNodeId}
+              editable={isTemplateMode}
+              onToggleListPreset={handleToggleListPreset}
+              onChangeListItemLevel={handleToolbarChangeListItemLevel}
+            />
+            <RichTextToolbar
+              doc={state.doc}
+              selectedNodeId={state.selectedNodeId}
+              draftParagraph={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+                richWysiwygDraftSessionState.nodeId === state.selectedNodeId
+                ? richWysiwygDraftSessionState.draft?.paragraph ?? null
+                : null}
+              pendingStyle={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+                richWysiwygDraftSessionState.nodeId === state.selectedNodeId
+                ? richWysiwygDraftSessionState.draft?.pendingStyle ?? null
+                : null}
+              textSelection={richTextToolbarSelection}
+              commandTextSelection={richTextToolbarLiveSelection}
+              editable={isTemplateMode}
+              onUpdateParagraphTextStyle={(nodeId, changes) => {
+                if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
+                const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
+                const finalized = finalizeInlineEditBeforeAction()
+                if (hadWysiwygTextSession && !finalized) return
+                dispatch({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })
+              }}
+              onUpdateTextRunStyleRange={(nodeId, start, end, changes) => {
+                if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
+                const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
+                const finalized = finalizeInlineEditBeforeAction()
+                if (hadWysiwygTextSession && !finalized) return
+                dispatch({ type: "UPDATE_TEXT_RUN_STYLE_RANGE", nodeId, start, end, changes })
+              }}
+            />
+          </>
         )}
       </EditorToolbar>
 
@@ -3389,6 +3491,9 @@ export default function EditorShell() {
                 onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
                 onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
                 onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
+                onExitListItem={isTemplateMode ? handleExitListItem : () => undefined}
+                onChangeListItemLevel={isTemplateMode ? handleChangeListItemLevel : () => undefined}
+                onBackspaceListItemAtStart={isTemplateMode ? handleBackspaceListItemAtStart : () => undefined}
                 setPageRef={setPageRef}
                 onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
                 onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}

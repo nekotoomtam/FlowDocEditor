@@ -44,6 +44,7 @@ import { isParagraphInsideFlowStack, isParagraphInsideRowStack } from "./wysiwyg
 import { resolveActiveInlineEditPageIndex } from "./editorPageFollow"
 import { buildSelectionContext, type SelectionContextItem } from "./selectionContext"
 import type { WysiwygTextInputKey } from "./useWysiwygTextSession"
+import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1385,6 +1386,9 @@ function ZoneFragments({
   onInlineEditEnd,
   onSplitParagraph,
   onMergeParagraph,
+  onExitListItem,
+  onChangeListItemLevel,
+  onBackspaceListItemAtStart,
   onWysiwygTextDraftChange,
   onWysiwygRichTextShortcut,
   onWysiwygTextReflowDecision,
@@ -1420,8 +1424,11 @@ function ZoneFragments({
   onInlineEditUserInteraction: (nodeId: string) => void
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
-  onSplitParagraph: (nodeId: string, splitIndex: number) => void
+  onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph: (nodeId: string) => void
+  onExitListItem?: (nodeId: string, text?: string) => void
+  onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
+  onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
   onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
   onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
@@ -1548,6 +1555,9 @@ function ZoneFragments({
             onEndEdit={onInlineEditEnd}
             onSplitParagraph={onSplitParagraph}
             onMergeParagraph={onMergeParagraph}
+            onExitListItem={onExitListItem}
+            onChangeListItemLevel={onChangeListItemLevel}
+            onBackspaceListItemAtStart={onBackspaceListItemAtStart}
             onWysiwygTextDraftChange={onWysiwygTextDraftChange}
             onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
             onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
@@ -1981,7 +1991,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading, inlineEditVisualFresh,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
   pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction,
   resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, headerFooterZoneScroll, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onHeaderFooterZoneScroll, onHeaderFooterZoneScrollTo, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
@@ -2014,8 +2024,11 @@ function PageView({
   onInlineEditUserInteraction: (nodeId: string) => void
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
-  onSplitParagraph: (nodeId: string, splitIndex: number) => void
+  onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph: (nodeId: string) => void
+  onExitListItem?: (nodeId: string, text?: string) => void
+  onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
+  onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
   onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
   onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
@@ -2732,6 +2745,9 @@ function PageView({
                 onEndEdit={onInlineEditEnd}
                 onSplitParagraph={onSplitParagraph}
                 onMergeParagraph={onMergeParagraph}
+                onExitListItem={onExitListItem}
+                onChangeListItemLevel={onChangeListItemLevel}
+                onBackspaceListItemAtStart={onBackspaceListItemAtStart}
                 onWysiwygTextDraftChange={onWysiwygTextDraftChange}
                 onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
                 onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
@@ -2803,6 +2819,9 @@ function PageView({
           onInlineEditEnd={onInlineEditEnd}
           onSplitParagraph={onSplitParagraph}
           onMergeParagraph={onMergeParagraph}
+          onExitListItem={onExitListItem}
+          onChangeListItemLevel={onChangeListItemLevel}
+          onBackspaceListItemAtStart={onBackspaceListItemAtStart}
           onWysiwygTextDraftChange={onWysiwygTextDraftChange}
           onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
           onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
@@ -2849,6 +2868,9 @@ function PageView({
           onInlineEditEnd={onInlineEditEnd}
           onSplitParagraph={onSplitParagraph}
           onMergeParagraph={onMergeParagraph}
+          onExitListItem={onExitListItem}
+          onChangeListItemLevel={onChangeListItemLevel}
+          onBackspaceListItemAtStart={onBackspaceListItemAtStart}
           onWysiwygTextDraftChange={onWysiwygTextDraftChange}
           onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
           onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
@@ -3426,8 +3448,11 @@ interface Props {
   onInlineEditUserInteraction: (nodeId: string) => void
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
-  onSplitParagraph: (nodeId: string, splitIndex: number) => void
+  onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph: (nodeId: string) => void
+  onExitListItem?: (nodeId: string, text?: string) => void
+  onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
+  onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
   setPageRef: (key: string, el: SVGSVGElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
@@ -3557,7 +3582,7 @@ export function buildWysiwygDraftVisualPreview(input: {
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
   textMeasurer,
-  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph,
+  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
@@ -3786,6 +3811,9 @@ export function EditorCanvas({
                   onInlineEditEnd={onInlineEditEnd}
                   onSplitParagraph={onSplitParagraph}
                   onMergeParagraph={onMergeParagraph}
+                  onExitListItem={onExitListItem}
+                  onChangeListItemLevel={onChangeListItemLevel}
+                  onBackspaceListItemAtStart={onBackspaceListItemAtStart}
                   pageKey={`${si}-${pi}`}
                   setPageRef={setPageRef}
                   onNodePointerDown={onNodePointerDown}

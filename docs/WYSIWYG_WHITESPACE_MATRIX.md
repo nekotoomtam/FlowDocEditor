@@ -96,9 +96,10 @@ Do not mark these rows PASS until a separate layout decision either:
 
 - Whitespace visualization UI (show pilcrow / dot markers) — separate UX
   feature.
-- Keyboard Tab key behavior inside the active edit session — current
-  behavior is the browser default (move focus). Revisit only if user
-  feedback requests it; the clipboard/IME path is the dominant tab source.
+- Keyboard Tab key behavior inside normal active edit sessions remains the
+  browser default (move focus). List items are the exception: `Tab` /
+  `Shift+Tab` are structural list level commands, documented in
+  `docs/LIST_NUMBERING_CONTRACT.md`.
 - Non-breaking space (` `), zero-width space (`​`), and other
   exotic whitespace codepoints — preserved by default, not separately tested
   yet. Add a row if a regression is observed.

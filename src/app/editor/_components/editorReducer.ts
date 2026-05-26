@@ -7,6 +7,7 @@ import {
   applyParagraphTextStyle,
   applyTextRunStyleRange,
   applyPlacementOperation,
+  backspaceListItemAtStart,
   assertDocument,
   createDefaultDocument,
   deleteNode,
@@ -14,14 +15,20 @@ import {
   disableSectionReservedZoneIfEmpty,
   ensureReservedZoneRoots,
   ensureSectionReservedZoneVisibleForAuthoring,
+  exitListItem,
   fitFlowTableToSectionWidth,
+  indentListItem,
+  mergeListItemWithPrevious,
   mergeParagraphWithPrevious,
   normalizeDocument,
+  outdentListItem,
   removeFlowTableColumn,
   removeFlowTableRow,
   reorderBodyChild,
   resizeFlowTableColumnPair,
+  splitListItemAtIndex,
   splitParagraphAtIndex,
+  toggleParagraphListPreset,
   updateFieldRefInline,
   updateFlowStackBoxStyle,
   updateFlowTableCellSpan,
@@ -31,9 +38,10 @@ import {
   updateSectionMargin,
   updateSectionReservedZones,
 } from "@/document"
-import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
+import type { FieldRefInlineChanges, FlowDocListStylePresetId, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
 import type { ReservedZonePriority } from "@/document"
 import type { DocumentNode, ParagraphNode } from "@/schema"
+import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import type { DragSource, PlacementOperation, PlacementPreview } from "@/placement/types"
 import { loadDocumentFromStorage } from "./documentPersistence"
 import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
@@ -42,6 +50,7 @@ import {
   commitWysiwygRichTextEditState,
   commitWysiwygTextEditState,
   getEditableParagraphTextFromDocument,
+  replaceEditableParagraphInDocument,
   replaceEditableParagraphTextInDocument,
 } from "./wysiwygTextCommit"
 
@@ -66,6 +75,8 @@ interface EditorState {
   selectedNodeId: string | null
   selectionAnchorNodeId: string | null
   lastSplitNodeId: string | null
+  listExitNodeId: string | null
+  listLevelChangeResult: { nodeId: string; caretIndex: number | null } | null
   mergeResult: { prevNodeId: string; caretIndex: number } | null
 }
 
@@ -108,10 +119,16 @@ type EditorAction =
   | { type: "ENSURE_HEADER_FOOTER_ZONE_VISIBLE"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE"; sectionIndex: number; mode: "body" | "full" }
-  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; history?: HistoryEntry }
+  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; text?: string; history?: HistoryEntry }
   | { type: "CLEAR_SPLIT_NODE_ID" }
   | { type: "MERGE_PARAGRAPH"; nodeId: string; history?: HistoryEntry }
   | { type: "CLEAR_MERGE_RESULT" }
+  | { type: "EXIT_LIST_ITEM"; nodeId: string; text?: string; history?: HistoryEntry }
+  | { type: "CLEAR_LIST_EXIT_NODE_ID" }
+  | { type: "CHANGE_LIST_ITEM_LEVEL"; nodeId: string; direction: ListLevelChangeDirection; text?: string; caretIndex?: number | null; history?: HistoryEntry; refocus?: boolean }
+  | { type: "CLEAR_LIST_LEVEL_CHANGE_RESULT" }
+  | { type: "BACKSPACE_LIST_ITEM_AT_START"; nodeId: string; text?: string; caretIndex?: number | null; history?: HistoryEntry }
+  | { type: "TOGGLE_LIST_PRESET"; nodeId: string; styleId: FlowDocListStylePresetId; instanceId: string; level?: number; text?: string; paragraph?: ParagraphNode; history?: HistoryEntry }
   | { type: "REORDER_BODY_CHILD"; sectionId: string; sourceNodeId: string; targetNodeId: string; position: "before" | "after" }
 
 function loadFromStorage(): DocumentNode | null {
@@ -184,6 +201,8 @@ export function createInitialEditorState(initialDocOverride?: DocumentNode | nul
     selectedNodeId: null,
     selectionAnchorNodeId: null,
     lastSplitNodeId: null,
+    listExitNodeId: null,
+    listLevelChangeResult: null,
     mergeResult: null,
   }
 }
@@ -370,14 +389,18 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
     }
     case "SPLIT_PARAGRAPH": {
-      const result = splitParagraphAtIndex(state.doc, action.nodeId, action.splitIndex)
+      const sourceDoc = action.text === undefined
+        ? state.doc
+        : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+      const listResult = splitListItemAtIndex(sourceDoc, action.nodeId, action.splitIndex)
+      const result = listResult.newNodeId ? listResult : splitParagraphAtIndex(sourceDoc, action.nodeId, action.splitIndex)
       if (!result.newNodeId) return state
       return { ...pushDoc(state, result.doc, action.history), lastSplitNodeId: result.newNodeId }
     }
     case "CLEAR_SPLIT_NODE_ID":
       return { ...state, lastSplitNodeId: null }
     case "MERGE_PARAGRAPH": {
-      const result = mergeParagraphWithPrevious(state.doc, action.nodeId)
+      const result = mergeListItemWithPrevious(state.doc, action.nodeId) ?? mergeParagraphWithPrevious(state.doc, action.nodeId)
       if (!result) return state
       return {
         ...pushDoc(state, result.doc, action.history),
@@ -386,5 +409,65 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
     }
     case "CLEAR_MERGE_RESULT":
       return { ...state, mergeResult: null }
+    case "EXIT_LIST_ITEM": {
+      const sourceDoc = action.text === undefined
+        ? state.doc
+        : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+      const nextDoc = exitListItem(sourceDoc, action.nodeId)
+      if (nextDoc === state.doc) return state
+      return { ...pushDoc(state, nextDoc, action.history), listExitNodeId: action.nodeId }
+    }
+    case "CLEAR_LIST_EXIT_NODE_ID":
+      return { ...state, listExitNodeId: null }
+    case "CHANGE_LIST_ITEM_LEVEL": {
+      const sourceDoc = action.text === undefined
+        ? state.doc
+        : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+      const nextDoc = action.direction === "indent"
+        ? indentListItem(sourceDoc, action.nodeId)
+        : outdentListItem(sourceDoc, action.nodeId)
+      if (nextDoc === sourceDoc) return state
+      return {
+        ...pushDoc(state, nextDoc, action.history),
+        listLevelChangeResult: action.refocus === false ? null : {
+          nodeId: action.nodeId,
+          caretIndex: action.caretIndex ?? null,
+        },
+      }
+    }
+    case "CLEAR_LIST_LEVEL_CHANGE_RESULT":
+      return { ...state, listLevelChangeResult: null }
+    case "BACKSPACE_LIST_ITEM_AT_START": {
+      const sourceDoc = action.text === undefined
+        ? state.doc
+        : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+      const nextDoc = backspaceListItemAtStart(sourceDoc, action.nodeId)
+      if (nextDoc === sourceDoc) return state
+      return {
+        ...pushDoc(state, nextDoc, action.history),
+        listLevelChangeResult: {
+          nodeId: action.nodeId,
+          caretIndex: action.caretIndex ?? null,
+        },
+      }
+    }
+    case "TOGGLE_LIST_PRESET": {
+      const sourceDoc = action.paragraph
+        ? replaceEditableParagraphInDocument(state.doc, action.nodeId, action.paragraph)
+        : action.text === undefined
+          ? state.doc
+          : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+      const nextDoc = toggleParagraphListPreset(sourceDoc, action.nodeId, {
+        styleId: action.styleId,
+        instanceId: action.instanceId,
+        level: action.level,
+      })
+      if (nextDoc === sourceDoc) return state
+      return {
+        ...pushDoc(state, nextDoc, action.history),
+        selectedNodeId: action.nodeId,
+        selectionAnchorNodeId: action.nodeId,
+      }
+    }
   }
 }

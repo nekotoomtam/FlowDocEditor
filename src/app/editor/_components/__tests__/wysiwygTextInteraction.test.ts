@@ -8,6 +8,7 @@ import {
   getWysiwygSelectedText,
   normalizeWysiwygTextRange,
   replaceWysiwygTextRange,
+  resolveStructuralListEnterInput,
   shouldUseWysiwygNativeFallback,
 } from "../wysiwygTextInteraction"
 
@@ -53,6 +54,19 @@ describe("inline edit input policy", () => {
     expect(classifyInlineEditKey({ key: "z", ctrlKey: true })).toEqual({ action: "native" })
   })
 
+  it("keeps Tab native by default while allowing list level changes", () => {
+    expect(classifyInlineEditKey({ key: "Tab" })).toEqual({ action: "native" })
+    expect(classifyInlineEditKey({ key: "Tab" }, { listTabBehavior: "change-list-level" })).toEqual({
+      action: "change-list-level",
+      direction: "indent",
+    })
+    expect(classifyInlineEditKey({ key: "Tab", shiftKey: true }, { listTabBehavior: "change-list-level" })).toEqual({
+      action: "change-list-level",
+      direction: "outdent",
+    })
+    expect(classifyInlineEditKey({ key: "Tab", ctrlKey: true }, { listTabBehavior: "change-list-level" })).toEqual({ action: "native" })
+  })
+
   it("classifies only boundary backspace as merge/boundary handling", () => {
     expect(classifyInlineEditKey({
       key: "Backspace",
@@ -82,6 +96,27 @@ describe("inline edit input policy", () => {
     })
     expect(getInlineEditClipboardPolicy("cut")).toMatchObject({ handling: "native", preventDefault: false })
     expect(getInlineEditClipboardPolicy("paste")).toMatchObject({ handling: "native", preventDefault: false })
+  })
+
+  it("resolves structural Enter for list items without mutating plain paragraph policy", () => {
+    expect(resolveStructuralListEnterInput("", 0)).toEqual({
+      action: "exit-list",
+      text: "",
+      caretOffset: 0,
+    })
+    expect(resolveStructuralListEnterInput("Hello world", 6)).toEqual({
+      action: "split-list-item",
+      text: "Hello world",
+      splitIndex: 6,
+    })
+    expect(resolveStructuralListEnterInput("Hello wide world", 11, {
+      anchorOffset: 6,
+      focusOffset: 11,
+    })).toEqual({
+      action: "split-list-item",
+      text: "Hello world",
+      splitIndex: 6,
+    })
   })
 
   it("captures textarea selection as full paragraph offsets for continuation editing", () => {

@@ -3,7 +3,7 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.16`: suitable for self-use with accepted
+The current baseline is `0.6.18`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -28,6 +28,9 @@ and cleaner active header/footer authoring chrome with selected path/action
 tools, outside-left header/footer action rails, top-left path placement, and
 authored Divider/Page break nodes with matching editor, pagination, PDF/DOCX,
 outline, property panel, and blocked page-break drop feedback support,
+plus the first paragraph-based list numbering model, resolver, generated marker
+preview/PDF/DOCX rendering, list keyboard/toolbar controls, TOR list fixtures,
+and WYSIWYG list-item draft geometry hardening,
 but not yet a general-user `v1`.
 
 ## Version Meaning
@@ -59,6 +62,7 @@ but not yet a general-user `v1`.
 | `0.6.14` | Patch baseline for selected Flow Table canvas add/delete actions and drag-to-copy selected node cloning without changing persisted document or package schema versions. |
 | `0.6.15` | Patch baseline for cleaner active header/footer authoring chrome, selected path/action tools inside active header/footer zones, outside-left header/footer action rails, and top-left path placement without changing persisted document or package schema versions. |
 | `0.6.16` | Patch baseline for authored Divider and Page break nodes across schema, pagination, PDF/DOCX export, palette/canvas/property/outline editor surfaces, blocked same-page page-break drop feedback, and Divider line/spacing controls without changing persisted document or package schema versions. |
+| `0.6.18` | Patch baseline for paragraph-based list numbering metadata, resolver, preset helpers, TOR fixtures, generated marker preview/PDF/DOCX rendering, list toolbar/keyboard interactions, and WYSIWYG list-item draft geometry hardening. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

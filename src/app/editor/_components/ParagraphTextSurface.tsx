@@ -5,7 +5,14 @@ import {
   isTextRunOnlyParagraph,
   replaceTextRunParagraphTextInParagraph,
 } from "@/document"
-import { measureParagraph, nextTextGraphemeBoundary, previousTextGraphemeBoundary, snapToGraphemeBoundary } from "@/layout"
+import {
+  measureParagraph,
+  nextTextGraphemeBoundary,
+  paragraphBoxLeftInset,
+  previousTextGraphemeBoundary,
+  resolveParagraphBoxStyle,
+  snapToGraphemeBoundary,
+} from "@/layout"
 import type { TextMeasurer } from "@/layout"
 import { buildPositionedParagraphLines, resolvePaginatedLineBaselineY } from "@/pagination"
 import type { DocumentNode, FlowTableNode, ParagraphNode } from "@/schema"
@@ -20,8 +27,8 @@ import {
   resolveSelectionOverlayRectsInFragment,
 } from "./wysiwygCaretMapping"
 import type { WysiwygCollapsedCaretOverlay, WysiwygVerticalCaretLineAffinity } from "./wysiwygCaretMapping"
-import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
-import type { InlineEditSelectionSnapshot } from "./wysiwygTextInteraction"
+import { classifyInlineEditKey, getInlineEditInputSnapshot, resolveStructuralListEnterInput } from "./wysiwygTextInteraction"
+import type { InlineEditSelectionSnapshot, ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import {
   applyWysiwygTextClipboardCut,
   applyWysiwygTextInputKey,
@@ -71,8 +78,11 @@ interface Props {
   onUserEditInteraction: (nodeId: string) => void
   onHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onEndEdit: (nodeId: string, reason?: "blur" | "keyboard") => void
-  onSplitParagraph: (nodeId: string, splitIndex: number) => void
+  onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph: (nodeId: string) => void
+  onExitListItem?: (nodeId: string, text?: string) => void
+  onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
+  onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
   onWysiwygTextDraftChange?: (nodeId: string, text: string, caretIndex: number | null, selection?: WysiwygTextSelection | null) => void
   onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision?: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
@@ -314,8 +324,8 @@ export function buildInlineEditSliceKey(
   return `${fragment.nodeId}:${fragment.pageIndex}:${fragmentPart}:${continuationCharStart ?? 0}`
 }
 
-export function shouldUseNativeInlineEditEnter(): boolean {
-  return true
+export function shouldUseNativeInlineEditEnter(isListItem = false): boolean {
+  return !isListItem
 }
 
 export function shouldUseNativeTableCellBoundaryBackspace(
@@ -969,6 +979,14 @@ export function createWysiwygDraftParagraphLayoutCacheKey(
       x: fragment.x,
       y: fragment.y,
       width: fragment.width,
+      listMarker: fragment.listMarker
+        ? {
+          markerIndent: fragment.listMarker.markerIndent,
+          textIndent: fragment.listMarker.textIndent,
+          markerX: fragment.listMarker.markerX,
+          bodyX: fragment.listMarker.bodyX,
+        }
+        : null,
       continuesFrom: fragment.continuesFrom ?? false,
       isContinued: fragment.isContinued ?? false,
       lineStart: fragment.lineStart ?? null,
@@ -987,6 +1005,29 @@ export function createWysiwygDraftParagraphLayoutCacheKey(
       allowContinuedFirstFragment: options.allowContinuedFirstFragment ?? false,
     },
   })
+}
+
+function resolveWysiwygListBodyIndent(fragment: PageFragment, node: ParagraphNode): number | null {
+  const marker = fragment.listMarker
+  if (!marker) return null
+  const box = resolveParagraphBoxStyle(node.props.box, fragment.width)
+  const contentOriginX = fragment.x + paragraphBoxLeftInset(box)
+  const bodyIndent = marker.bodyX - contentOriginX
+  if (Number.isFinite(bodyIndent)) return Math.max(0, bodyIndent)
+  return Math.max(0, marker.textIndent)
+}
+
+function withWysiwygListBodyIndent(fragment: PageFragment, node: ParagraphNode): ParagraphNode {
+  const bodyIndent = resolveWysiwygListBodyIndent(fragment, node)
+  if (bodyIndent == null) return node
+  return {
+    ...node,
+    props: {
+      ...node.props,
+      indentLeft: { value: bodyIndent, unit: "pt" },
+      textIndent: { value: 0, unit: "pt" },
+    },
+  }
 }
 
 export function buildCachedWysiwygDraftParagraphLayout(
@@ -1032,8 +1073,9 @@ export function buildWysiwygDraftParagraphLayout(
   if (fragment.continuesFrom || (fragment.isContinued && !options.allowContinuedFirstFragment)) return null
   const draftNode = paragraphWithDraftText(node, draftText)
   if (!draftNode) return null
+  const layoutNode = withWysiwygListBodyIndent(fragment, draftNode)
   const startedAt = options.traceMeasure ? startWysiwygPerfSpan() : null
-  const measured = measureParagraph(draftNode, fragment.width, textMeasurer)
+  const measured = measureParagraph(layoutNode, fragment.width, textMeasurer)
   if (startedAt !== null) {
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "text-engine-draft-measure", startedAt, {
       nodeId: fragment.nodeId,
@@ -1045,7 +1087,7 @@ export function buildWysiwygDraftParagraphLayout(
     })
   }
   return {
-    lines: buildPositionedParagraphLines(measured, measured.lines, fragment.x, fragment.y, 0, node.props.align, true),
+    lines: buildPositionedParagraphLines(measured, measured.lines, fragment.x, fragment.y, 0, layoutNode.props.align, true),
     height: measured.totalHeight,
   }
 }
@@ -1338,9 +1380,14 @@ interface WysiwygTextLayerProps {
   caretIndex: number | null
   selection?: WysiwygTextSelection | null
   draftText?: string | null
+  isListItem?: boolean
   onDraftChange?: (nodeId: string, text: string, caretIndex: number | null, selection?: WysiwygTextSelection | null) => void
   onRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onEndEdit?: (nodeId: string, reason?: "blur" | "keyboard") => void
+  onSplitParagraph?: (nodeId: string, splitIndex: number, text?: string) => void
+  onExitListItem?: (nodeId: string, text?: string) => void
+  onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
+  onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
   showTextSegments: boolean
   selectionOverlayRects?: ReturnType<typeof resolveSelectionOverlayRectsInFragment>
   pointerFragments?: WysiwygTextPointerFragmentTarget[]
@@ -1472,9 +1519,14 @@ export function WysiwygTextLayer({
   caretIndex,
   selection,
   draftText,
+  isListItem = false,
   onDraftChange,
   onRichTextShortcut,
   onEndEdit,
+  onSplitParagraph,
+  onExitListItem,
+  onChangeListItemLevel,
+  onBackspaceListItemAtStart,
   showTextSegments,
   selectionOverlayRects = [],
   pointerFragments = [],
@@ -2236,6 +2288,77 @@ export function WysiwygTextLayer({
         event.preventDefault()
         return
       }
+      if (
+        isListItem &&
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.isComposing &&
+        !isComposingTextEngineRef.current
+      ) {
+        event.preventDefault()
+        const current = draftStateRef.current
+        const structuralInput = resolveStructuralListEnterInput(
+          current.text,
+          current.caretOffset,
+          current.selection ?? null,
+        )
+        cancelScheduledDraftSyncFrame()
+        pendingDraftSyncRef.current = null
+        if (structuralInput.action === "exit-list") {
+          onExitListItem?.(fragment.nodeId, structuralInput.text)
+        } else {
+          onSplitParagraph?.(fragment.nodeId, structuralInput.splitIndex, structuralInput.text)
+        }
+        return
+      }
+      const listLevelDecision = classifyInlineEditKey({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        isComposing: event.isComposing || isComposingTextEngineRef.current,
+      }, {
+        listTabBehavior: isListItem ? "change-list-level" : "native",
+      })
+      if (listLevelDecision.action === "change-list-level") {
+        event.preventDefault()
+        const current = draftStateRef.current
+        cancelScheduledDraftSyncFrame()
+        pendingDraftSyncRef.current = null
+        onChangeListItemLevel?.(
+          fragment.nodeId,
+          listLevelDecision.direction,
+          current.text,
+          current.caretOffset,
+        )
+        return
+      }
+      if (
+        isListItem &&
+        event.key === "Backspace" &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.isComposing &&
+        !isComposingTextEngineRef.current
+      ) {
+        const current = draftStateRef.current
+        const selection = current.selection
+        const isCollapsedAtStart = current.caretOffset === 0 &&
+          (!selection || (selection.anchorOffset === 0 && selection.focusOffset === 0))
+        if (isCollapsedAtStart) {
+          event.preventDefault()
+          cancelScheduledDraftSyncFrame()
+          pendingDraftSyncRef.current = null
+          onBackspaceListItemAtStart?.(fragment.nodeId, current.text, 0)
+          return
+        }
+      }
       const isVerticalNavigation = event.key === "ArrowUp" || event.key === "ArrowDown"
       const handled = applyVerticalKeyInput(keyInput) || applyKeyInput(keyInput)
       if (!handled) {
@@ -2334,6 +2457,7 @@ export function WysiwygTextLayer({
     applyKeyInput,
     applyVerticalKeyInput,
     applyTextInput,
+    cancelScheduledDraftSyncFrame,
     clearInputBridgeText,
     consumeSuppressedCompositionInput,
     endCompositionInput,
@@ -2342,8 +2466,13 @@ export function WysiwygTextLayer({
     getSelectedDraftText,
     handleClipboardShortcutKeyDown,
     isCompositionBridgeInput,
+    isListItem,
+    onBackspaceListItemAtStart,
+    onChangeListItemLevel,
     onEndEdit,
+    onExitListItem,
     onRichTextShortcut,
+    onSplitParagraph,
     startCompositionInput,
   ])
 
@@ -2647,6 +2776,9 @@ export function ParagraphTextSurface({
   onEndEdit,
   onSplitParagraph,
   onMergeParagraph,
+  onExitListItem,
+  onChangeListItemLevel,
+  onBackspaceListItemAtStart,
   onWysiwygTextDraftChange,
   onWysiwygRichTextShortcut,
   onWysiwygTextReflowDecision,
@@ -2682,6 +2814,7 @@ export function ParagraphTextSurface({
   // inside SVG foreignObject with overflow:hidden).
   const fullText = getEditableParagraphText(doc, fragment.nodeId)
   const paragraphNode = useMemo(() => findParagraphNode(doc, fragment.nodeId), [doc, fragment.nodeId])
+  const isListItem = paragraphNode?.props.list != null
   const canPlainTextEdit = fullText !== null
   const nextEditState = getContinuationEditState(fullText ?? "", fragment, initialCaretIndex)
   const editSliceKey = buildInlineEditSliceKey(
@@ -2874,6 +3007,8 @@ export function ParagraphTextSurface({
   // Matching padding cancels that expansion so textarea content starts at the
   // same paragraph origin as SVG lines instead of drifting by the chrome size.
   const textareaPadding = `${spacingBefore + EDIT_CHROME_Y}px ${EDIT_CHROME_X}px ${spacingAfter + EDIT_CHROME_Y}px`
+  const textareaContentX = displayFragment.listMarker?.bodyX ?? displayFragment.x
+  const textareaContentWidth = Math.max(0, (displayFragment.x + displayFragment.width) - textareaContentX)
 
   const syncTextareaHeight = useCallback((el: HTMLTextAreaElement) => {
     el.scrollTop = 0
@@ -2968,9 +3103,14 @@ export function ParagraphTextSurface({
           caretIndex={textEngineCaretOffset}
           selection={wysiwygTextSelection}
           draftText={textEngineDraftText}
+          isListItem={isListItem}
           onDraftChange={onWysiwygTextDraftChange}
           onRichTextShortcut={onWysiwygRichTextShortcut}
           onEndEdit={onEndEdit}
+          onSplitParagraph={onSplitParagraph}
+          onExitListItem={onExitListItem}
+          onChangeListItemLevel={onChangeListItemLevel}
+          onBackspaceListItemAtStart={onBackspaceListItemAtStart}
           showTextSegments={showTextSegments}
           selectionOverlayRects={textEngineSelectionOverlayRects}
           pointerFragments={wysiwygTextPointerFragments}
@@ -2993,9 +3133,9 @@ export function ParagraphTextSurface({
         )}
         {showTextSegments && renderSegmentDebug(displayFragment.lines, displayFragment, renderProps, scale)}
         <foreignObject
-          x={displayFragment.x * scale - EDIT_CHROME_X}
+          x={textareaContentX * scale - EDIT_CHROME_X}
           y={displayFragment.y * scale - EDIT_CHROME_Y}
-          width={displayFragment.width * scale + EDIT_CHROME_X * 2}
+          width={textareaContentWidth * scale + EDIT_CHROME_X * 2}
           height={activeEditHeight + EDIT_CHROME_Y * 2}
         >
           <textarea
@@ -3067,7 +3207,8 @@ export function ParagraphTextSurface({
                 selectionEnd: el.selectionEnd,
                 valueLength: el.value.length,
               }, {
-                plainEnterBehavior: shouldUseNativeInlineEditEnter() ? "native" : "split-paragraph",
+                plainEnterBehavior: shouldUseNativeInlineEditEnter(isListItem) ? "native" : "split-paragraph",
+                listTabBehavior: isListItem ? "change-list-level" : "native",
               })
 
               if (decision.action === "native") return
@@ -3080,11 +3221,29 @@ export function ParagraphTextSurface({
 
               if (decision.action === "split-paragraph") {
                 event.preventDefault()
+                const snapshot = getInlineEditInputSnapshot(el, preText, postText)
+                if (isListItem && snapshot.text.length === 0 && snapshot.isSelectionCollapsed) {
+                  onChange(fragment.nodeId, snapshot.text, 0)
+                  onExitListItem?.(fragment.nodeId, snapshot.text)
+                  return
+                }
                 const selectionStart = el.selectionStart ?? el.value.length
                 const selectionEnd = el.selectionEnd ?? selectionStart
                 const input = buildSplitEditInput(preText, el.value, selectionStart, selectionEnd, postText)
                 onChange(fragment.nodeId, input.text, input.splitIndex)
-                onSplitParagraph(fragment.nodeId, input.splitIndex)
+                onSplitParagraph(fragment.nodeId, input.splitIndex, input.text)
+                return
+              }
+
+              if (decision.action === "change-list-level") {
+                event.preventDefault()
+                const snapshot = getInlineEditInputSnapshot(el, preText, postText)
+                onChangeListItemLevel?.(
+                  fragment.nodeId,
+                  decision.direction,
+                  snapshot.text,
+                  snapshot.caretOffset,
+                )
                 return
               }
 
@@ -3096,6 +3255,13 @@ export function ParagraphTextSurface({
                   return
                 }
 
+                if (isListItem) {
+                  event.preventDefault()
+                  const snapshot = getInlineEditInputSnapshot(el, preText, postText)
+                  onChange(fragment.nodeId, snapshot.text, snapshot.caretOffset)
+                  onBackspaceListItemAtStart?.(fragment.nodeId, snapshot.text, snapshot.caretOffset)
+                  return
+                }
                 if (shouldUseNativeTableCellBoundaryBackspace(isTableCellParagraph, preText)) return
                 event.preventDefault()
                 onChange(fragment.nodeId, preText + el.value + postText, 0)

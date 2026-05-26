@@ -112,6 +112,94 @@ describe("resolveListMarkers", () => {
     expect(markers.get("p2")?.markerText).toBe("4.")
   })
 
+  it("applies list instance startAt before style startAt for top-level counters", () => {
+    const doc = listDoc([
+      paragraph("p1", "Appendix first", { instanceId: "tor-appendix", level: 0, itemId: "appendix-first" }),
+      paragraph("p2", "Appendix child", { instanceId: "tor-appendix", level: 1, itemId: "appendix-child" }),
+      paragraph("p3", "Appendix second", { instanceId: "tor-appendix", level: 0, itemId: "appendix-second" }),
+    ])
+    doc.document.listInstances = {
+      ...doc.document.listInstances,
+      "tor-appendix": { id: "tor-appendix", styleId: "tor-clause", startAt: 3 },
+    }
+
+    const markers = resolveListMarkers(doc)
+
+    expect(markers.get("p1")?.ordinal).toBe(3)
+    expect(markers.get("p1")?.markerText).toBe("3.")
+    expect(markers.get("p2")?.markerText).toBe("3.1")
+    expect(markers.get("p3")?.markerText).toBe("4.")
+  })
+
+  it("uses list instance startAt for a missing top-level parent counter", () => {
+    const doc = listDoc([
+      paragraph("p1", "Appendix child first", { instanceId: "tor-appendix", level: 1, itemId: "appendix-child-first" }),
+    ])
+    doc.document.listInstances = {
+      ...doc.document.listInstances,
+      "tor-appendix": { id: "tor-appendix", styleId: "tor-clause", startAt: 3 },
+    }
+
+    const markers = resolveListMarkers(doc)
+
+    expect(markers.get("p1")?.markerText).toBe("3.1")
+  })
+
+  it("lets paragraph startAt override list instance startAt", () => {
+    const doc = listDoc([
+      paragraph("p1", "Override", { instanceId: "tor-appendix", level: 0, itemId: "override", startAt: 8 }),
+      paragraph("p2", "After override", { instanceId: "tor-appendix", level: 0, itemId: "after-override" }),
+    ])
+    doc.document.listInstances = {
+      ...doc.document.listInstances,
+      "tor-appendix": { id: "tor-appendix", styleId: "tor-clause", startAt: 3 },
+    }
+
+    const markers = resolveListMarkers(doc)
+
+    expect(markers.get("p1")?.markerText).toBe("8.")
+    expect(markers.get("p2")?.markerText).toBe("9.")
+  })
+
+  it("uses restartAfterLevel to narrow which shallower level resets a counter", () => {
+    const doc = listDoc([
+      paragraph("p1", "Parent", { instanceId: "tor-main", level: 0, itemId: "parent" }),
+      paragraph("p2", "First child", { instanceId: "tor-main", level: 1, itemId: "first-child" }),
+      paragraph("p3", "First grandchild", { instanceId: "tor-main", level: 2, itemId: "first-grandchild" }),
+      paragraph("p4", "Second child", { instanceId: "tor-main", level: 1, itemId: "second-child" }),
+      paragraph("p5", "Continued grandchild counter", { instanceId: "tor-main", level: 2, itemId: "continued-grandchild" }),
+      paragraph("p6", "Next parent", { instanceId: "tor-main", level: 0, itemId: "next-parent" }),
+      paragraph("p7", "Reset child", { instanceId: "tor-main", level: 1, itemId: "reset-child" }),
+      paragraph("p8", "Reset grandchild", { instanceId: "tor-main", level: 2, itemId: "reset-grandchild" }),
+    ])
+    doc.document.listStyles = {
+      ...doc.document.listStyles,
+      "tor-clause": {
+        ...doc.document.listStyles?.["tor-clause"],
+        id: "tor-clause",
+        levels: [
+          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
+          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+          {
+            level: 2,
+            format: "decimal",
+            pattern: "%1.%2.%3",
+            startAt: 1,
+            restartAfterLevel: 0,
+            markerIndent: pt(36),
+            textIndent: pt(54),
+          },
+        ],
+      },
+    }
+
+    const markers = resolveListMarkers(doc)
+
+    expect(markers.get("p3")?.markerText).toBe("1.1.1")
+    expect(markers.get("p5")?.markerText).toBe("1.2.2")
+    expect(markers.get("p8")?.markerText).toBe("2.1.1")
+  })
+
   it("does not create markers for normal paragraphs and never changes paragraph children", () => {
     const normal = paragraph("p1", "plain text")
     const listed = paragraph("p2", "list text", { instanceId: "bullets", level: 0, itemId: "bullet-one" })

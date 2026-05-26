@@ -68,17 +68,17 @@ function makeSmokeDocument() {
       const paraId = `smoke-table-p${rowIndex}-${colIndex}`
       const cellId = `smoke-table-c${rowIndex}-${colIndex}`
       tableNodes[paraId] = paragraph(paraId, `Cell ${rowIndex + 1}.${colIndex + 1}`)
-      tableNodes[cellId] = { id: cellId, type: "table-cell", props: {}, childIds: [paraId] }
+      tableNodes[cellId] = { id: cellId, type: "flow-table-cell", props: {}, childIds: [paraId] }
       cellIds.push(cellId)
     }
     const rowId = `smoke-table-row${rowIndex}`
-    tableNodes[rowId] = { id: rowId, type: "table-row", props: {}, cellIds }
+    tableNodes[rowId] = { id: rowId, type: "flow-table-row", props: {}, cellIds }
     rowIds.push(rowId)
   }
 
   const table = {
     id: "smoke-table",
-    type: "table",
+    type: "flow-table",
     props: { headerRowCount: 1 },
     columns: [{ width: pt(150) }, { width: pt(150) }, { width: pt(150) }],
     rowIds,
@@ -251,17 +251,17 @@ function makeUserReportSmokeTable(id, bodyRowCount) {
       const paragraphId = `${id}-p${rowIndex}-${colIndex}`
       const cellId = `${id}-c${rowIndex}-${colIndex}`
       nodes[paragraphId] = paragraph(paragraphId, text)
-      nodes[cellId] = { id: cellId, type: "table-cell", props: {}, childIds: [paragraphId] }
+      nodes[cellId] = { id: cellId, type: "flow-table-cell", props: {}, childIds: [paragraphId] }
       cellIds.push(cellId)
     })
     const rowId = `${id}-row${rowIndex}`
-    nodes[rowId] = { id: rowId, type: "table-row", props: {}, cellIds }
+    nodes[rowId] = { id: rowId, type: "flow-table-row", props: {}, cellIds }
     rowIds.push(rowId)
   })
 
   return {
     id,
-    type: "table",
+    type: "flow-table",
     props: { headerRowCount: 1 },
     columns: [{ width: pt(90) }, { width: pt(221) }, { width: pt(140) }],
     rowIds,
@@ -740,7 +740,14 @@ async function openInlineTextareaFromFragment(page, fragment, nodeId) {
   for (let attempt = 0; attempt < 3; attempt++) {
     await fragment.scrollIntoViewIfNeeded()
     await page.waitForTimeout(100)
-    await fragment.dblclick()
+    try {
+      await fragment.dblclick({ timeout: 5000 })
+    } catch (error) {
+      lastError = error
+      await page.keyboard.press("Escape")
+      await page.waitForTimeout(100)
+      continue
+    }
     try {
       await textarea.waitFor({ state: "visible", timeout: 5000 })
       return textarea
@@ -776,7 +783,7 @@ async function waitForStoredTableShape(page, tableId, expected) {
         : parsed
       for (const section of doc.document.sections) {
         const table = section.nodes[tableId]
-        if (table?.type !== "table") continue
+        if (table?.type !== "flow-table") continue
         return table.rowIds.length === rows &&
           table.columns.length === cols &&
           (headerRowCount == null || (table.props.headerRowCount ?? 0) === headerRowCount)
@@ -799,10 +806,10 @@ async function storedTableCellId(page, tableId, rowIndex, colIndex) {
         : parsed
       for (const section of doc.document.sections) {
         const table = section.nodes[tableId]
-        if (table?.type !== "table") continue
+        if (table?.type !== "flow-table") continue
         const rowId = table.rowIds[rowIndex]
         const row = table.nodes[rowId]
-        return row?.type === "table-row" ? row.cellIds[colIndex] ?? null : null
+        return row?.type === "flow-table-row" ? row.cellIds[colIndex] ?? null : null
       }
       return null
     },
@@ -821,12 +828,12 @@ async function storedTableCellFirstChildId(page, tableId, rowIndex, colIndex) {
         : parsed
       for (const section of doc.document.sections) {
         const table = section.nodes[tableId]
-        if (table?.type !== "table") continue
+        if (table?.type !== "flow-table") continue
         const rowId = table.rowIds[rowIndex]
         const row = table.nodes[rowId]
-        const cellId = row?.type === "table-row" ? row.cellIds[colIndex] : null
+        const cellId = row?.type === "flow-table-row" ? row.cellIds[colIndex] : null
         const cell = cellId ? table.nodes[cellId] : null
-        return cell?.type === "table-cell" ? cell.childIds[0] ?? null : null
+        return cell?.type === "flow-table-cell" ? cell.childIds[0] ?? null : null
       }
       return null
     },
@@ -836,7 +843,7 @@ async function storedTableCellFirstChildId(page, tableId, rowIndex, colIndex) {
 
 async function waitForVisibleTableCellCount(page, expectedCount) {
   await page.waitForFunction(
-    (count) => document.querySelectorAll('[data-testid="editor-fragment"][data-node-type="table-cell"]').length === count,
+    (count) => document.querySelectorAll('[data-testid="editor-fragment"][data-node-type="flow-table-cell"]').length === count,
     expectedCount,
     { timeout: 5000 },
   )
@@ -900,7 +907,7 @@ async function waitForStoredFieldRefMetadata(page, fieldRefId, expected) {
         for (const node of Object.values(section.nodes)) {
           const paragraphs = []
           if (node?.type === "paragraph") paragraphs.push(node)
-          if (node?.type === "table") {
+          if (node?.type === "flow-table") {
             for (const inner of Object.values(node.nodes)) {
               if (inner?.type === "paragraph") paragraphs.push(inner)
             }
@@ -928,6 +935,10 @@ async function expectPropertyPanelTitle(page, expectedTitle) {
     const title = document.querySelector('[data-testid="property-panel-title"] > span')
     return title?.textContent?.trim() === titleText
   }, expectedTitle, { timeout: 3000 })
+}
+
+async function selectCanvasPathNode(page, nodeId) {
+  await page.locator(`[data-testid="canvas-path-item"][data-node-id="${nodeId}"]`).click()
 }
 
 function isIgnoredResourceError(error) {
@@ -1067,6 +1078,7 @@ async function run() {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" })
     await page.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
     await page.getByTestId("editor-toolbar").waitFor({ state: "visible" })
+    await page.getByTestId("list-toolbar").waitFor({ state: "visible" })
     await page.getByTestId("editor-canvas").waitFor({ state: "visible" })
     await page.getByTestId("editor-page").first().waitFor({ state: "visible" })
     await waitForZoneText(page, "header", "smoke-header-p1", "Smoke Header Preview")
@@ -1181,8 +1193,9 @@ async function run() {
     await expectNoLayoutError(page)
 
     await tableParagraph.click()
+    await selectCanvasPathNode(page, "smoke-table-c1-1")
 
-    await expectPropertyPanelTitle(page, "table-cell")
+    await expectPropertyPanelTitle(page, "Flow table cell")
     await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
     await waitForVisibleTableCellCount(page, 6)
     await expectNoLayoutError(page)
@@ -1195,14 +1208,16 @@ async function run() {
     assert(insertedColumnCellId, "expected inserted table column cell id")
     assert(insertedColumnParagraphId, "expected inserted table column paragraph id")
     await page.locator(`[data-testid="editor-fragment"][data-node-id="${insertedColumnParagraphId}"]`).click()
-    await expectPropertyPanelTitle(page, "table-cell")
+    await selectCanvasPathNode(page, insertedColumnCellId)
+    await expectPropertyPanelTitle(page, "Flow table cell")
     await page.getByRole("button", { name: "Delete column" }).click()
     await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
     await waitForVisibleTableCellCount(page, 6)
     await expectNoLayoutError(page)
 
     await tableParagraph.click()
-    await expectPropertyPanelTitle(page, "table-cell")
+    await selectCanvasPathNode(page, "smoke-table-c1-1")
+    await expectPropertyPanelTitle(page, "Flow table cell")
     await page.getByRole("button", { name: /Below/ }).click()
     await waitForStoredTableShape(page, "smoke-table", { rows: 3, cols: 3, headerRowCount: 1 })
     await waitForVisibleTableCellCount(page, 9)
@@ -1211,7 +1226,8 @@ async function run() {
     assert(insertedRowCellId, "expected inserted table row cell id")
     assert(insertedRowParagraphId, "expected inserted table row paragraph id")
     await page.locator(`[data-testid="editor-fragment"][data-node-id="${insertedRowParagraphId}"]`).click()
-    await expectPropertyPanelTitle(page, "table-cell")
+    await selectCanvasPathNode(page, insertedRowCellId)
+    await expectPropertyPanelTitle(page, "Flow table cell")
     await page.getByRole("button", { name: "Delete row" }).click()
     await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
     await waitForVisibleTableCellCount(page, 6)
@@ -1350,6 +1366,7 @@ async function run() {
     }, { key: STORAGE_KEY, pack: makeRegistryPlacementPackage() })
     await registryPage.goto(baseUrl, { waitUntil: "domcontentloaded" })
     await registryPage.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
+    await registryPage.getByTestId("editor-left-rail-mode-add").click()
     await registryPage.getByTestId("field-palette-item").filter({ hasText: "Project code" }).first().waitFor({ state: "visible", timeout: 5000 })
     const registryParagraph = registryPage.locator('[data-testid="editor-fragment"][data-node-id="registry-p1"]')
     await registryParagraph.first().waitFor({ state: "visible", timeout: 10000 })

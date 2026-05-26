@@ -54,6 +54,8 @@ import {
   replaceTextRunRangeInParagraph,
   splitTextRunsAtOffset,
 } from "./richText"
+import { createListInstanceForPreset, getListStylePreset } from "./listPresets"
+import type { FlowDocListStylePresetId } from "./listPresets"
 import type {
   ParagraphTextStyleChanges,
   ReplaceTextRunRangeOptions,
@@ -110,6 +112,20 @@ export interface ParagraphListAssignment {
   level?: number
   itemId?: string
   startAt?: number | null
+}
+
+export interface EnsureListPresetInstanceOptions {
+  styleId: FlowDocListStylePresetId
+  instanceId: string
+  startAt?: number | null
+}
+
+export interface ToggleParagraphListPresetOptions extends EnsureListPresetInstanceOptions {
+  level?: number
+}
+
+export interface SplitListItemOptions {
+  itemId?: string
 }
 
 const MIN_TABLE_COLUMN_RESIZE_WIDTH_PT = 24
@@ -869,6 +885,24 @@ function findParagraphListProps(doc: DocumentNode, paragraphId: string): Paragra
   return null
 }
 
+function findParagraphNodeById(doc: DocumentNode, paragraphId: string): ParagraphNode | null {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[paragraphId]
+    if (node?.type === "paragraph") return node
+    for (const n of Object.values(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const inner = (n as unknown as FlowTableNode).nodes[paragraphId]
+      if (inner?.type === "paragraph") return inner as ParagraphNode
+    }
+  }
+  return null
+}
+
+function isEmptyTextRunOnlyParagraph(node: ParagraphNode): boolean {
+  return isTextRunOnlyParagraph(node) &&
+    node.children.every((child) => child.type === "text" && child.text.trim().length === 0)
+}
+
 export function upsertListStyleDefinition(doc: DocumentNode, style: ListStyleDefinition): DocumentNode {
   return {
     ...doc,
@@ -893,6 +927,21 @@ export function upsertListInstance(doc: DocumentNode, instance: ListInstance): D
       },
     },
   }
+}
+
+export function ensureListPresetInstance(
+  doc: DocumentNode,
+  options: EnsureListPresetInstanceOptions,
+): DocumentNode {
+  if (options.instanceId.length === 0) return doc
+  const current = doc.document.listInstances?.[options.instanceId]
+  const startAt = Object.prototype.hasOwnProperty.call(options, "startAt")
+    ? normalizeStartAt(options.startAt)
+    : current?.startAt
+  return upsertListInstance(
+    upsertListStyleDefinition(doc, getListStylePreset(options.styleId)),
+    createListInstanceForPreset(options.instanceId, options.styleId, startAt),
+  )
 }
 
 export function applyParagraphList(
@@ -925,6 +974,22 @@ export function clearParagraphList(doc: DocumentNode, paragraphIds: string | str
   })
 }
 
+export function toggleParagraphListPreset(
+  doc: DocumentNode,
+  paragraphIds: string | string[],
+  options: ToggleParagraphListPresetOptions,
+): DocumentNode {
+  const ids = Array.isArray(paragraphIds) ? paragraphIds : [paragraphIds]
+  if (ids.length === 0 || options.instanceId.length === 0) return doc
+  const shouldClear = ids.every((paragraphId) => findParagraphListProps(doc, paragraphId)?.instanceId === options.instanceId)
+  if (shouldClear) return clearParagraphList(doc, ids)
+  const withInstance = ensureListPresetInstance(doc, options)
+  return applyParagraphList(withInstance, ids, {
+    instanceId: options.instanceId,
+    level: options.level,
+  })
+}
+
 export function changeParagraphListLevel(doc: DocumentNode, paragraphId: string, level: number): DocumentNode {
   return updateParagraphNodeById(doc, paragraphId, (node) => {
     const current = node.props.list
@@ -945,6 +1010,20 @@ export function outdentListItem(doc: DocumentNode, paragraphId: string): Documen
   const current = findParagraphListProps(doc, paragraphId)
   if (!current) return doc
   return changeParagraphListLevel(doc, paragraphId, current.level - 1)
+}
+
+export function backspaceListItemAtStart(doc: DocumentNode, paragraphId: string): DocumentNode {
+  const current = findParagraphListProps(doc, paragraphId)
+  if (!current) return doc
+  return current.level > 0
+    ? changeParagraphListLevel(doc, paragraphId, current.level - 1)
+    : clearParagraphList(doc, paragraphId)
+}
+
+export function exitListItem(doc: DocumentNode, paragraphId: string): DocumentNode {
+  const node = findParagraphNodeById(doc, paragraphId)
+  if (!node?.props.list || !isEmptyTextRunOnlyParagraph(node)) return doc
+  return clearParagraphList(doc, paragraphId)
 }
 
 export function restartParagraphListAt(
@@ -2354,6 +2433,27 @@ export function splitTextRunParagraphAtIndex(
   return { doc, newNodeId: "" }
 }
 
+export function splitListItemAtIndex(
+  doc: DocumentNode,
+  nodeId: string,
+  splitIndex: number,
+  options: SplitListItemOptions = {},
+): { doc: DocumentNode; newNodeId: string } {
+  const list = findParagraphListProps(doc, nodeId)
+  if (!list) return { doc, newNodeId: "" }
+  const result = splitTextRunParagraphAtIndex(doc, nodeId, splitIndex)
+  if (!result.newNodeId) return result
+  return {
+    doc: applyParagraphList(result.doc, result.newNodeId, {
+      instanceId: list.instanceId,
+      level: list.level,
+      itemId: options.itemId && options.itemId.length > 0 ? options.itemId : result.newNodeId,
+      startAt: null,
+    }),
+    newNodeId: result.newNodeId,
+  }
+}
+
 export function mergeTextRunParagraphWithPrevious(
   doc: DocumentNode,
   nodeId: string,
@@ -2395,6 +2495,14 @@ export function mergeTextRunParagraphWithPrevious(
     }
   }
   return null
+}
+
+export function mergeListItemWithPrevious(
+  doc: DocumentNode,
+  nodeId: string,
+): { doc: DocumentNode; prevNodeId: string; caretIndex: number } | null {
+  if (!findParagraphListProps(doc, nodeId)) return null
+  return mergeTextRunParagraphWithPrevious(doc, nodeId)
 }
 
 export function addFlowTableRow(doc: DocumentNode, tableId: string, afterIndex?: number): DocumentNode {

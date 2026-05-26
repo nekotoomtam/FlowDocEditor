@@ -14,6 +14,7 @@ import { assertDocument } from "./assert"
 import { resolveFlowTableGrid } from "./flowTableGrid"
 import {
   applyTextRunStyleRange,
+  backspaceListItemAtStart,
   applyParagraphTextStyle,
   applyPlacementOperation,
   applyParagraphList,
@@ -33,9 +34,12 @@ import {
   duplicateNode,
   ensureReservedZoneRoots,
   ensureSectionReservedZoneVisibleForAuthoring,
+  ensureListPresetInstance,
+  exitListItem,
   fitFlowTableToSectionWidth,
   indentListItem,
   isPlainTextParagraph,
+  mergeListItemWithPrevious,
   mergeParagraphWithPrevious,
   mergeTextRunParagraphWithPrevious,
   MAX_HEADER_FOOTER_RESERVED_RATIO,
@@ -53,7 +57,9 @@ import {
   resizeFlowTableColumnPair,
   resolveFlowTableCellMergeTarget,
   splitParagraphAtIndex,
+  splitListItemAtIndex,
   splitTextRunParagraphAtIndex,
+  toggleParagraphListPreset,
   updateFlowTableCellSpan,
   updateFieldRefInline,
   updateFlowStackBoxStyle,
@@ -64,6 +70,8 @@ import {
   upsertListInstance,
   upsertListStyleDefinition,
 } from "./operations"
+import { TOR_CLAUSE_LIST_STYLE_ID } from "./listPresets"
+import { resolveListMarkers } from "./listNumbering"
 
 function makeParagraph(id: string, children: ParagraphNode["children"]): ParagraphNode {
   return {
@@ -478,6 +486,52 @@ describe("paragraph list operations", () => {
     )
   }
 
+  it("installs a list preset and instance through one operation", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    let doc = makeDoc({ p1: p }, ["p1"])
+
+    doc = ensureListPresetInstance(doc, {
+      styleId: TOR_CLAUSE_LIST_STYLE_ID,
+      instanceId: "tor-main",
+      startAt: 3,
+    })
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", itemId: "tor.one" })
+
+    expect(doc.document.listStyles?.["tor-clause"]?.levels).toHaveLength(8)
+    expect(doc.document.listInstances?.["tor-main"]).toEqual({
+      id: "tor-main",
+      styleId: "tor-clause",
+      startAt: 3,
+    })
+    expect(resolveListMarkers(doc).get("p1")?.markerText).toBe("3.")
+    expect(getParagraph(doc, "p1").children).toEqual(p.children)
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("preserves and clears preset instance startAt explicitly", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    let doc = makeDoc({ p1: p }, ["p1"])
+
+    doc = ensureListPresetInstance(doc, {
+      styleId: TOR_CLAUSE_LIST_STYLE_ID,
+      instanceId: "tor-main",
+      startAt: 3,
+    })
+    doc = ensureListPresetInstance(doc, {
+      styleId: TOR_CLAUSE_LIST_STYLE_ID,
+      instanceId: "tor-main",
+    })
+    expect(doc.document.listInstances?.["tor-main"]?.startAt).toBe(3)
+
+    doc = ensureListPresetInstance(doc, {
+      styleId: TOR_CLAUSE_LIST_STYLE_ID,
+      instanceId: "tor-main",
+      startAt: null,
+    })
+    expect(doc.document.listInstances?.["tor-main"]?.startAt).toBeUndefined()
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
   it("adds list definitions and applies list metadata without editing paragraph children", () => {
     const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
     const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Two" }])
@@ -523,6 +577,23 @@ describe("paragraph list operations", () => {
     expect(getParagraph(doc, "p1").props.list?.level).toBe(0)
   })
 
+  it("handles Backspace at list item start as outdent or clear-list", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", level: 2, itemId: "one" })
+
+    doc = backspaceListItemAtStart(doc, "p1")
+    expect(getParagraph(doc, "p1").props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "one" })
+
+    doc = backspaceListItemAtStart(doc, "p1")
+    expect(getParagraph(doc, "p1").props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: "one" })
+
+    doc = backspaceListItemAtStart(doc, "p1")
+    expect(getParagraph(doc, "p1").props.list).toBeUndefined()
+    expect(getParagraph(doc, "p1").children).toEqual(p.children)
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
   it("sets and clears numbering restart metadata", () => {
     const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
     let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
@@ -545,6 +616,125 @@ describe("paragraph list operations", () => {
     expect(getParagraph(result, "p1").props.list).toBeUndefined()
     expect(getParagraph(result, "p1").children).toEqual(p.children)
     expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("toggles a preset-backed list on and off for selected paragraphs", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Two" }])
+    let doc = makeDoc({ p1, p2 }, ["p1", "p2"])
+
+    doc = toggleParagraphListPreset(doc, ["p1", "p2"], {
+      styleId: TOR_CLAUSE_LIST_STYLE_ID,
+      instanceId: "tor-main",
+      level: 1,
+    })
+    expect(getParagraph(doc, "p1").props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "p1" })
+    expect(getParagraph(doc, "p2").props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "p2" })
+    expect(resolveListMarkers(doc).get("p1")?.markerText).toBe("1.1")
+
+    doc = toggleParagraphListPreset(doc, ["p1", "p2"], {
+      styleId: TOR_CLAUSE_LIST_STYLE_ID,
+      instanceId: "tor-main",
+      level: 1,
+    })
+    expect(getParagraph(doc, "p1").props.list).toBeUndefined()
+    expect(getParagraph(doc, "p2").props.list).toBeUndefined()
+    expect(getParagraph(doc, "p1").children).toEqual(p1.children)
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("splits a list item and gives the new item a unique list identity", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+      { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+    ])
+    let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
+    doc = applyParagraphList(doc, "p1", {
+      instanceId: "tor-main",
+      level: 1,
+      itemId: "tor.item.one",
+      startAt: 3,
+    })
+
+    const result = splitListItemAtIndex(doc, "p1", 6, { itemId: "tor.item.two" })
+    const first = getParagraph(result.doc, "p1")
+    const second = getParagraph(result.doc, result.newNodeId)
+
+    expect(textRunSummary(first)).toEqual([
+      { type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+    ])
+    expect(textRunSummary(second)).toEqual([
+      { type: "text", text: "world", style: { fontStyle: "italic" } },
+    ])
+    expect(first.props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "tor.item.one", startAt: 3 })
+    expect(second.props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "tor.item.two" })
+    expect(resolveListMarkers(result.doc).get("p1")?.markerText).toBe("1.3")
+    expect(resolveListMarkers(result.doc).get(result.newNodeId)?.markerText).toBe("1.4")
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("uses the new paragraph id as split item identity when no itemId is supplied", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }])
+    let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", itemId: "tor.item.one" })
+
+    const result = splitListItemAtIndex(doc, "p1", 6)
+
+    expect(getParagraph(result.doc, result.newNodeId).props.list?.itemId).toBe(result.newNodeId)
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("does not split a list item that contains inline field objects yet", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Duration " },
+      { id: "f1", type: "fieldRef", key: "project.durationDays" },
+    ])
+    let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", itemId: "tor.duration" })
+
+    const result = splitListItemAtIndex(doc, "p1", 4)
+
+    expect(result.doc).toBe(doc)
+    expect(result.newNodeId).toBe("")
+    expect(getParagraph(result.doc, "p1").children).toEqual(p.children)
+  })
+
+  it("exits a list only when the item is empty", () => {
+    const empty = makeParagraph("empty", [{ id: "empty-t", type: "text", text: "" }])
+    const filled = makeParagraph("filled", [{ id: "filled-t", type: "text", text: "Keep me listed" }])
+    let doc = withTorListDefinitions(makeDoc({ empty, filled }, ["empty", "filled"]))
+    doc = applyParagraphList(doc, ["empty", "filled"], { instanceId: "tor-main" })
+
+    const afterEmpty = exitListItem(doc, "empty")
+    const afterFilled = exitListItem(afterEmpty, "filled")
+
+    expect(getParagraph(afterFilled, "empty").props.list).toBeUndefined()
+    expect(getParagraph(afterFilled, "filled").props.list).toBeDefined()
+    expect(getParagraph(afterFilled, "empty").children).toEqual(empty.children)
+    expect(getParagraph(afterFilled, "filled").children).toEqual(filled.children)
+    expect(() => assertDocument(afterFilled)).not.toThrow()
+  })
+
+  it("merges a list item into the previous text-run paragraph without duplicating list identity", () => {
+    const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello " }])
+    const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "world", style: { fontWeight: "bold" } }])
+    let doc = withTorListDefinitions(makeDoc({ p1, p2 }, ["p1", "p2"]))
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", itemId: "tor.item.one" })
+    doc = applyParagraphList(doc, "p2", { instanceId: "tor-main", itemId: "tor.item.two" })
+
+    const result = mergeListItemWithPrevious(doc, "p2")
+
+    expect(result).not.toBeNull()
+    if (!result) return
+    expect(result.prevNodeId).toBe("p1")
+    expect(result.caretIndex).toBe("Hello ".length)
+    expect(() => getParagraph(result.doc, "p2")).toThrow()
+    expect(getParagraph(result.doc, "p1").props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: "tor.item.one" })
+    expect(textRunSummary(getParagraph(result.doc, "p1"))).toEqual([
+      { type: "text", text: "Hello ", style: undefined },
+      { type: "text", text: "world", style: { fontWeight: "bold" } },
+    ])
+    expect(() => assertDocument(result.doc)).not.toThrow()
   })
 })
 

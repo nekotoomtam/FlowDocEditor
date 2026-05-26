@@ -185,6 +185,46 @@ describe("assertDocument list numbering invariants", () => {
     expect(() => assertDocument(doc)).not.toThrow()
   })
 
+  it("allows a list instance to define a positive top-level startAt", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1"),
+    }, ["p1"]))
+    doc.document.listInstances = {
+      "tor-main": { id: "tor-main", styleId: "tor-clause", startAt: 3 },
+    }
+
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("rejects a list instance startAt that is not a positive integer", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1"),
+    }, ["p1"]))
+    doc.document.listInstances = {
+      "tor-main": { id: "tor-main", styleId: "tor-clause", startAt: 0 },
+    }
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+  })
+
+  it("rejects restartAfterLevel when it does not point to a shallower level", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1", "tor-main", "p1", 1),
+    }, ["p1"]))
+    doc.document.listStyles = {
+      "tor-clause": {
+        id: "tor-clause",
+        levels: [
+          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
+          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, restartAfterLevel: 1, markerIndent: pt(18), textIndent: pt(36) },
+        ],
+      },
+    }
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow("restartAfterLevel must be shallower than the level it restarts")
+  })
+
   it("rejects paragraph list metadata that references a missing instance", () => {
     const doc = addListDefinitions(bodyDoc({
       p1: listedParagraph("p1", "missing-instance"),

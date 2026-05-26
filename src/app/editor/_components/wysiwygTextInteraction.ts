@@ -34,11 +34,13 @@ export interface WysiwygTextReplacement {
 }
 
 export type InlineEditPlainEnterBehavior = "native" | "split-paragraph"
+export type ListLevelChangeDirection = "indent" | "outdent"
 
 export type InlineEditKeyDecision =
   | { action: "native" }
   | { action: "end-edit"; reason: "escape" }
   | { action: "split-paragraph" }
+  | { action: "change-list-level"; direction: ListLevelChangeDirection }
   | { action: "merge-or-boundary-backspace" }
 
 export interface InlineEditKeyEventLike {
@@ -55,6 +57,7 @@ export interface InlineEditKeyEventLike {
 
 export interface InlineEditKeyOptions {
   plainEnterBehavior?: InlineEditPlainEnterBehavior
+  listTabBehavior?: "native" | "change-list-level"
 }
 
 export type InlineEditClipboardType = "copy" | "cut" | "paste"
@@ -83,6 +86,10 @@ export interface InlineEditInputSnapshot {
   selection: InlineEditSelectionSnapshot
   isSelectionCollapsed: boolean
 }
+
+export type StructuralListEnterInput =
+  | { action: "exit-list"; text: string; caretOffset: 0 }
+  | { action: "split-list-item"; text: string; splitIndex: number }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -148,8 +155,34 @@ export function replaceWysiwygTextRange(
   }
 }
 
+export function resolveStructuralListEnterInput(
+  text: string,
+  caretOffset: number | null | undefined,
+  selection?: WysiwygTextRange | null,
+): StructuralListEnterInput {
+  const caret = clamp(caretOffset ?? text.length, 0, text.length)
+  const range = normalizeWysiwygTextRange(
+    selection ?? { anchorOffset: caret, focusOffset: caret },
+    text.length,
+  )
+
+  if (text.length === 0 && range.isCollapsed) {
+    return { action: "exit-list", text: "", caretOffset: 0 }
+  }
+
+  return {
+    action: "split-list-item",
+    text: text.slice(0, range.startOffset) + text.slice(range.endOffset),
+    splitIndex: range.startOffset,
+  }
+}
+
 function hasPlainKeyModifiers(event: InlineEditKeyEventLike): boolean {
   return !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
+}
+
+function hasListTabModifiers(event: InlineEditKeyEventLike): boolean {
+  return !event.ctrlKey && !event.altKey && !event.metaKey
 }
 
 export function classifyInlineEditKey(
@@ -163,6 +196,12 @@ export function classifyInlineEditKey(
   if (event.key === "Enter" && hasPlainKeyModifiers(event)) {
     return options.plainEnterBehavior === "split-paragraph"
       ? { action: "split-paragraph" }
+      : { action: "native" }
+  }
+
+  if (event.key === "Tab" && hasListTabModifiers(event)) {
+    return options.listTabBehavior === "change-list-level"
+      ? { action: "change-list-level", direction: event.shiftKey ? "outdent" : "indent" }
       : { action: "native" }
   }
 
