@@ -1,6 +1,6 @@
 import type { ResolvedListMarker } from "../../document/listNumbering"
 import { toAbstractUnit } from "../../layout"
-import type { DocumentNode, ListLevelDefinition, ParagraphNode } from "../../schema"
+import { resolveListLevelBodyIndent, type DocumentNode, type ListLevelDefinition, type ParagraphNode } from "../../schema"
 import type { ListMarkerRenderProps } from "../types"
 
 export interface ListNumberingPaginationContext {
@@ -16,7 +16,8 @@ export function toListMarkerRenderProps(
   if (!marker) return undefined
   const level = context?.styles[marker.styleId]?.levels.find((candidate) => candidate.level === marker.level)
   const markerIndent = level ? toAbstractUnit(level.markerIndent.value, level.markerIndent.unit) : 0
-  const textIndent = level ? toAbstractUnit(level.textIndent.value, level.textIndent.unit) : 0
+  const bodyIndentValue = level ? resolveListLevelBodyIndent(level) : undefined
+  const bodyIndent = bodyIndentValue ? toAbstractUnit(bodyIndentValue.value, bodyIndentValue.unit) : 0
   return {
     text: marker.markerText,
     level: marker.level,
@@ -25,9 +26,9 @@ export function toListMarkerRenderProps(
     styleId: marker.styleId,
     itemId: marker.itemId,
     markerIndent,
-    textIndent,
+    bodyIndent,
     markerX: paragraphContentX + markerIndent,
-    bodyX: paragraphContentX + textIndent,
+    bodyX: paragraphContentX + bodyIndent,
   }
 }
 
@@ -46,11 +47,12 @@ export function withListBodyIndent(
 ): ParagraphNode {
   const level = resolveListLevelDefinition(marker, context)
   if (!level) return node
+  const bodyIndent = resolveListLevelBodyIndent(level)
   return {
     ...node,
     props: {
       ...node.props,
-      indentLeft: { value: Math.max(0, toAbstractUnit(level.textIndent.value, level.textIndent.unit)), unit: "pt" },
+      indentLeft: { value: Math.max(0, toAbstractUnit(bodyIndent.value, bodyIndent.unit)), unit: "pt" },
       textIndent: { value: 0, unit: "pt" },
     },
   }

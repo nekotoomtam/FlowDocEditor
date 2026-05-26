@@ -77,6 +77,92 @@ function flowRow(id: string, cellIds: string[]): FlowTableRowNode {
 }
 
 describe("assertDocument general invariants", () => {
+  it("allows central paragraph and text-run style definitions", () => {
+    const doc = bodyDoc({}, [])
+    doc.document.styles = {
+      paragraphStyles: {
+        "tor.body": {
+          id: "tor.body",
+          props: { fontSize: pt(12), spacingAfter: pt(6) },
+        },
+      },
+      textRunStyles: {
+        emphasis: {
+          id: "emphasis",
+          style: { fontWeight: "bold", textColor: "1D4ED8" },
+        },
+      },
+    }
+
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("rejects central style definitions whose ids do not match map keys", () => {
+    const doc = bodyDoc({}, [])
+    doc.document.styles = {
+      paragraphStyles: {
+        "tor.body": {
+          id: "tor.heading",
+          props: {},
+        },
+      },
+    }
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow('paragraph style id "tor.heading" must match map key "tor.body"')
+  })
+
+  it("allows paragraphs to reference known central paragraph styles", () => {
+    const doc = bodyDoc({
+      p1: {
+        ...paragraph("p1", "Styled"),
+        props: {
+          ...paragraph("p1", "Styled").props,
+          paragraphStyleId: "tor.body",
+        },
+      },
+    }, ["p1"])
+    doc.document.styles = {
+      paragraphStyles: {
+        "tor.body": { id: "tor.body", props: { fontSize: pt(12) } },
+      },
+    }
+
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("allows paragraph style overrides without requiring a central style reference", () => {
+    const doc = bodyDoc({
+      p1: {
+        ...paragraph("p1", "Styled"),
+        props: {
+          ...paragraph("p1", "Styled").props,
+          styleOverrides: {
+            fontSize: pt(16),
+            spacingAfter: pt(10),
+          },
+        },
+      },
+    }, ["p1"])
+
+    expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("rejects paragraphs that reference missing central paragraph styles", () => {
+    const doc = bodyDoc({
+      p1: {
+        ...paragraph("p1", "Styled"),
+        props: {
+          ...paragraph("p1", "Styled").props,
+          paragraphStyleId: "missing",
+        },
+      },
+    }, ["p1"])
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow('missing paragraph style "missing"')
+  })
+
   it("allows authored toc blocks used by report fixtures", () => {
     const doc = bodyDoc({
       toc: { id: "toc", type: "toc", props: { title: "สารบัญ" } },
@@ -165,8 +251,8 @@ describe("assertDocument list numbering invariants", () => {
       "tor-clause": {
         id: "tor-clause",
         levels: [
-          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
-          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), bodyIndent: pt(18) },
+          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), bodyIndent: pt(36) },
         ],
       },
     }
@@ -215,8 +301,8 @@ describe("assertDocument list numbering invariants", () => {
       "tor-clause": {
         id: "tor-clause",
         levels: [
-          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
-          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, restartAfterLevel: 1, markerIndent: pt(18), textIndent: pt(36) },
+          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), bodyIndent: pt(18) },
+          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, restartAfterLevel: 1, markerIndent: pt(18), bodyIndent: pt(36) },
         ],
       },
     }
@@ -241,6 +327,35 @@ describe("assertDocument list numbering invariants", () => {
 
     expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
     expect(() => assertDocument(doc)).toThrow('list style "tor-clause" does not define level 2')
+  })
+
+  it("rejects a list item that starts deeper than level 0", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1", "tor-main", "p1", 1),
+    }, ["p1"]))
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow("list cannot start at level 1; missing parent level 0")
+  })
+
+  it("rejects a list item that jumps more than one level deeper", () => {
+    const doc = addListDefinitions(bodyDoc({
+      p1: listedParagraph("p1", "tor-main", "p1", 0),
+      p2: listedParagraph("p2", "tor-main", "p2", 2),
+    }, ["p1", "p2"]))
+    doc.document.listStyles = {
+      "tor-clause": {
+        id: "tor-clause",
+        levels: [
+          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), bodyIndent: pt(18) },
+          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), bodyIndent: pt(36) },
+          { level: 2, format: "decimal", pattern: "%1.%2.%3", startAt: 1, markerIndent: pt(36), bodyIndent: pt(54) },
+        ],
+      },
+    }
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow("list level cannot jump from 0 to 2; missing parent level 1")
   })
 
   it("rejects duplicate itemId values inside the same list instance", () => {

@@ -34,14 +34,14 @@ describe("list style presets", () => {
       pattern: "%1.",
       startAt: 1,
       markerIndent: pt(0),
-      textIndent: pt(36),
+      bodyIndent: pt(36),
     })
     expect(style.levels[7]).toMatchObject({
       format: "decimal",
       pattern: "%1.%2.%3.%4.%5.%6.%7.%8",
       startAt: 1,
       markerIndent: pt(252),
-      textIndent: pt(288),
+      bodyIndent: pt(288),
     })
   })
 
@@ -53,14 +53,14 @@ describe("list style presets", () => {
       pattern: "(%1)",
       startAt: 1,
       markerIndent: pt(72),
-      textIndent: pt(108),
+      bodyIndent: pt(108),
     })
     expect(presets[BULLET_BASIC_LIST_STYLE_ID].levels[0]).toMatchObject({
       format: "bullet",
       pattern: "•",
       startAt: 1,
       markerIndent: pt(72),
-      textIndent: pt(108),
+      bodyIndent: pt(108),
     })
   })
 
@@ -90,18 +90,22 @@ describe("list style presets", () => {
     const { paragraphId, paragraph } = firstBodyParagraph(doc)
     const torStyle = getListStylePreset(TOR_CLAUSE_LIST_STYLE_ID)
     const section = doc.document.sections[0]
-    const listedParagraph: ParagraphNode = {
+    const body = section.nodes[section.bodyRootId]
+    if (body?.type !== "body") throw new Error("expected body root")
+    const listedParagraphs: ParagraphNode[] = Array.from({ length: 8 }, (_value, level) => ({
       ...paragraph,
+      id: level === 0 ? paragraphId : `${paragraphId}-level-${level}`,
       props: {
         ...paragraph.props,
         list: {
           instanceId: "tor-main",
-          level: 7,
-          itemId: "tor.deep.clause",
+          level,
+          itemId: `tor.deep.clause.${level}`,
         },
       },
-      children: [{ id: `${paragraphId}-text`, type: "text", text: "Deep clause" }],
-    }
+      children: [{ id: `${paragraphId}-level-${level}-text`, type: "text", text: level === 7 ? "Deep clause" : `Parent ${level}` }],
+    }))
+    const deepestParagraph = listedParagraphs[7]
     const nextDoc: DocumentNode = {
       ...doc,
       document: {
@@ -114,14 +118,18 @@ describe("list style presets", () => {
           ...section,
           nodes: {
             ...section.nodes,
-            [paragraphId]: listedParagraph as unknown as LayoutNode,
+            [section.bodyRootId]: {
+              ...body,
+              childIds: listedParagraphs.map((node) => node.id),
+            },
+            ...Object.fromEntries(listedParagraphs.map((node) => [node.id, node as unknown as LayoutNode])),
           },
         }],
       },
     }
 
     expect(() => assertDocument(nextDoc)).not.toThrow()
-    expect(resolveListMarkers(nextDoc).get(paragraphId)?.markerText).toBe("1.1.1.1.1.1.1.1")
-    expect(listedParagraph.children).toEqual([{ id: `${paragraphId}-text`, type: "text", text: "Deep clause" }])
+    expect(resolveListMarkers(nextDoc).get(deepestParagraph.id)?.markerText).toBe("1.1.1.1.1.1.1.1")
+    expect(deepestParagraph.children).toEqual([{ id: `${paragraphId}-level-7-text`, type: "text", text: "Deep clause" }])
   })
 })

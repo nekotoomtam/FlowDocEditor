@@ -109,7 +109,7 @@ export interface ListMarkerRenderProps {
   styleId: string
   itemId: string
   markerIndent: number
-  textIndent: number
+  bodyIndent: number
   markerX: number
   bodyX: number
 }

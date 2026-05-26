@@ -98,8 +98,8 @@ function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): Doc
 const TOR_LIST_STYLE: ListStyleDefinition = {
   id: "tor-clause",
   levels: [
-    { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
-    { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+    { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), bodyIndent: pt(18) },
+    { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), bodyIndent: pt(36) },
   ],
 }
 
@@ -228,6 +228,36 @@ describe("paginator — geometry", () => {
     expect(f.renderProps?.indentLeft).toBe(18)
     expect(f.renderProps?.indentRight).toBe(10)
     expect(f.renderProps?.textIndent).toBe(6)
+  })
+
+  it("uses resolved paragraph style props for layout and render props", () => {
+    const p = makePara("p1", "Styled", {
+      paragraphStyleId: "tor.heading1",
+    })
+    const doc = makeDoc(["p1"], { p1: p })
+    doc.document.styles = {
+      paragraphStyles: {
+        "tor.heading1": {
+          id: "tor.heading1",
+          props: {
+            fontSize: pt(20),
+            fontWeight: "bold",
+            lineHeight: 1.5,
+            spacingAfter: pt(4),
+          },
+        },
+      },
+    }
+
+    const frags = getFragments(doc)
+    const f = frags.find((fragment) => fragment.nodeId === "p1")!
+
+    expect(f.renderProps?.fontSize).toBe(20)
+    expect(f.renderProps?.fontWeight).toBe("bold")
+    expect(f.renderProps?.lineHeight).toBe(30)
+    expect(f.renderProps?.spacingAfter).toBe(4)
+    expect(f.height).toBe(34)
+    expect((doc.document.sections[0].nodes.p1 as ParagraphNode).props.fontSize).toEqual(pt(FS))
   })
 })
 
@@ -454,7 +484,7 @@ describe("paginator — list marker metadata", () => {
       styleId: "tor-clause",
       itemId: "first",
       markerIndent: 0,
-      textIndent: 18,
+      bodyIndent: 18,
       markerX: CX,
       bodyX: CX + 18,
     })
@@ -480,7 +510,7 @@ describe("paginator — list marker metadata", () => {
     expect(fragment.listMarker).toMatchObject({
       text: "1.1",
       markerIndent: 18,
-      textIndent: 36,
+      bodyIndent: 36,
       markerX: CX + 2 + 6 + 18,
       bodyX: CX + 2 + 6 + 36,
     })

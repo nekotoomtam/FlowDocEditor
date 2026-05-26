@@ -36,7 +36,7 @@ interface ListLevelDefinition {
   startAt: number
   restartAfterLevel?: number
   markerIndent: UnitValue
-  textIndent: UnitValue
+  bodyIndent: UnitValue
   tabStop?: UnitValue
 }
 
@@ -68,6 +68,12 @@ item identity.
 
 The current supported level range is `0..7` internally, exposed to users as
 levels 1 through 8.
+
+`ListLevelDefinition.bodyIndent` is the canonical list-level body start. Older
+draft documents may still contain list-level `textIndent`; normalization treats
+that legacy field as `bodyIndent` and writes the canonical name forward.
+Paragraph `props.textIndent` remains the normal first-line paragraph indent and
+is not the same concept as list body start.
 
 ## Presets
 
@@ -217,6 +223,21 @@ Rules:
 - Missing level 0 parent counters use the list instance `startAt` when present.
 - Marker text is derived from counters plus the level pattern.
 - Marker text must not be written back into paragraph children.
+- Document validation rejects authored level jumps per list instance. The first
+  item in an instance must be level 0, and a later item may move at most one
+  level deeper than the previous item in that same instance.
+
+Traversal order is part of the contract:
+
+- Walk sections in document order.
+- Start from each section `bodyRootId` and recursively follow `childIds`.
+- `flow-row` children are visited by their `childIds`, so stacks are traversed
+  left-to-right according to authored row order.
+- `flow-stack` children are visited top-to-bottom by `childIds`.
+- `flow-table` contents are visited by `rowIds`, then each row's `cellIds`, then
+  each cell's `childIds`.
+- Paragraphs sharing the same `instanceId` count through these containers. Use a
+  different list instance when numbering should restart or stay independent.
 
 Current v1 restart precedence is:
 
@@ -255,7 +276,7 @@ interface ListMarkerRenderProps {
   styleId: string
   itemId: string
   markerIndent: number
-  textIndent: number
+  bodyIndent: number
   markerX: number
   bodyX: number
 }
@@ -271,10 +292,10 @@ runs, or paragraph children.
 
 `markerX` and `bodyX` are absolute page coordinates in abstract pt. They are
 derived from the paragraph content edge plus the list level's `markerIndent`
-and `textIndent`.
+and `bodyIndent`.
 
 For body paragraph pagination, list item lines are measured and positioned with
-the list level's `textIndent` as the effective body start. This is runtime
+the list level's `bodyIndent` as the effective body start. This is runtime
 layout state only and must not be written back into paragraph props.
 
 Indent ownership:
@@ -282,7 +303,7 @@ Indent ownership:
 - Normal paragraphs use `paragraph.props.indentLeft`, `indentRight`, and
   `textIndent`.
 - Listed paragraphs use the resolved list level's `markerIndent` and
-  `textIndent` as the primary marker/body geometry in v1.
+  `bodyIndent` as the primary marker/body geometry in v1.
 - Existing paragraph indent props remain authored paragraph data, but they are
   not added on top of list indents by the v1 generated-marker path.
 - Any future "additional indent" or paragraph-level list indent override needs
@@ -295,7 +316,7 @@ paragraph text editing ranges.
 
 Inline edit/draft geometry must use the same generated body start as preview
 layout. A list item's WYSIWYG draft lines and any legacy textarea fallback must
-start from `PageFragment.listMarker.bodyX` / the level `textIndent` at runtime,
+start from `PageFragment.listMarker.bodyX` / the level `bodyIndent` at runtime,
 without writing indentation or leading spaces back into
 `ParagraphNode.children` or authored paragraph indent props.
 When paragraph boxes or other content insets are present, draft layout must treat

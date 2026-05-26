@@ -3672,6 +3672,12 @@ export default function EditorShell() {
                       onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
                       onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
                       onUpdateParagraphTextStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })}
+                      onApplyParagraphStylePreset={(nodeId, styleId) => dispatch({ type: "APPLY_PARAGRAPH_STYLE_PRESET", nodeId, styleId })}
+                      onUpdateParagraphStyleBoxOverrides={(nodeId, changes) => dispatch({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX", nodeId, changes })}
+                      onUpdateParagraphStyleOverrides={(nodeId, changes) => dispatch({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDES", nodeId, changes })}
+                      onClearParagraphStyle={(nodeId) => dispatch({ type: "CLEAR_PARAGRAPH_STYLE", nodeId })}
+                      onDetachParagraphStyle={(nodeId) => dispatch({ type: "DETACH_PARAGRAPH_STYLE", nodeId })}
+                      onResetParagraphStyleOverrides={(nodeId) => dispatch({ type: "RESET_PARAGRAPH_STYLE_OVERRIDES", nodeId })}
                       onUpdateFieldRef={(fieldRefId, changes) => dispatch({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
                       onUpdateParagraphBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
                       onUpdateFlowStackBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId, changes })}

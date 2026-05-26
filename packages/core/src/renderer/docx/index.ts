@@ -569,9 +569,9 @@ function buildParagraphIndent(fragment: PageFragment, props: ParagraphRenderProp
     }
   }
 
-  const markerToBodyDelta = marker.textIndent - marker.markerIndent
+  const markerToBodyDelta = marker.bodyIndent - marker.markerIndent
   return {
-    left: ptToTwips(marker.textIndent),
+    left: ptToTwips(marker.bodyIndent),
     right: ptToTwips(props.indentRight),
     hanging: markerToBodyDelta >= 0 ? ptToTwips(markerToBodyDelta) : undefined,
     firstLine: markerToBodyDelta < 0 ? ptToTwips(-markerToBodyDelta) : undefined,
@@ -605,7 +605,7 @@ function buildParagraph(fragments: PageFragment | PageFragment[], context: DocxR
     },
     indent: buildParagraphIndent(firstFragment, props),
     tabStops: firstFragment.listMarker
-      ? [{ type: TabStopType.LEFT, position: ptToTwips(firstFragment.listMarker.textIndent) }]
+      ? [{ type: TabStopType.LEFT, position: ptToTwips(firstFragment.listMarker.bodyIndent) }]
       : undefined,
     border: buildParagraphBorders(boxFragment),
     shading: buildParagraphShading(boxFragment),

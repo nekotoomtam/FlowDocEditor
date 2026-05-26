@@ -6,6 +6,7 @@ import {
   MAX_HEADER_FOOTER_RESERVED_RATIO,
   MIN_HEADER_FOOTER_RESERVED_PT,
   TOR_CLAUSE_LIST_STYLE_ID,
+  TOR_HEADING1_PARAGRAPH_STYLE_ID,
 } from "@/document"
 import { getPageDimensions } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
@@ -69,7 +70,25 @@ function docWithListedParagraphs(): DocumentNode {
           },
         },
         nodes: {
-          body: { id: "body", type: "body", props: {}, childIds: ["p1", "p2"] },
+          body: { id: "body", type: "body", props: {}, childIds: ["p0", "p0-child", "p1", "p2"] },
+          p0: {
+            id: "p0",
+            type: "paragraph",
+            props: {
+              ...DEFAULT_PARAGRAPH_PROPS,
+              list: { instanceId: "tor-main", level: 0, itemId: "tor.parent" },
+            },
+            children: [{ id: "t0", type: "text", text: "parent" }],
+          },
+          "p0-child": {
+            id: "p0-child",
+            type: "paragraph",
+            props: {
+              ...DEFAULT_PARAGRAPH_PROPS,
+              list: { instanceId: "tor-main", level: 1, itemId: "tor.parent.child" },
+            },
+            children: [{ id: "t0-child", type: "text", text: "parent child" }],
+          },
           p1: {
             id: "p1",
             type: "paragraph",
@@ -133,6 +152,157 @@ describe("editorReducer rich text range actions", () => {
   })
 })
 
+describe("editorReducer paragraph style actions", () => {
+  it("applies and clears a preset-backed paragraph style", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const styled = reducer(state, {
+      type: "APPLY_PARAGRAPH_STYLE_PRESET",
+      nodeId: "p1",
+      styleId: TOR_HEADING1_PARAGRAPH_STYLE_ID,
+    })
+    const paragraph = styled.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(styled.doc.document.styles?.paragraphStyles?.[TOR_HEADING1_PARAGRAPH_STYLE_ID]).toBeDefined()
+    expect(paragraph.props.paragraphStyleId).toBe(TOR_HEADING1_PARAGRAPH_STYLE_ID)
+    expect(paragraph.props.fontSize).toEqual(pt(16))
+    expect(paragraph.props.headingLevel).toBe(1)
+    expect(styled.selectedNodeId).toBe("p1")
+    expect(styled.past).toHaveLength(1)
+
+    const cleared = reducer(styled, {
+      type: "CLEAR_PARAGRAPH_STYLE",
+      nodeId: "p1",
+    })
+    const clearedParagraph = cleared.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(clearedParagraph.props.paragraphStyleId).toBeUndefined()
+    expect(clearedParagraph.props.styleOverrides).toBeUndefined()
+    expect(cleared.past).toHaveLength(2)
+  })
+
+  it("resets paragraph style overrides from the editor reducer", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const styled = reducer(state, {
+      type: "APPLY_PARAGRAPH_STYLE_PRESET",
+      nodeId: "p1",
+      styleId: TOR_HEADING1_PARAGRAPH_STYLE_ID,
+    })
+    const withOverrideDoc: DocumentNode = {
+      ...styled.doc,
+      document: {
+        ...styled.doc.document,
+        sections: styled.doc.document.sections.map((section) => ({
+          ...section,
+          nodes: {
+            ...section.nodes,
+            p1: {
+              ...(section.nodes.p1 as ParagraphNode),
+              props: {
+                ...(section.nodes.p1 as ParagraphNode).props,
+                styleOverrides: { fontSize: pt(18) },
+              },
+            },
+          },
+        })),
+      },
+    }
+    const withOverride = createInitialEditorState(withOverrideDoc)
+    const reset = reducer(withOverride, {
+      type: "RESET_PARAGRAPH_STYLE_OVERRIDES",
+      nodeId: "p1",
+    })
+    const paragraph = reset.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(paragraph.props.styleOverrides).toBeUndefined()
+    expect(paragraph.props.fontSize).toEqual(pt(16))
+    expect(reset.past).toHaveLength(1)
+  })
+
+  it("patches style overrides without removing text-run styling", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const styled = reducer(state, {
+      type: "APPLY_PARAGRAPH_STYLE_PRESET",
+      nodeId: "p1",
+      styleId: TOR_HEADING1_PARAGRAPH_STYLE_ID,
+    })
+    const styledParagraph = styled.doc.document.sections[0].nodes.p1 as ParagraphNode
+    const withRunStyleDoc: DocumentNode = {
+      ...styled.doc,
+      document: {
+        ...styled.doc.document,
+        sections: styled.doc.document.sections.map((section) => ({
+          ...section,
+          nodes: {
+            ...section.nodes,
+            p1: {
+              ...styledParagraph,
+              children: [{ id: "t1", type: "text", text: "Hello", style: { fontWeight: "bold" } }],
+            },
+          },
+        })),
+      },
+    }
+    const withRunStyle = createInitialEditorState(withRunStyleDoc)
+    const patched = reducer(withRunStyle, {
+      type: "PATCH_PARAGRAPH_STYLE_OVERRIDES",
+      nodeId: "p1",
+      changes: { fontSize: pt(18), headingLevel: null },
+    })
+    const paragraph = patched.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(paragraph.props.paragraphStyleId).toBe(TOR_HEADING1_PARAGRAPH_STYLE_ID)
+    expect(paragraph.props.styleOverrides).toEqual({ fontSize: pt(18), headingLevel: null })
+    expect(paragraph.props.fontSize).toEqual(pt(16))
+    expect(paragraph.children).toEqual([{ id: "t1", type: "text", text: "Hello", style: { fontWeight: "bold" } }])
+    expect(patched.past).toHaveLength(1)
+  })
+
+  it("detaches a style while keeping the resolved paragraph appearance", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const styled = reducer(state, {
+      type: "APPLY_PARAGRAPH_STYLE_PRESET",
+      nodeId: "p1",
+      styleId: TOR_HEADING1_PARAGRAPH_STYLE_ID,
+    })
+    const withOverride = reducer(styled, {
+      type: "PATCH_PARAGRAPH_STYLE_OVERRIDES",
+      nodeId: "p1",
+      changes: { fontSize: pt(18), headingLevel: null },
+    })
+    const detached = reducer(withOverride, {
+      type: "DETACH_PARAGRAPH_STYLE",
+      nodeId: "p1",
+    })
+    const paragraph = detached.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(paragraph.props.paragraphStyleId).toBeUndefined()
+    expect(paragraph.props.styleOverrides).toBeUndefined()
+    expect(paragraph.props.fontSize).toEqual(pt(18))
+    expect(paragraph.props.fontWeight).toBe("bold")
+    expect(paragraph.props.headingLevel).toBeUndefined()
+    expect(detached.past).toHaveLength(3)
+  })
+
+  it("patches paragraph style box overrides through the editor reducer", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const styled = reducer(state, {
+      type: "APPLY_PARAGRAPH_STYLE_PRESET",
+      nodeId: "p1",
+      styleId: TOR_HEADING1_PARAGRAPH_STYLE_ID,
+    })
+    const patched = reducer(styled, {
+      type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX",
+      nodeId: "p1",
+      changes: { fill: "F5F7FA" },
+    })
+    const paragraph = patched.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(paragraph.props.box).toBeUndefined()
+    expect(paragraph.props.styleOverrides?.box).toEqual({ fill: "F5F7FA" })
+    expect(patched.past).toHaveLength(2)
+  })
+})
+
 describe("editorReducer list-aware structural paragraph actions", () => {
   it("splits a listed text-run paragraph without duplicating list item identity", () => {
     const state = createInitialEditorState(docWithListedParagraphs())
@@ -153,7 +323,7 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(inserted.children).toEqual([
       { id: expect.any(String), type: "text", text: "world", style: { fontStyle: "italic" } },
     ])
-    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["p1", newNodeId, "p2"])
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["p0", "p0-child", "p1", newNodeId, "p2"])
     expect(next.past).toHaveLength(1)
   })
 
@@ -333,7 +503,7 @@ describe("editorReducer list-aware structural paragraph actions", () => {
       { id: expect.any(String), type: "text", text: "world", style: { fontStyle: "italic" } },
       { id: expect.any(String), type: "text", text: "next", style: { fontWeight: "bold" } },
     ])
-    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["p1"])
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["p0", "p0-child", "p1"])
     expect(next.mergeResult).toEqual({ prevNodeId: "p1", caretIndex: "Hello world".length })
     expect(next.past).toHaveLength(1)
   })

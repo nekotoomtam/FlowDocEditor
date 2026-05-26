@@ -4,13 +4,16 @@ import {
   addFlowStackColumn,
   addFlowTableColumn,
   addFlowTableRow,
+  applyParagraphStylePreset,
   applyParagraphTextStyle,
   applyTextRunStyleRange,
   applyPlacementOperation,
   backspaceListItemAtStart,
   assertDocument,
+  clearParagraphStyleId,
   createDefaultDocument,
   deleteNode,
+  detachParagraphStyle,
   duplicateNode,
   disableSectionReservedZoneIfEmpty,
   ensureReservedZoneRoots,
@@ -22,9 +25,12 @@ import {
   mergeParagraphWithPrevious,
   normalizeDocument,
   outdentListItem,
+  patchParagraphStyleOverrideBox,
+  patchParagraphStyleOverrides,
   removeFlowTableColumn,
   removeFlowTableRow,
   reorderBodyChild,
+  resetParagraphStyleOverrides,
   resizeFlowTableColumnPair,
   splitListItemAtIndex,
   splitParagraphAtIndex,
@@ -38,9 +44,9 @@ import {
   updateSectionMargin,
   updateSectionReservedZones,
 } from "@/document"
-import type { FieldRefInlineChanges, FlowDocListStylePresetId, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
+import type { FieldRefInlineChanges, FlowDocListStylePresetId, FlowDocParagraphStylePresetId, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
 import type { ReservedZonePriority } from "@/document"
-import type { DocumentNode, ParagraphNode } from "@/schema"
+import type { DocumentNode, ParagraphNode, ParagraphStyleProperties } from "@/schema"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import type { DragSource, PlacementOperation, PlacementPreview } from "@/placement/types"
 import { loadDocumentFromStorage } from "./documentPersistence"
@@ -89,6 +95,12 @@ type EditorAction =
   | { type: "UPDATE_PROPS"; nodeId: string; changes: Record<string, unknown> }
   | { type: "UPDATE_TEXT"; nodeId: string; text: string }
   | { type: "UPDATE_PARAGRAPH_TEXT_STYLE"; nodeId: string; changes: ParagraphTextStyleChanges }
+  | { type: "APPLY_PARAGRAPH_STYLE_PRESET"; nodeId: string; styleId: FlowDocParagraphStylePresetId }
+  | { type: "CLEAR_PARAGRAPH_STYLE"; nodeId: string }
+  | { type: "DETACH_PARAGRAPH_STYLE"; nodeId: string }
+  | { type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX"; nodeId: string; changes: ParagraphBoxStyleChanges }
+  | { type: "PATCH_PARAGRAPH_STYLE_OVERRIDES"; nodeId: string; changes: ParagraphStyleProperties }
+  | { type: "RESET_PARAGRAPH_STYLE_OVERRIDES"; nodeId: string }
   | { type: "UPDATE_TEXT_RUN_STYLE_RANGE"; nodeId: string; start: number; end: number; changes: ParagraphTextStyleChanges }
   | { type: "UPDATE_FIELD_REF"; fieldRefId: string; changes: FieldRefInlineChanges }
   | { type: "UPDATE_PARAGRAPH_BOX_STYLE"; nodeId: string; changes: ParagraphBoxStyleChanges }
@@ -233,6 +245,60 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       return pushDoc(state, replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text))
     case "UPDATE_PARAGRAPH_TEXT_STYLE":
       return pushDoc(state, applyParagraphTextStyle(state.doc, action.nodeId, action.changes))
+    case "APPLY_PARAGRAPH_STYLE_PRESET": {
+      const nextDoc = applyParagraphStylePreset(state.doc, action.nodeId, action.styleId)
+      if (nextDoc === state.doc) return state
+      return {
+        ...pushDoc(state, nextDoc),
+        selectedNodeId: action.nodeId,
+        selectionAnchorNodeId: action.nodeId,
+      }
+    }
+    case "CLEAR_PARAGRAPH_STYLE": {
+      const nextDoc = clearParagraphStyleId(state.doc, action.nodeId)
+      if (nextDoc === state.doc) return state
+      return {
+        ...pushDoc(state, nextDoc),
+        selectedNodeId: action.nodeId,
+        selectionAnchorNodeId: action.nodeId,
+      }
+    }
+    case "DETACH_PARAGRAPH_STYLE": {
+      const nextDoc = detachParagraphStyle(state.doc, action.nodeId)
+      if (nextDoc === state.doc) return state
+      return {
+        ...pushDoc(state, nextDoc),
+        selectedNodeId: action.nodeId,
+        selectionAnchorNodeId: action.nodeId,
+      }
+    }
+    case "PATCH_PARAGRAPH_STYLE_OVERRIDES": {
+      const nextDoc = patchParagraphStyleOverrides(state.doc, action.nodeId, action.changes)
+      if (nextDoc === state.doc) return state
+      return {
+        ...pushDoc(state, nextDoc),
+        selectedNodeId: action.nodeId,
+        selectionAnchorNodeId: action.nodeId,
+      }
+    }
+    case "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX": {
+      const nextDoc = patchParagraphStyleOverrideBox(state.doc, action.nodeId, action.changes)
+      if (nextDoc === state.doc) return state
+      return {
+        ...pushDoc(state, nextDoc),
+        selectedNodeId: action.nodeId,
+        selectionAnchorNodeId: action.nodeId,
+      }
+    }
+    case "RESET_PARAGRAPH_STYLE_OVERRIDES": {
+      const nextDoc = resetParagraphStyleOverrides(state.doc, action.nodeId)
+      if (nextDoc === state.doc) return state
+      return {
+        ...pushDoc(state, nextDoc),
+        selectedNodeId: action.nodeId,
+        selectionAnchorNodeId: action.nodeId,
+      }
+    }
     case "UPDATE_TEXT_RUN_STYLE_RANGE": {
       const nextDoc = applyTextRunStyleRange(state.doc, action.nodeId, action.start, action.end, action.changes)
       return nextDoc === state.doc ? state : pushDoc(state, nextDoc)

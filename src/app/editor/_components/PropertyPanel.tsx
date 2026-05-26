@@ -9,6 +9,7 @@ import type {
   ParagraphBoxBorderSide,
   ParagraphBoxStyle,
   ParagraphNode,
+  ParagraphStyleProperties,
   TocNode,
   UnitValue,
 } from "@/schema"
@@ -18,11 +19,14 @@ import {
   canRemoveFlowTableColumn,
   canRemoveFlowTableRow,
   canUpdateFlowTableCellSpan,
+  FLOWDOC_PARAGRAPH_STYLE_PRESET_IDS,
+  getParagraphStylePreset,
   getTextRunStyleRangeState,
   isTextRunOnlyParagraph,
   resolveFlowTableCellMergeTarget,
+  resolveStyledParagraphProps,
 } from "@/document"
-import type { FieldRefInlineChanges, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
+import type { FieldRefInlineChanges, FlowDocParagraphStylePresetId, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import { FontFamilyCombobox } from "./FontFamilyCombobox"
@@ -34,7 +38,7 @@ import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from ".
 type DocNode = LayoutNode | FlowTableRowNode | FlowTableCellNode
 type DividerNode = Extract<LayoutNode, { type: "divider" }>
 type DividerLineStyle = DividerNode["props"]["style"]
-type ParagraphPanelTab = "text" | "box"
+type ParagraphPanelTab = "text" | "box" | "style"
 type FlowContainerPanelTab = "layout" | "box"
 
 interface TableOps {
@@ -58,6 +62,12 @@ interface Props {
   onUpdateProps: (nodeId: string, changes: Record<string, unknown>) => void
   onUpdateText: (nodeId: string, text: string) => void
   onUpdateParagraphTextStyle?: (nodeId: string, changes: ParagraphTextStyleChanges) => void
+  onApplyParagraphStylePreset?: (nodeId: string, styleId: FlowDocParagraphStylePresetId) => void
+  onUpdateParagraphStyleBoxOverrides?: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
+  onUpdateParagraphStyleOverrides?: (nodeId: string, changes: ParagraphStyleProperties) => void
+  onClearParagraphStyle?: (nodeId: string) => void
+  onDetachParagraphStyle?: (nodeId: string) => void
+  onResetParagraphStyleOverrides?: (nodeId: string) => void
   onUpdateFieldRef: (fieldRefId: string, changes: FieldRefInlineChanges) => void
   onUpdateParagraphBoxStyle: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
   onUpdateFlowStackBoxStyle?: (nodeId: string, changes: ParagraphBoxStyleChanges) => void
@@ -194,6 +204,13 @@ const DOCUMENT_COLOR_PALETTE = [
 const BOX_BORDER_STYLE_OPTIONS: ParagraphBoxBorderStyle[] = ["none", "solid", "dashed", "dotted"]
 const DIVIDER_LINE_STYLE_OPTIONS: DividerLineStyle[] = ["solid", "dashed", "dotted"]
 const PARAGRAPH_FONT_OPTIONS = listSelectableFontEntries()
+const PARAGRAPH_STYLE_PRESET_OPTIONS = FLOWDOC_PARAGRAPH_STYLE_PRESET_IDS.map((styleId) => {
+  const style = getParagraphStylePreset(styleId)
+  return {
+    id: style.id,
+    label: style.name ?? style.id,
+  }
+})
 
 function sanitizeHexColorInput(value: string): string {
   return value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6).toUpperCase()
@@ -1589,7 +1606,7 @@ const collapsibleCardBody: React.CSSProperties = {
 const panelTabList: React.CSSProperties = {
   flexShrink: 0,
   display: "grid",
-  gridTemplateColumns: "1fr 1fr",
+  gridTemplateColumns: "repeat(auto-fit, minmax(0, 1fr))",
   gap: 0,
   padding: "0 12px",
   background: "white",
@@ -1898,7 +1915,7 @@ function TableHeaderRowsControl({
 
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
-export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateParagraphTextStyle, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectNode, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
+export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateParagraphTextStyle, onApplyParagraphStylePreset, onUpdateParagraphStyleBoxOverrides, onUpdateParagraphStyleOverrides, onClearParagraphStyle, onDetachParagraphStyle, onResetParagraphStyleOverrides, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectNode, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
   const [contextOpen, setContextOpen] = useState(false)
   const [paragraphPanelTab, setParagraphPanelTab] = useState<ParagraphPanelTab>("text")
   const [flowContainerPanelTab, setFlowContainerPanelTab] = useState<FlowContainerPanelTab>("layout")
@@ -2093,6 +2110,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
         <div role="tablist" aria-label="Paragraph properties" data-testid="paragraph-panel-tabs" style={panelTabList}>
           {renderParagraphTabButton("text", "Text")}
           {renderParagraphTabButton("box", "Box")}
+          {renderParagraphTabButton("style", "Style")}
         </div>
       )}
       {hasFlowContainerTabs && (
@@ -2110,10 +2128,34 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           const text = getParagraphText(node)
           const canEditText = isTextRunOnlyParagraph(node)
           const fieldRefs = getParagraphFieldRefs(node)
-          const textStyleState = getTextRunStyleRangeState(node, 0, text.length)
+          const effectiveNode: ParagraphNode = {
+            ...node,
+            props: resolveStyledParagraphProps(doc.document.styles, node),
+          }
+          const effectiveProps = effectiveNode.props
+          const textStyleState = getTextRunStyleRangeState(effectiveNode, 0, text.length)
+          const usesStyleOverrideLayer = Boolean(node.props.paragraphStyleId || node.props.styleOverrides)
+          const updateParagraphWideStyle = (changes: ParagraphStyleProperties) => {
+            if (usesStyleOverrideLayer && onUpdateParagraphStyleOverrides) {
+              onUpdateParagraphStyleOverrides(selectedNodeId, changes)
+              return
+            }
+            onUpdateProps(selectedNodeId, changes as Record<string, unknown>)
+          }
           const updateTextStyle = (changes: ParagraphTextStyleChanges) => {
+            if (usesStyleOverrideLayer && onUpdateParagraphStyleOverrides) {
+              onUpdateParagraphStyleOverrides(selectedNodeId, changes as ParagraphStyleProperties)
+              return
+            }
             if (onUpdateParagraphTextStyle) onUpdateParagraphTextStyle(selectedNodeId, changes)
             else onUpdateProps(selectedNodeId, { ...changes })
+          }
+          const updateHeadingLevel = (level: 1 | 2 | 3 | undefined) => {
+            if (usesStyleOverrideLayer && onUpdateParagraphStyleOverrides) {
+              onUpdateParagraphStyleOverrides(selectedNodeId, { headingLevel: level ?? null })
+              return
+            }
+            onUpdateProps(selectedNodeId, { headingLevel: level })
           }
           const fontFamilyMixed = textStyleState?.fontFamilyKey.mixed === true
           const fontSizeMixed = textStyleState?.fontSize.mixed === true
@@ -2124,19 +2166,19 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           const strikethroughMixed = textStyleState?.strikethrough.mixed === true
           const currentFontKey = resolveFontEntry(
             fontFamilyMixed
-              ? node.props.fontFamilyKey ?? DEFAULT_FONT_KEY
-              : textStyleState?.fontFamilyKey.value ?? node.props.fontFamilyKey ?? DEFAULT_FONT_KEY,
+              ? effectiveProps.fontFamilyKey ?? DEFAULT_FONT_KEY
+              : textStyleState?.fontFamilyKey.value ?? effectiveProps.fontFamilyKey ?? DEFAULT_FONT_KEY,
           ).key
           const currentFont = resolveFontEntry(currentFontKey)
-          const fontWeight = fontWeightMixed ? "normal" : textStyleState?.fontWeight.value ?? node.props.fontWeight ?? "normal"
-          const fontStyle = fontStyleMixed ? "normal" : textStyleState?.fontStyle.value ?? node.props.fontStyle ?? "normal"
-          const textDecoration = textDecorationMixed ? "none" : textStyleState?.textDecoration.value ?? node.props.textDecoration ?? "none"
-          const strikethrough = strikethroughMixed ? false : textStyleState?.strikethrough.value ?? node.props.strikethrough ?? false
-          const rawTextColor = textColorMixed ? node.props.textColor ?? "000000" : textStyleState?.textColor.value ?? node.props.textColor ?? "000000"
+          const fontWeight = fontWeightMixed ? "normal" : textStyleState?.fontWeight.value ?? effectiveProps.fontWeight ?? "normal"
+          const fontStyle = fontStyleMixed ? "normal" : textStyleState?.fontStyle.value ?? effectiveProps.fontStyle ?? "normal"
+          const textDecoration = textDecorationMixed ? "none" : textStyleState?.textDecoration.value ?? effectiveProps.textDecoration ?? "none"
+          const strikethrough = strikethroughMixed ? false : textStyleState?.strikethrough.value ?? effectiveProps.strikethrough ?? false
+          const rawTextColor = textColorMixed ? effectiveProps.textColor ?? "000000" : textStyleState?.textColor.value ?? effectiveProps.textColor ?? "000000"
           const textColor = sanitizeHexColorInput(rawTextColor) || "000000"
           const fontSizeValue = fontSizeMixed
             ? ""
-            : String(textStyleState?.fontSize.value.value ?? node.props.fontSize.value)
+            : String(textStyleState?.fontSize.value.value ?? effectiveProps.fontSize.value)
           const hasBoldVariant = Boolean(currentFont.variants.bold || currentFont.variants.boldItalic)
           const hasItalicVariant = Boolean(currentFont.variants.italic || currentFont.variants.boldItalic)
           const textStyleOptions = [
@@ -2177,6 +2219,13 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
               changes: { strikethrough: strikethroughMixed ? true : !strikethrough },
             },
           ] as const
+          const currentStyleId = node.props.paragraphStyleId ?? ""
+          const currentStyle = currentStyleId ? doc.document.styles?.paragraphStyles?.[currentStyleId] : undefined
+          const currentPresetStyleId = (FLOWDOC_PARAGRAPH_STYLE_PRESET_IDS as readonly string[]).includes(currentStyleId)
+            ? currentStyleId
+            : ""
+          const currentStyleLabel = currentStyle ? currentStyle.name ?? currentStyle.id : currentStyleId || "None"
+          const styleOverrideKeys = Object.keys(node.props.styleOverrides ?? {})
           return (
             <>
               <section
@@ -2295,8 +2344,8 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   <div style={{ flex: 1 }}>
                     <label style={label}>Line height</label>
                     <input type="number" min={0.5} max={5} step={0.1}
-                      value={node.props.lineHeight}
-                      onChange={(e) => onUpdateProps(selectedNodeId, { lineHeight: Number(e.target.value) })}
+                      value={effectiveProps.lineHeight}
+                      onChange={(e) => updateParagraphWideStyle({ lineHeight: Number(e.target.value) })}
                       style={input} />
                   </div>
                 </div>
@@ -2304,8 +2353,8 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   <label style={label}>Align</label>
                   <div style={{ display: "flex", gap: 4 }}>
                     {(["left", "center", "right", "justify"] as const).map((a) => (
-                      <button key={a} onClick={() => onUpdateProps(selectedNodeId, { align: a })}
-                        style={{ flex: 1, padding: "4px 0", fontSize: 10, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: node.props.align === a ? "#dbeafe" : "#fafafa", color: node.props.align === a ? "#1d4ed8" : "#6b7280", fontWeight: node.props.align === a ? "bold" : "normal" }}>
+                      <button key={a} onClick={() => updateParagraphWideStyle({ align: a })}
+                        style={{ flex: 1, padding: "4px 0", fontSize: 10, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: effectiveProps.align === a ? "#dbeafe" : "#fafafa", color: effectiveProps.align === a ? "#1d4ed8" : "#6b7280", fontWeight: effectiveProps.align === a ? "bold" : "normal" }}>
                         {a === "left" ? "L" : a === "center" ? "C" : a === "right" ? "R" : "J"}
                       </button>
                     ))}
@@ -2315,15 +2364,15 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   <div style={{ flex: 1 }}>
                     <label style={label}>Space before</label>
                     <input type="number" min={0}
-                      value={node.props.spacingBefore.value}
-                      onChange={(e) => onUpdateProps(selectedNodeId, { spacingBefore: pt(Number(e.target.value)) })}
+                      value={effectiveProps.spacingBefore.value}
+                      onChange={(e) => updateParagraphWideStyle({ spacingBefore: pt(Number(e.target.value)) })}
                       style={input} />
                   </div>
                   <div style={{ flex: 1 }}>
                     <label style={label}>Space after</label>
                     <input type="number" min={0}
-                      value={node.props.spacingAfter.value}
-                      onChange={(e) => onUpdateProps(selectedNodeId, { spacingAfter: pt(Number(e.target.value)) })}
+                      value={effectiveProps.spacingAfter.value}
+                      onChange={(e) => updateParagraphWideStyle({ spacingAfter: pt(Number(e.target.value)) })}
                       style={input} />
                   </div>
                 </div>
@@ -2332,9 +2381,9 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   <label style={label}>Heading level</label>
                   <div style={{ display: "flex", gap: 4 }}>
                     {([undefined, 1, 2, 3] as const).map((lvl) => {
-                      const active = (node.props.headingLevel ?? undefined) === lvl
+                      const active = (effectiveProps.headingLevel ?? undefined) === lvl
                       return (
-                        <button key={String(lvl)} onClick={() => onUpdateProps(selectedNodeId, { headingLevel: lvl })}
+                        <button key={String(lvl)} onClick={() => updateHeadingLevel(lvl)}
                           style={{ flex: 1, padding: "4px 0", fontSize: 10, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: active ? "#dbeafe" : "#fafafa", color: active ? "#1d4ed8" : "#6b7280", fontWeight: active ? "bold" : "normal" }}>
                           {lvl === undefined ? "—" : `H${lvl}`}
                         </button>
@@ -2353,9 +2402,99 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
               >
                 <BoxControls
                   nodeId={selectedNodeId}
-                  box={node.props.box}
-                  onUpdateBoxStyle={onUpdateParagraphBoxStyle}
+                  box={effectiveProps.box}
+                  onUpdateBoxStyle={usesStyleOverrideLayer && onUpdateParagraphStyleBoxOverrides
+                    ? onUpdateParagraphStyleBoxOverrides
+                    : onUpdateParagraphBoxStyle}
                 />
+              </section>
+              <section
+                id="paragraph-panel-style"
+                role="tabpanel"
+                aria-labelledby="paragraph-panel-tab-style"
+                data-testid="paragraph-panel-style"
+                hidden={paragraphPanelTab !== "style"}
+                style={{ ...paragraphTabPanel, display: paragraphPanelTab === "style" ? "flex" : "none" }}
+              >
+                <div>
+                  <label style={label}>Preset</label>
+                  <select
+                    data-testid="paragraph-style-preset"
+                    value={currentPresetStyleId}
+                    disabled={!onApplyParagraphStylePreset}
+                    onChange={(e) => {
+                      const styleId = e.target.value
+                      if (!styleId) {
+                        onClearParagraphStyle?.(selectedNodeId)
+                        return
+                      }
+                      onApplyParagraphStylePreset?.(selectedNodeId, styleId as FlowDocParagraphStylePresetId)
+                    }}
+                    style={input}
+                  >
+                    <option value="">None</option>
+                    {PARAGRAPH_STYLE_PRESET_OPTIONS.map((option) => (
+                      <option key={option.id} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={label}>Current</label>
+                  <div data-testid="paragraph-style-current" style={{ fontSize: 11, color: "#334155", lineHeight: 1.4, wordBreak: "break-word" }}>
+                    {currentStyleLabel}
+                  </div>
+                </div>
+                <div>
+                  <label style={label}>Overrides</label>
+                  <div data-testid="paragraph-style-overrides" style={{ display: "flex", flexWrap: "wrap", gap: 4, minHeight: 22, alignItems: "center" }}>
+                    {styleOverrideKeys.length > 0 ? styleOverrideKeys.map((key) => (
+                      <span
+                        key={key}
+                        style={{
+                          border: "1px solid #dbeafe",
+                          borderRadius: 4,
+                          background: "#eff6ff",
+                          color: "#1d4ed8",
+                          fontSize: 9,
+                          padding: "2px 5px",
+                        }}
+                      >
+                        {key}
+                      </span>
+                    )) : (
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>None</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                  <button
+                    type="button"
+                    data-testid="paragraph-style-clear"
+                    disabled={!onClearParagraphStyle || (!currentStyleId && styleOverrideKeys.length === 0)}
+                    onClick={() => onClearParagraphStyle?.(selectedNodeId)}
+                    style={{ ...btn, opacity: (!currentStyleId && styleOverrideKeys.length === 0) ? 0.55 : 1 }}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="paragraph-style-detach"
+                    disabled={!onDetachParagraphStyle || (!currentStyleId && styleOverrideKeys.length === 0)}
+                    onClick={() => onDetachParagraphStyle?.(selectedNodeId)}
+                    style={{ ...btn, opacity: (!currentStyleId && styleOverrideKeys.length === 0) ? 0.55 : 1 }}
+                  >
+                    Detach
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="paragraph-style-reset-overrides"
+                    disabled={!onResetParagraphStyleOverrides || styleOverrideKeys.length === 0}
+                    onClick={() => onResetParagraphStyleOverrides?.(selectedNodeId)}
+                    style={{ ...btn, opacity: styleOverrideKeys.length === 0 ? 0.55 : 1 }}
+                  >
+                    Reset
+                  </button>
+                </div>
               </section>
             </>
           )

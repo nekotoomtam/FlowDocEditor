@@ -15,6 +15,8 @@ import type {
   ParagraphBoxStyle,
   ParagraphListProps,
   ParagraphNode,
+  ParagraphStyleDefinition,
+  ParagraphStyleProperties,
   PageSettings,
   TextRun,
   UnitValue,
@@ -55,7 +57,11 @@ import {
   splitTextRunsAtOffset,
 } from "./richText"
 import { createListInstanceForPreset, getListStylePreset } from "./listPresets"
+import { orderedSectionParagraphs } from "./listNumbering"
 import type { FlowDocListStylePresetId } from "./listPresets"
+import { applyParagraphStyleProperties, resolveParagraphStyleProperties, resolveStyledParagraphProps, setParagraphStyleOverrides } from "./paragraphStyles"
+import { getParagraphStylePreset } from "./paragraphStylePresets"
+import type { FlowDocParagraphStylePresetId } from "./paragraphStylePresets"
 import type {
   ParagraphTextStyleChanges,
   ReplaceTextRunRangeOptions,
@@ -122,6 +128,11 @@ export interface EnsureListPresetInstanceOptions {
 
 export interface ToggleParagraphListPresetOptions extends EnsureListPresetInstanceOptions {
   level?: number
+}
+
+export interface ApplyParagraphStyleOptions {
+  clearOverrides?: boolean
+  syncProps?: boolean
 }
 
 export interface SplitListItemOptions {
@@ -814,6 +825,29 @@ function clampListLevel(level: number): number {
   return Math.max(0, Math.min(MAX_LIST_LEVEL, Math.trunc(level)))
 }
 
+function maxAllowedListLevelBefore(doc: DocumentNode, paragraphId: string, instanceId: string): number {
+  let previousLevel: number | null = null
+  for (const section of doc.document.sections) {
+    for (const paragraph of orderedSectionParagraphs(section)) {
+      if (paragraph.id === paragraphId) {
+        return previousLevel == null ? 0 : Math.min(MAX_LIST_LEVEL, previousLevel + 1)
+      }
+      const list = paragraph.props.list
+      if (list?.instanceId === instanceId) previousLevel = list.level
+    }
+  }
+  return MAX_LIST_LEVEL
+}
+
+function clampListLevelForPosition(
+  doc: DocumentNode,
+  paragraphId: string,
+  instanceId: string,
+  level: number,
+): number {
+  return Math.min(clampListLevel(level), maxAllowedListLevelBefore(doc, paragraphId, instanceId))
+}
+
 function normalizeStartAt(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined
 }
@@ -944,26 +978,131 @@ export function ensureListPresetInstance(
   )
 }
 
+export function upsertParagraphStyleDefinition(doc: DocumentNode, style: ParagraphStyleDefinition): DocumentNode {
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      styles: {
+        ...(doc.document.styles ?? {}),
+        paragraphStyles: {
+          ...(doc.document.styles?.paragraphStyles ?? {}),
+          [style.id]: clonePlainData(style),
+        },
+      },
+    },
+  }
+}
+
+export function ensureParagraphStylePreset(
+  doc: DocumentNode,
+  styleId: FlowDocParagraphStylePresetId,
+): DocumentNode {
+  return upsertParagraphStyleDefinition(doc, getParagraphStylePreset(styleId))
+}
+
+function applyParagraphStyleMetadata(
+  node: ParagraphNode,
+  style: ParagraphStyleDefinition | undefined,
+  styleId: string,
+  options: ApplyParagraphStyleOptions = {},
+): ParagraphNode | null {
+  const shouldClearOverrides = options.clearOverrides !== false
+  const shouldSyncProps = options.syncProps !== false
+  let props: ParagraphNode["props"] = {
+    ...node.props,
+    paragraphStyleId: styleId,
+  }
+  if (shouldClearOverrides) delete props.styleOverrides
+  if (shouldSyncProps && style) props = applyParagraphStyleProperties(props, style.props)
+  return { ...node, props }
+}
+
+export function applyParagraphStyleId(
+  doc: DocumentNode,
+  paragraphIds: string | string[],
+  styleId: string,
+  options: ApplyParagraphStyleOptions = {},
+): DocumentNode {
+  if (styleId.length === 0) return doc
+  const style = doc.document.styles?.paragraphStyles?.[styleId]
+  if (!style) return doc
+  return updateParagraphNodesById(doc, paragraphIds, (node) => applyParagraphStyleMetadata(node, style, styleId, options))
+}
+
+export function applyParagraphStylePreset(
+  doc: DocumentNode,
+  paragraphIds: string | string[],
+  styleId: FlowDocParagraphStylePresetId,
+  options: ApplyParagraphStyleOptions = {},
+): DocumentNode {
+  const withPreset = ensureParagraphStylePreset(doc, styleId)
+  return applyParagraphStyleId(withPreset, paragraphIds, styleId, options)
+}
+
+export function clearParagraphStyleId(
+  doc: DocumentNode,
+  paragraphIds: string | string[],
+  options: { clearOverrides?: boolean } = {},
+): DocumentNode {
+  const shouldClearOverrides = options.clearOverrides !== false
+  return updateParagraphNodesById(doc, paragraphIds, (node) => {
+    if (!node.props.paragraphStyleId && (!shouldClearOverrides || !node.props.styleOverrides)) return null
+    const { paragraphStyleId: _paragraphStyleId, styleOverrides: _styleOverrides, ...props } = node.props
+    return { ...node, props: shouldClearOverrides ? props : { ...props, styleOverrides: node.props.styleOverrides } }
+  })
+}
+
+export function detachParagraphStyle(
+  doc: DocumentNode,
+  paragraphIds: string | string[],
+): DocumentNode {
+  return updateParagraphNodesById(doc, paragraphIds, (node) => {
+    if (!node.props.paragraphStyleId && !node.props.styleOverrides) return null
+    const resolved = resolveStyledParagraphProps(doc.document.styles, node)
+    const { paragraphStyleId: _paragraphStyleId, styleOverrides: _styleOverrides, ...props } = resolved
+    return { ...node, props }
+  })
+}
+
+export function resetParagraphStyleOverrides(
+  doc: DocumentNode,
+  paragraphIds: string | string[],
+  options: { syncProps?: boolean } = {},
+): DocumentNode {
+  return updateParagraphNodesById(doc, paragraphIds, (node) => {
+    if (!node.props.styleOverrides) return null
+    const styleId = node.props.paragraphStyleId
+    const style = styleId ? doc.document.styles?.paragraphStyles?.[styleId] : undefined
+    const { styleOverrides: _styleOverrides, ...withoutOverrides } = node.props
+    const props = options.syncProps === false || !style
+      ? withoutOverrides
+      : applyParagraphStyleProperties(withoutOverrides, style.props)
+    return { ...node, props }
+  })
+}
+
 export function applyParagraphList(
   doc: DocumentNode,
   paragraphIds: string | string[],
   assignment: ParagraphListAssignment,
 ): DocumentNode {
   if (assignment.instanceId.length === 0) return doc
-  return updateParagraphNodesById(doc, paragraphIds, (node) => {
+  const ids = Array.isArray(paragraphIds) ? paragraphIds : [paragraphIds]
+  return ids.reduce((currentDoc, paragraphId) => updateParagraphNodeById(currentDoc, paragraphId, (node) => {
     const current = node.props.list
     const startAt = Object.prototype.hasOwnProperty.call(assignment, "startAt")
       ? normalizeStartAt(assignment.startAt)
       : current?.startAt
     const nextList: ParagraphListProps = {
       instanceId: assignment.instanceId,
-      level: clampListLevel(assignment.level ?? current?.level ?? 0),
+      level: clampListLevelForPosition(currentDoc, node.id, assignment.instanceId, assignment.level ?? current?.level ?? 0),
       itemId: assignment.itemId && assignment.itemId.length > 0 ? assignment.itemId : current?.itemId ?? node.id,
       ...(startAt ? { startAt } : {}),
     }
     if (sameParagraphListProps(current, nextList)) return null
     return { ...node, props: { ...node.props, list: nextList } }
-  })
+  }), doc)
 }
 
 export function clearParagraphList(doc: DocumentNode, paragraphIds: string | string[]): DocumentNode {
@@ -994,7 +1133,7 @@ export function changeParagraphListLevel(doc: DocumentNode, paragraphId: string,
   return updateParagraphNodeById(doc, paragraphId, (node) => {
     const current = node.props.list
     if (!current) return null
-    const nextList = { ...current, level: clampListLevel(level) }
+    const nextList = { ...current, level: clampListLevelForPosition(doc, node.id, current.instanceId, level) }
     if (sameParagraphListProps(current, nextList)) return null
     return { ...node, props: { ...node.props, list: nextList } }
   })
@@ -1946,6 +2085,84 @@ export function updateFlowStackBoxStyle(
     return { ...doc, document: { ...doc.document, sections: newSections } }
   }
   return doc
+}
+
+export function updateParagraphStyleOverrides(
+  doc: DocumentNode,
+  paragraphId: string,
+  overrides: ParagraphStyleProperties | undefined,
+): DocumentNode {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    const node = section.nodes[paragraphId]
+    if (node?.type === "paragraph") {
+      const updated: LayoutNode = setParagraphStyleOverrides(node, overrides) as LayoutNode
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: { ...s.nodes, [paragraphId]: updated } } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+
+    for (const [tableId, n] of Object.entries(section.nodes)) {
+      if (n.type !== "flow-table") continue
+      const table = n as unknown as FlowTableNode
+      const inner = table.nodes[paragraphId]
+      if (inner?.type !== "paragraph") continue
+      const updated = setParagraphStyleOverrides(inner, overrides)
+      const newTable = { ...table, nodes: { ...table.nodes, [paragraphId]: updated } }
+      const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return { ...doc, document: { ...doc.document, sections: newSections } }
+    }
+  }
+  return doc
+}
+
+function mergeParagraphStyleOverridePatch(
+  current: ParagraphStyleProperties | undefined,
+  patch: ParagraphStyleProperties,
+): ParagraphStyleProperties | undefined {
+  const next = clonePlainData(current ?? {}) as ParagraphStyleProperties
+  ;(Object.keys(patch) as Array<keyof ParagraphStyleProperties>).forEach((key) => {
+    const value = patch[key]
+    if (value === undefined) {
+      delete next[key]
+      return
+    }
+    ;(next as Record<keyof ParagraphStyleProperties, unknown>)[key] = clonePlainData(value)
+  })
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
+export function patchParagraphStyleOverrides(
+  doc: DocumentNode,
+  paragraphId: string,
+  patch: ParagraphStyleProperties,
+): DocumentNode {
+  return updateParagraphNodeById(doc, paragraphId, (node) => {
+    const nextOverrides = mergeParagraphStyleOverridePatch(node.props.styleOverrides, patch)
+    if (JSON.stringify(node.props.styleOverrides ?? {}) === JSON.stringify(nextOverrides ?? {})) return null
+    return setParagraphStyleOverrides(node, nextOverrides)
+  })
+}
+
+export function patchParagraphStyleOverrideBox(
+  doc: DocumentNode,
+  paragraphId: string,
+  changes: ParagraphBoxStyleChanges,
+): DocumentNode {
+  return updateParagraphNodeById(doc, paragraphId, (node) => {
+    const effectiveProps = resolveStyledParagraphProps(doc.document.styles, node)
+    const baseNode = { ...node, props: { ...node.props, box: effectiveProps.box } }
+    const updated = applyBoxStyleChanges(baseNode, changes)
+    const styleBase = resolveParagraphStyleProperties(doc.document.styles, node.props.paragraphStyleId)
+    const nextBox = updated.props.box ?? (styleBase.box ? {} : undefined)
+    const nextOverrides = mergeParagraphStyleOverridePatch(node.props.styleOverrides, { box: nextBox })
+    if (JSON.stringify(node.props.styleOverrides ?? {}) === JSON.stringify(nextOverrides ?? {})) return null
+    return setParagraphStyleOverrides(node, nextOverrides)
+  })
 }
 
 export function addFlowStackColumn(

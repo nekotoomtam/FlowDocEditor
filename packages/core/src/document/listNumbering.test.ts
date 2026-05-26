@@ -33,15 +33,15 @@ function listDoc(paragraphs: ParagraphNode[]): DocumentNode {
         "tor-clause": {
           id: "tor-clause",
           levels: [
-            { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
-            { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
-            { level: 2, format: "decimal", pattern: "%1.%2.%3", startAt: 1, markerIndent: pt(36), textIndent: pt(54) },
+            { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), bodyIndent: pt(18) },
+            { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), bodyIndent: pt(36) },
+            { level: 2, format: "decimal", pattern: "%1.%2.%3", startAt: 1, markerIndent: pt(36), bodyIndent: pt(54) },
           ],
         },
         bullet: {
           id: "bullet",
           levels: [
-            { level: 0, format: "bullet", pattern: "•", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
+            { level: 0, format: "bullet", pattern: "•", startAt: 1, markerIndent: pt(0), bodyIndent: pt(18) },
           ],
         },
       },
@@ -178,8 +178,8 @@ describe("resolveListMarkers", () => {
         ...doc.document.listStyles?.["tor-clause"],
         id: "tor-clause",
         levels: [
-          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
-          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+          { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), bodyIndent: pt(18) },
+          { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), bodyIndent: pt(36) },
           {
             level: 2,
             format: "decimal",
@@ -187,7 +187,7 @@ describe("resolveListMarkers", () => {
             startAt: 1,
             restartAfterLevel: 0,
             markerIndent: pt(36),
-            textIndent: pt(54),
+            bodyIndent: pt(54),
           },
         ],
       },

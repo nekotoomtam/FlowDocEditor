@@ -67,8 +67,8 @@ function makeDoc(bodyChildIds: string[], nodes: Record<string, LayoutNode>): Doc
 const TOR_LIST_STYLE: ListStyleDefinition = {
   id: "tor-clause",
   levels: [
-    { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), textIndent: pt(18) },
-    { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), textIndent: pt(36) },
+    { level: 0, format: "decimal", pattern: "%1.", startAt: 1, markerIndent: pt(0), bodyIndent: pt(18) },
+    { level: 1, format: "decimal", pattern: "%1.%2", startAt: 1, markerIndent: pt(18), bodyIndent: pt(36) },
   ],
 }
 

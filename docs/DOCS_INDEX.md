@@ -33,6 +33,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Browser/manual editor smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Editor interaction and UX behavior | `docs/EDITOR_UX_CONTRACT.md` |
 | Paragraph box style contract | `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md` |
+| Paragraph/text-run style preset contract | `docs/PARAGRAPH_STYLE_CONTRACT.md` |
 | WYSIWYG/inline edit roadmap | `docs/WYSIWYG_EDITOR_ROADMAP.md` |
 | FlowDoc-owned WYSIWYG text engine plan | `docs/WYSIWYG_TEXT_ENGINE_PLAN.md` |
 | End-to-end WYSIWYG edit/show parity plan | `docs/WYSIWYG_PARITY_PLAN.md` |

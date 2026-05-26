@@ -1,5 +1,5 @@
 import type { ListInstance, ListStyleDefinition, UnitValue } from "../schema"
-import { LIST_LEVEL_COUNT, pt } from "../schema"
+import { LIST_LEVEL_COUNT, pt, resolveListLevelBodyIndent } from "../schema"
 
 export const TOR_CLAUSE_LIST_STYLE_ID = "tor-clause"
 export const PAREN_DECIMAL_LIST_STYLE_ID = "paren-decimal"
@@ -32,7 +32,7 @@ export function cloneListStyleDefinition(style: ListStyleDefinition): ListStyleD
       startAt: level.startAt,
       ...(level.restartAfterLevel != null ? { restartAfterLevel: level.restartAfterLevel } : {}),
       markerIndent: cloneUnitValue(level.markerIndent),
-      textIndent: cloneUnitValue(level.textIndent),
+      bodyIndent: cloneUnitValue(resolveListLevelBodyIndent(level)),
       ...(level.tabStop ? { tabStop: cloneUnitValue(level.tabStop) } : {}),
     })),
   }
@@ -46,7 +46,7 @@ export const TOR_CLAUSE_LIST_STYLE: ListStyleDefinition = {
     pattern: decimalPatternForLevel(level),
     startAt: 1,
     markerIndent: pt(level * 36),
-    textIndent: pt((level + 1) * 36),
+    bodyIndent: pt((level + 1) * 36),
   })),
 }
 
@@ -59,7 +59,7 @@ export const PAREN_DECIMAL_LIST_STYLE: ListStyleDefinition = {
       pattern: "(%1)",
       startAt: 1,
       markerIndent: pt(72),
-      textIndent: pt(108),
+      bodyIndent: pt(108),
     },
   ],
 }
@@ -73,7 +73,7 @@ export const BULLET_BASIC_LIST_STYLE: ListStyleDefinition = {
       pattern: "•",
       startAt: 1,
       markerIndent: pt(72),
-      textIndent: pt(108),
+      bodyIndent: pt(108),
     },
   ],
 }

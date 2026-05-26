@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { UnitValueSchema } from "./units"
+import { UnitValueSchema, type UnitValue } from "./units"
 
 export const MAX_LIST_LEVEL = 7
 export const LIST_LEVEL_COUNT = MAX_LIST_LEVEL + 1
@@ -18,16 +18,23 @@ export const ListMarkerFormatSchema = z.enum([
   "custom",
 ])
 
-export const ListLevelDefinitionSchema = z.object({
+const RawListLevelDefinitionSchema = z.object({
   level: ListLevelIndexSchema,
   format: ListMarkerFormatSchema,
   pattern: z.string().min(1),
   startAt: PositiveIntegerSchema,
   restartAfterLevel: ListLevelIndexSchema.optional(),
   markerIndent: UnitValueSchema,
-  textIndent: UnitValueSchema,
+  bodyIndent: UnitValueSchema,
   tabStop: UnitValueSchema.optional(),
 })
+
+export const ListLevelDefinitionSchema = z.preprocess((input) => {
+  if (typeof input !== "object" || input == null) return input
+  const raw = input as Record<string, unknown>
+  if (raw["bodyIndent"] != null || raw["textIndent"] == null) return input
+  return { ...raw, bodyIndent: raw["textIndent"] }
+}, RawListLevelDefinitionSchema)
 
 export const ListStyleDefinitionSchema = z.object({
   id: z.string().min(1),
@@ -52,3 +59,8 @@ export type ListLevelDefinition = z.infer<typeof ListLevelDefinitionSchema>
 export type ListStyleDefinition = z.infer<typeof ListStyleDefinitionSchema>
 export type ListInstance = z.infer<typeof ListInstanceSchema>
 export type ParagraphListProps = z.infer<typeof ParagraphListPropsSchema>
+
+export function resolveListLevelBodyIndent(level: ListLevelDefinition): UnitValue {
+  const legacy = level as ListLevelDefinition & { textIndent?: UnitValue }
+  return legacy.bodyIndent ?? legacy.textIndent ?? { value: 0, unit: "pt" }
+}

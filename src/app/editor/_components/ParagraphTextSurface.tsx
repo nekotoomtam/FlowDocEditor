@@ -982,7 +982,7 @@ export function createWysiwygDraftParagraphLayoutCacheKey(
       listMarker: fragment.listMarker
         ? {
           markerIndent: fragment.listMarker.markerIndent,
-          textIndent: fragment.listMarker.textIndent,
+          bodyIndent: fragment.listMarker.bodyIndent,
           markerX: fragment.listMarker.markerX,
           bodyX: fragment.listMarker.bodyX,
         }
@@ -1014,7 +1014,7 @@ function resolveWysiwygListBodyIndent(fragment: PageFragment, node: ParagraphNod
   const contentOriginX = fragment.x + paragraphBoxLeftInset(box)
   const bodyIndent = marker.bodyX - contentOriginX
   if (Number.isFinite(bodyIndent)) return Math.max(0, bodyIndent)
-  return Math.max(0, marker.textIndent)
+  return Math.max(0, marker.bodyIndent)
 }
 
 function withWysiwygListBodyIndent(fragment: PageFragment, node: ParagraphNode): ParagraphNode {

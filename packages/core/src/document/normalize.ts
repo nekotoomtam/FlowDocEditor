@@ -1,6 +1,7 @@
 import type {
   BodyNode,
   DividerNode,
+  DocumentStyleDefinitions,
   DocumentNode,
   DocumentSection,
   FieldRefInline,
@@ -11,11 +12,14 @@ import type {
   FlowTableNode,
   InlineNode,
   LayoutNode,
+  ListStyleDefinition,
   PageBreakNode,
   ParagraphBoxBorder,
   ParagraphBoxBorderSide,
   ParagraphBoxPadding,
   ParagraphBoxStyle,
+  ParagraphStyleDefinition,
+  ParagraphStyleProperties,
   ParagraphNode,
   ParagraphProps,
   RowNode,
@@ -24,6 +28,7 @@ import type {
   SpacerNode,
   StackNode,
   TextRun,
+  TextRunStyleDefinition,
   TextRunStyle,
   UnitValue,
 } from "../schema"
@@ -104,6 +109,17 @@ function normalizeOptionalPositiveUnitValue(input: unknown): UnitValue | undefin
   const unit = raw["unit"]
   const value = raw["value"]
   if ((unit === "pt" || unit === "mm") && typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return { value, unit }
+  }
+  return undefined
+}
+
+function normalizeOptionalUnitValue(input: unknown): UnitValue | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const unit = raw["unit"]
+  const value = raw["value"]
+  if ((unit === "pt" || unit === "mm") && typeof value === "number" && Number.isFinite(value)) {
     return { value, unit }
   }
   return undefined
@@ -252,8 +268,13 @@ function normalizeParagraphListProps(input: unknown, fallbackItemId: string): Pa
 function normalizeParagraphProps(input: unknown, paragraphId: string): ParagraphProps {
   const raw = (typeof input === "object" && input != null ? input : {}) as Record<string, unknown>
   const align = raw["align"]
+  const styleOverrides = normalizeParagraphStyleProperties(raw["styleOverrides"])
 
   return {
+    paragraphStyleId: typeof raw["paragraphStyleId"] === "string" && raw["paragraphStyleId"].length > 0
+      ? raw["paragraphStyleId"]
+      : undefined,
+    ...(Object.keys(styleOverrides).length > 0 ? { styleOverrides } : {}),
     align: align === "left" || align === "center" || align === "right" || align === "justify"
       ? align
       : DEFAULT_PARAGRAPH_PROPS.align,
@@ -281,6 +302,98 @@ function normalizeParagraphProps(input: unknown, paragraphId: string): Paragraph
   }
 }
 
+// ─── Document Styles ─────────────────────────────────────────────────────────
+
+function normalizeParagraphStyleProperties(input: unknown): ParagraphStyleProperties {
+  if (typeof input !== "object" || input == null) return {}
+  const raw = input as Record<string, unknown>
+  const props: ParagraphStyleProperties = {}
+  const align = raw["align"]
+  const fontSize = normalizeOptionalPositiveUnitValue(raw["fontSize"])
+  const textColor = normalizeHexColor(raw["textColor"])
+  const lineHeight = normalizePositiveNumber(raw["lineHeight"], 0)
+  const spacingBefore = normalizeOptionalUnitValue(raw["spacingBefore"])
+  const spacingAfter = normalizeOptionalUnitValue(raw["spacingAfter"])
+  const textIndent = normalizeOptionalUnitValue(raw["textIndent"])
+  const indentLeft = normalizeOptionalUnitValue(raw["indentLeft"])
+  const indentRight = normalizeOptionalUnitValue(raw["indentRight"])
+  const box = normalizeParagraphBoxStyle(raw["box"])
+
+  if (align === "left" || align === "center" || align === "right" || align === "justify") props.align = align
+  if (fontSize) props.fontSize = fontSize
+  if (typeof raw["fontFamilyKey"] === "string" && raw["fontFamilyKey"].length > 0) {
+    props.fontFamilyKey = normalizeFontFamilyKey(raw["fontFamilyKey"])
+  }
+  if (textColor) props.textColor = textColor
+  if (raw["fontWeight"] === "normal" || raw["fontWeight"] === "bold") props.fontWeight = raw["fontWeight"]
+  if (raw["fontStyle"] === "normal" || raw["fontStyle"] === "italic") props.fontStyle = raw["fontStyle"]
+  if (raw["textDecoration"] === "none" || raw["textDecoration"] === "underline") props.textDecoration = raw["textDecoration"]
+  if (typeof raw["strikethrough"] === "boolean") props.strikethrough = raw["strikethrough"]
+  if (lineHeight > 0) props.lineHeight = lineHeight
+  if (spacingBefore) props.spacingBefore = spacingBefore
+  if (spacingAfter) props.spacingAfter = spacingAfter
+  if (textIndent) props.textIndent = textIndent
+  if (indentLeft) props.indentLeft = indentLeft
+  if (indentRight) props.indentRight = indentRight
+  if (raw["headingLevel"] === 1 || raw["headingLevel"] === 2 || raw["headingLevel"] === 3 || raw["headingLevel"] === null) {
+    props.headingLevel = raw["headingLevel"]
+  }
+  if (typeof raw["keepWithNext"] === "boolean") props.keepWithNext = raw["keepWithNext"]
+  if (box || Object.prototype.hasOwnProperty.call(raw, "box")) props.box = box ?? {}
+
+  return props
+}
+
+function normalizeParagraphStyleDefinition(key: string, input: unknown): ParagraphStyleDefinition | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const id = typeof raw["id"] === "string" && raw["id"].length > 0 ? raw["id"] : key
+  return {
+    id,
+    ...(typeof raw["name"] === "string" ? { name: raw["name"] } : {}),
+    props: normalizeParagraphStyleProperties(raw["props"]),
+  }
+}
+
+function normalizeTextRunStyleDefinition(key: string, input: unknown): TextRunStyleDefinition | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const id = typeof raw["id"] === "string" && raw["id"].length > 0 ? raw["id"] : key
+  return {
+    id,
+    ...(typeof raw["name"] === "string" ? { name: raw["name"] } : {}),
+    style: normalizeTextRunStyle(raw["style"]) ?? {},
+  }
+}
+
+function normalizeDocumentStyles(input: unknown): DocumentStyleDefinitions | undefined {
+  if (typeof input !== "object" || input == null) return undefined
+  const raw = input as Record<string, unknown>
+  const styles: DocumentStyleDefinitions = {}
+
+  if (typeof raw["paragraphStyles"] === "object" && raw["paragraphStyles"] != null) {
+    const paragraphStyles: Record<string, ParagraphStyleDefinition> = {}
+    Object.entries(raw["paragraphStyles"] as Record<string, unknown>).forEach(([key, value]) => {
+      if (key.length === 0) return
+      const style = normalizeParagraphStyleDefinition(key, value)
+      if (style) paragraphStyles[key] = style
+    })
+    if (Object.keys(paragraphStyles).length > 0) styles.paragraphStyles = paragraphStyles
+  }
+
+  if (typeof raw["textRunStyles"] === "object" && raw["textRunStyles"] != null) {
+    const textRunStyles: Record<string, TextRunStyleDefinition> = {}
+    Object.entries(raw["textRunStyles"] as Record<string, unknown>).forEach(([key, value]) => {
+      if (key.length === 0) return
+      const style = normalizeTextRunStyleDefinition(key, value)
+      if (style) textRunStyles[key] = style
+    })
+    if (Object.keys(textRunStyles).length > 0) styles.textRunStyles = textRunStyles
+  }
+
+  return Object.keys(styles).length > 0 ? styles : undefined
+}
+
 function normalizeParagraphNode(input: LayoutNode & { type: "paragraph" }): ParagraphNode {
   return {
     id: input.id,
@@ -288,6 +401,39 @@ function normalizeParagraphNode(input: LayoutNode & { type: "paragraph" }): Para
     props: normalizeParagraphProps(input.props, input.id),
     children: normalizeInlineChildren(input.children),
   }
+}
+
+// ─── List Styles ──────────────────────────────────────────────────────────────
+
+function normalizeListStyleDefinitions(
+  input: DocumentNode["document"]["listStyles"],
+): DocumentNode["document"]["listStyles"] {
+  if (input == null) return undefined
+
+  const styles: Record<string, ListStyleDefinition> = {}
+  Object.entries(input).forEach(([id, style]) => {
+    styles[id] = {
+      id: style.id,
+      levels: style.levels.map((level) => {
+        const rawLevel = level as unknown as Record<string, unknown>
+        const tabStop = rawLevel["tabStop"] != null
+          ? normalizeUnitValue(rawLevel["tabStop"], ZERO_PT)
+          : undefined
+        return {
+          level: level.level,
+          format: level.format,
+          pattern: level.pattern,
+          startAt: level.startAt,
+          ...(level.restartAfterLevel != null ? { restartAfterLevel: level.restartAfterLevel } : {}),
+          markerIndent: normalizeUnitValue(rawLevel["markerIndent"], ZERO_PT),
+          bodyIndent: normalizeUnitValue(rawLevel["bodyIndent"] ?? rawLevel["textIndent"], ZERO_PT),
+          ...(tabStop ? { tabStop } : {}),
+        }
+      }),
+    }
+  })
+
+  return styles
 }
 
 // ─── Spacer ───────────────────────────────────────────────────────────────────
@@ -604,10 +750,14 @@ function normalizeSection(section: DocumentSection): DocumentSection {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export function normalizeDocument(doc: DocumentNode): DocumentNode {
+  const styles = normalizeDocumentStyles(doc.document.styles)
+  const listStyles = normalizeListStyleDefinitions(doc.document.listStyles)
   return {
     ...doc,
     document: {
       ...doc.document,
+      ...(styles != null ? { styles } : {}),
+      ...(listStyles != null ? { listStyles } : {}),
       sections: doc.document.sections.map(normalizeSection),
     },
   }

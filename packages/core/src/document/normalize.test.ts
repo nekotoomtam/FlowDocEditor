@@ -155,6 +155,60 @@ describe("normalizeDocument", () => {
     })
   })
 
+  it("normalizes paragraph style references", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "Styled"),
+        props: {
+          ...paragraph("p1", "Styled").props,
+          paragraphStyleId: "tor.body",
+        },
+      },
+      p2: {
+        ...paragraph("p2", "Plain"),
+        props: {
+          ...paragraph("p2", "Plain").props,
+          paragraphStyleId: "",
+        },
+      } as unknown as ParagraphNode,
+    }, ["p1", "p2"])
+
+    const nodes = normalizeDocument(doc).document.sections[0].nodes
+
+    expect((nodes.p1 as ParagraphNode).props.paragraphStyleId).toBe("tor.body")
+    expect((nodes.p2 as ParagraphNode).props.paragraphStyleId).toBeUndefined()
+  })
+
+  it("normalizes paragraph style overrides", () => {
+    const doc = makeDoc({
+      p1: {
+        ...paragraph("p1", "Styled"),
+        props: {
+          ...paragraph("p1", "Styled").props,
+          styleOverrides: {
+            fontFamilyKey: "default",
+            fontSize: { value: -1, unit: "pt" },
+            textColor: "red",
+            lineHeight: 1.25,
+            spacingAfter: pt(12),
+            fontWeight: "bold",
+          },
+        },
+      } as unknown as ParagraphNode,
+    }, ["p1"])
+
+    const normalized = normalizeDocument(doc).document.sections[0].nodes.p1
+
+    expect(normalized.type).toBe("paragraph")
+    if (normalized.type !== "paragraph") return
+    expect(normalized.props.styleOverrides).toEqual({
+      fontFamilyKey: "sarabun",
+      lineHeight: 1.25,
+      spacingAfter: pt(12),
+      fontWeight: "bold",
+    })
+  })
+
   it("drops malformed paragraph list metadata", () => {
     const doc = makeDoc({
       p1: {
@@ -174,6 +228,30 @@ describe("normalizeDocument", () => {
     expect(normalized.type).toBe("paragraph")
     if (normalized.type !== "paragraph") return
     expect(normalized.props.list).toBeUndefined()
+  })
+
+  it("normalizes legacy list-level textIndent to canonical bodyIndent", () => {
+    const doc = makeDoc({
+      p1: paragraph("p1", "Listed"),
+    }, ["p1"])
+    doc.document.listStyles = {
+      "tor-clause": {
+        id: "tor-clause",
+        levels: [{
+          level: 0,
+          format: "decimal",
+          pattern: "%1.",
+          startAt: 1,
+          markerIndent: pt(0),
+          textIndent: pt(36),
+        }],
+      },
+    } as unknown as DocumentNode["document"]["listStyles"]
+
+    const normalizedLevel = normalizeDocument(doc).document.listStyles?.["tor-clause"]?.levels[0]
+
+    expect(normalizedLevel?.bodyIndent).toEqual(pt(36))
+    expect("textIndent" in (normalizedLevel as unknown as Record<string, unknown>)).toBe(false)
   })
 
   it("normalizes paragraph list metadata inside flow-table cells", () => {
@@ -208,6 +286,53 @@ describe("normalizeDocument", () => {
       instanceId: "tor-main",
       level: 1,
       itemId: "p1",
+    })
+  })
+
+  it("normalizes central paragraph and text-run style definitions", () => {
+    const doc = makeDoc({
+      p1: paragraph("p1", "Styled"),
+    }, ["p1"])
+    doc.document.styles = {
+      paragraphStyles: {
+        "tor.body": {
+          id: "tor.body",
+          name: "Body",
+          props: {
+            fontFamilyKey: "default",
+            fontSize: { value: -1, unit: "pt" },
+            textColor: "red",
+            lineHeight: -1,
+            spacingAfter: pt(6),
+            headingLevel: 2,
+          },
+        },
+      },
+      textRunStyles: {
+        emphasis: {
+          id: "emphasis",
+          style: {
+            fontFamilyKey: "thSarabun",
+            fontSize: pt(14),
+            textColor: "DC2626",
+            fontWeight: "bold",
+          },
+        },
+      },
+    } as unknown as DocumentNode["document"]["styles"]
+
+    const styles = normalizeDocument(doc).document.styles
+
+    expect(styles?.paragraphStyles?.["tor.body"].props).toEqual({
+      fontFamilyKey: "sarabun",
+      spacingAfter: pt(6),
+      headingLevel: 2,
+    })
+    expect(styles?.textRunStyles?.emphasis.style).toEqual({
+      fontFamilyKey: "sarabun",
+      fontSize: pt(14),
+      textColor: "DC2626",
+      fontWeight: "bold",
     })
   })
 

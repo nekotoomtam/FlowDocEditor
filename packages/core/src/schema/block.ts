@@ -67,6 +67,26 @@ export const ParagraphBoxStyleSchema = z.object({
   border: ParagraphBoxBorderSchema.optional(),
 })
 
+export const ParagraphStylePropertiesSchema = z.object({
+  align: TextAlignSchema.optional(),
+  fontSize: UnitValueSchema.optional(),
+  fontFamilyKey: z.string().min(1).optional(),
+  textColor: HexColorSchema.optional(),
+  fontWeight: z.union([z.literal("normal"), z.literal("bold")]).optional(),
+  fontStyle: z.union([z.literal("normal"), z.literal("italic")]).optional(),
+  textDecoration: z.union([z.literal("none"), z.literal("underline")]).optional(),
+  strikethrough: z.boolean().optional(),
+  lineHeight: z.number().positive().optional(),
+  spacingBefore: UnitValueSchema.optional(),
+  spacingAfter: UnitValueSchema.optional(),
+  textIndent: UnitValueSchema.optional(),
+  indentLeft: UnitValueSchema.optional(),
+  indentRight: UnitValueSchema.optional(),
+  headingLevel: z.union([z.literal(1), z.literal(2), z.literal(3), z.null()]).optional(),
+  keepWithNext: z.boolean().optional(),
+  box: ParagraphBoxStyleSchema.optional(),
+})
+
 export const FlowStackPropsSchema = z.object({
   // widthShare คือ % ของ parent flow-row เช่น 50 = 50%
   // ต้องมีเมื่ออยู่ใน flow-row — validate ตอน assertDocument
@@ -76,6 +96,8 @@ export const FlowStackPropsSchema = z.object({
 })
 
 export const ParagraphPropsSchema = z.object({
+  paragraphStyleId: z.string().min(1).optional(),
+  styleOverrides: ParagraphStylePropertiesSchema.optional(),
   align: TextAlignSchema,
   fontSize: UnitValueSchema,
   fontFamilyKey: z.string().optional(),
@@ -213,6 +235,7 @@ export type ParagraphBoxPadding = z.infer<typeof ParagraphBoxPaddingSchema>
 export type ParagraphBoxBorderSide = z.infer<typeof ParagraphBoxBorderSideSchema>
 export type ParagraphBoxBorder = z.infer<typeof ParagraphBoxBorderSchema>
 export type ParagraphBoxStyle = z.infer<typeof ParagraphBoxStyleSchema>
+export type ParagraphStyleProperties = z.infer<typeof ParagraphStylePropertiesSchema>
 export type SpacerProps = z.infer<typeof SpacerPropsSchema>
 export type DividerLineStyle = z.infer<typeof DividerLineStyleSchema>
 export type DividerProps = z.infer<typeof DividerPropsSchema>

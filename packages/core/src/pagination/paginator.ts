@@ -1,4 +1,5 @@
 import type { DocumentNode, DocumentSection } from "../schema"
+import { resolveDocumentParagraphStyles } from "../document/paragraphStyles"
 import { resolveListMarkers } from "../document/listNumbering"
 import {
   flowSection,
@@ -401,24 +402,25 @@ export function paginateDocument(
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
 ): PaginatedDocument {
   const wb = wordBreaker ?? defaultWordBreaker
+  const layoutDoc = resolveDocumentParagraphStyles(doc)
   const listNumbering: ListNumberingPaginationContext = {
-    markers: resolveListMarkers(doc),
-    styles: doc.document.listStyles ?? {},
+    markers: resolveListMarkers(layoutDoc),
+    styles: layoutDoc.document.listStyles ?? {},
   }
 
   // Pass 1: paginate with estimated TOC heights
-  const sections1 = runAllSections(doc, measurer, wb, undefined, onSplitDecision, listNumbering)
-  const entries1 = collectTocEntries(sections1, doc)
-  const overrides = computeTocOverrides(sections1, doc, entries1)
+  const sections1 = runAllSections(layoutDoc, measurer, wb, undefined, onSplitDecision, listNumbering)
+  const entries1 = collectTocEntries(sections1, layoutDoc)
+  const overrides = computeTocOverrides(sections1, layoutDoc, entries1)
 
   if (overrides.size > 0) {
     // Pass 2: repaginate with corrected TOC heights; page numbers may shift
-    const sections2 = runAllSections(doc, measurer, wb, overrides, onSplitDecision, listNumbering)
-    const entries2 = collectTocEntries(sections2, doc)
-    fillTocFragments(sections2, doc, entries2)
+    const sections2 = runAllSections(layoutDoc, measurer, wb, overrides, onSplitDecision, listNumbering)
+    const entries2 = collectTocEntries(sections2, layoutDoc)
+    fillTocFragments(sections2, layoutDoc, entries2)
     return { sections: sections2, tocEntries: entries2 }
   }
 
-  fillTocFragments(sections1, doc, entries1)
+  fillTocFragments(sections1, layoutDoc, entries1)
   return { sections: sections1, tocEntries: entries1 }
 }

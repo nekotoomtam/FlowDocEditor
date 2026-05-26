@@ -28,7 +28,7 @@ const THAI_LETTERS = [
   "ย", "ร", "ล", "ว", "ศ", "ษ", "ส", "ห", "ฬ", "อ", "ฮ",
 ]
 
-function orderedBodyParagraphs(section: DocumentSection): ParagraphNode[] {
+export function orderedSectionParagraphs(section: DocumentSection): ParagraphNode[] {
   const paragraphs: ParagraphNode[] = []
   const visit = (nodeId: string): void => {
     const node = section.nodes[nodeId]
@@ -180,7 +180,7 @@ export function resolveListMarkers(doc: DocumentNode): Map<string, ResolvedListM
   const instances = doc.document.listInstances ?? {}
   const countersByInstance = new Map<string, CounterState>()
 
-  const paragraphs = doc.document.sections.flatMap(orderedBodyParagraphs)
+  const paragraphs = doc.document.sections.flatMap(orderedSectionParagraphs)
   for (const paragraph of paragraphs) {
     const list = paragraph.props.list
     if (!list) continue
