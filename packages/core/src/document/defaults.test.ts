@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createDefaultFlowTable, createDividerNode, createId, createPageBreakNode } from "./defaults"
+import { createDefaultDocument, createDefaultFlowTable, createDividerNode, createId, createPageBreakNode } from "./defaults"
+import { TOR_BODY_PARAGRAPH_STYLE_ID } from "./paragraphStylePresets"
 
 describe("createId", () => {
   afterEach(() => {
@@ -81,6 +82,21 @@ describe("createDefaultFlowTable", () => {
     expect(paragraph.type).toBe("paragraph")
     if (paragraph.type !== "paragraph") return
     expect(paragraph.children[0]?.type === "text" ? paragraph.children[0].text : "").toBe("")
+  })
+})
+
+describe("createDefaultDocument", () => {
+  it("starts with a document-owned base paragraph style", () => {
+    const doc = createDefaultDocument("Styled document")
+    const section = doc.document.sections[0]
+    const body = section.nodes[section.bodyRootId]
+    const firstParagraph = body.type === "body" ? section.nodes[body.childIds[0]] : undefined
+
+    expect(doc.document.styles?.baseParagraphStyleId).toBe(TOR_BODY_PARAGRAPH_STYLE_ID)
+    expect(doc.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID]).toBeDefined()
+    expect(firstParagraph?.type).toBe("paragraph")
+    if (firstParagraph?.type !== "paragraph") return
+    expect(firstParagraph.props.paragraphStyleId).toBe(TOR_BODY_PARAGRAPH_STYLE_ID)
   })
 })
 

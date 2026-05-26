@@ -1425,7 +1425,7 @@ function ZoneFragments({
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
-  onMergeParagraph: (nodeId: string) => void
+  onMergeParagraph: (nodeId: string, text?: string) => void
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -2025,7 +2025,7 @@ function PageView({
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
-  onMergeParagraph: (nodeId: string) => void
+  onMergeParagraph: (nodeId: string, text?: string) => void
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -3449,7 +3449,7 @@ interface Props {
   onInlineEditHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
-  onMergeParagraph: (nodeId: string) => void
+  onMergeParagraph: (nodeId: string, text?: string) => void
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void

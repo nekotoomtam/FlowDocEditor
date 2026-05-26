@@ -2,7 +2,7 @@
 
 import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
-import { assertDocument, canRemoveFlowTableColumn, canRemoveFlowTableRow, clampSectionReservedZones, createDefaultDocument, normalizeDocument } from "@/document"
+import { assertDocument, canRemoveFlowTableColumn, canRemoveFlowTableRow, clampSectionReservedZones, createDefaultDocument, createUniqueListPresetInstanceId, normalizeDocument, resolveParagraphListContext } from "@/document"
 import type { FlowDocListStylePresetId } from "@/document"
 import {
   resizeFlowTableColumnPair as resizeFlowTableColumnPairForPreview,
@@ -26,7 +26,10 @@ import type {
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import { EditorCanvas, type CanvasTableAction } from "./EditorCanvas"
 import { ListToolbar } from "./ListToolbar"
+import { ListResourceInspectorPanel } from "./ListResourceInspectorPanel"
 import { PropertyPanel } from "./PropertyPanel"
+import { StyleDefinitionPanel } from "./StyleDefinitionPanel"
+import type { StyleManagerResourceSelection } from "./StyleManagerPanel"
 import { RichTextToolbar } from "./RichTextToolbar"
 import { FillingPanel } from "./FillingPanel"
 import { PagePanel } from "./PagePanel"
@@ -283,7 +286,7 @@ export interface HeaderFooterReservedDrag {
 
 type ZoomMode = "fit" | "manual"
 type LeftRailMode = EditorLeftRailMode
-type RightRailMode = "page" | "properties"
+type RightRailMode = "page" | "properties" | "style"
 type WorkflowMode = EditorWorkflowMode
 type RightRailResizeDrag = {
   pointerId: number
@@ -821,6 +824,8 @@ export default function EditorShell() {
   const [rightRailResizeDrag, setRightRailResizeDrag] = useState<RightRailResizeDrag | null>(null)
   const [rightRailResizeHandleHover, setRightRailResizeHandleHover] = useState(false)
   const [state, dispatch] = useReducer(reducer, initialTestScenario?.document ?? null, createInitialEditorState)
+  const [selectedStyleResource, setSelectedStyleResource] = useState<StyleManagerResourceSelection>(null)
+  const selectedStyleResourceId = selectedStyleResource?.id ?? null
   const [editorTextMeasurer, setEditorTextMeasurer] = useState<TextMeasurer>(() => createBrowserTextMeasurer())
   const [editorTextMeasurerStatus, setEditorTextMeasurerStatus] = useState<EditorTextMeasurerStatus>("loading")
   const [initialLayoutReady, setInitialLayoutReady] = useState(false)
@@ -848,6 +853,12 @@ export default function EditorShell() {
       : fieldRegistryFromDocumentParseResult(loadDocumentFromStorage(localStorage))
   ))
   const isTemplateMode = mode === "template"
+  const selectedParagraphListContext = useMemo(() => (
+    resolveParagraphListContext(state.doc, state.selectedNodeId)
+  ), [state.doc, state.selectedNodeId])
+  const activeOutlineListGroupId = selectedStyleResource?.kind === "list-group"
+    ? selectedStyleResource.id
+    : selectedParagraphListContext?.instanceId ?? null
   const activeSectionIndex = useMemo(() => (
     findSectionIndexForNode(state.doc, state.selectedNodeId)
   ), [state.doc, state.selectedNodeId])
@@ -966,6 +977,17 @@ export default function EditorShell() {
   useEffect(() => { packageFieldRegistryRef.current = packageFieldRegistry }, [packageFieldRegistry])
   useEffect(() => { dataSnapshotRef.current = dataSnapshot }, [dataSnapshot])
   useEffect(() => { paginatedRef.current = state.paginated })
+  useEffect(() => {
+    if (!selectedStyleResource) return
+    const exists = selectedStyleResource.kind === "paragraph-style"
+      ? Boolean(state.doc.document.styles?.paragraphStyles?.[selectedStyleResource.id])
+      : selectedStyleResource.kind === "list-style"
+        ? Boolean(state.doc.document.listStyles?.[selectedStyleResource.id])
+        : Boolean(state.doc.document.listInstances?.[selectedStyleResource.id])
+    if (exists) return
+    setSelectedStyleResource(null)
+    setRightRailMode("page")
+  }, [selectedStyleResource, state.doc])
 
   useEffect(() => {
     if (typeof document === "undefined" || !("fonts" in document)) return
@@ -1761,6 +1783,7 @@ export default function EditorShell() {
         resetInlineEditStateForDocumentReplace()
         clearWysiwygDraftPagination()
         endWysiwygTextSession()
+        setSelectedStyleResource(null)
         setPackageFieldRegistry(fieldRegistryFromDocumentParseResult(result))
         setDataSnapshot(dataSnapshotFromDocumentParseResult(result))
         dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
@@ -1782,6 +1805,7 @@ export default function EditorShell() {
     resetInlineEditStateForDocumentReplace()
     clearWysiwygDraftPagination()
     endWysiwygTextSession()
+    setSelectedStyleResource(null)
     setPackageFieldRegistry(SAMPLE_FIELD_REGISTRY_V1)
     setDataSnapshot(createEmptyDataSnapshot())
     dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
@@ -1868,10 +1892,14 @@ export default function EditorShell() {
     dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex, text, history })
   }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
 
-  const handleMergeParagraph = useCallback((nodeId: string) => {
+  const handleMergeParagraph = useCallback((nodeId: string, text?: string) => {
     const history = consumeInlineEditHistory(nodeId)
-    dispatch({ type: "MERGE_PARAGRAPH", nodeId, history })
-  }, [consumeInlineEditHistory])
+    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
+    }
+    dispatch({ type: "MERGE_PARAGRAPH", nodeId, text, history })
+  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
 
   const handleExitListItem = useCallback((nodeId: string, text?: string) => {
     const history = consumeInlineEditHistory(nodeId)
@@ -1910,9 +1938,21 @@ export default function EditorShell() {
     const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
     const finalized = finalizeInlineEditBeforeAction()
     if (hadWysiwygTextSession && !finalized) return
-    dispatch({ type: "TOGGLE_LIST_PRESET", nodeId, styleId, instanceId, level })
-    setRightRailMode("properties")
-  }, [finalizeInlineEditBeforeAction])
+    const listContext = resolveParagraphListContext(docRef.current, nodeId)
+    const isClearingSamePreset = listContext?.styleId === styleId
+    const targetInstanceId = isClearingSamePreset
+      ? listContext.instanceId
+      : createUniqueListPresetInstanceId(docRef.current, styleId)
+    dispatch({ type: "TOGGLE_LIST_PRESET", nodeId, styleId, instanceId: targetInstanceId || instanceId, level })
+    if (isClearingSamePreset) {
+      setSelectedStyleResource(null)
+      setRightRailMode("properties")
+      return
+    }
+    setSelectedStyleResource({ kind: "list-group", id: targetInstanceId })
+    setLeftRailMode("styles")
+    openRightRailMode("style")
+  }, [finalizeInlineEditBeforeAction, openRightRailMode])
 
   const handleToolbarChangeListItemLevel = useCallback((nodeId: string, direction: ListLevelChangeDirection) => {
     const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
@@ -2358,6 +2398,7 @@ export default function EditorShell() {
   }, [])
 
   const handleBackgroundPointerDown = useCallback(() => {
+    setSelectedStyleResource(null)
     if (headerFooterEditMode) {
       if (inlineEditNodeId) finalizeInlineEditBeforeAction()
       setHeaderFooterEditMode(null)
@@ -2594,6 +2635,7 @@ export default function EditorShell() {
     if (headerFooterEditMode && !isHeaderFooterSupportedDragSource(source)) return
     e.preventDefault()
     finalizeInlineEditBeforeAction()
+    setSelectedStyleResource(null)
     dispatch({ type: "DRAG_START", source, clientX: e.clientX, clientY: e.clientY })
   }, [finalizeInlineEditBeforeAction, headerFooterEditMode])
 
@@ -2601,11 +2643,13 @@ export default function EditorShell() {
   const startNodePointerDown = useCallback((source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => {
     e.preventDefault()
     finalizeInlineEditBeforeAction()
+    setSelectedStyleResource(null)
     pendingDragRef.current = { source, clientX: e.clientX, clientY: e.clientY, clickAction }
   }, [finalizeInlineEditBeforeAction])
 
   const selectContextNode = useCallback((nodeId: string) => {
     finalizeInlineEditBeforeAction()
+    setSelectedStyleResource(null)
     dispatch({
       type: "SELECT_NODE",
       nodeId,
@@ -2613,6 +2657,20 @@ export default function EditorShell() {
     })
     setRightRailMode("properties")
   }, [finalizeInlineEditBeforeAction, state.selectionAnchorNodeId])
+
+  const selectStyleResource = useCallback((resource: Exclude<StyleManagerResourceSelection, null>) => {
+    finalizeInlineEditBeforeAction()
+    setSelectedStyleResource(resource)
+    setLeftRailMode("styles")
+    openRightRailMode("style")
+  }, [finalizeInlineEditBeforeAction, openRightRailMode])
+
+  const selectOutlineListGroup = useCallback((instanceId: string) => {
+    finalizeInlineEditBeforeAction()
+    setSelectedStyleResource({ kind: "list-group", id: instanceId })
+    setLeftRailMode("outline")
+    openRightRailMode("style")
+  }, [finalizeInlineEditBeforeAction, openRightRailMode])
 
   const startCloneDragPointerDown = useCallback((nodeId: string, e: React.PointerEvent<SVGGElement>) => {
     startNodePointerDown({ source: "document-copy", nodeId }, e)
@@ -2656,6 +2714,7 @@ export default function EditorShell() {
 
   const activateWorkflowMode = useCallback((nextMode: WorkflowMode) => {
     finalizeInlineEditBeforeAction()
+    if (nextMode !== "design") setSelectedStyleResource(null)
     setWorkflowMode(nextMode)
     if (nextMode === "fill") {
       setMode("fill")
@@ -3245,6 +3304,7 @@ export default function EditorShell() {
       if (state.drag) dispatch({ type: "DRAG_CANCEL" })
       else if (pendingDragRef.current) pendingDragRef.current = null
       else {
+        setSelectedStyleResource(null)
         dispatch({ type: "SELECT_NODE", nodeId: null })
         setRightRailMode("page")
       }
@@ -3421,18 +3481,25 @@ export default function EditorShell() {
         <EditorLeftRail
           mode={leftRailMode}
           outlineDoc={isTemplateMode ? state.doc : previewDoc}
+          styleDoc={state.doc}
           selectedNodeId={state.selectedNodeId}
+          selectedStyleResource={selectedStyleResource}
+          activeOutlineListGroupId={activeOutlineListGroupId}
           registry={packageFieldRegistry}
           editable={isTemplateMode}
           isDragging={!!state.drag}
           addPaletteScope={headerFooterEditMode ? "headerFooter" : "document"}
           onModeChange={setLeftRailMode}
           onSelectNode={(nodeId) => {
+            setSelectedStyleResource(null)
             dispatch({ type: "SELECT_NODE", nodeId })
             setRightRailMode("properties")
           }}
+          onSelectOutlineListGroup={selectOutlineListGroup}
+          onSelectStyleResource={selectStyleResource}
           onReorderBodyChild={(request) => {
             finalizeInlineEditBeforeAction()
+            setSelectedStyleResource(null)
             dispatch({ type: "REORDER_BODY_CHILD", ...request })
             setRightRailMode("properties")
           }}
@@ -3629,6 +3696,24 @@ export default function EditorShell() {
               >
                 P
               </button>
+              <button
+                type="button"
+                data-testid="editor-right-rail-mode-style"
+                aria-label="Show style"
+                aria-pressed={!rightRailCollapsed && rightRailMode === "style"}
+                title="Style"
+                disabled={!selectedStyleResourceId}
+                onClick={() => {
+                  if (selectedStyleResourceId) openRightRailMode("style")
+                }}
+                style={{
+                  ...rightRailBookmarkButton(!rightRailCollapsed && rightRailMode === "style", 28, 10),
+                  cursor: selectedStyleResourceId ? "pointer" : "default",
+                  opacity: selectedStyleResourceId ? 1 : 0.45,
+                }}
+              >
+                St
+              </button>
             </div>
           </div>
           {rightRailContentVisible && (
@@ -3661,6 +3746,31 @@ export default function EditorShell() {
                     }}
                   />
                 </div>
+              ) : rightRailMode === "style" ? (
+                <div data-testid="editor-right-rail-style" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                  {selectedStyleResource?.kind === "paragraph-style" ? (
+                    <StyleDefinitionPanel
+                      doc={state.doc}
+                      selectedStyleId={selectedStyleResource.id}
+                      editable={isTemplateMode}
+                      onPatchStyleDefinition={(styleId, patch) => {
+                        if (!isTemplateMode) return
+                        finalizeInlineEditBeforeAction()
+                        dispatch({ type: "PATCH_PARAGRAPH_STYLE_DEFINITION", styleId, patch })
+                      }}
+                      onRenameStyleDefinition={(styleId, name) => {
+                        if (!isTemplateMode) return
+                        finalizeInlineEditBeforeAction()
+                        dispatch({ type: "RENAME_PARAGRAPH_STYLE_DEFINITION", styleId, name })
+                      }}
+                    />
+                  ) : (
+                    <ListResourceInspectorPanel
+                      doc={state.doc}
+                      selectedResource={selectedStyleResource}
+                    />
+                  )}
+                </div>
               ) : rightRailMode === "properties" ? (
                 <div data-testid="editor-right-rail-properties" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
                   {isTemplateMode ? (
@@ -3684,6 +3794,8 @@ export default function EditorShell() {
                       onUpdateFlowTableCellSpan={(cellId, changes) => dispatch({ type: "UPDATE_FLOW_TABLE_CELL_SPAN", cellId, changes })}
                       onSelectNode={(nodeId) => dispatch({ type: "SELECT_NODE", nodeId, anchorNodeId: nodeId })}
                       onSelectContextNode={selectContextNode}
+                      onSelectListGroup={selectOutlineListGroup}
+                      onSelectStyleResource={selectStyleResource}
                       onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
                       tableOps={{
                         addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),

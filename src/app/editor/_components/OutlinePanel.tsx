@@ -1,7 +1,11 @@
 "use client"
 
 import { useState } from "react"
+import { buildStyleManagerState, resolveListMarkers } from "@/document"
+import type { StyleManagerListGroupItem } from "@/document"
 import type { DocumentNode, LayoutNode } from "@/schema"
+import { buildOutlineModel } from "./outlineModel"
+import type { OutlineItem, OutlineNodeItem } from "./outlineModel"
 import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -41,6 +45,13 @@ interface OutlineDragState {
   position: OutlineReorderPosition | null
   pointer: { x: number; y: number } | null
   ghost: { label: string; icon: string; depth: number }
+}
+
+interface OutlineListGroupContext {
+  selectedListGroupId: string | null
+  groupsById: Map<string, StyleManagerListGroupItem>
+  markerTextByParagraphId: Map<string, string>
+  onSelectListGroup?: (instanceId: string) => void
 }
 
 // ─── Node Row ─────────────────────────────────────────────────────────────────
@@ -341,40 +352,209 @@ function NodeRow({
   )
 }
 
+function markerRange(markers: Array<string | undefined>): string {
+  const values = markers.filter((value): value is string => Boolean(value))
+  if (values.length === 0) return ""
+  const first = values[0]
+  const last = values[values.length - 1]
+  return first === last ? first : `${first} - ${last}`
+}
+
+function ListGroupRunRow({
+  instanceId,
+  paragraphIds,
+  depth,
+  listGroupContext,
+  children,
+}: {
+  instanceId: string
+  paragraphIds: string[]
+  depth: number
+  listGroupContext: OutlineListGroupContext
+  children: React.ReactNode
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const [hovered, setHovered] = useState(false)
+  const group = listGroupContext.groupsById.get(instanceId)
+  const isSelected = listGroupContext.selectedListGroupId === instanceId
+  const range = markerRange(paragraphIds.map((paragraphId) => listGroupContext.markerTextByParagraphId.get(paragraphId)))
+  const label = group?.label ?? instanceId
+  const itemCount = paragraphIds.length
+  const totalCount = group?.itemCount ?? itemCount
+  const meta = [
+    group?.styleLabel,
+    `${itemCount}${totalCount !== itemCount ? `/${totalCount}` : ""} items`,
+    range,
+  ].filter(Boolean).join(" · ")
+  const rowBackground = isSelected ? "#e0f2fe" : hovered ? "#f8fafc" : "#fff"
+
+  return (
+    <>
+      <div
+        data-testid="outline-list-group-row"
+        data-outline-list-group-id={instanceId}
+        role={listGroupContext.onSelectListGroup ? "button" : undefined}
+        aria-pressed={isSelected}
+        onClick={() => listGroupContext.onSelectListGroup?.(instanceId)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          minHeight: 28,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 7px",
+          paddingLeft: OUTLINE_DEPTH_BASE_LEFT + depth * OUTLINE_DEPTH_INDENT,
+          cursor: listGroupContext.onSelectListGroup ? "pointer" : "default",
+          fontSize: 11,
+          backgroundColor: rowBackground,
+          backgroundImage: outlineDepthGuideBackground(depth, rowBackground, hovered ? "#cbd5e1" : "#d8e0eb"),
+          color: isSelected ? "#0369a1" : "#334155",
+          border: isSelected ? "1px solid #7dd3fc" : hovered ? "1px solid #e2e8f0" : "1px solid transparent",
+          borderRadius: 5,
+          userSelect: "none",
+          boxSizing: "border-box",
+        }}
+      >
+        <span
+          onClick={(event) => {
+            event.stopPropagation()
+            setExpanded((value) => !value)
+          }}
+          style={{ fontSize: 8, color: "#94a3b8", width: 10, flexShrink: 0 }}
+        >
+          {expanded ? "▼" : "▶"}
+        </span>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 20,
+            height: 18,
+            borderRadius: 4,
+            background: isSelected ? "#bae6fd" : "#e0f2fe",
+            color: isSelected ? "#0369a1" : "#0284c7",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            fontSize: 9,
+            fontWeight: 900,
+          }}
+        >
+          LG
+        </span>
+        <span title={label} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isSelected ? "#0369a1" : "#0f172a", fontWeight: 800 }}>
+          {label}
+        </span>
+        {meta && (
+          <span title={meta} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#64748b", fontSize: 10 }}>
+            {meta}
+          </span>
+        )}
+      </div>
+      {expanded ? children : null}
+    </>
+  )
+}
+
 // ─── Tree Builder ─────────────────────────────────────────────────────────────
 
-function OutlineNode({
-  nodes,
-  nodeId,
+function OutlineItems({
+  items,
   depth,
   selectedNodeId,
   onSelect,
-  labelOverride,
-  sectionId,
-  bodyId,
-  isBodyChild = false,
   dragState,
   onDragStateChange,
   onReorder,
+  listGroupContext,
 }: {
-  nodes: Record<string, LayoutNode>; nodeId: string; depth: number
-  selectedNodeId: string | null; onSelect: (id: string) => void
-  labelOverride?: string
-  sectionId: string
-  bodyId: string
-  isBodyChild?: boolean
+  items: OutlineItem[]
+  depth: number
+  selectedNodeId: string | null
+  onSelect: (id: string) => void
   dragState: OutlineDragState | null
   onDragStateChange: (state: OutlineDragState | null) => void
   onReorder?: (request: OutlineBodyChildReorder) => void
+  listGroupContext: OutlineListGroupContext
 }) {
-  const node = nodes[nodeId]
-  if (!node) return null
-  const reorderItem = isBodyChild ? { sectionId, bodyId, nodeId } : undefined
+  return (
+    <>
+      {items.map((item) => item.kind === "list-group-run" ? (
+        <ListGroupRunRow
+          key={item.key}
+          instanceId={item.instanceId}
+          paragraphIds={item.paragraphIds}
+          depth={depth}
+          listGroupContext={listGroupContext}
+        >
+          <OutlineItems
+            items={item.children}
+            depth={depth + 1}
+            selectedNodeId={selectedNodeId}
+            onSelect={onSelect}
+            dragState={dragState}
+            onDragStateChange={onDragStateChange}
+            onReorder={onReorder}
+            listGroupContext={listGroupContext}
+          />
+        </ListGroupRunRow>
+      ) : (
+        <OutlineNode
+          key={item.key}
+          item={item}
+          depth={depth}
+          selectedNodeId={selectedNodeId}
+          onSelect={onSelect}
+          dragState={dragState}
+          onDragStateChange={onDragStateChange}
+          onReorder={onReorder}
+          listGroupContext={listGroupContext}
+        />
+      ))}
+    </>
+  )
+}
+
+function OutlineNode({
+  item,
+  depth,
+  selectedNodeId,
+  onSelect,
+  dragState,
+  onDragStateChange,
+  onReorder,
+  listGroupContext,
+}: {
+  item: OutlineNodeItem
+  depth: number
+  selectedNodeId: string | null; onSelect: (id: string) => void
+  dragState: OutlineDragState | null
+  onDragStateChange: (state: OutlineDragState | null) => void
+  onReorder?: (request: OutlineBodyChildReorder) => void
+  listGroupContext: OutlineListGroupContext
+}) {
+  const node = item.node
+  const reorderItem = item.isBodyChild
+    ? { sectionId: item.sectionId, bodyId: item.bodyId, nodeId: item.nodeId }
+    : undefined
+  const children = item.children.length > 0 ? (
+    <OutlineItems
+      items={item.children}
+      depth={depth + 1}
+      selectedNodeId={selectedNodeId}
+      onSelect={onSelect}
+      dragState={dragState}
+      onDragStateChange={onDragStateChange}
+      onReorder={onReorder}
+      listGroupContext={listGroupContext}
+    />
+  ) : null
 
   if (node.type === "paragraph") {
     const text = getParaText(node)
     return (
-      <NodeRow icon="¶" label={text || "(ว่าง)"} depth={depth} nodeId={nodeId}
+      <NodeRow icon="¶" label={text || "(ว่าง)"} depth={depth} nodeId={item.nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder} />
@@ -383,7 +563,7 @@ function OutlineNode({
 
   if (node.type === "spacer") {
     return (
-      <NodeRow icon="—" label="ช่องว่าง" depth={depth} nodeId={nodeId}
+      <NodeRow icon="—" label="ช่องว่าง" depth={depth} nodeId={item.nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder} />
@@ -392,7 +572,7 @@ function OutlineNode({
 
   if (node.type === "divider") {
     return (
-      <NodeRow icon="-" label="เส้นแบ่ง" depth={depth} nodeId={nodeId}
+      <NodeRow icon="-" label="เส้นแบ่ง" depth={depth} nodeId={item.nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder} />
@@ -401,7 +581,7 @@ function OutlineNode({
 
   if (node.type === "page-break") {
     return (
-      <NodeRow icon="PB" label="ขึ้นหน้าใหม่" depth={depth} nodeId={nodeId}
+      <NodeRow icon="PB" label="ขึ้นหน้าใหม่" depth={depth} nodeId={item.nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder} />
@@ -410,7 +590,7 @@ function OutlineNode({
 
   if (node.type === "toc") {
     return (
-      <NodeRow icon="☰" label="สารบัญ" depth={depth} nodeId={nodeId}
+      <NodeRow icon="☰" label="สารบัญ" depth={depth} nodeId={item.nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder} />
@@ -419,64 +599,57 @@ function OutlineNode({
 
   if (node.type === "flow-table") {
     return (
-      <NodeRow icon="▦" label={`Flow table ${getTableSize(node)}`} depth={depth} nodeId={nodeId}
+      <NodeRow icon="▦" label={`Flow table ${getTableSize(node)}`} depth={depth} nodeId={item.nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder} />
+        onDragStateChange={onDragStateChange} onReorder={onReorder}>
+        {children}
+      </NodeRow>
+    )
+  }
+
+  if (node.type === "flow-table-row") {
+    return (
+      <NodeRow icon="TR" label={item.labelOverride ?? "แถว"} depth={depth} nodeId={item.nodeId}
+        selectedNodeId={selectedNodeId} onClick={onSelect}
+        reorderItem={reorderItem} dragState={dragState}
+        onDragStateChange={onDragStateChange} onReorder={onReorder}>
+        {children}
+      </NodeRow>
+    )
+  }
+
+  if (node.type === "flow-table-cell") {
+    return (
+      <NodeRow icon="TC" label={item.labelOverride ?? "เซลล์"} depth={depth} nodeId={item.nodeId}
+        selectedNodeId={selectedNodeId} onClick={onSelect}
+        reorderItem={reorderItem} dragState={dragState}
+        onDragStateChange={onDragStateChange} onReorder={onReorder}>
+        {children}
+      </NodeRow>
     )
   }
 
   if (node.type === "row" || node.type === "flow-row") {
-    const childIds = node.childIds ?? []
-    const stackCount = childIds.length
-    const expectedStackType = node.type === "flow-row" ? "flow-stack" : "stack"
+    const stackCount = node.childIds.length
     return (
-      <NodeRow icon="⫿" label={`${stackCount} คอลัมน์`} depth={depth} nodeId={nodeId}
+      <NodeRow icon="⫿" label={`${stackCount} คอลัมน์`} depth={depth} nodeId={item.nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}>
-        {childIds.map((stackId, i) => {
-          const stack = nodes[stackId]
-          if (stack?.type !== expectedStackType) return null
-          return (
-            <OutlineNode key={stackId} nodes={nodes} nodeId={stackId}
-              depth={depth + 1} selectedNodeId={selectedNodeId} onSelect={onSelect}
-              labelOverride={`คอลัมน์ ${i + 1}`} sectionId={sectionId} bodyId={bodyId}
-              dragState={dragState} onDragStateChange={onDragStateChange} onReorder={onReorder} />
-          )
-        })}
+        {children}
       </NodeRow>
     )
   }
 
   if (node.type === "stack" || node.type === "flow-stack") {
-    const childIds = node.childIds ?? []
     return (
-      <NodeRow icon="▯" label={labelOverride ?? "คอลัมน์"} depth={depth} nodeId={nodeId}
+      <NodeRow icon="▯" label={item.labelOverride ?? "คอลัมน์"} depth={depth} nodeId={item.nodeId}
         selectedNodeId={selectedNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}>
-        {childIds.map((childId) => (
-          <OutlineNode key={childId} nodes={nodes} nodeId={childId}
-            depth={depth + 1} selectedNodeId={selectedNodeId} onSelect={onSelect}
-            sectionId={sectionId} bodyId={bodyId}
-            dragState={dragState} onDragStateChange={onDragStateChange} onReorder={onReorder} />
-        ))}
+        {children}
       </NodeRow>
-    )
-  }
-
-  if (node.type === "body") {
-    const childIds = node.childIds ?? []
-    return (
-      <>
-        {childIds.map((childId) => (
-          <OutlineNode key={childId} nodes={nodes} nodeId={childId}
-            depth={depth} selectedNodeId={selectedNodeId} onSelect={onSelect}
-            sectionId={sectionId} bodyId={node.id} isBodyChild
-            dragState={dragState} onDragStateChange={onDragStateChange} onReorder={onReorder} />
-        ))}
-      </>
     )
   }
 
@@ -488,7 +661,9 @@ function OutlineNode({
 interface Props {
   doc: DocumentNode
   selectedNodeId: string | null
+  selectedListGroupId?: string | null
   onSelect: (nodeId: string) => void
+  onSelectListGroup?: (instanceId: string) => void
   onAddShortcut?: () => void
   onReorderBodyChild?: (request: OutlineBodyChildReorder) => void
 }
@@ -588,8 +763,29 @@ function findLastBodyChildRow(root: HTMLElement, dragState: OutlineDragState): H
   return rows.length > 0 ? rows[rows.length - 1] : null
 }
 
-export function OutlinePanel({ doc, selectedNodeId, onSelect, onAddShortcut, onReorderBodyChild }: Props) {
+export function OutlinePanel({
+  doc,
+  selectedNodeId,
+  selectedListGroupId = null,
+  onSelect,
+  onSelectListGroup,
+  onAddShortcut,
+  onReorderBodyChild,
+}: Props) {
   const [dragState, setDragState] = useState<OutlineDragState | null>(null)
+  const listGroupState = buildStyleManagerState(doc).listGroups.items
+  const markerTextByParagraphId = new Map(
+    Array.from(resolveListMarkers(doc).entries()).map(([paragraphId, marker]) => [paragraphId, marker.markerText]),
+  )
+  const listGroupContext: OutlineListGroupContext = {
+    selectedListGroupId,
+    groupsById: new Map(listGroupState.map((group) => [group.id, group])),
+    markerTextByParagraphId,
+    ...(onSelectListGroup ? { onSelectListGroup } : {}),
+  }
+  const outlineSections = buildOutlineModel(doc, {
+    listGroupIds: listGroupState.map((group) => group.id),
+  })
 
   const handleBodyEndDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     if (!dragState || !onReorderBodyChild) return
@@ -666,24 +862,22 @@ export function OutlinePanel({ doc, selectedNodeId, onSelect, onAddShortcut, onR
         onDragOver={handleBodyEndDragOver}
         onDrop={handleBodyEndDrop}
       >
-        {doc.document.sections.map((section, si) => (
-          <div key={section.id}>
+        {outlineSections.map((sectionModel, si) => (
+          <div key={sectionModel.sectionId}>
             {doc.document.sections.length > 1 && (
               <div style={{ padding: "6px 8px 4px", fontSize: 10, color: "#9ca3af", fontWeight: 700 }}>
                 Section {si + 1}
               </div>
             )}
-            <OutlineNode
-              nodes={section.nodes}
-              nodeId={section.bodyRootId}
+            <OutlineItems
+              items={sectionModel.items}
               depth={0}
               selectedNodeId={selectedNodeId}
               onSelect={onSelect}
-              sectionId={section.id}
-              bodyId={section.bodyRootId}
               dragState={dragState}
               onDragStateChange={setDragState}
               onReorder={onReorderBodyChild}
+              listGroupContext={listGroupContext}
             />
           </div>
         ))}

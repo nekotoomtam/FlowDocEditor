@@ -1,6 +1,7 @@
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
+import { getAllListStylePresets } from "@/document"
 import type { DocumentNode } from "@/schema"
 import { OutlinePanel } from "../OutlinePanel"
 
@@ -73,6 +74,69 @@ function flowOutlineDoc(): DocumentNode {
   return doc
 }
 
+function listedOutlineDoc(): DocumentNode {
+  const doc = outlineDoc()
+  doc.document.listStyles = getAllListStylePresets()
+  doc.document.listInstances = {
+    "tor-main": { id: "tor-main", styleId: "tor-clause" },
+  }
+  const section = doc.document.sections[0]
+  const p1 = section.nodes.p1
+  const p2 = section.nodes.p2
+  if (p1?.type === "paragraph") {
+    p1.props = {
+      ...p1.props,
+      list: { instanceId: "tor-main", level: 0, itemId: "tor.one" },
+    }
+  }
+  if (p2?.type === "paragraph") {
+    p2.props = {
+      ...p2.props,
+      list: { instanceId: "tor-main", level: 1, itemId: "tor.two" },
+    }
+  }
+  return doc
+}
+
+function flowStackListedOutlineDoc(): DocumentNode {
+  const doc = listedOutlineDoc()
+  const section = doc.document.sections[0]
+  section.nodes.body = { id: "body", type: "body", props: {}, childIds: ["fr1"] }
+  section.nodes.fr1 = { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] }
+  section.nodes.fs1 = { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["p1", "p2"] }
+  return doc
+}
+
+function flowTableListedOutlineDoc(): DocumentNode {
+  const doc = listedOutlineDoc()
+  const section = doc.document.sections[0]
+  const p1 = section.nodes.p1
+  const p2 = section.nodes.p2
+  if (p1?.type !== "paragraph" || p2?.type !== "paragraph") return doc
+
+  section.nodes = {
+    body: { id: "body", type: "body", props: {}, childIds: ["ft1"] },
+    ft1: {
+      id: "ft1",
+      type: "flow-table",
+      props: {},
+      columns: [
+        { width: { value: 120, unit: "pt" } },
+        { width: { value: 120, unit: "pt" } },
+      ],
+      rowIds: ["r1"],
+      nodes: {
+        r1: { id: "r1", type: "flow-table-row", props: {}, cellIds: ["c1", "c2"] },
+        c1: { id: "c1", type: "flow-table-cell", props: {}, childIds: ["p1", "p2"] },
+        c2: { id: "c2", type: "flow-table-cell", props: {}, childIds: [] },
+        p1,
+        p2,
+      },
+    },
+  }
+  return doc
+}
+
 function dividerPageBreakOutlineDoc(): DocumentNode {
   const doc = outlineDoc()
   const section = doc.document.sections[0]
@@ -133,6 +197,70 @@ describe("OutlinePanel", () => {
     expect(markup).toContain("1 คอลัมน์")
     expect(markup).toContain("คอลัมน์ 1")
     expect(markup).toContain("First paragraph")
+  })
+
+  it("renders list groups as virtual outline runs without hiding paragraph rows", () => {
+    const markup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: listedOutlineDoc(),
+      selectedNodeId: null,
+      selectedListGroupId: "tor-main",
+      onSelect: () => undefined,
+      onSelectListGroup: () => undefined,
+      onReorderBodyChild: () => undefined,
+    }))
+
+    expect(markup).toContain("data-testid=\"outline-list-group-row\"")
+    expect(markup).toContain("data-outline-list-group-id=\"tor-main\"")
+    expect(markup).toContain("aria-pressed=\"true\"")
+    expect(markup).toContain("TOR Main")
+    expect(markup).toContain("TOR Clause")
+    expect(markup).toContain("2 items")
+    expect(markup).toContain("1. - 1.1")
+    expect(markup).toContain("First paragraph")
+    expect(markup).toContain("Second paragraph with a long title")
+    expect((markup.match(/data-outline-body-child=\"true\"/g) ?? [])).toHaveLength(2)
+    expect((markup.match(/data-testid=\"outline-row-grip\"/g) ?? [])).toHaveLength(2)
+  })
+
+  it("renders list groups inside flow-stack content", () => {
+    const markup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: flowStackListedOutlineDoc(),
+      selectedNodeId: null,
+      selectedListGroupId: "tor-main",
+      onSelect: () => undefined,
+      onSelectListGroup: () => undefined,
+    }))
+
+    expect(markup).toContain("1 คอลัมน์")
+    expect(markup).toContain("คอลัมน์ 1")
+    expect(markup).toContain("data-testid=\"outline-list-group-row\"")
+    expect(markup).toContain("data-outline-list-group-id=\"tor-main\"")
+    expect(markup).toContain("2 items")
+    expect(markup).toContain("1. - 1.1")
+    expect(markup).toContain("First paragraph")
+    expect(markup).toContain("Second paragraph with a long title")
+  })
+
+  it("renders list groups inside flow-table cell content", () => {
+    const markup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: flowTableListedOutlineDoc(),
+      selectedNodeId: "c1",
+      selectedListGroupId: "tor-main",
+      onSelect: () => undefined,
+      onSelectListGroup: () => undefined,
+    }))
+
+    expect(markup).toContain("Flow table 1×2")
+    expect(markup).toContain("แถว 1")
+    expect(markup).toContain("เซลล์ 1")
+    expect(markup).toContain("data-testid=\"outline-list-group-row\"")
+    expect(markup).toContain("data-outline-list-group-id=\"tor-main\"")
+    expect(markup).toContain("aria-pressed=\"true\"")
+    expect(markup).toContain("TOR Main")
+    expect(markup).toContain("2 items")
+    expect(markup).toContain("1. - 1.1")
+    expect(markup).toContain("First paragraph")
+    expect(markup).toContain("Second paragraph with a long title")
   })
 
   it("shows divider and page-break outline labels", () => {

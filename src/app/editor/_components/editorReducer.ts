@@ -15,6 +15,7 @@ import {
   deleteNode,
   detachParagraphStyle,
   duplicateNode,
+  ensureBaseParagraphStyle,
   disableSectionReservedZoneIfEmpty,
   ensureReservedZoneRoots,
   ensureSectionReservedZoneVisibleForAuthoring,
@@ -25,10 +26,12 @@ import {
   mergeParagraphWithPrevious,
   normalizeDocument,
   outdentListItem,
+  patchParagraphStyleDefinition,
   patchParagraphStyleOverrideBox,
   patchParagraphStyleOverrides,
   removeFlowTableColumn,
   removeFlowTableRow,
+  renameParagraphStyleDefinition,
   reorderBodyChild,
   resetParagraphStyleOverrides,
   resizeFlowTableColumnPair,
@@ -44,9 +47,9 @@ import {
   updateSectionMargin,
   updateSectionReservedZones,
 } from "@/document"
-import type { FieldRefInlineChanges, FlowDocListStylePresetId, FlowDocParagraphStylePresetId, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
+import type { FieldRefInlineChanges, FlowDocListStylePresetId, FlowDocParagraphStylePresetId, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphStyleDefinitionPatch, ParagraphTextStyleChanges } from "@/document"
 import type { ReservedZonePriority } from "@/document"
-import type { DocumentNode, ParagraphNode, ParagraphStyleProperties } from "@/schema"
+import type { DocumentNode, LayoutNode, ParagraphNode, ParagraphStyleProperties } from "@/schema"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import type { DragSource, PlacementOperation, PlacementPreview } from "@/placement/types"
 import { loadDocumentFromStorage } from "./documentPersistence"
@@ -55,6 +58,7 @@ import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import {
   commitWysiwygRichTextEditState,
   commitWysiwygTextEditState,
+  getEditableParagraphFromDocument,
   getEditableParagraphTextFromDocument,
   replaceEditableParagraphInDocument,
   replaceEditableParagraphTextInDocument,
@@ -100,6 +104,8 @@ type EditorAction =
   | { type: "DETACH_PARAGRAPH_STYLE"; nodeId: string }
   | { type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX"; nodeId: string; changes: ParagraphBoxStyleChanges }
   | { type: "PATCH_PARAGRAPH_STYLE_OVERRIDES"; nodeId: string; changes: ParagraphStyleProperties }
+  | { type: "PATCH_PARAGRAPH_STYLE_DEFINITION"; styleId: string; patch: ParagraphStyleDefinitionPatch }
+  | { type: "RENAME_PARAGRAPH_STYLE_DEFINITION"; styleId: string; name: string | null }
   | { type: "RESET_PARAGRAPH_STYLE_OVERRIDES"; nodeId: string }
   | { type: "UPDATE_TEXT_RUN_STYLE_RANGE"; nodeId: string; start: number; end: number; changes: ParagraphTextStyleChanges }
   | { type: "UPDATE_FIELD_REF"; fieldRefId: string; changes: FieldRefInlineChanges }
@@ -133,7 +139,7 @@ type EditorAction =
   | { type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE"; sectionIndex: number; mode: "body" | "full" }
   | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; text?: string; history?: HistoryEntry }
   | { type: "CLEAR_SPLIT_NODE_ID" }
-  | { type: "MERGE_PARAGRAPH"; nodeId: string; history?: HistoryEntry }
+  | { type: "MERGE_PARAGRAPH"; nodeId: string; text?: string; history?: HistoryEntry }
   | { type: "CLEAR_MERGE_RESULT" }
   | { type: "EXIT_LIST_ITEM"; nodeId: string; text?: string; history?: HistoryEntry }
   | { type: "CLEAR_LIST_EXIT_NODE_ID" }
@@ -193,6 +199,39 @@ function setDocWithoutHistory(state: EditorState, newDoc: DocumentNode): EditorS
   return { ...state, doc: normalizedDoc }
 }
 
+function shouldDeleteEmptyUnlistedParagraph(doc: DocumentNode, nodeId: string): boolean {
+  const paragraph = getEditableParagraphFromDocument(doc, nodeId)
+  if (!paragraph || paragraph.props.list) return false
+  const text = getEditableParagraphTextFromDocument(doc, nodeId)
+  return text != null && text.trim().length === 0
+}
+
+function getLayoutChildIds(node: LayoutNode): string[] | null {
+  if (!("childIds" in node)) return null
+  return Array.isArray(node.childIds) ? node.childIds : null
+}
+
+function findPreviousEditableParagraphSibling(
+  doc: DocumentNode,
+  nodeId: string,
+): { prevNodeId: string; caretIndex: number } | null {
+  for (const section of doc.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      const childIds = getLayoutChildIds(node)
+      const index = childIds?.indexOf(nodeId) ?? -1
+      if (index <= 0 || !childIds) continue
+
+      const prevNodeId = childIds[index - 1]
+      if (!prevNodeId) return null
+      const prevNode = section.nodes[prevNodeId]
+      if (prevNode?.type !== "paragraph") return null
+      const prevText = getEditableParagraphTextFromDocument(doc, prevNodeId)
+      return prevText == null ? null : { prevNodeId, caretIndex: prevText.length }
+    }
+  }
+  return null
+}
+
 function updateTableStructure(
   state: EditorState,
   tableId: string,
@@ -203,7 +242,8 @@ function updateTableStructure(
 }
 
 export function createInitialEditorState(initialDocOverride?: DocumentNode | null): EditorState {
-  const initialDoc = normalizeDocument(ensureReservedZoneRoots(initialDocOverride ?? loadFromStorage() ?? createDefaultDocument("Untitled")))
+  const sourceDoc = normalizeDocument(ensureReservedZoneRoots(initialDocOverride ?? loadFromStorage() ?? createDefaultDocument("Untitled")))
+  const initialDoc = normalizeDocument(ensureBaseParagraphStyle(sourceDoc))
   return {
     past: [],
     doc: initialDoc,
@@ -289,6 +329,14 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
         selectedNodeId: action.nodeId,
         selectionAnchorNodeId: action.nodeId,
       }
+    }
+    case "PATCH_PARAGRAPH_STYLE_DEFINITION": {
+      const nextDoc = patchParagraphStyleDefinition(state.doc, action.styleId, action.patch)
+      return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
+    }
+    case "RENAME_PARAGRAPH_STYLE_DEFINITION": {
+      const nextDoc = renameParagraphStyleDefinition(state.doc, action.styleId, action.name)
+      return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
     }
     case "RESET_PARAGRAPH_STYLE_OVERRIDES": {
       const nextDoc = resetParagraphStyleOverrides(state.doc, action.nodeId)
@@ -466,7 +514,24 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
     case "CLEAR_SPLIT_NODE_ID":
       return { ...state, lastSplitNodeId: null }
     case "MERGE_PARAGRAPH": {
-      const result = mergeListItemWithPrevious(state.doc, action.nodeId) ?? mergeParagraphWithPrevious(state.doc, action.nodeId)
+      const sourceDoc = action.text === undefined
+        ? state.doc
+        : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+
+      if (shouldDeleteEmptyUnlistedParagraph(sourceDoc, action.nodeId)) {
+        const previousSibling = findPreviousEditableParagraphSibling(sourceDoc, action.nodeId)
+        const nextDoc = deleteNode(sourceDoc, action.nodeId)
+        if (nextDoc !== state.doc) {
+          return {
+            ...pushDoc(state, nextDoc, action.history),
+            selectedNodeId: previousSibling?.prevNodeId ?? null,
+            selectionAnchorNodeId: previousSibling?.prevNodeId ?? null,
+            mergeResult: previousSibling,
+          }
+        }
+      }
+
+      const result = mergeListItemWithPrevious(sourceDoc, action.nodeId) ?? mergeParagraphWithPrevious(sourceDoc, action.nodeId)
       if (!result) return state
       return {
         ...pushDoc(state, result.doc, action.history),

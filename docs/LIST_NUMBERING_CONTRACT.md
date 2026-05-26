@@ -177,21 +177,27 @@ Deferred list key bindings:
 ## Editor Toolbar
 
 The minimal v1 toolbar exposes preset-backed list creation for the currently
-selected paragraph:
+selected paragraph. Creating a list from a non-list paragraph creates a new
+document-owned list instance/List Group immediately, then assigns the paragraph
+to that group. This keeps independent list scopes visible in Style Manager from
+the moment the list exists.
 
-- `1.` applies/toggles the `tor-clause` preset through the default `tor-main`
-  instance.
-- `(1)` applies/toggles the `paren-decimal` preset through the default
-  `flowdoc-paren-decimal` instance.
-- `•` applies/toggles the `bullet-basic` preset through the default
-  `flowdoc-bullet-basic` instance.
+- `1.` applies/toggles the `tor-clause` preset through a new `tor-main_*`
+  group when the selected paragraph is not already using that preset.
+- `(1)` applies/toggles the `paren-decimal` preset through a new
+  `flowdoc-paren-decimal_*` group.
+- `•` applies/toggles the `bullet-basic` preset through a new
+  `flowdoc-bullet-basic_*` group.
 - `In` and `Out` call the same list level operation family as Tab and
   Shift+Tab, but do not force inline edit re-entry after a toolbar click.
+- Indent operations must no-op when the current list style does not define the
+  requested target level, such as `bullet-basic` level 1.
 
-When a selected paragraph already uses the same preset through a different
-instance, the toolbar clears that existing instance instead of switching it to
-the default instance. This keeps imported or generated list instances stable
-for history and future diff.
+When a selected paragraph already uses the same preset, the toolbar clears that
+existing group membership instead of switching it to another group. This keeps
+imported or generated list instances stable for history and future diff.
+Structural Enter on an existing list item continues the same group through the
+split operation; it does not create a new group.
 
 ## Resolver
 

@@ -4,19 +4,25 @@ import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DragSource } from "@/placement/types"
 import { AddPanel } from "../AddPanel"
 import { OutlinePanel, type OutlineBodyChildReorder } from "../OutlinePanel"
+import { StyleManagerPanel, type StyleManagerResourceSelection } from "../StyleManagerPanel"
 
-export type EditorLeftRailMode = "outline" | "add"
+export type EditorLeftRailMode = "outline" | "add" | "styles"
 
 interface EditorLeftRailProps {
   mode: EditorLeftRailMode
   outlineDoc: DocumentNode
+  styleDoc: DocumentNode
   selectedNodeId: string | null
+  selectedStyleResource: StyleManagerResourceSelection
+  activeOutlineListGroupId?: string | null
   registry: FieldRegistryV1
   editable: boolean
   isDragging: boolean
   addPaletteScope?: "document" | "headerFooter"
   onModeChange: (mode: EditorLeftRailMode) => void
   onSelectNode: (nodeId: string) => void
+  onSelectOutlineListGroup?: (instanceId: string) => void
+  onSelectStyleResource: (resource: Exclude<StyleManagerResourceSelection, null>) => void
   onReorderBodyChild: (request: OutlineBodyChildReorder) => void
   onDragStart: (source: DragSource, event: PointerEvent) => void
 }
@@ -88,13 +94,18 @@ const leftRailBookmarkButton = (active: boolean, height = 28, fontSize = 11): CS
 export function EditorLeftRail({
   mode,
   outlineDoc,
+  styleDoc,
   selectedNodeId,
+  selectedStyleResource,
+  activeOutlineListGroupId = null,
   registry,
   editable,
   isDragging,
   addPaletteScope = "document",
   onModeChange,
   onSelectNode,
+  onSelectOutlineListGroup,
+  onSelectStyleResource,
   onReorderBodyChild,
   onDragStart,
 }: EditorLeftRailProps) {
@@ -124,6 +135,17 @@ export function EditorLeftRail({
           >
             +
           </button>
+          <button
+            type="button"
+            data-testid="editor-left-rail-mode-styles"
+            aria-label="Show styles"
+            aria-pressed={mode === "styles"}
+            title="Styles"
+            onClick={() => onModeChange("styles")}
+            style={leftRailBookmarkButton(mode === "styles")}
+          >
+            S
+          </button>
         </div>
       </div>
       <div data-testid="editor-left-rail-content" style={leftRailContentStyle}>
@@ -131,17 +153,26 @@ export function EditorLeftRail({
           <OutlinePanel
             doc={outlineDoc}
             selectedNodeId={editable ? selectedNodeId : null}
+            selectedListGroupId={activeOutlineListGroupId ?? (selectedStyleResource?.kind === "list-group" ? selectedStyleResource.id : null)}
             onAddShortcut={editable ? () => onModeChange("add") : undefined}
             onSelect={editable ? onSelectNode : () => undefined}
+            onSelectListGroup={editable ? onSelectOutlineListGroup : undefined}
             onReorderBodyChild={editable ? onReorderBodyChild : undefined}
           />
-        ) : (
+        ) : mode === "add" ? (
           <AddPanel
             registry={registry}
             editable={editable}
             onDragStart={onDragStart}
             isDragging={isDragging}
             paletteScope={addPaletteScope}
+          />
+        ) : (
+          <StyleManagerPanel
+            doc={styleDoc}
+            selectedResource={selectedStyleResource}
+            editable={editable}
+            onSelectResource={editable ? onSelectStyleResource : () => undefined}
           />
         )}
       </div>

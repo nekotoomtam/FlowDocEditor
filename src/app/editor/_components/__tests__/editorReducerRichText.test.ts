@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest"
 import {
   DEFAULT_HEADER_FOOTER_RESERVED_PT,
   DEFAULT_PARAGRAPH_PROPS,
+  BULLET_BASIC_LIST_STYLE_ID,
   getAllListStylePresets,
   MAX_HEADER_FOOTER_RESERVED_RATIO,
   MIN_HEADER_FOOTER_RESERVED_PT,
+  resolveStyledParagraphProps,
+  TOR_BODY_PARAGRAPH_STYLE_ID,
   TOR_CLAUSE_LIST_STYLE_ID,
   TOR_HEADING1_PARAGRAPH_STYLE_ID,
 } from "@/document"
@@ -39,6 +42,91 @@ function docWithParagraph(): DocumentNode {
             type: "paragraph",
             props: DEFAULT_PARAGRAPH_PROPS,
             children: [{ id: "t1", type: "text", text: "Hello" }],
+          },
+        },
+      }],
+    },
+  }
+}
+
+function docWithEmptyParagraphAfterParagraph(): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: pt(72),
+            right: pt(72),
+            bottom: pt(72),
+            left: pt(72),
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["p1", "p2"] },
+          p1: {
+            id: "p1",
+            type: "paragraph",
+            props: DEFAULT_PARAGRAPH_PROPS,
+            children: [{ id: "t1", type: "text", text: "Before" }],
+          },
+          p2: {
+            id: "p2",
+            type: "paragraph",
+            props: DEFAULT_PARAGRAPH_PROPS,
+            children: [{ id: "t2", type: "text", text: "", style: { fontWeight: "bold" } }],
+          },
+        },
+      }],
+    },
+  }
+}
+
+function docWithOnlyEmptyParagraph(): DocumentNode {
+  const doc = docWithParagraph()
+  const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      sections: [{
+        ...doc.document.sections[0],
+        nodes: {
+          ...doc.document.sections[0].nodes,
+          p1: {
+            ...paragraph,
+            children: [{ id: "t1", type: "text", text: "" }],
+          },
+        },
+      }],
+    },
+  }
+}
+
+function docWithStyleBackedParagraph(): DocumentNode {
+  const doc = docWithParagraph()
+  const section = doc.document.sections[0]
+  const paragraph = section.nodes.p1 as ParagraphNode
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      sections: [{
+        ...section,
+        nodes: {
+          ...section.nodes,
+          p1: {
+            ...paragraph,
+            props: {
+              ...paragraph.props,
+              paragraphStyleId: TOR_BODY_PARAGRAPH_STYLE_ID,
+            },
           },
         },
       }],
@@ -153,6 +241,15 @@ describe("editorReducer rich text range actions", () => {
 })
 
 describe("editorReducer paragraph style actions", () => {
+  it("ensures a document base style for authoring without styling legacy paragraphs", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const paragraph = state.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(state.doc.document.styles?.baseParagraphStyleId).toBe(TOR_BODY_PARAGRAPH_STYLE_ID)
+    expect(state.doc.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID]).toBeDefined()
+    expect(paragraph.props.paragraphStyleId).toBeUndefined()
+  })
+
   it("applies and clears a preset-backed paragraph style", () => {
     const state = createInitialEditorState(docWithParagraph())
     const styled = reducer(state, {
@@ -301,6 +398,70 @@ describe("editorReducer paragraph style actions", () => {
     expect(paragraph.props.styleOverrides?.box).toEqual({ fill: "F5F7FA" })
     expect(patched.past).toHaveLength(2)
   })
+
+  it("patches a document style definition without rewriting paragraphs", () => {
+    const state = createInitialEditorState(docWithStyleBackedParagraph())
+    const beforeParagraph = state.doc.document.sections[0].nodes.p1 as ParagraphNode
+    const beforeEffective = resolveStyledParagraphProps(state.doc.document.styles, beforeParagraph)
+
+    const patched = reducer(state, {
+      type: "PATCH_PARAGRAPH_STYLE_DEFINITION",
+      styleId: TOR_BODY_PARAGRAPH_STYLE_ID,
+      patch: { props: { fontSize: pt(13), lineHeight: 1.25 } },
+    })
+    const afterParagraph = patched.doc.document.sections[0].nodes.p1 as ParagraphNode
+    const afterEffective = resolveStyledParagraphProps(patched.doc.document.styles, afterParagraph)
+
+    expect(beforeEffective.fontSize).toEqual(pt(12))
+    expect(patched.doc.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID].props.fontSize).toEqual(pt(13))
+    expect(patched.doc.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID].props.lineHeight).toBe(1.25)
+    expect(afterParagraph).toEqual(beforeParagraph)
+    expect(afterEffective.fontSize).toEqual(pt(13))
+    expect(afterEffective.lineHeight).toBe(1.25)
+    expect(patched.past).toHaveLength(1)
+
+    const undone = reducer(patched, { type: "UNDO" })
+    const undoneStyle = undone.doc.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID]
+    expect(undoneStyle?.props.fontSize).toEqual(pt(12))
+    expect(undone.future).toHaveLength(1)
+
+    const redone = reducer(undone, { type: "REDO" })
+    const redoneStyle = redone.doc.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID]
+    expect(redoneStyle?.props.fontSize).toEqual(pt(13))
+    expect(redone.past).toHaveLength(1)
+  })
+
+  it("renames a document style definition as one history operation", () => {
+    const state = createInitialEditorState(docWithStyleBackedParagraph())
+    const renamed = reducer(state, {
+      type: "RENAME_PARAGRAPH_STYLE_DEFINITION",
+      styleId: TOR_BODY_PARAGRAPH_STYLE_ID,
+      name: " Contract Body ",
+    })
+
+    expect(renamed.doc.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID].name).toBe("Contract Body")
+    expect(renamed.past).toHaveLength(1)
+
+    const cleared = reducer(renamed, {
+      type: "RENAME_PARAGRAPH_STYLE_DEFINITION",
+      styleId: TOR_BODY_PARAGRAPH_STYLE_ID,
+      name: " ",
+    })
+
+    expect(cleared.doc.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID].name).toBeUndefined()
+    expect(cleared.past).toHaveLength(2)
+  })
+
+  it("does not push history when patching a missing style definition", () => {
+    const state = createInitialEditorState(docWithStyleBackedParagraph())
+    const next = reducer(state, {
+      type: "PATCH_PARAGRAPH_STYLE_DEFINITION",
+      styleId: "missing.style",
+      patch: { props: { fontSize: pt(13) } },
+    })
+
+    expect(next).toBe(state)
+  })
 })
 
 describe("editorReducer list-aware structural paragraph actions", () => {
@@ -443,6 +604,55 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(next.past).toHaveLength(1)
   })
 
+  it("deletes an empty unlisted paragraph on Backspace at paragraph start", () => {
+    const selected = reducer(createInitialEditorState(docWithEmptyParagraphAfterParagraph()), {
+      type: "SELECT_NODE",
+      nodeId: "p2",
+    })
+    const next = reducer(selected, { type: "MERGE_PARAGRAPH", nodeId: "p2" })
+    const section = next.doc.document.sections[0]
+    const previous = section.nodes.p1 as ParagraphNode
+
+    expect(section.nodes.p2).toBeUndefined()
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["p1"])
+    expect(previous.children).toEqual([{ id: "t1", type: "text", text: "Before" }])
+    expect(next.selectedNodeId).toBe("p1")
+    expect(next.mergeResult).toEqual({ prevNodeId: "p1", caretIndex: "Before".length })
+    expect(next.past).toHaveLength(1)
+  })
+
+  it("uses the latest edit text before deleting an empty unlisted paragraph", () => {
+    const doc = docWithEmptyParagraphAfterParagraph()
+    const paragraph = doc.document.sections[0].nodes.p2 as ParagraphNode
+    paragraph.children = [{ id: "t2", type: "text", text: "draft text" }]
+    const selected = reducer(createInitialEditorState(doc), {
+      type: "SELECT_NODE",
+      nodeId: "p2",
+    })
+    const next = reducer(selected, { type: "MERGE_PARAGRAPH", nodeId: "p2", text: "" })
+    const section = next.doc.document.sections[0]
+
+    expect(section.nodes.p2).toBeUndefined()
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["p1"])
+    expect(next.mergeResult).toEqual({ prevNodeId: "p1", caretIndex: "Before".length })
+    expect(next.past).toHaveLength(1)
+  })
+
+  it("deletes the only empty unlisted paragraph without creating a merge target", () => {
+    const selected = reducer(createInitialEditorState(docWithOnlyEmptyParagraph()), {
+      type: "SELECT_NODE",
+      nodeId: "p1",
+    })
+    const next = reducer(selected, { type: "MERGE_PARAGRAPH", nodeId: "p1" })
+    const section = next.doc.document.sections[0]
+
+    expect(section.nodes.p1).toBeUndefined()
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual([])
+    expect(next.selectedNodeId).toBeNull()
+    expect(next.mergeResult).toBeNull()
+    expect(next.past).toHaveLength(1)
+  })
+
   it("toggles a preset-backed list from the editor reducer", () => {
     const state = createInitialEditorState(docWithParagraph())
     const listed = reducer(state, {
@@ -488,6 +698,26 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(paragraph.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: "p1" })
     expect(paragraph.children).toEqual([{ id: expect.any(String), type: "text", text: "Draft list item" }])
     expect(next.past).toHaveLength(1)
+  })
+
+  it("does not indent bullet lists beyond the levels defined by the style", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const listed = reducer(state, {
+      type: "TOGGLE_LIST_PRESET",
+      nodeId: "p1",
+      styleId: BULLET_BASIC_LIST_STYLE_ID,
+      instanceId: "bullets",
+      level: 0,
+    })
+    const indented = reducer(listed, {
+      type: "CHANGE_LIST_ITEM_LEVEL",
+      nodeId: "p1",
+      direction: "indent",
+    })
+    const paragraph = indented.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(indented).toBe(listed)
+    expect(paragraph.props.list).toEqual({ instanceId: "bullets", level: 0, itemId: "p1" })
   })
 
   it("merges a listed text-run paragraph into the previous paragraph while preserving previous identity", () => {

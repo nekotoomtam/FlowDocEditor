@@ -323,6 +323,7 @@ describe("normalizeDocument", () => {
 
     const styles = normalizeDocument(doc).document.styles
 
+    expect(styles?.baseParagraphStyleId).toBe("tor.body")
     expect(styles?.paragraphStyles?.["tor.body"].props).toEqual({
       fontFamilyKey: "sarabun",
       spacingAfter: pt(6),
@@ -334,6 +335,23 @@ describe("normalizeDocument", () => {
       textColor: "DC2626",
       fontWeight: "bold",
     })
+  })
+
+  it("normalizes invalid base paragraph style ids to the first paragraph style", () => {
+    const doc = makeDoc({
+      p1: paragraph("p1", "Styled"),
+    }, ["p1"])
+    doc.document.styles = {
+      baseParagraphStyleId: "missing",
+      paragraphStyles: {
+        "tor.body": {
+          id: "tor.body",
+          props: { fontSize: pt(12) },
+        },
+      },
+    } as unknown as DocumentNode["document"]["styles"]
+
+    expect(normalizeDocument(doc).document.styles?.baseParagraphStyleId).toBe("tor.body")
   })
 
   it("normalizes paragraph-level font style props", () => {

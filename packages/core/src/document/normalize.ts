@@ -378,7 +378,14 @@ function normalizeDocumentStyles(input: unknown): DocumentStyleDefinitions | und
       const style = normalizeParagraphStyleDefinition(key, value)
       if (style) paragraphStyles[key] = style
     })
-    if (Object.keys(paragraphStyles).length > 0) styles.paragraphStyles = paragraphStyles
+    const paragraphStyleIds = Object.keys(paragraphStyles)
+    if (paragraphStyleIds.length > 0) {
+      styles.paragraphStyles = paragraphStyles
+      const rawBaseStyleId = raw["baseParagraphStyleId"]
+      styles.baseParagraphStyleId = typeof rawBaseStyleId === "string" && paragraphStyles[rawBaseStyleId]
+        ? rawBaseStyleId
+        : paragraphStyleIds[0]
+    }
   }
 
   if (typeof raw["textRunStyles"] === "object" && raw["textRunStyles"] != null) {

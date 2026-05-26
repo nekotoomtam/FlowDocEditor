@@ -17,13 +17,6 @@ export default function Home() {
         }}>
           Editor
         </Link>
-        <Link href="/debug" style={{
-          display: "block", padding: "10px 18px",
-          background: "#6b7280", color: "white", borderRadius: 6,
-          textDecoration: "none", fontSize: 13, textAlign: "center",
-        }}>
-          Debug View
-        </Link>
       </div>
     </div>
   )

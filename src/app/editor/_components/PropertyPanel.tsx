@@ -24,9 +24,10 @@ import {
   getTextRunStyleRangeState,
   isTextRunOnlyParagraph,
   resolveFlowTableCellMergeTarget,
+  resolveParagraphListContext,
   resolveStyledParagraphProps,
 } from "@/document"
-import type { FieldRefInlineChanges, FlowDocParagraphStylePresetId, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges } from "@/document"
+import type { FieldRefInlineChanges, FlowDocParagraphStylePresetId, FlowTableCellSpanChanges, ParagraphBoxStyleChanges, ParagraphTextStyleChanges, StyleManagerResourceKind } from "@/document"
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import { FontFamilyCombobox } from "./FontFamilyCombobox"
@@ -74,6 +75,8 @@ interface Props {
   onUpdateFlowTableCellSpan?: (cellId: string, changes: FlowTableCellSpanChanges) => void
   onSelectNode?: (nodeId: string) => void
   onSelectContextNode: (nodeId: string) => void
+  onSelectListGroup?: (instanceId: string) => void
+  onSelectStyleResource?: (resource: { kind: StyleManagerResourceKind; id: string }) => void
   onDelete: (nodeId: string) => void
   tableOps: TableOps
   flowRowOps: FlowRowOps
@@ -1915,7 +1918,7 @@ function TableHeaderRowsControl({
 
 // ─── PropertyPanel ────────────────────────────────────────────────────────────
 
-export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateParagraphTextStyle, onApplyParagraphStylePreset, onUpdateParagraphStyleBoxOverrides, onUpdateParagraphStyleOverrides, onClearParagraphStyle, onDetachParagraphStyle, onResetParagraphStyleOverrides, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectNode, onSelectContextNode, onDelete, tableOps, flowRowOps }: Props) {
+export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNodeId, onUpdateProps, onUpdateText, onUpdateParagraphTextStyle, onApplyParagraphStylePreset, onUpdateParagraphStyleBoxOverrides, onUpdateParagraphStyleOverrides, onClearParagraphStyle, onDetachParagraphStyle, onResetParagraphStyleOverrides, onUpdateFieldRef, onUpdateParagraphBoxStyle, onUpdateFlowStackBoxStyle, onUpdateFlowTableCellSpan, onSelectNode, onSelectContextNode, onSelectListGroup, onSelectStyleResource, onDelete, tableOps, flowRowOps }: Props) {
   const [contextOpen, setContextOpen] = useState(false)
   const [paragraphPanelTab, setParagraphPanelTab] = useState<ParagraphPanelTab>("text")
   const [flowContainerPanelTab, setFlowContainerPanelTab] = useState<FlowContainerPanelTab>("layout")
@@ -2226,6 +2229,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
             : ""
           const currentStyleLabel = currentStyle ? currentStyle.name ?? currentStyle.id : currentStyleId || "None"
           const styleOverrideKeys = Object.keys(node.props.styleOverrides ?? {})
+          const listContext = resolveParagraphListContext(doc, selectedNodeId)
           return (
             <>
               <section
@@ -2443,6 +2447,60 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   <div data-testid="paragraph-style-current" style={{ fontSize: 11, color: "#334155", lineHeight: 1.4, wordBreak: "break-word" }}>
                     {currentStyleLabel}
                   </div>
+                </div>
+                <div data-testid="paragraph-list-context">
+                  <label style={label}>List</label>
+                  {listContext ? (
+                    <div style={{ border: "1px solid #e5e7eb", borderRadius: 6, background: "#f8fafc", padding: 8, display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "#334155", lineHeight: 1.35 }}>
+                      <div data-testid="paragraph-list-context-group" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ color: "#64748b" }}>Group</span>
+                        <strong style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{listContext.groupLabel}</strong>
+                      </div>
+                      <div data-testid="paragraph-list-context-style" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ color: "#64748b" }}>Style</span>
+                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{listContext.styleLabel}</span>
+                      </div>
+                      <div data-testid="paragraph-list-context-marker" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ color: "#64748b" }}>Number</span>
+                        <span>{listContext.markerText ?? "-"}</span>
+                      </div>
+                      <div data-testid="paragraph-list-context-level" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ color: "#64748b" }}>Level</span>
+                        <span>{listContext.userLevel}</span>
+                      </div>
+                      <div data-testid="paragraph-list-context-count" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ color: "#64748b" }}>Items</span>
+                        <span>{listContext.itemCount}</span>
+                      </div>
+                      {(onSelectListGroup || onSelectStyleResource) && (
+                        <div style={{ display: "grid", gridTemplateColumns: onSelectStyleResource ? "1fr 1fr" : "1fr", gap: 6, marginTop: 3 }}>
+                          <button
+                            type="button"
+                            data-testid="paragraph-list-context-select-group"
+                            onClick={() => {
+                              if (onSelectListGroup) onSelectListGroup(listContext.instanceId)
+                              else onSelectStyleResource?.({ kind: "list-group", id: listContext.instanceId })
+                            }}
+                            style={btn}
+                          >
+                            Select group
+                          </button>
+                          {onSelectStyleResource && (
+                            <button
+                              type="button"
+                              data-testid="paragraph-list-context-edit-style"
+                              onClick={() => onSelectStyleResource({ kind: "list-style", id: listContext.styleId })}
+                              style={btn}
+                            >
+                              Edit style
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div data-testid="paragraph-list-context-empty" style={{ fontSize: 11, color: "#9ca3af" }}>No list</div>
+                  )}
                 </div>
                 <div>
                   <label style={label}>Overrides</label>

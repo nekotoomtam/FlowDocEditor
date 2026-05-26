@@ -34,11 +34,13 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Editor interaction and UX behavior | `docs/EDITOR_UX_CONTRACT.md` |
 | Paragraph box style contract | `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md` |
 | Paragraph/text-run style preset contract | `docs/PARAGRAPH_STYLE_CONTRACT.md` |
+| Document style manager behavior | `docs/STYLE_MANAGER_CONTRACT.md` |
 | WYSIWYG/inline edit roadmap | `docs/WYSIWYG_EDITOR_ROADMAP.md` |
 | FlowDoc-owned WYSIWYG text engine plan | `docs/WYSIWYG_TEXT_ENGINE_PLAN.md` |
 | End-to-end WYSIWYG edit/show parity plan | `docs/WYSIWYG_PARITY_PLAN.md` |
 | Rich text draft lane decision | `docs/RICH_TEXT_DRAFT_DECISION.md` |
 | List numbering model | `docs/LIST_NUMBERING_CONTRACT.md` |
+| List style/group manager behavior | `docs/LIST_STYLE_MANAGER_CONTRACT.md` |
 | WYSIWYG whitespace contract and Tab decision | `docs/WYSIWYG_WHITESPACE_MATRIX.md` |
 | WYSIWYG typing smoothness probe and thresholds | `docs/WYSIWYG_SMOOTHNESS_PROBE.md` |
 | WYSIWYG edit re-entry line-geometry drift probe | `docs/WYSIWYG_REENTER_DRIFT_PROBE.md` |

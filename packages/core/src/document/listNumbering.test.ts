@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { DocumentNode, LayoutNode, ParagraphNode } from "../schema"
 import { pt } from "../schema"
+import { orderedSectionParagraphs } from "./documentTraversal"
 import { resolveListMarkers } from "./listNumbering"
 
 function paragraph(id: string, text: string, list?: ParagraphNode["props"]["list"]): ParagraphNode {
@@ -68,7 +69,82 @@ function listDoc(paragraphs: ParagraphNode[]): DocumentNode {
   }
 }
 
+function mixedContainerListDoc(): DocumentNode {
+  const paragraphs = {
+    p1: paragraph("p1", "Body first", { instanceId: "tor-main", level: 0, itemId: "body.first" }),
+    p2: paragraph("p2", "Left stack item", { instanceId: "tor-main", level: 1, itemId: "stack.left" }),
+    p3: paragraph("p3", "Right stack item", { instanceId: "tor-main", level: 1, itemId: "stack.right" }),
+    p4: paragraph("p4", "Body after row", { instanceId: "tor-main", level: 0, itemId: "body.afterRow" }),
+    p5: paragraph("p5", "Table first cell", { instanceId: "tor-main", level: 1, itemId: "table.cellA" }),
+    p6: paragraph("p6", "Table second cell", { instanceId: "tor-main", level: 2, itemId: "table.cellB" }),
+    p7: paragraph("p7", "Body after table", { instanceId: "tor-main", level: 0, itemId: "body.afterTable" }),
+  }
+
+  return {
+    version: 1,
+    document: {
+      ...listDoc([]).document,
+      sections: [{
+        id: "section",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
+        },
+        bodyRootId: "body",
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["p1", "fr1", "p4", "ft1", "p7"] },
+          p1: paragraphs.p1,
+          fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs-left", "fs-right"] },
+          "fs-left": { id: "fs-left", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] },
+          "fs-right": { id: "fs-right", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p3"] },
+          p2: paragraphs.p2,
+          p3: paragraphs.p3,
+          p4: paragraphs.p4,
+          ft1: {
+            id: "ft1",
+            type: "flow-table",
+            props: {},
+            columns: [
+              { width: pt(120) },
+              { width: pt(120) },
+            ],
+            rowIds: ["tr1"],
+            nodes: {
+              tr1: { id: "tr1", type: "flow-table-row", props: {}, cellIds: ["tc1", "tc2"] },
+              tc1: { id: "tc1", type: "flow-table-cell", props: {}, childIds: ["p5"] },
+              tc2: { id: "tc2", type: "flow-table-cell", props: {}, childIds: ["p6"] },
+              p5: paragraphs.p5,
+              p6: paragraphs.p6,
+            },
+          },
+          p7: paragraphs.p7,
+        },
+      }],
+    },
+  }
+}
+
 describe("resolveListMarkers", () => {
+  it("walks body, flow stacks, and flow-table cells in one document order", () => {
+    const doc = mixedContainerListDoc()
+
+    const orderedIds = orderedSectionParagraphs(doc.document.sections[0]).map((node) => node.id)
+    const markers = resolveListMarkers(doc)
+
+    expect(orderedIds).toEqual(["p1", "p2", "p3", "p4", "p5", "p6", "p7"])
+    expect(Array.from(markers.entries()).map(([id, marker]) => [id, marker.markerText])).toEqual([
+      ["p1", "1."],
+      ["p2", "1.1"],
+      ["p3", "1.2"],
+      ["p4", "2."],
+      ["p5", "2.1"],
+      ["p6", "2.1.1"],
+      ["p7", "3."],
+    ])
+  })
+
   it("resolves decimal multilevel numbering from paragraph list metadata", () => {
     const doc = listDoc([
       paragraph("p1", "Background", { instanceId: "tor-main", level: 0, itemId: "intro" }),

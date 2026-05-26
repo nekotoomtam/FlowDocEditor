@@ -14,7 +14,7 @@ export interface ListToolbarPresetOption {
   label: string
   title: string
   styleId: FlowDocListStylePresetId
-  instanceId: string
+  defaultInstanceId: string
 }
 
 export interface ListToolbarState {
@@ -33,21 +33,21 @@ export const LIST_TOOLBAR_PRESETS: ListToolbarPresetOption[] = [
     label: "1.",
     title: "TOR clause numbering",
     styleId: TOR_CLAUSE_LIST_STYLE_ID,
-    instanceId: "tor-main",
+    defaultInstanceId: "tor-main",
   },
   {
     key: "paren",
     label: "(1)",
     title: "Parenthesized numbering",
     styleId: PAREN_DECIMAL_LIST_STYLE_ID,
-    instanceId: "flowdoc-paren-decimal",
+    defaultInstanceId: "flowdoc-paren-decimal",
   },
   {
     key: "bullet",
     label: "•",
     title: "Bullet list",
     styleId: BULLET_BASIC_LIST_STYLE_ID,
-    instanceId: "flowdoc-bullet-basic",
+    defaultInstanceId: "flowdoc-bullet-basic",
   },
 ]
 
@@ -81,7 +81,7 @@ export function ListToolbar({
         {LIST_TOOLBAR_PRESETS.map((preset) => {
           const active = state.currentStyleId === preset.styleId
           const disabled = !state.canToggle
-          const instanceId = active && state.currentInstanceId ? state.currentInstanceId : preset.instanceId
+          const instanceId = active && state.currentInstanceId ? state.currentInstanceId : preset.defaultInstanceId
           return (
             <button
               key={preset.key}

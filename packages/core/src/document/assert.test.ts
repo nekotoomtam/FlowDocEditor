@@ -80,6 +80,7 @@ describe("assertDocument general invariants", () => {
   it("allows central paragraph and text-run style definitions", () => {
     const doc = bodyDoc({}, [])
     doc.document.styles = {
+      baseParagraphStyleId: "tor.body",
       paragraphStyles: {
         "tor.body": {
           id: "tor.body",
@@ -95,6 +96,37 @@ describe("assertDocument general invariants", () => {
     }
 
     expect(() => assertDocument(doc)).not.toThrow()
+  })
+
+  it("rejects central paragraph style definitions without a base style", () => {
+    const doc = bodyDoc({}, [])
+    doc.document.styles = {
+      paragraphStyles: {
+        "tor.body": {
+          id: "tor.body",
+          props: {},
+        },
+      },
+    }
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow("base paragraph style is required when paragraph styles exist")
+  })
+
+  it("rejects base paragraph style ids that do not resolve", () => {
+    const doc = bodyDoc({}, [])
+    doc.document.styles = {
+      baseParagraphStyleId: "missing",
+      paragraphStyles: {
+        "tor.body": {
+          id: "tor.body",
+          props: {},
+        },
+      },
+    }
+
+    expect(() => assertDocument(doc)).toThrow(DocumentAssertionError)
+    expect(() => assertDocument(doc)).toThrow('missing base paragraph style "missing"')
   })
 
   it("rejects central style definitions whose ids do not match map keys", () => {
@@ -123,6 +155,7 @@ describe("assertDocument general invariants", () => {
       },
     }, ["p1"])
     doc.document.styles = {
+      baseParagraphStyleId: "tor.body",
       paragraphStyles: {
         "tor.body": { id: "tor.body", props: { fontSize: pt(12) } },
       },

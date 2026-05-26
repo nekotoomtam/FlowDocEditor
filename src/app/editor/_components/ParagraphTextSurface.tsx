@@ -79,7 +79,7 @@ interface Props {
   onHeightChange: (nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => void
   onEndEdit: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
-  onMergeParagraph: (nodeId: string) => void
+  onMergeParagraph: (nodeId: string, text?: string) => void
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -1385,6 +1385,7 @@ interface WysiwygTextLayerProps {
   onRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onEndEdit?: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph?: (nodeId: string, splitIndex: number, text?: string) => void
+  onMergeParagraph?: (nodeId: string, text?: string) => void
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -1524,6 +1525,7 @@ export function WysiwygTextLayer({
   onRichTextShortcut,
   onEndEdit,
   onSplitParagraph,
+  onMergeParagraph,
   onExitListItem,
   onChangeListItemLevel,
   onBackspaceListItemAtStart,
@@ -2338,7 +2340,6 @@ export function WysiwygTextLayer({
         return
       }
       if (
-        isListItem &&
         event.key === "Backspace" &&
         !event.shiftKey &&
         !event.altKey &&
@@ -2351,11 +2352,15 @@ export function WysiwygTextLayer({
         const selection = current.selection
         const isCollapsedAtStart = current.caretOffset === 0 &&
           (!selection || (selection.anchorOffset === 0 && selection.focusOffset === 0))
-        if (isCollapsedAtStart) {
+        if (isCollapsedAtStart && (isListItem || onMergeParagraph)) {
           event.preventDefault()
           cancelScheduledDraftSyncFrame()
           pendingDraftSyncRef.current = null
-          onBackspaceListItemAtStart?.(fragment.nodeId, current.text, 0)
+          if (isListItem) {
+            onBackspaceListItemAtStart?.(fragment.nodeId, current.text, 0)
+          } else {
+            onMergeParagraph?.(fragment.nodeId, current.text)
+          }
           return
         }
       }
@@ -2471,6 +2476,7 @@ export function WysiwygTextLayer({
     onChangeListItemLevel,
     onEndEdit,
     onExitListItem,
+    onMergeParagraph,
     onRichTextShortcut,
     onSplitParagraph,
     startCompositionInput,
@@ -3108,6 +3114,7 @@ export function ParagraphTextSurface({
           onRichTextShortcut={onWysiwygRichTextShortcut}
           onEndEdit={onEndEdit}
           onSplitParagraph={onSplitParagraph}
+          onMergeParagraph={isTableCellParagraph ? undefined : onMergeParagraph}
           onExitListItem={onExitListItem}
           onChangeListItemLevel={onChangeListItemLevel}
           onBackspaceListItemAtStart={onBackspaceListItemAtStart}
@@ -3264,8 +3271,9 @@ export function ParagraphTextSurface({
                 }
                 if (shouldUseNativeTableCellBoundaryBackspace(isTableCellParagraph, preText)) return
                 event.preventDefault()
-                onChange(fragment.nodeId, preText + el.value + postText, 0)
-                onMergeParagraph(fragment.nodeId)
+                const text = preText + el.value + postText
+                onChange(fragment.nodeId, text, 0)
+                onMergeParagraph(fragment.nodeId, text)
               }
             }}
             onKeyUp={(event) => {

@@ -44,6 +44,7 @@ import {
   createId,
   createPageBreakNode,
 } from "./defaults"
+import { orderedSectionParagraphs } from "./documentTraversal"
 import { tryResolveFlowTableGrid } from "./flowTableGrid"
 import {
   applyTextRunStyleRangeToParagraph,
@@ -57,10 +58,9 @@ import {
   splitTextRunsAtOffset,
 } from "./richText"
 import { createListInstanceForPreset, getListStylePreset } from "./listPresets"
-import { orderedSectionParagraphs } from "./listNumbering"
 import type { FlowDocListStylePresetId } from "./listPresets"
 import { applyParagraphStyleProperties, resolveParagraphStyleProperties, resolveStyledParagraphProps, setParagraphStyleOverrides } from "./paragraphStyles"
-import { getParagraphStylePreset } from "./paragraphStylePresets"
+import { getParagraphStylePreset, TOR_BODY_PARAGRAPH_STYLE_ID } from "./paragraphStylePresets"
 import type { FlowDocParagraphStylePresetId } from "./paragraphStylePresets"
 import type {
   ParagraphTextStyleChanges,
@@ -82,6 +82,11 @@ export type {
 // ─── Internal Types ────────────────────────────────────────────────────────────
 
 type Nodes = Record<string, LayoutNode>
+
+export type ParagraphStyleDefinitionPatch = {
+  name?: string | null
+  props?: ParagraphStyleProperties
+}
 
 interface ParentInfo {
   parentId: string
@@ -478,10 +483,21 @@ function clampPaletteTableAxis(value: number | undefined): number {
   return Math.min(6, Math.max(1, Math.floor(numericValue)))
 }
 
-function createNodesForSource(source: DragSource, nodes: Nodes): { insertId: string; newNodes: Nodes } {
+function createDocumentDefaultParagraphNode(doc: DocumentNode, text = ""): ParagraphNode {
+  const baseStyleId = doc.document.styles?.baseParagraphStyleId
+  const baseStyle = baseStyleId ? doc.document.styles?.paragraphStyles?.[baseStyleId] : undefined
+  if (!baseStyleId || !baseStyle) return createParagraphNode(text)
+
+  return createParagraphNode(text, applyParagraphStyleProperties({
+    ...DEFAULT_PARAGRAPH_PROPS,
+    paragraphStyleId: baseStyleId,
+  }, baseStyle.props))
+}
+
+function createNodesForSource(source: DragSource, nodes: Nodes, doc: DocumentNode): { insertId: string; newNodes: Nodes } {
   if (source.source === "palette") {
     if (source.blockType === "paragraph") {
-      const node = createParagraphNode("New paragraph")
+      const node = createDocumentDefaultParagraphNode(doc, "New paragraph")
       return { insertId: node.id, newNodes: { [node.id]: node } }
     }
     if (source.blockType === "divider") {
@@ -747,6 +763,19 @@ function clonePlainData<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+function hasOwnKey<T extends object, K extends PropertyKey>(
+  value: T,
+  key: K,
+): value is T & Record<K, unknown> {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function normalizeParagraphStyleDisplayName(name: string | null | undefined): string | undefined {
+  if (name == null) return undefined
+  const trimmed = name.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
 function cloneInlineNode(node: InlineNode): InlineNode {
   if (node.type === "text") return { ...node, id: createId("text"), style: clonePlainData(node.style) }
   if (node.type === "fieldRef") return { ...node, id: createId("field") }
@@ -845,11 +874,46 @@ function clampListLevelForPosition(
   instanceId: string,
   level: number,
 ): number {
-  return Math.min(clampListLevel(level), maxAllowedListLevelBefore(doc, paragraphId, instanceId))
+  const maxAllowedLevel = Math.min(clampListLevel(level), maxAllowedListLevelBefore(doc, paragraphId, instanceId))
+  const instance = doc.document.listInstances?.[instanceId]
+  const style = instance ? doc.document.listStyles?.[instance.styleId] : undefined
+  if (!style || style.levels.length === 0) return maxAllowedLevel
+
+  const definedLevels = style.levels
+    .map((definition) => definition.level)
+    .filter((definedLevel) => Number.isInteger(definedLevel) && definedLevel >= 0 && definedLevel <= MAX_LIST_LEVEL)
+    .sort((a, b) => b - a)
+  return definedLevels.find((definedLevel) => definedLevel <= maxAllowedLevel) ?? maxAllowedLevel
 }
 
 function normalizeStartAt(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+const LIST_PRESET_INSTANCE_ID_PREFIXES = {
+  "tor-clause": "tor-main",
+  "paren-decimal": "flowdoc-paren-decimal",
+  "bullet-basic": "flowdoc-bullet-basic",
+} satisfies Record<FlowDocListStylePresetId, string>
+
+export function createUniqueListPresetInstanceId(
+  doc: DocumentNode,
+  styleId: FlowDocListStylePresetId,
+): string {
+  const instances = doc.document.listInstances ?? {}
+  const prefix = LIST_PRESET_INSTANCE_ID_PREFIXES[styleId]
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const id = createId(prefix)
+    if (!instances[id]) return id
+  }
+
+  let fallbackIndex = 1
+  let fallbackId = `${prefix}_${fallbackIndex}`
+  while (instances[fallbackId]) {
+    fallbackIndex += 1
+    fallbackId = `${prefix}_${fallbackIndex}`
+  }
+  return fallbackId
 }
 
 function sameParagraphListProps(
@@ -979,6 +1043,47 @@ export function ensureListPresetInstance(
 }
 
 export function upsertParagraphStyleDefinition(doc: DocumentNode, style: ParagraphStyleDefinition): DocumentNode {
+  const paragraphStyles = doc.document.styles?.paragraphStyles ?? {}
+  const currentBaseStyleId = doc.document.styles?.baseParagraphStyleId
+  const baseParagraphStyleId = currentBaseStyleId && paragraphStyles[currentBaseStyleId]
+    ? currentBaseStyleId
+    : style.id
+  return {
+    ...doc,
+    document: {
+      ...doc.document,
+      styles: {
+        ...(doc.document.styles ?? {}),
+        baseParagraphStyleId,
+        paragraphStyles: {
+          ...(doc.document.styles?.paragraphStyles ?? {}),
+          [style.id]: clonePlainData(style),
+        },
+      },
+    },
+  }
+}
+
+export function patchParagraphStyleDefinition(
+  doc: DocumentNode,
+  styleId: string,
+  patch: ParagraphStyleDefinitionPatch,
+): DocumentNode {
+  if (styleId.length === 0) return doc
+  const current = doc.document.styles?.paragraphStyles?.[styleId]
+  if (!current) return doc
+
+  const next: ParagraphStyleDefinition = {
+    ...clonePlainData(current),
+    ...(patch.props ? { props: { ...clonePlainData(current.props), ...clonePlainData(patch.props) } } : {}),
+  }
+  if (hasOwnKey(patch, "name")) {
+    const name = normalizeParagraphStyleDisplayName(patch.name)
+    if (name) next.name = name
+    else delete next.name
+  }
+
+  if (JSON.stringify(current) === JSON.stringify(next)) return doc
   return {
     ...doc,
     document: {
@@ -987,8 +1092,37 @@ export function upsertParagraphStyleDefinition(doc: DocumentNode, style: Paragra
         ...(doc.document.styles ?? {}),
         paragraphStyles: {
           ...(doc.document.styles?.paragraphStyles ?? {}),
-          [style.id]: clonePlainData(style),
+          [styleId]: next,
         },
+      },
+    },
+  }
+}
+
+export function renameParagraphStyleDefinition(
+  doc: DocumentNode,
+  styleId: string,
+  name: string | null,
+): DocumentNode {
+  return patchParagraphStyleDefinition(doc, styleId, { name })
+}
+
+export function ensureBaseParagraphStyle(
+  doc: DocumentNode,
+  styleId: FlowDocParagraphStylePresetId = TOR_BODY_PARAGRAPH_STYLE_ID,
+): DocumentNode {
+  const styles = doc.document.styles
+  const baseStyleId = styles?.baseParagraphStyleId
+  if (baseStyleId && styles?.paragraphStyles?.[baseStyleId]) return doc
+
+  const withPreset = ensureParagraphStylePreset(doc, styleId)
+  return {
+    ...withPreset,
+    document: {
+      ...withPreset.document,
+      styles: {
+        ...(withPreset.document.styles ?? {}),
+        baseParagraphStyleId: styleId,
       },
     },
   }
@@ -2525,7 +2659,7 @@ export function splitParagraphAtIndex(
       ...node,
       children: [{ ...firstRun, text: textBefore }],
     }
-    const newPara = createParagraphNode(textAfter, node.props)
+    const newPara = createParagraphNode(textAfter, clonePlainData(node.props))
 
     const parentInfo = findParentInfo(section.nodes, nodeId)
     if (!parentInfo) continue
@@ -3468,7 +3602,7 @@ export function applyPlacementOperation(
   // Phase 1: merge nodes created by palette or document-copy sources.
   const { insertId, newNodes } = op.kind === "insert-stacks-into-row"
     ? { insertId: "", newNodes: {} }
-    : createNodesForSource(source, nodes)
+    : createNodesForSource(source, nodes, doc)
   if (op.kind !== "insert-stacks-into-row" && insertId === "") return doc
   if (Object.keys(newNodes).length > 0) {
     nodes = { ...nodes, ...newNodes }

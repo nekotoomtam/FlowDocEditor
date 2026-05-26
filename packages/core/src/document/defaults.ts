@@ -30,6 +30,7 @@ import type {
 } from "../schema"
 import { DEFAULT_FONT_KEY } from "../font-registry"
 import { pt } from "../schema"
+import { getParagraphStylePreset, TOR_BODY_PARAGRAPH_STYLE_ID } from "./paragraphStylePresets"
 
 // ─── ID Factory ───────────────────────────────────────────────────────────────
 
@@ -341,8 +342,9 @@ export function createDefaultFlowTable(rowCount = 3, colCount = 3): FlowTableNod
 // ─── Document Factory ─────────────────────────────────────────────────────────
 
 export function createDefaultDocument(title = "Untitled"): DocumentNode {
-  const paragraph = createParagraphNode()
+  const paragraph = createParagraphNode("", { paragraphStyleId: TOR_BODY_PARAGRAPH_STYLE_ID })
   const body = createBodyNode([paragraph.id])
+  const bodyStyle = getParagraphStylePreset(TOR_BODY_PARAGRAPH_STYLE_ID)
 
   const section: DocumentSection = {
     id: createId("section"),
@@ -368,6 +370,12 @@ export function createDefaultDocument(title = "Untitled"): DocumentNode {
     document: {
       id: createId("doc"),
       meta: { title },
+      styles: {
+        baseParagraphStyleId: TOR_BODY_PARAGRAPH_STYLE_ID,
+        paragraphStyles: {
+          [TOR_BODY_PARAGRAPH_STYLE_ID]: bodyStyle,
+        },
+      },
       sections: [section],
     },
   }

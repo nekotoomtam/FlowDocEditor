@@ -63,6 +63,7 @@ interface TextRunStyleDefinition {
 }
 
 interface DocumentStyleDefinitions {
+  baseParagraphStyleId?: string
   paragraphStyles?: Record<string, ParagraphStyleDefinition>
   textRunStyles?: Record<string, TextRunStyleDefinition>
 }
@@ -137,6 +138,17 @@ Style removal semantics:
 - Detach resolves the current effective paragraph appearance into direct props,
   then removes `paragraphStyleId` and `styleOverrides`.
 
+Paragraph creation and structural editing semantics:
+
+- Editor startup ensures the document has a base paragraph style resource, but
+  does not add `paragraphStyleId` to legacy paragraphs.
+- Palette-created paragraphs use the document base paragraph style when one is
+  present and valid.
+- Splitting a paragraph inherits the source paragraph's style metadata and local
+  overrides.
+- Exiting a list item clears only list metadata; paragraph style metadata stays
+  intact.
+
 Property-panel paragraph-wide controls must write to `styleOverrides` when a
 paragraph already has `paragraphStyleId` or existing `styleOverrides`. They must
 not rewrite `children[].style`; inline rich text remains the more specific
@@ -177,6 +189,10 @@ Active core operations:
 
 - `ensureParagraphStylePreset`: clone a known preset into the document.
 - `upsertParagraphStyleDefinition`: insert or replace a document-owned style.
+- `patchParagraphStyleDefinition`: edit an existing document-owned paragraph
+  style definition without rewriting referencing paragraph nodes.
+- `renameParagraphStyleDefinition`: edit an existing style display name; blank
+  names clear the display name and fall back to the style id in UI read models.
 - `applyParagraphStylePreset`: install a preset, set `paragraphStyleId`, clear
   overrides by default, and sync direct props for current render paths.
 - `applyParagraphStyleId`: apply an existing document style reference.
@@ -197,6 +213,8 @@ Active core operations:
 Later phases may add:
 
 - richer style preset UI in the right property panel
+- document-level Style Manager behavior defined in
+  `docs/STYLE_MANAGER_CONTRACT.md`
 - document starter presets for TOR body, heading, caption, table body, and
   signature text
 - generated group display rules that reference paragraph/table/list styles

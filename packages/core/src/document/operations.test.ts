@@ -36,7 +36,9 @@ import {
   detachParagraphStyle,
   disableSectionReservedZoneIfEmpty,
   duplicateNode,
+  createUniqueListPresetInstanceId,
   ensureReservedZoneRoots,
+  ensureBaseParagraphStyle,
   ensureSectionReservedZoneVisibleForAuthoring,
   ensureListPresetInstance,
   exitListItem,
@@ -52,6 +54,7 @@ import {
   outdentListItem,
   patchParagraphStyleOverrideBox,
   patchParagraphStyleOverrides,
+  patchParagraphStyleDefinition,
   removeFlowTableColumn,
   removeFlowTableRow,
   replaceTextRunParagraphText,
@@ -76,11 +79,12 @@ import {
   updateSectionHeaderFooterHorizontalMode,
   updateSectionReservedZones,
   ensureParagraphStylePreset,
+  renameParagraphStyleDefinition,
   upsertListInstance,
   upsertListStyleDefinition,
   upsertParagraphStyleDefinition,
 } from "./operations"
-import { TOR_CLAUSE_LIST_STYLE_ID } from "./listPresets"
+import { BULLET_BASIC_LIST_STYLE_ID, TOR_CLAUSE_LIST_STYLE_ID } from "./listPresets"
 import { resolveListMarkers } from "./listNumbering"
 import { resolveStyledParagraphProps } from "./paragraphStyles"
 import { TOR_BODY_PARAGRAPH_STYLE_ID, TOR_HEADING1_PARAGRAPH_STYLE_ID } from "./paragraphStylePresets"
@@ -520,6 +524,20 @@ describe("paragraph list operations", () => {
     expect(() => assertDocument(doc)).not.toThrow()
   })
 
+  it("creates unique preset-backed list group ids", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
+    const doc = makeDoc({ p1: p }, ["p1"])
+
+    const firstId = createUniqueListPresetInstanceId(doc, TOR_CLAUSE_LIST_STYLE_ID)
+    const withFirstGroup = upsertListInstance(doc, { id: firstId, styleId: TOR_CLAUSE_LIST_STYLE_ID })
+    const secondId = createUniqueListPresetInstanceId(withFirstGroup, TOR_CLAUSE_LIST_STYLE_ID)
+
+    expect(firstId).toMatch(/^tor-main_/)
+    expect(secondId).toMatch(/^tor-main_/)
+    expect(secondId).not.toBe(firstId)
+    expect(withFirstGroup.document.listInstances?.[secondId]).toBeUndefined()
+  })
+
   it("preserves and clears preset instance startAt explicitly", () => {
     const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
     let doc = makeDoc({ p1: p }, ["p1"])
@@ -606,6 +624,24 @@ describe("paragraph list operations", () => {
 
     doc = outdentListItem(doc, "p7")
     expect(getParagraph(doc, "p7").props.list?.level).toBe(0)
+  })
+
+  it("does not indent into a level missing from the list style", () => {
+    const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Bullet" }])
+    let doc = makeDoc({ p1: p }, ["p1"])
+    doc = ensureListPresetInstance(doc, {
+      styleId: BULLET_BASIC_LIST_STYLE_ID,
+      instanceId: "bullets",
+    })
+    doc = applyParagraphList(doc, "p1", { instanceId: "bullets", level: 1, itemId: "bullet.one" })
+
+    expect(getParagraph(doc, "p1").props.list).toEqual({ instanceId: "bullets", level: 0, itemId: "bullet.one" })
+
+    const indented = indentListItem(doc, "p1")
+
+    expect(indented).toBe(doc)
+    expect(getParagraph(indented, "p1").props.list).toEqual({ instanceId: "bullets", level: 0, itemId: "bullet.one" })
+    expect(() => assertDocument(indented)).not.toThrow()
   })
 
   it("handles Backspace at list item start as outdent or clear-list", () => {
@@ -714,6 +750,34 @@ describe("paragraph list operations", () => {
     expect(() => assertDocument(result.doc)).not.toThrow()
   })
 
+  it("preserves paragraph style metadata when splitting a list item", () => {
+    const p = {
+      ...makeParagraph("p1", [
+        { id: "t1", type: "text", text: "Hello " },
+        { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+      ]),
+      props: {
+        ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]).props,
+        paragraphStyleId: "custom.body",
+        styleOverrides: { fontSize: pt(16) },
+      },
+    }
+    let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      props: { fontSize: pt(12), lineHeight: 1.5 },
+    })
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", level: 0, itemId: "tor.item.one" })
+
+    const result = splitListItemAtIndex(doc, "p1", 6)
+    const second = getParagraph(result.doc, result.newNodeId)
+
+    expect(second.props.paragraphStyleId).toBe("custom.body")
+    expect(second.props.styleOverrides).toEqual({ fontSize: pt(16) })
+    expect(second.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: result.newNodeId })
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
   it("uses the new paragraph id as split item identity when no itemId is supplied", () => {
     const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }])
     let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
@@ -754,6 +818,31 @@ describe("paragraph list operations", () => {
     expect(getParagraph(afterFilled, "empty").children).toEqual(empty.children)
     expect(getParagraph(afterFilled, "filled").children).toEqual(filled.children)
     expect(() => assertDocument(afterFilled)).not.toThrow()
+  })
+
+  it("exits a list item without clearing paragraph style metadata", () => {
+    const empty = {
+      ...makeParagraph("empty", [{ id: "empty-t", type: "text", text: "" }]),
+      props: {
+        ...makeParagraph("empty", [{ id: "empty-t", type: "text", text: "" }]).props,
+        paragraphStyleId: "custom.body",
+        styleOverrides: { spacingAfter: pt(10) },
+      },
+    }
+    let doc = withTorListDefinitions(makeDoc({ empty }, ["empty"]))
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      props: { spacingAfter: pt(6) },
+    })
+    doc = applyParagraphList(doc, "empty", { instanceId: "tor-main", itemId: "tor.empty" })
+
+    const result = exitListItem(doc, "empty")
+    const paragraph = getParagraph(result, "empty")
+
+    expect(paragraph.props.list).toBeUndefined()
+    expect(paragraph.props.paragraphStyleId).toBe("custom.body")
+    expect(paragraph.props.styleOverrides).toEqual({ spacingAfter: pt(10) })
+    expect(() => assertDocument(result)).not.toThrow()
   })
 
   it("merges a list item into the previous text-run paragraph without duplicating list identity", () => {
@@ -1225,9 +1314,123 @@ describe("paragraph text operations", () => {
 
     const result = ensureParagraphStylePreset(doc, TOR_BODY_PARAGRAPH_STYLE_ID)
 
+    expect(result.document.styles?.baseParagraphStyleId).toBe(TOR_BODY_PARAGRAPH_STYLE_ID)
     expect(result.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID].props.fontSize).toEqual(pt(12))
     expect(result.document.styles?.textRunStyles?.emphasis).toEqual({ id: "emphasis", style: { fontWeight: "bold" } })
     expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("ensures a base paragraph style without replacing an existing valid base", () => {
+    let doc = makeDoc({}, [])
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      props: { fontSize: pt(13) },
+    })
+
+    const result = ensureBaseParagraphStyle(doc)
+
+    expect(result).toBe(doc)
+    expect(result.document.styles?.baseParagraphStyleId).toBe("custom.body")
+  })
+
+  it("uses an upserted paragraph style as base when the existing base is missing", () => {
+    const doc = makeDoc({}, [])
+    doc.document.styles = {
+      baseParagraphStyleId: "missing",
+    }
+
+    const result = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      props: { fontSize: pt(13) },
+    })
+
+    expect(result.document.styles?.baseParagraphStyleId).toBe("custom.body")
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("repairs a missing base paragraph style with the body preset", () => {
+    const doc = makeDoc({}, [])
+
+    const result = ensureBaseParagraphStyle(doc)
+
+    expect(result.document.styles?.baseParagraphStyleId).toBe(TOR_BODY_PARAGRAPH_STYLE_ID)
+    expect(result.document.styles?.paragraphStyles?.[TOR_BODY_PARAGRAPH_STYLE_ID]).toBeDefined()
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("patches paragraph style definitions without rewriting referenced paragraphs", () => {
+    const p = {
+      ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Styled body" }]),
+      props: {
+        ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Styled body" }]).props,
+        paragraphStyleId: "custom.body",
+      },
+    }
+    let doc = makeDoc({ p1: p }, ["p1"])
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      name: "Body",
+      props: { fontSize: pt(14), lineHeight: 1.25 },
+    })
+    const originalParagraph = doc.document.sections[0].nodes.p1
+
+    const result = patchParagraphStyleDefinition(doc, "custom.body", {
+      name: " Body Updated ",
+      props: { fontSize: pt(15), spacingAfter: pt(12) },
+    })
+    const updatedStyle = result.document.styles?.paragraphStyles?.["custom.body"]
+    const updatedParagraph = result.document.sections[0].nodes.p1
+
+    expect(updatedStyle).toMatchObject({
+      id: "custom.body",
+      name: "Body Updated",
+      props: {
+        fontSize: pt(15),
+        spacingAfter: pt(12),
+        lineHeight: 1.25,
+      },
+    })
+    expect(result.document.styles?.baseParagraphStyleId).toBe("custom.body")
+    expect(updatedParagraph).toBe(originalParagraph)
+    expect(resolveStyledParagraphProps(result.document.styles, updatedParagraph as ParagraphNode).fontSize).toEqual(pt(15))
+    expect(() => assertDocument(result)).not.toThrow()
+  })
+
+  it("renames paragraph style definitions and clears blank display names", () => {
+    let doc = makeDoc({}, [])
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      name: "Body",
+      props: { fontSize: pt(12) },
+    })
+
+    const renamed = renameParagraphStyleDefinition(doc, "custom.body", " Contract Body ")
+    const cleared = renameParagraphStyleDefinition(renamed, "custom.body", " ")
+
+    expect(renamed.document.styles?.paragraphStyles?.["custom.body"].name).toBe("Contract Body")
+    expect(cleared.document.styles?.paragraphStyles?.["custom.body"].name).toBeUndefined()
+    expect(() => assertDocument(cleared)).not.toThrow()
+  })
+
+  it("does not patch missing paragraph style definitions", () => {
+    const doc = makeDoc({}, [])
+
+    expect(patchParagraphStyleDefinition(doc, "missing", { props: { fontSize: pt(15) } })).toBe(doc)
+    expect(renameParagraphStyleDefinition(doc, "missing", "Missing")).toBe(doc)
+  })
+
+  it("clones paragraph style definition patches before storing them", () => {
+    let doc = makeDoc({}, [])
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      props: { fontSize: pt(12) },
+    })
+    const patch = { spacingAfter: pt(8) }
+
+    const result = patchParagraphStyleDefinition(doc, "custom.body", { props: patch })
+    patch.spacingAfter.value = 99
+
+    expect(result.document.styles?.paragraphStyles?.["custom.body"].props.spacingAfter).toEqual(pt(8))
   })
 
   it("applies paragraph style presets and syncs direct props for current render paths", () => {
@@ -1673,6 +1876,39 @@ describe("paragraph text operations", () => {
     if (first.type !== "paragraph" || second?.type !== "paragraph") return
     expect(paragraphText(first)).toBe("Hello ")
     expect(paragraphText(second)).toBe("world")
+  })
+
+  it("splits plain text paragraphs with cloned paragraph style metadata", () => {
+    const p = {
+      ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]),
+      props: {
+        ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]).props,
+        paragraphStyleId: "custom.body",
+        styleOverrides: { fontSize: pt(16) },
+      },
+    }
+    let doc = makeDoc({ p1: p }, ["p1"])
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      props: { fontSize: pt(12) },
+    })
+
+    const result = splitParagraphAtIndex(doc, "p1", 6)
+    const section = result.doc.document.sections[0]
+    const first = section.nodes.p1
+    const second = section.nodes[result.newNodeId]
+
+    expect(first.type).toBe("paragraph")
+    expect(second?.type).toBe("paragraph")
+    if (first.type !== "paragraph" || second?.type !== "paragraph") return
+    expect(first.props.paragraphStyleId).toBe("custom.body")
+    expect(second.props.paragraphStyleId).toBe("custom.body")
+    expect(first.props.styleOverrides).toEqual({ fontSize: pt(16) })
+    expect(second.props.styleOverrides).toEqual({ fontSize: pt(16) })
+
+    second.props.styleOverrides!.fontSize!.value = 99
+    expect(first.props.styleOverrides).toEqual({ fontSize: pt(16) })
+    expect(() => assertDocument(result.doc)).not.toThrow()
   })
 
   it("does not split mixed inline paragraph", () => {
@@ -2499,6 +2735,34 @@ describe("flow-row / flow-stack operations", () => {
     if (stack.type !== "flow-stack") return
     expect(stack.childIds).toHaveLength(1)
     expect(section.nodes[stack.childIds[0]]?.type).toBe("paragraph")
+  })
+
+  it("uses the document base paragraph style for palette paragraphs", () => {
+    let doc = makeDoc({}, [])
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      props: { fontSize: pt(13), lineHeight: 1.25, spacingAfter: pt(9) },
+    })
+
+    const updated = applyPlacementOperation(
+      doc,
+      "section",
+      { kind: "insert-into-container", containerId: "body", containerType: "body", index: 0 },
+      { source: "palette", blockType: "paragraph" },
+    )
+    const section = updated.document.sections[0]
+    const body = section.nodes.body
+
+    expect(() => assertDocument(updated)).not.toThrow()
+    expect(body.type).toBe("body")
+    if (body.type !== "body") return
+    const paragraph = section.nodes[body.childIds[0]]
+    expect(paragraph.type).toBe("paragraph")
+    if (paragraph.type !== "paragraph") return
+    expect(paragraph.props.paragraphStyleId).toBe("custom.body")
+    expect(paragraph.props.fontSize).toEqual(pt(13))
+    expect(paragraph.props.lineHeight).toBe(1.25)
+    expect(paragraph.props.spacingAfter).toEqual(pt(9))
   })
 
   it("inserts divider and page-break palette blocks with authored defaults", () => {

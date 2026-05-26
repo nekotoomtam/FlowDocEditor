@@ -2,6 +2,10 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 import type { DocumentNode } from "@/schema"
+import {
+  getAllListStylePresets,
+  TOR_CLAUSE_LIST_STYLE_ID,
+} from "@/document"
 import { PropertyPanel } from "../PropertyPanel"
 
 function docWithFlowParagraph(): DocumentNode {
@@ -298,6 +302,7 @@ describe("PropertyPanel selection context", () => {
       onUpdateFieldRef: noop,
       onUpdateParagraphBoxStyle: noop,
       onSelectContextNode: noop,
+      onSelectStyleResource: noop,
       onDelete: noop,
       tableOps: {
         addRow: noop,
@@ -321,6 +326,7 @@ describe("PropertyPanel selection context", () => {
       onUpdateFieldRef: noop,
       onUpdateParagraphBoxStyle: noop,
       onSelectContextNode: noop,
+      onSelectStyleResource: noop,
       onDelete: noop,
       tableOps: {
         addRow: noop,
@@ -360,6 +366,7 @@ describe("PropertyPanel selection context", () => {
       onUpdateFieldRef: noop,
       onUpdateParagraphBoxStyle: noop,
       onSelectContextNode: noop,
+      onSelectStyleResource: noop,
       onDelete: noop,
       tableOps: {
         addRow: noop,
@@ -398,6 +405,56 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"paragraph-text-color-palette-value\"")
     expect(markup).toContain("data-testid=\"paragraph-text-color-palette-toggle\"")
     expect(markup).toContain("aria-selected=\"true\"")
+  })
+
+  it("renders selected paragraph list context without editing list metadata", () => {
+    const noop = () => undefined
+    const doc = docWithFlowParagraph()
+    const paragraph = doc.document.sections[0].nodes.p1
+    if (paragraph.type !== "paragraph") throw new Error("expected paragraph fixture")
+    paragraph.props = {
+      ...paragraph.props,
+      list: { instanceId: "tor-main", level: 0, itemId: "tor.one" },
+    }
+    doc.document.listStyles = getAllListStylePresets()
+    doc.document.listInstances = {
+      "tor-main": { id: "tor-main", styleId: TOR_CLAUSE_LIST_STYLE_ID },
+    }
+
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc,
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "p1",
+      selectionAnchorNodeId: "p1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onSelectStyleResource: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("data-testid=\"paragraph-list-context\"")
+    expect(markup).toContain("data-testid=\"paragraph-list-context-group\"")
+    expect(markup).toContain("TOR Main")
+    expect(markup).toContain("data-testid=\"paragraph-list-context-style\"")
+    expect(markup).toContain("TOR Clause")
+    expect(markup).toContain("data-testid=\"paragraph-list-context-marker\"")
+    expect(markup).toContain("1.")
+    expect(markup).toContain("data-testid=\"paragraph-list-context-count\"")
+    expect(markup).toContain("data-testid=\"paragraph-list-context-select-group\"")
+    expect(markup).toContain("data-testid=\"paragraph-list-context-edit-style\"")
   })
 
   it("renders paragraph box controls for paragraph document styling", () => {

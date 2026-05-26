@@ -8,8 +8,8 @@ import {
   SpacerNodeSchema,
 } from "../schema"
 import type { DocumentNode, DocumentSection, FlowRowNode, FlowTableCellNode, FlowTableNode, LayoutNode, ListStyleDefinition, RowNode } from "../schema"
+import { orderedSectionParagraphs } from "./documentTraversal"
 import { FlowTableGridError, resolveFlowTableGrid } from "./flowTableGrid"
-import { orderedSectionParagraphs } from "./listNumbering"
 
 // ─── Error Types ──────────────────────────────────────────────────────────────
 
@@ -184,12 +184,21 @@ function assertListReferences(doc: DocumentNode): void {
 function assertDocumentStyles(doc: DocumentNode): void {
   const styles = doc.document.styles
   if (!styles) return
+  const paragraphStyles = styles.paragraphStyles ?? {}
 
-  Object.entries(styles.paragraphStyles ?? {}).forEach(([key, style]) => {
+  Object.entries(paragraphStyles).forEach(([key, style]) => {
     if (style.id !== key) {
       fail(`document.styles.paragraphStyles.${key}`, `paragraph style id "${style.id}" must match map key "${key}"`)
     }
   })
+
+  const baseStyleId = styles.baseParagraphStyleId
+  if (Object.keys(paragraphStyles).length > 0 && !baseStyleId) {
+    fail("document.styles.baseParagraphStyleId", "base paragraph style is required when paragraph styles exist")
+  }
+  if (baseStyleId && paragraphStyles[baseStyleId] == null) {
+    fail("document.styles.baseParagraphStyleId", `missing base paragraph style "${baseStyleId}"`)
+  }
 
   Object.entries(styles.textRunStyles ?? {}).forEach(([key, style]) => {
     if (style.id !== key) {

@@ -1,13 +1,13 @@
 import { LIST_LEVEL_COUNT } from "../schema"
 import type {
   DocumentNode,
-  DocumentSection,
-  FlowTableNode,
   ListInstance,
   ListLevelDefinition,
   ListMarkerFormat,
-  ParagraphNode,
 } from "../schema"
+import { orderedDocumentParagraphs } from "./documentTraversal"
+
+export { orderedDocumentParagraphs, orderedSectionParagraphs } from "./documentTraversal"
 
 export interface ResolvedListMarker {
   paragraphId: string
@@ -27,41 +27,6 @@ const THAI_LETTERS = [
   "ธ", "น", "บ", "ป", "ผ", "ฝ", "พ", "ฟ", "ภ", "ม",
   "ย", "ร", "ล", "ว", "ศ", "ษ", "ส", "ห", "ฬ", "อ", "ฮ",
 ]
-
-export function orderedSectionParagraphs(section: DocumentSection): ParagraphNode[] {
-  const paragraphs: ParagraphNode[] = []
-  const visit = (nodeId: string): void => {
-    const node = section.nodes[nodeId]
-    if (!node) return
-    if (node.type === "paragraph") {
-      paragraphs.push(node)
-      return
-    }
-    if (node.type === "flow-table") {
-      visitFlowTable(node as unknown as FlowTableNode)
-      return
-    }
-    if ("childIds" in node) node.childIds.forEach(visit)
-  }
-
-  const visitFlowTable = (table: FlowTableNode): void => {
-    table.rowIds.forEach((rowId) => {
-      const row = table.nodes[rowId]
-      if (row?.type !== "flow-table-row") return
-      row.cellIds.forEach((cellId) => {
-        const cell = table.nodes[cellId]
-        if (cell?.type !== "flow-table-cell") return
-        cell.childIds.forEach((childId) => {
-          const child = table.nodes[childId]
-          if (child?.type === "paragraph") paragraphs.push(child)
-        })
-      })
-    })
-  }
-
-  visit(section.bodyRootId)
-  return paragraphs
-}
 
 function levelByIndex(levels: ListLevelDefinition[], levelIndex: number): ListLevelDefinition | undefined {
   return levels.find((level) => level.level === levelIndex)
@@ -180,7 +145,7 @@ export function resolveListMarkers(doc: DocumentNode): Map<string, ResolvedListM
   const instances = doc.document.listInstances ?? {}
   const countersByInstance = new Map<string, CounterState>()
 
-  const paragraphs = doc.document.sections.flatMap(orderedSectionParagraphs)
+  const paragraphs = orderedDocumentParagraphs(doc)
   for (const paragraph of paragraphs) {
     const list = paragraph.props.list
     if (!list) continue
