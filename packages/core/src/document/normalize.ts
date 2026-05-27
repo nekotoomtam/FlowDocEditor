@@ -10,6 +10,7 @@ import type {
   FlowTableCellMergeMap,
   FlowTableCellNode,
   FlowTableNode,
+  HeadingLevel,
   InlineNode,
   LayoutNode,
   ListStyleDefinition,
@@ -101,6 +102,12 @@ function normalizeNonNegativeUnitValue(input: unknown, fallback: UnitValue): Uni
 function normalizeHexColor(value: unknown, fallback?: string): string | undefined {
   if (typeof value === "string" && /^[0-9A-Fa-f]{6}$/.test(value)) return value
   return fallback
+}
+
+function normalizeHeadingLevel(value: unknown): HeadingLevel | undefined {
+  return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 || value === 6
+    ? value
+    : undefined
 }
 
 function normalizeOptionalPositiveUnitValue(input: unknown): UnitValue | undefined {
@@ -293,9 +300,7 @@ function normalizeParagraphProps(input: unknown, paragraphId: string): Paragraph
     textIndent: normalizeUnitValue(raw["textIndent"], DEFAULT_PARAGRAPH_PROPS.textIndent),
     indentLeft: normalizeUnitValue(raw["indentLeft"], DEFAULT_PARAGRAPH_PROPS.indentLeft),
     indentRight: normalizeUnitValue(raw["indentRight"], DEFAULT_PARAGRAPH_PROPS.indentRight),
-    headingLevel: raw["headingLevel"] === 1 || raw["headingLevel"] === 2 || raw["headingLevel"] === 3
-      ? raw["headingLevel"]
-      : undefined,
+    headingLevel: normalizeHeadingLevel(raw["headingLevel"]),
     keepWithNext: typeof raw["keepWithNext"] === "boolean" ? raw["keepWithNext"] : undefined,
     list: normalizeParagraphListProps(raw["list"], paragraphId),
     box: normalizeParagraphBoxStyle(raw["box"]),
@@ -335,8 +340,9 @@ function normalizeParagraphStyleProperties(input: unknown): ParagraphStyleProper
   if (textIndent) props.textIndent = textIndent
   if (indentLeft) props.indentLeft = indentLeft
   if (indentRight) props.indentRight = indentRight
-  if (raw["headingLevel"] === 1 || raw["headingLevel"] === 2 || raw["headingLevel"] === 3 || raw["headingLevel"] === null) {
-    props.headingLevel = raw["headingLevel"]
+  const headingLevel = normalizeHeadingLevel(raw["headingLevel"])
+  if (headingLevel !== undefined || raw["headingLevel"] === null) {
+    props.headingLevel = headingLevel ?? null
   }
   if (typeof raw["keepWithNext"] === "boolean") props.keepWithNext = raw["keepWithNext"]
   if (box || Object.prototype.hasOwnProperty.call(raw, "box")) props.box = box ?? {}

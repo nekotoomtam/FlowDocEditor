@@ -115,6 +115,9 @@ const CANVAS_ACTION_RAIL_BUTTON_SIZE = 22
 const CANVAS_ACTION_RAIL_GAP = 4
 const CANVAS_ACTION_RAIL_PADDING = 4
 const CANVAS_ACTION_RAIL_OFFSET = 8
+const LAZY_PAGE_RENDER_THRESHOLD = 24
+const LAZY_PAGE_RENDER_ROOT_MARGIN_PX = 1600
+const LAZY_PAGE_RENDER_INITIAL_COUNT = 4
 
 const CANVAS_PATH_LABELS: Record<SelectionContextItem["type"], string> = {
   body: "BODY",
@@ -1992,7 +1995,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 function PageView({
   page, doc, drag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading, inlineEditVisualFresh,
   inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
-  pageKey, setPageRef, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction,
+  pageKey, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction,
   resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, headerFooterZoneScroll, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onHeaderFooterZoneScroll, onHeaderFooterZoneScrollTo, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygRichTextShortcut, onWysiwygTextReflowDecision,
@@ -2032,7 +2035,7 @@ function PageView({
   onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
   onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
-  pageKey: string; setPageRef: (key: string, el: SVGSVGElement | null) => void
+  pageKey: string
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   onSelectContextNode: (nodeId: string) => void
@@ -2401,7 +2404,6 @@ function PageView({
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
     <svg
-      ref={(el) => setPageRef(pageKey, el)}
       data-testid="editor-page"
       data-page-key={pageKey}
       data-page-index={page.index}
@@ -3426,6 +3428,90 @@ const MemoizedPageView = memo(PageView, arePageViewPropsEqual)
 
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 
+function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
+  if (a.size !== b.size) return false
+  for (const value of a) {
+    if (!b.has(value)) return false
+  }
+  return true
+}
+
+export function shouldRenderLazyPageFrame(input: {
+  lazyEnabled: boolean
+  pageKey: string
+  visiblePageKeys: ReadonlySet<string>
+  forcedPageKeys: ReadonlySet<string>
+}): boolean {
+  if (!input.lazyEnabled) return true
+  return input.visiblePageKeys.has(input.pageKey) || input.forcedPageKeys.has(input.pageKey)
+}
+
+function LazyPagePlaceholder({ page, scale }: { page: PaginatedPage; scale: number }) {
+  const W = page.width * scale
+  const H = page.height * scale
+
+  return (
+    <div
+      data-testid="editor-page-placeholder"
+      data-page-index={page.index}
+      style={{
+        width: W,
+        height: H,
+        border: "1px solid #d1d5db",
+        background: "white",
+        display: "grid",
+        placeItems: "center",
+        color: "#cbd5e1",
+        fontSize: 11,
+        fontWeight: 700,
+        boxSizing: "border-box",
+        userSelect: "none",
+      }}
+    >
+      Page {page.index + 1}
+    </div>
+  )
+}
+
+function LazyPageFrame({
+  page,
+  pageKey,
+  scale,
+  rendered,
+  setPageFrameRef,
+  children,
+}: {
+  page: PaginatedPage
+  pageKey: string
+  scale: number
+  rendered: boolean
+  setPageFrameRef: (key: string, el: HTMLDivElement | null) => void
+  children: React.ReactNode
+}) {
+  const setFrameRef = useCallback((el: HTMLDivElement | null) => {
+    setPageFrameRef(pageKey, el)
+  }, [pageKey, setPageFrameRef])
+  const W = page.width * scale
+  const H = page.height * scale
+
+  return (
+    <div
+      ref={setFrameRef}
+      data-testid="editor-page-frame"
+      data-page-key={pageKey}
+      data-page-index={page.index}
+      data-page-rendered={rendered ? "true" : "false"}
+      style={{
+        width: W,
+        height: H,
+        position: "relative",
+      }}
+    >
+      {rendered ? children : <LazyPagePlaceholder page={page} scale={scale} />}
+    </div>
+  )
+}
+
 interface Props {
   paginated: PaginatedDocument
   doc: DocumentNode
@@ -3433,6 +3519,7 @@ interface Props {
   resizeDrag: ResizeDrag | null
   minHeightDrag: MinHeightDrag | null
   scale: number
+  activePageIndex: number | null
   selectedNodeId: string | null
   selectionAnchorNodeId: string | null
   isLayoutLoading: boolean
@@ -3453,7 +3540,7 @@ interface Props {
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
-  setPageRef: (key: string, el: SVGSVGElement | null) => void
+  setPageRef: (key: string, el: HTMLElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   onSelectContextNode: (nodeId: string) => void
@@ -3580,7 +3667,7 @@ export function buildWysiwygDraftVisualPreview(input: {
 }
 
 export function EditorCanvas({
-  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
+  paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, scale, activePageIndex, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
   textMeasurer,
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
   setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, onScaleChange,
@@ -3599,8 +3686,26 @@ export function EditorCanvas({
   onWysiwygTextReflowDecision,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const pageFrameRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const pageVisibilityObserverRef = useRef<IntersectionObserver | null>(null)
   const [headerFooterZoneScroll, setHeaderFooterZoneScroll] = useState<HeaderFooterZoneScrollState | null>(null)
+  const [lazyVisiblePageKeys, setLazyVisiblePageKeys] = useState<Set<string>>(() => new Set())
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
+  const pageKeyEntries = useMemo(() =>
+    sections.flatMap((section, sectionIndex) =>
+      section.pages.map((page, pageArrayIndex) => ({
+        key: `${sectionIndex}-${pageArrayIndex}`,
+        pageIndex: page.index,
+      })),
+    ),
+  [sections])
+  const pageKeySignature = useMemo(() =>
+    pageKeyEntries.map((entry) => `${entry.key}:${entry.pageIndex}`).join("|"),
+  [pageKeyEntries])
+  const allPageKeySet = useMemo(() =>
+    new Set(pageKeyEntries.map((entry) => entry.key)),
+  [pageKeyEntries])
+  const totalPageCount = pageKeyEntries.length
   const pageWidth = sections[0]?.pages[0]?.width ?? 595
   const scaledPageWidth = pageWidth * scale
   const pageKeyByPageIndex = useMemo(() => {
@@ -3612,6 +3717,26 @@ export function EditorCanvas({
     }
     return byPageIndex
   }, [sections])
+  const shouldLazyRenderPages = typeof IntersectionObserver !== "undefined" && totalPageCount > LAZY_PAGE_RENDER_THRESHOLD
+  const setPageFrameRef = useCallback((key: string, el: HTMLDivElement | null) => {
+    const previous = pageFrameRefs.current.get(key)
+    if (previous && previous !== el) {
+      pageVisibilityObserverRef.current?.unobserve(previous)
+    }
+
+    if (el) {
+      pageFrameRefs.current.set(key, el)
+      pageVisibilityObserverRef.current?.observe(el)
+      setPageRef(key, el)
+      return
+    }
+
+    if (previous) {
+      pageVisibilityObserverRef.current?.unobserve(previous)
+      pageFrameRefs.current.delete(key)
+    }
+    setPageRef(key, null)
+  }, [setPageRef])
   const wysiwygTextExistingSplitActive = Boolean(
     wysiwygTextEngineEnabled &&
     wysiwygTextDraftNodeId &&
@@ -3699,6 +3824,95 @@ export function EditorCanvas({
     wysiwygTextDraftNodeId,
     wysiwygTextEngineEnabled,
   ])
+
+  const forcedPageKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const entry of pageKeyEntries.slice(0, LAZY_PAGE_RENDER_INITIAL_COUNT)) {
+      keys.add(entry.key)
+    }
+    if (activePageIndex != null) {
+      const key = pageKeyByPageIndex.get(activePageIndex)
+      if (key) keys.add(key)
+    }
+    if (inlineEditPageIndex != null) {
+      const key = pageKeyByPageIndex.get(inlineEditPageIndex)
+      if (key) keys.add(key)
+    }
+    if (wysiwygDraftVisualPreview?.caretPageIndex != null) {
+      const key = pageKeyByPageIndex.get(wysiwygDraftVisualPreview.caretPageIndex)
+      if (key) keys.add(key)
+    }
+    if (resizeDrag?.pageKey) keys.add(resizeDrag.pageKey)
+    if (minHeightDrag?.pageKey) keys.add(minHeightDrag.pageKey)
+    if (marginDrag?.pageKey) keys.add(marginDrag.pageKey)
+    if (headerFooterReservedDrag?.pageKey) keys.add(headerFooterReservedDrag.pageKey)
+    for (const target of wysiwygTextPointerFragments) {
+      keys.add(target.pageKey)
+    }
+    return keys
+  }, [
+    activePageIndex,
+    headerFooterReservedDrag,
+    inlineEditPageIndex,
+    marginDrag,
+    minHeightDrag,
+    pageKeyByPageIndex,
+    pageKeyEntries,
+    resizeDrag,
+    wysiwygDraftVisualPreview,
+    wysiwygTextPointerFragments,
+  ])
+
+  useEffect(() => {
+    setLazyVisiblePageKeys((current) => {
+      const next = new Set<string>()
+      for (const key of current) {
+        if (allPageKeySet.has(key)) next.add(key)
+      }
+      for (const key of forcedPageKeys) next.add(key)
+      return setsEqual(current, next) ? current : next
+    })
+  }, [allPageKeySet, forcedPageKeys, pageKeySignature])
+
+  useEffect(() => {
+    if (!shouldLazyRenderPages) {
+      pageVisibilityObserverRef.current?.disconnect()
+      pageVisibilityObserverRef.current = null
+      return
+    }
+
+    const root = containerRef.current
+    if (!root) return
+
+    const observer = new IntersectionObserver((entries) => {
+      setLazyVisiblePageKeys((current) => {
+        const next = new Set(current)
+        for (const entry of entries) {
+          const key = (entry.target as HTMLElement).dataset.pageKey
+          if (!key) continue
+          if (entry.isIntersecting) next.add(key)
+          else next.delete(key)
+        }
+        for (const key of forcedPageKeys) next.add(key)
+        return setsEqual(current, next) ? current : next
+      })
+    }, {
+      root,
+      rootMargin: `${LAZY_PAGE_RENDER_ROOT_MARGIN_PX}px 0px`,
+    })
+
+    pageVisibilityObserverRef.current = observer
+    for (const el of pageFrameRefs.current.values()) {
+      observer.observe(el)
+    }
+
+    return () => {
+      observer.disconnect()
+      if (pageVisibilityObserverRef.current === observer) {
+        pageVisibilityObserverRef.current = null
+      }
+    }
+  }, [forcedPageKeys, pageKeySignature, shouldLazyRenderPages])
 
   useEffect(() => {
     if (!autoFitScale) return
@@ -3791,76 +4005,93 @@ export function EditorCanvas({
             Section {si + 1} · {section.pages.length} page{section.pages.length !== 1 ? "s" : ""}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start", justifyContent: "center" }}>
-            {section.pages.map((page, pi) => (
-              <div key={`${section.sectionId}-${page.index}-${pi}`}>
-                <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>Page {page.index + 1}</div>
-                <MemoizedPageView
-                  page={page} doc={doc} drag={drag} scale={scale}
-                  selectedNodeId={selectedNodeId} selectionAnchorNodeId={selectionAnchorNodeId} isLayoutLoading={isLayoutLoading}
-                  textMeasurer={textMeasurer}
-                  inlineEditVisualFresh={inlineEditVisualFresh}
-                  inlineEditNodeId={inlineEditNodeId}
-                  inlineEditCaretIndex={inlineEditCaretIndex}
-                  inlineEditPageIndex={inlineEditPageIndex}
-                  inlineEditVisualLocked={inlineEditVisualLocked}
-                  onInlineEditStart={onInlineEditStart}
-                  onInlineEditChange={onInlineEditChange}
-                  onInlineEditCaretChange={onInlineEditCaretChange}
-                  onInlineEditUserInteraction={onInlineEditUserInteraction}
-                  onInlineEditHeightChange={onInlineEditHeightChange}
-                  onInlineEditEnd={onInlineEditEnd}
-                  onSplitParagraph={onSplitParagraph}
-                  onMergeParagraph={onMergeParagraph}
-                  onExitListItem={onExitListItem}
-                  onChangeListItemLevel={onChangeListItemLevel}
-                  onBackspaceListItemAtStart={onBackspaceListItemAtStart}
-                  pageKey={`${si}-${pi}`}
-                  setPageRef={setPageRef}
-                  onNodePointerDown={onNodePointerDown}
-                  onBackgroundPointerDown={onBackgroundPointerDown}
-                  onSelectContextNode={onSelectContextNode}
-                  onStartCloneDrag={onStartCloneDrag}
-                  onDeleteNode={onDeleteNode}
-                  onTableAction={onTableAction}
-                  resizeDrag={resizeDrag}
-                  onResizeStart={onResizeStart}
-                  onTableColumnResizeStart={onTableColumnResizeStart}
-                  minHeightDrag={minHeightDrag}
-                  onMinHeightResizeStart={onMinHeightResizeStart}
-                  sectionIndex={si}
-                  marginDrag={marginDrag}
-                  marginEditMode={marginEditMode}
-                  headerFooterEditMode={headerFooterEditMode}
-                  headerFooterReservedDrag={headerFooterReservedDrag}
-                  headerFooterZoneScroll={headerFooterZoneScroll}
-                  onMarginEditModeEnter={onMarginEditModeEnter}
-                  onMarginEditModeExit={onMarginEditModeExit}
-                  onHeaderFooterEditModeEnter={onHeaderFooterEditModeEnter}
-                  onHeaderFooterEditModeExit={onHeaderFooterEditModeExit}
-                  onHeaderFooterZonePointerDown={onHeaderFooterZonePointerDown}
-                  onHeaderFooterReservedResizeStart={onHeaderFooterReservedResizeStart}
-                  onHeaderFooterZoneScroll={handleHeaderFooterZoneScroll}
-                  onHeaderFooterZoneScrollTo={handleHeaderFooterZoneScrollTo}
-                  onMarginResizeStart={onMarginResizeStart}
-                  showTextSegments={showTextSegments}
-                  showDrift={showDrift}
-                  driftMap={driftMap}
-                  wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
-                  wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
-                  wysiwygTextDraftNodeId={wysiwygTextDraftNodeId}
-                  wysiwygTextDraftText={wysiwygTextDraftText}
-                  wysiwygTextCaretOffset={wysiwygTextCaretOffset}
-                  wysiwygTextSelection={wysiwygTextSelection}
-                  wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive}
-                  wysiwygDraftVisualPreview={wysiwygDraftVisualPreview}
-                  wysiwygTableCellDraftVisualChromeByPageIndex={wysiwygTableCellDraftVisualChromeByPageIndex}
-                  wysiwygTextPointerFragments={wysiwygTextPointerFragments}
-                  onWysiwygTextDraftChange={onWysiwygTextDraftChange}
-                  onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
-                  onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
-                />
-              </div>
-            ))}
+            {section.pages.map((page, pi) => {
+              const pageKey = `${si}-${pi}`
+              const rendered = shouldRenderLazyPageFrame({
+                lazyEnabled: shouldLazyRenderPages,
+                pageKey,
+                visiblePageKeys: lazyVisiblePageKeys,
+                forcedPageKeys,
+              })
+
+              return (
+                <div key={`${section.sectionId}-${page.index}-${pi}`}>
+                  <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>Page {page.index + 1}</div>
+                  <LazyPageFrame
+                    page={page}
+                    pageKey={pageKey}
+                    scale={scale}
+                    rendered={rendered}
+                    setPageFrameRef={setPageFrameRef}
+                  >
+                    <MemoizedPageView
+                      page={page} doc={doc} drag={drag} scale={scale}
+                      selectedNodeId={selectedNodeId} selectionAnchorNodeId={selectionAnchorNodeId} isLayoutLoading={isLayoutLoading}
+                      textMeasurer={textMeasurer}
+                      inlineEditVisualFresh={inlineEditVisualFresh}
+                      inlineEditNodeId={inlineEditNodeId}
+                      inlineEditCaretIndex={inlineEditCaretIndex}
+                      inlineEditPageIndex={inlineEditPageIndex}
+                      inlineEditVisualLocked={inlineEditVisualLocked}
+                      onInlineEditStart={onInlineEditStart}
+                      onInlineEditChange={onInlineEditChange}
+                      onInlineEditCaretChange={onInlineEditCaretChange}
+                      onInlineEditUserInteraction={onInlineEditUserInteraction}
+                      onInlineEditHeightChange={onInlineEditHeightChange}
+                      onInlineEditEnd={onInlineEditEnd}
+                      onSplitParagraph={onSplitParagraph}
+                      onMergeParagraph={onMergeParagraph}
+                      onExitListItem={onExitListItem}
+                      onChangeListItemLevel={onChangeListItemLevel}
+                      onBackspaceListItemAtStart={onBackspaceListItemAtStart}
+                      pageKey={pageKey}
+                      onNodePointerDown={onNodePointerDown}
+                      onBackgroundPointerDown={onBackgroundPointerDown}
+                      onSelectContextNode={onSelectContextNode}
+                      onStartCloneDrag={onStartCloneDrag}
+                      onDeleteNode={onDeleteNode}
+                      onTableAction={onTableAction}
+                      resizeDrag={resizeDrag}
+                      onResizeStart={onResizeStart}
+                      onTableColumnResizeStart={onTableColumnResizeStart}
+                      minHeightDrag={minHeightDrag}
+                      onMinHeightResizeStart={onMinHeightResizeStart}
+                      sectionIndex={si}
+                      marginDrag={marginDrag}
+                      marginEditMode={marginEditMode}
+                      headerFooterEditMode={headerFooterEditMode}
+                      headerFooterReservedDrag={headerFooterReservedDrag}
+                      headerFooterZoneScroll={headerFooterZoneScroll}
+                      onMarginEditModeEnter={onMarginEditModeEnter}
+                      onMarginEditModeExit={onMarginEditModeExit}
+                      onHeaderFooterEditModeEnter={onHeaderFooterEditModeEnter}
+                      onHeaderFooterEditModeExit={onHeaderFooterEditModeExit}
+                      onHeaderFooterZonePointerDown={onHeaderFooterZonePointerDown}
+                      onHeaderFooterReservedResizeStart={onHeaderFooterReservedResizeStart}
+                      onHeaderFooterZoneScroll={handleHeaderFooterZoneScroll}
+                      onHeaderFooterZoneScrollTo={handleHeaderFooterZoneScrollTo}
+                      onMarginResizeStart={onMarginResizeStart}
+                      showTextSegments={showTextSegments}
+                      showDrift={showDrift}
+                      driftMap={driftMap}
+                      wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
+                      wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
+                      wysiwygTextDraftNodeId={wysiwygTextDraftNodeId}
+                      wysiwygTextDraftText={wysiwygTextDraftText}
+                      wysiwygTextCaretOffset={wysiwygTextCaretOffset}
+                      wysiwygTextSelection={wysiwygTextSelection}
+                      wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive}
+                      wysiwygDraftVisualPreview={wysiwygDraftVisualPreview}
+                      wysiwygTableCellDraftVisualChromeByPageIndex={wysiwygTableCellDraftVisualChromeByPageIndex}
+                      wysiwygTextPointerFragments={wysiwygTextPointerFragments}
+                      onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+                      onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
+                      onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
+                    />
+                  </LazyPageFrame>
+                </div>
+              )
+            })}
           </div>
         </div>
         ))}

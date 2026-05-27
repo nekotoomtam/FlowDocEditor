@@ -6,7 +6,7 @@ interface PaletteItem {
   type: PaletteBlockType
   label: string
   desc: string
-  icon: "paragraph" | "divider" | "page-break" | "row" | "column" | "two-even" | "two-left" | "two-right" | "three" | "four" | "table"
+  icon: "paragraph" | "divider" | "page-break" | "toc" | "row" | "column" | "two-even" | "two-left" | "two-right" | "three" | "four" | "table"
   columnShares?: number[]
 }
 
@@ -26,6 +26,7 @@ const TEXT_ITEMS: PaletteItem[] = [
 ]
 
 const DOCUMENT_ITEMS: PaletteItem[] = [
+  { type: "toc", label: "TOC", icon: "toc", desc: "Generated headings" },
   { type: "page-break", label: "Page break", icon: "page-break", desc: "Start next page" },
 ]
 
@@ -111,6 +112,10 @@ function PaletteIcon({ icon }: { icon: PaletteItem["icon"] }) {
 
   if (icon === "page-break") {
     return <span style={paragraphIcon}>PB</span>
+  }
+
+  if (icon === "toc") {
+    return <span style={paragraphIcon}>☰</span>
   }
 
   if (icon === "table") {

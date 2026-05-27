@@ -6,7 +6,7 @@ import { paginateDocument } from "../../pagination"
 import { assertPaginatedDocument } from "../../pagination/assertPaginated"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { pt } from "../../schema"
-import type { DocumentNode, LayoutNode, ParagraphNode } from "../../schema"
+import type { DocumentNode, HeadingLevel, LayoutNode, ParagraphNode } from "../../schema"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -16,7 +16,7 @@ const PAGE = {
   margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
 }
 
-function makePara(id: string, text: string, headingLevel?: 1 | 2 | 3): ParagraphNode {
+function makePara(id: string, text: string, headingLevel?: HeadingLevel): ParagraphNode {
   return {
     id,
     type: "paragraph",

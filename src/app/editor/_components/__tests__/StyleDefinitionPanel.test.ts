@@ -29,6 +29,7 @@ describe("StyleDefinitionPanel", () => {
     expect(markup).toContain("data-testid=\"style-definition-spacing-before-input\"")
     expect(markup).toContain("data-testid=\"style-definition-spacing-after-input\"")
     expect(markup).toContain("data-testid=\"style-definition-heading-1\"")
+    expect(markup).toContain("data-testid=\"style-definition-heading-6\"")
     expect(markup).toContain("data-testid=\"style-definition-keep-next-on\"")
     expect(markup).toContain("data-testid=\"style-definition-font-family-select\"")
     expect(markup).toContain("Sarabun")

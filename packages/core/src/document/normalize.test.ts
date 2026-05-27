@@ -115,7 +115,7 @@ describe("normalizeDocument", () => {
           textIndent: pt(0),
           indentLeft: pt(0),
           indentRight: pt(0),
-          headingLevel: 2,
+          headingLevel: 6,
           keepWithNext: true,
         },
         children: [{ id: "t1", type: "text", text: "Heading" }],
@@ -125,7 +125,7 @@ describe("normalizeDocument", () => {
     const paragraph = normalizeDocument(doc).document.sections[0].nodes.p1
     expect(paragraph.type).toBe("paragraph")
     if (paragraph.type !== "paragraph") return
-    expect(paragraph.props.headingLevel).toBe(2)
+    expect(paragraph.props.headingLevel).toBe(6)
     expect(paragraph.props.keepWithNext).toBe(true)
   })
 
@@ -304,7 +304,7 @@ describe("normalizeDocument", () => {
             textColor: "red",
             lineHeight: -1,
             spacingAfter: pt(6),
-            headingLevel: 2,
+            headingLevel: 6,
           },
         },
       },
@@ -327,7 +327,7 @@ describe("normalizeDocument", () => {
     expect(styles?.paragraphStyles?.["tor.body"].props).toEqual({
       fontFamilyKey: "sarabun",
       spacingAfter: pt(6),
-      headingLevel: 2,
+      headingLevel: 6,
     })
     expect(styles?.textRunStyles?.emphasis.style).toEqual({
       fontFamilyKey: "sarabun",

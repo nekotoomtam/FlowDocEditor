@@ -15,7 +15,7 @@ import {
 } from "@/layout"
 import type { TextMeasurer } from "@/layout"
 import { buildPositionedParagraphLines, resolvePaginatedLineBaselineY } from "@/pagination"
-import type { DocumentNode, FlowTableNode, ParagraphNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, ParagraphBoxStyle, ParagraphNode } from "@/schema"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import { resolveFontCssFamily, resolveFontVariantKeyForStyle } from "@/font-registry"
 import {
@@ -133,6 +133,21 @@ const SVG_TEXT_PRESERVE_WHITESPACE_STYLE: React.CSSProperties = {
   pointerEvents: "none",
   userSelect: "none",
   whiteSpace: "pre",
+}
+
+export function resolveInlineEditTextareaPointerPagePoint(input: {
+  textareaContentX: number
+  fragmentY: number
+  clientX: number
+  clientY: number
+  rectLeft: number
+  rectTop: number
+  scale: number
+}): { x: number; y: number } {
+  return {
+    x: input.textareaContentX + (input.clientX - input.rectLeft - EDIT_CHROME_X) / input.scale,
+    y: input.fragmentY + (input.clientY - input.rectTop - EDIT_CHROME_Y) / input.scale,
+  }
 }
 
 export function focusElementWithoutScroll(
@@ -965,6 +980,63 @@ function cloneWysiwygDraftParagraphLayout(layout: WysiwygDraftParagraphLayout): 
   }
 }
 
+function ptUnit(value: number) {
+  return { value, unit: "pt" as const }
+}
+
+function paragraphBoxStyleFromRenderProps(renderProps: ParagraphRenderProps): ParagraphBoxStyle | undefined {
+  const box = renderProps.box
+  if (!box) return undefined
+  const border = {
+    top: box.border.top ? { ...box.border.top, width: ptUnit(box.border.top.width) } : undefined,
+    right: box.border.right ? { ...box.border.right, width: ptUnit(box.border.right.width) } : undefined,
+    bottom: box.border.bottom ? { ...box.border.bottom, width: ptUnit(box.border.bottom.width) } : undefined,
+    left: box.border.left ? { ...box.border.left, width: ptUnit(box.border.left.width) } : undefined,
+  }
+  const hasBorder = Object.values(border).some(Boolean)
+  return {
+    fill: box.fill,
+    padding: {
+      top: ptUnit(box.padding.top),
+      right: ptUnit(box.padding.right),
+      bottom: ptUnit(box.padding.bottom),
+      left: ptUnit(box.padding.left),
+    },
+    ...(hasBorder ? { border } : {}),
+  }
+}
+
+export function paragraphWithWysiwygFragmentRenderProps(fragment: PageFragment, node: ParagraphNode): ParagraphNode {
+  const renderProps = fragment.renderProps
+  if (!renderProps) return node
+  const lineHeightRatio = renderProps.fontSize > 0
+    ? renderProps.lineHeight / renderProps.fontSize
+    : node.props.lineHeight
+  return {
+    ...node,
+    props: {
+      ...node.props,
+      align: renderProps.align,
+      fontSize: ptUnit(renderProps.fontSize),
+      fontFamilyKey: renderProps.fontFamilyKey,
+      textColor: renderProps.textColor,
+      fontWeight: renderProps.fontWeight,
+      fontStyle: renderProps.fontStyle,
+      textDecoration: renderProps.textDecoration,
+      strikethrough: renderProps.strikethrough,
+      lineHeight: Number.isFinite(lineHeightRatio) && lineHeightRatio > 0
+        ? lineHeightRatio
+        : node.props.lineHeight,
+      spacingBefore: ptUnit(renderProps.spacingBefore),
+      spacingAfter: ptUnit(renderProps.spacingAfter),
+      textIndent: ptUnit(renderProps.textIndent),
+      indentLeft: ptUnit(renderProps.indentLeft),
+      indentRight: ptUnit(renderProps.indentRight),
+      box: paragraphBoxStyleFromRenderProps(renderProps) ?? node.props.box,
+    },
+  }
+}
+
 export function createWysiwygDraftParagraphLayoutCacheKey(
   fragment: PageFragment,
   node: ParagraphNode,
@@ -991,6 +1063,7 @@ export function createWysiwygDraftParagraphLayoutCacheKey(
       isContinued: fragment.isContinued ?? false,
       lineStart: fragment.lineStart ?? null,
       lineEnd: fragment.lineEnd ?? null,
+      renderProps: fragment.renderProps ?? null,
     },
     node: {
       id: node.id,
@@ -1073,7 +1146,8 @@ export function buildWysiwygDraftParagraphLayout(
   if (fragment.continuesFrom || (fragment.isContinued && !options.allowContinuedFirstFragment)) return null
   const draftNode = paragraphWithDraftText(node, draftText)
   if (!draftNode) return null
-  const layoutNode = withWysiwygListBodyIndent(fragment, draftNode)
+  const resolvedDraftNode = paragraphWithWysiwygFragmentRenderProps(fragment, draftNode)
+  const layoutNode = withWysiwygListBodyIndent(fragment, resolvedDraftNode)
   const startedAt = options.traceMeasure ? startWysiwygPerfSpan() : null
   const measured = measureParagraph(layoutNode, fragment.width, textMeasurer)
   if (startedAt !== null) {
@@ -2853,17 +2927,28 @@ export function ParagraphTextSurface({
   const markUserEditInteraction = useCallback(() => {
     onUserEditInteraction(fragment.nodeId)
   }, [fragment.nodeId, onUserEditInteraction])
+  // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
+  // Matching padding cancels that expansion so textarea content starts at the
+  // same paragraph origin as SVG lines instead of drifting by the chrome size.
+  const textareaPadding = `${spacingBefore + EDIT_CHROME_Y}px ${EDIT_CHROME_X}px ${spacingAfter + EDIT_CHROME_Y}px`
+  const textareaContentX = displayFragment.listMarker?.bodyX ?? displayFragment.x
+  const textareaContentWidth = Math.max(0, (displayFragment.x + displayFragment.width) - textareaContentX)
   const resolveLocalOffsetFromPointer = useCallback((event: React.PointerEvent<HTMLTextAreaElement>): number | null => {
     const el = event.currentTarget
     const rect = el.getBoundingClientRect()
-    const point = {
-      x: displayFragment.x + (event.clientX - rect.left - EDIT_CHROME_X) / scale,
-      y: displayFragment.y + (event.clientY - rect.top - EDIT_CHROME_Y) / scale,
-    }
+    const point = resolveInlineEditTextareaPointerPagePoint({
+      textareaContentX,
+      fragmentY: displayFragment.y,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      rectLeft: rect.left,
+      rectTop: rect.top,
+      scale,
+    })
     const candidate = resolveCaretOffsetFromPointInFragment(displayFragment, point, { textMeasurer })
     if (!candidate) return null
     return Math.max(0, Math.min(editText.length, candidate.offset - preText.length))
-  }, [displayFragment, editText.length, preText.length, scale, textMeasurer])
+  }, [displayFragment, editText.length, preText.length, scale, textMeasurer, textareaContentX])
 
   const setTextareaPointerSelection = useCallback((
     el: HTMLTextAreaElement,
@@ -3009,13 +3094,6 @@ export function ParagraphTextSurface({
   const passiveTextEngineSelectionFragment = wysiwygTextVisualDraftLines
     ? { ...displayFragment, lines: wysiwygTextVisualDraftLines }
     : displayFragment
-  // The foreignObject expands by EDIT_CHROME_* for outline/click affordance.
-  // Matching padding cancels that expansion so textarea content starts at the
-  // same paragraph origin as SVG lines instead of drifting by the chrome size.
-  const textareaPadding = `${spacingBefore + EDIT_CHROME_Y}px ${EDIT_CHROME_X}px ${spacingAfter + EDIT_CHROME_Y}px`
-  const textareaContentX = displayFragment.listMarker?.bodyX ?? displayFragment.x
-  const textareaContentWidth = Math.max(0, (displayFragment.x + displayFragment.width) - textareaContentX)
-
   const syncTextareaHeight = useCallback((el: HTMLTextAreaElement) => {
     el.scrollTop = 0
     onHeightChange(fragment.nodeId, activeEditHeight / scale, fragment.pageIndex)

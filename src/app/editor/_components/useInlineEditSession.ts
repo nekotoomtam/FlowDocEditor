@@ -267,11 +267,11 @@ export function useInlineEditSession({
     }
   }, [])
 
-  const startAfterStructuralChange = useCallback((nextNodeId: string, nextCaretIndex: number | null) => {
+  const startAfterStructuralChange = useCallback((nextNodeId: string, nextCaretIndex: number | null): PaginatedDocument | null => {
     cancelPendingEnd()
     const beforeDoc = getCurrentDoc()
     const beforeText = getParagraphText(beforeDoc, nextNodeId)
-    if (beforeText == null) return
+    if (beforeText == null) return null
 
     const beforePaginated = paginatePreviewDoc(beforeDoc)
     setPaginated(beforePaginated)
@@ -286,6 +286,7 @@ export function useInlineEditSession({
     setActiveNodeId(nextNodeId)
     setCaretIndex(nextCaretIndex)
     setPageIndex(null)
+    return beforePaginated
   }, [
     cancelPendingEnd,
     getCurrentDoc,

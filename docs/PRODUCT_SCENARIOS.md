@@ -193,7 +193,7 @@ priority.
   - may use roman/independent numbering in future
 - Section 3: body
   - `pageNumberStart=1`
-  - heading levels 1-3
+  - heading levels 1-6
   - paragraphs with Thai and mixed Thai/English text
   - simple data tables
   - optional appendix sections
@@ -210,7 +210,7 @@ Minimum useful fixture data:
 - `report.title`: report title
 - `report.period`: date range
 - `documentNo`: reference number
-- 8-20 headings across levels 1-3
+- 8-20 headings across levels 1-6
 - body paragraphs with:
   - Thai text
   - mixed Thai/English product or project names

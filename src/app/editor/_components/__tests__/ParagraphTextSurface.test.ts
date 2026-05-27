@@ -22,7 +22,9 @@ import {
   inlineEditTextareaTextColor,
   hasWysiwygTextDraftChange,
   isWysiwygTextSessionFocusTarget,
+  paragraphWithWysiwygFragmentRenderProps,
   resolvePointerSelectionWheelScrollDelta,
+  resolveInlineEditTextareaPointerPagePoint,
   resolveWysiwygCaretFollowScrollDelta,
   resolveWysiwygLiveTextEcho,
   resolveSelectionOverlayRectsInFragmentWithPerf,
@@ -581,6 +583,20 @@ describe("ParagraphTextSurface continuation editing", () => {
     expect(shouldUseNativeTableCellBoundaryBackspace(true, "")).toBe(true)
     expect(shouldUseNativeTableCellBoundaryBackspace(true, "Hello")).toBe(false)
     expect(shouldUseNativeTableCellBoundaryBackspace(false, "")).toBe(false)
+  })
+
+  it("maps list textarea pointer coordinates from the list body start", () => {
+    const point = resolveInlineEditTextareaPointerPagePoint({
+      textareaContentX: 96,
+      fragmentY: 40,
+      clientX: 149,
+      clientY: 55,
+      rectLeft: 93,
+      rectTop: 37,
+      scale: 2,
+    })
+
+    expect(point).toEqual({ x: 122.5, y: 47.5 })
   })
 })
 
@@ -2581,6 +2597,64 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(paragraph.props.textIndent.value).toBe(0)
   })
 
+  it("measures styled list draft layouts from the resolved fragment render props", () => {
+    const doc = makeDoc("กสสสสสส")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    paragraph.props.paragraphStyleId = "tor.body"
+    paragraph.props.styleOverrides = { spacingAfter: { value: 5, unit: "pt" } }
+    paragraph.props.fontSize = { value: 12.25, unit: "pt" }
+    paragraph.props.lineHeight = 1.5
+    paragraph.props.spacingAfter = { value: 8, unit: "pt" }
+    paragraph.props.list = { instanceId: "tor-main", level: 2, itemId: "tor.item" }
+    const fragment = makeFragment({
+      x: 72,
+      y: 319,
+      width: 225.5,
+      height: 18.5,
+      renderProps: {
+        fontSize: 9,
+        fontFamilyKey: "sarabun",
+        textColor: "000000",
+        fontWeight: "normal",
+        fontStyle: "normal",
+        textDecoration: "none",
+        strikethrough: false,
+        align: "left",
+        lineHeight: 13.5,
+        spacingBefore: 0,
+        spacingAfter: 5,
+        textIndent: 0,
+        indentLeft: 108,
+        indentRight: 0,
+      },
+      listMarker: {
+        text: "1.1.1",
+        level: 2,
+        ordinal: 1,
+        instanceId: "tor-main",
+        styleId: "tor-clause",
+        itemId: "tor.item",
+        markerIndent: 72,
+        bodyIndent: 108,
+        markerX: 144,
+        bodyX: 180,
+      },
+    })
+
+    const layout = buildWysiwygDraftParagraphLayout(fragment, paragraph, "กสสสสส", fixedMeasurer)
+
+    expect(layout?.height).toBe(18.5)
+    expect(layout?.lines).toHaveLength(1)
+    expect(layout?.lines[0]).toMatchObject({
+      text: "กสสสสส",
+      x: 180,
+      y: 319,
+      height: 13.5,
+    })
+    expect(paragraphWithWysiwygFragmentRenderProps(fragment, paragraph).props.fontSize).toEqual({ value: 9, unit: "pt" })
+    expect(paragraph.props.fontSize).toEqual({ value: 12.25, unit: "pt" })
+  })
+
   it("wraps list item draft lines from the generated body start", () => {
     const doc = makeDoc("ก".repeat(12))
     const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
@@ -2687,7 +2761,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(second?.lines).not.toBe(first?.lines)
   })
 
-  it("invalidates cached draft measurements when text, width, style, or measurer changes", () => {
+  it("invalidates cached draft measurements when text, width, style, fragment render props, or measurer changes", () => {
     const doc = makeDoc("Hello")
     const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
     const fragment = makeFragment({ width: 80 })
@@ -2715,6 +2789,24 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     buildCachedWysiwygDraftParagraphLayout(cache, { ...fragment, width: 70 }, styledParagraph, "Hello!!", firstCounting.measurer)
     const callsAfterStyleChange = firstCounting.totalCalls()
     expect(callsAfterStyleChange).toBeGreaterThan(callsAfterTextChange)
+
+    buildCachedWysiwygDraftParagraphLayout(cache, {
+      ...fragment,
+      width: 70,
+      renderProps: {
+        fontSize: 16,
+        fontFamilyKey: "default",
+        align: "left",
+        lineHeight: 16,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    }, styledParagraph, "Hello!!", firstCounting.measurer)
+    const callsAfterRenderPropsChange = firstCounting.totalCalls()
+    expect(callsAfterRenderPropsChange).toBeGreaterThan(callsAfterStyleChange)
 
     const secondCounting = makeCountingMeasurer()
     buildCachedWysiwygDraftParagraphLayout(cache, { ...fragment, width: 70 }, styledParagraph, "Hello!!", secondCounting.measurer)

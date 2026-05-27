@@ -43,6 +43,7 @@ import {
   createFieldRefInline,
   createId,
   createPageBreakNode,
+  createTocNode,
 } from "./defaults"
 import { orderedSectionParagraphs } from "./documentTraversal"
 import { tryResolveFlowTableGrid } from "./flowTableGrid"
@@ -506,6 +507,10 @@ function createNodesForSource(source: DragSource, nodes: Nodes, doc: DocumentNod
     }
     if (source.blockType === "page-break") {
       const node = createPageBreakNode()
+      return { insertId: node.id, newNodes: { [node.id]: node } }
+    }
+    if (source.blockType === "toc") {
+      const node = createTocNode()
       return { insertId: node.id, newNodes: { [node.id]: node } }
     }
     if (source.blockType === "row") {

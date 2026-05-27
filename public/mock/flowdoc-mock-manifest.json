@@ -1,0 +1,27 @@
+{
+  "generatedAt": "2026-05-27T01:20:25.057Z",
+  "variants": [
+    {
+      "variant": "long",
+      "filename": "flowdoc-long-mock.flowdoc.json",
+      "id": "mock_long_thai_document",
+      "title": "Mock FlowDoc Long Thai Document",
+      "bytes": 2544049,
+      "bodyChildren": 701,
+      "nodeCount": 798,
+      "hasThaiText": true,
+      "questionTriples": 0
+    },
+    {
+      "variant": "stress",
+      "filename": "flowdoc-stress-mock.flowdoc.json",
+      "id": "mock_stress_thai_document",
+      "title": "Mock FlowDoc Stress Thai Document",
+      "bytes": 4698396,
+      "bodyChildren": 1297,
+      "nodeCount": 1442,
+      "hasThaiText": true,
+      "questionTriples": 0
+    }
+  ]
+}

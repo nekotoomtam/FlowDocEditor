@@ -67,6 +67,17 @@ export const ParagraphBoxStyleSchema = z.object({
   border: ParagraphBoxBorderSchema.optional(),
 })
 
+export const HeadingLevelSchema = z.union([
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+  z.literal(4),
+  z.literal(5),
+  z.literal(6),
+])
+
+export type HeadingLevel = z.infer<typeof HeadingLevelSchema>
+
 export const ParagraphStylePropertiesSchema = z.object({
   align: TextAlignSchema.optional(),
   fontSize: UnitValueSchema.optional(),
@@ -82,7 +93,7 @@ export const ParagraphStylePropertiesSchema = z.object({
   textIndent: UnitValueSchema.optional(),
   indentLeft: UnitValueSchema.optional(),
   indentRight: UnitValueSchema.optional(),
-  headingLevel: z.union([z.literal(1), z.literal(2), z.literal(3), z.null()]).optional(),
+  headingLevel: HeadingLevelSchema.nullable().optional(),
   keepWithNext: z.boolean().optional(),
   box: ParagraphBoxStyleSchema.optional(),
 })
@@ -112,7 +123,7 @@ export const ParagraphPropsSchema = z.object({
   textIndent: UnitValueSchema,
   indentLeft: UnitValueSchema,
   indentRight: UnitValueSchema,
-  headingLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+  headingLevel: HeadingLevelSchema.optional(),
   keepWithNext: z.boolean().optional(),  // keep this paragraph on the same page as the next sibling
   list: ParagraphListPropsSchema.optional(),
   box: ParagraphBoxStyleSchema.optional(),
@@ -200,7 +211,7 @@ export const PageBreakNodeSchema = z.object({
 
 export const TocPropsSchema = z.object({
   title: z.string().optional(),
-  maxLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+  maxLevel: HeadingLevelSchema.optional(),
 })
 
 export const TocNodeSchema = z.object({

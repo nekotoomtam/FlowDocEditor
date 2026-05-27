@@ -187,7 +187,10 @@ export const TOC_ENTRY_LH = 1.5
 
 function countHeadings(section: DocumentSection, maxLevel: number): number {
   let count = 0
-  for (const node of Object.values(section.nodes)) {
+  const body = section.nodes[section.bodyRootId]
+  if (body?.type !== "body") return count
+  for (const nodeId of body.childIds) {
+    const node = section.nodes[nodeId]
     if (node.type === "paragraph" && node.props.headingLevel && node.props.headingLevel <= maxLevel) {
       count++
     }

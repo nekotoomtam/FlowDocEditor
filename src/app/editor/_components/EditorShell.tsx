@@ -520,6 +520,7 @@ function describeDragSource(source: DragSource): string {
     if (source.blockType === "paragraph") return "Paragraph"
     if (source.blockType === "divider") return "Divider"
     if (source.blockType === "page-break") return "Page break"
+    if (source.blockType === "toc") return "TOC"
     if (source.blockType === "row") return "Row"
     if (source.blockType === "flow-columns" || source.blockType === "columns") return "Column"
     if (source.blockType === "flow-table") return "Table"
@@ -568,6 +569,9 @@ function DragGhostIcon({ source }: { source: DragSource }) {
   }
   if (source.blockType === "page-break") {
     return <span style={dragGhostDocumentIcon}>PB</span>
+  }
+  if (source.blockType === "toc") {
+    return <span style={dragGhostDocumentIcon}>TOC</span>
   }
   if (source.blockType === "flow-table") {
     return (
@@ -879,7 +883,7 @@ export default function EditorShell() {
   ), [editorTextMeasurer, resolvePreviewDoc])
 
   const editorRootRef = useRef<HTMLDivElement | null>(null)
-  const pageRefs = useRef<Map<string, SVGSVGElement>>(new Map())
+  const pageRefs = useRef<Map<string, HTMLElement>>(new Map())
   const pendingDragRef = useRef<PendingDrag | null>(null)
   const pendingDragMoveRef = useRef<PendingDragMove | null>(null)
   const dragMoveFrameRef = useRef<number | null>(null)
@@ -1963,11 +1967,17 @@ export default function EditorShell() {
   }, [finalizeInlineEditBeforeAction])
 
   const startInlineEditAfterModelStructuralChange = useCallback((nodeId: string, caretIndex: number | null) => {
-    startInlineEditAfterStructuralChange(nodeId, caretIndex)
+    const structuralPaginated = startInlineEditAfterStructuralChange(nodeId, caretIndex)
     if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
+    if (!structuralPaginated) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
+      return
+    }
+    paginatedRef.current = structuralPaginated
     if (!isWysiwygTextEngineFragmentEligible({
       doc: docRef.current,
-      paginated: paginatedRef.current,
+      paginated: structuralPaginated,
       nodeId,
     })) {
       clearWysiwygDraftPagination()
@@ -2392,7 +2402,7 @@ export default function EditorShell() {
     }
   }, [headerFooterReservedDragRef, isLayoutLoading, marginDragRef, minHeightDragRef, resizeDragRef, setHeaderFooterReservedDrag, setMarginDrag, setMinHeightDrag, setResizeDrag])
 
-  const setPageRef = useCallback((key: string, el: SVGSVGElement | null) => {
+  const setPageRef = useCallback((key: string, el: HTMLElement | null) => {
     if (el) pageRefs.current.set(key, el)
     else pageRefs.current.delete(key)
   }, [])
@@ -3541,6 +3551,7 @@ export default function EditorShell() {
                 doc={previewDoc}
                 drag={isTemplateMode ? state.drag : null}
                 scale={scale}
+                activePageIndex={currentCanvasPageIndex}
                 selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
                 selectionAnchorNodeId={isTemplateMode ? state.selectionAnchorNodeId : null}
                 isLayoutLoading={showLayoutLoadingOverlay}

@@ -212,6 +212,12 @@ function paginateParagraph(
 
 // ─── Vertical Container Pagination ───────────────────────────────────────────
 
+function shouldTocAdvanceAfter(children: FlowBox[], index: number): boolean {
+  const nextChild = children[index + 1]
+  if (!nextChild || nextChild.nodeType === "page-break") return false
+  return true
+}
+
 function paginateVerticalContainer(
   box: FlowBox,
   section: DocumentSection,
@@ -226,6 +232,7 @@ function paginateVerticalContainer(
   listNumbering?: ListNumberingPaginationContext,
 ): PageFlowCursor {
   let current = cursor
+  const containerNode = section.nodes[box.nodeId]
 
   box.children.forEach((child, index) => {
     // keepWithNext: if this paragraph must stay with the next sibling, advance the
@@ -244,6 +251,14 @@ function paginateVerticalContainer(
       ) {
         current = advancePage(current, contentTop)
       }
+    }
+
+    if (containerNode?.type === "body" && node?.type === "toc") {
+      current = paginateTocPlaceholder(child, pages, template, contentTop, contentBottom, current, box.nodeId, {
+        isolateBefore: true,
+        isolateAfter: shouldTocAdvanceAfter(box.children, index),
+      })
+      return
     }
 
     current = paginateFlowBox(child, section, measurer, pages, template, contentTop, contentBottom, current, box.nodeId, wordBreaker, onSplitDecision, listNumbering)

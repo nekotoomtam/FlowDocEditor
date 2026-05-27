@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <title>Load FlowDoc Mock</title>
+  </head>
+  <body>
+    <script>
+      (async () => {
+        const storageKey = "flowdoc_document";
+        const params = new URLSearchParams(window.location.search);
+        const variant = params.get("variant") === "stress" ? "stress" : "long";
+        const filename = variant === "stress"
+          ? "flowdoc-stress-mock.flowdoc.json"
+          : "flowdoc-long-mock.flowdoc.json";
+        const backupKey = `flowdoc_document_backup_codex_${new Date().toISOString().replace(/[:.]/g, "-")}`;
+        const current = window.localStorage.getItem(storageKey);
+
+        if (current) {
+          window.localStorage.setItem(backupKey, current);
+          window.localStorage.setItem("flowdoc_document_backup_codex_latest", current);
+          window.localStorage.setItem("flowdoc_document_backup_codex_latest_key", backupKey);
+        }
+
+        const response = await fetch(`/mock/${filename}`, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`Cannot load mock package: ${response.status}`);
+        }
+
+        const mockPackage = await response.text();
+        window.localStorage.setItem(storageKey, mockPackage);
+        window.localStorage.setItem("flowdoc_document_mock_codex_variant", variant);
+        window.localStorage.setItem("flowdoc_document_mock_codex_loaded_at", new Date().toISOString());
+        window.location.replace("/editor");
+      })().catch((error) => {
+        document.body.textContent = error instanceof Error ? error.message : String(error);
+      });
+    </script>
+  </body>
+</html>

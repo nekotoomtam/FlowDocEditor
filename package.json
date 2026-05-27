@@ -22,6 +22,7 @@
     "review:archive": "node scripts/create-review-archive.mjs",
     "review:browser": "node scripts/review-browser.mjs",
     "review:browser:install": "playwright install chromium && npm run review:browser",
+    "mock:flowdoc": "node scripts/generate-flowdoc-mocks.mjs",
     "smoke:editor": "node scripts/editor-smoke.mjs",
     "smoke:wysiwyg-table-cell-boundary": "node scripts/wysiwyg-table-cell-boundary-smoke.mjs",
     "smoke:wysiwyg-flow-table-colspan-boundary": "node scripts/wysiwyg-table-cell-boundary-smoke.mjs --target=flow-table-colspan",

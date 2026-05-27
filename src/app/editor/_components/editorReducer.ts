@@ -21,6 +21,7 @@ import {
   ensureSectionReservedZoneVisibleForAuthoring,
   exitListItem,
   fitFlowTableToSectionWidth,
+  getParagraphStylePreset,
   indentListItem,
   mergeListItemWithPrevious,
   mergeParagraphWithPrevious,
@@ -211,6 +212,24 @@ function getLayoutChildIds(node: LayoutNode): string[] | null {
   return Array.isArray(node.childIds) ? node.childIds : null
 }
 
+function isDirectBodyParagraph(doc: DocumentNode, nodeId: string): boolean {
+  for (const section of doc.document.sections) {
+    const body = section.nodes[section.bodyRootId]
+    if (body?.type !== "body" || !body.childIds.includes(nodeId)) continue
+    return section.nodes[nodeId]?.type === "paragraph"
+  }
+  return false
+}
+
+function hasHeadingLevelChange(changes: Record<string, unknown> | ParagraphStyleProperties): boolean {
+  return Object.prototype.hasOwnProperty.call(changes, "headingLevel")
+}
+
+function omitHeadingLevelChange<T extends Record<string, unknown> | ParagraphStyleProperties>(changes: T): T {
+  const { headingLevel: _headingLevel, ...rest } = changes
+  return rest as T
+}
+
 function findPreviousEditableParagraphSibling(
   doc: DocumentNode,
   nodeId: string,
@@ -279,13 +298,19 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
         selectedNodeId: action.nodeId,
         selectionAnchorNodeId: action.anchorNodeId !== undefined ? action.anchorNodeId : action.nodeId,
       }
-    case "UPDATE_PROPS":
-      return pushDoc(state, updateNodeProps(state.doc, action.nodeId, action.changes))
+    case "UPDATE_PROPS": {
+      const changes = hasHeadingLevelChange(action.changes) && !isDirectBodyParagraph(state.doc, action.nodeId)
+        ? omitHeadingLevelChange(action.changes)
+        : action.changes
+      return Object.keys(changes).length === 0 ? state : pushDoc(state, updateNodeProps(state.doc, action.nodeId, changes))
+    }
     case "UPDATE_TEXT":
       return pushDoc(state, replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text))
     case "UPDATE_PARAGRAPH_TEXT_STYLE":
       return pushDoc(state, applyParagraphTextStyle(state.doc, action.nodeId, action.changes))
     case "APPLY_PARAGRAPH_STYLE_PRESET": {
+      const style = getParagraphStylePreset(action.styleId)
+      if (style.props.headingLevel != null && !isDirectBodyParagraph(state.doc, action.nodeId)) return state
       const nextDoc = applyParagraphStylePreset(state.doc, action.nodeId, action.styleId)
       if (nextDoc === state.doc) return state
       return {
@@ -313,7 +338,11 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       }
     }
     case "PATCH_PARAGRAPH_STYLE_OVERRIDES": {
-      const nextDoc = patchParagraphStyleOverrides(state.doc, action.nodeId, action.changes)
+      const changes = hasHeadingLevelChange(action.changes) && !isDirectBodyParagraph(state.doc, action.nodeId)
+        ? omitHeadingLevelChange(action.changes)
+        : action.changes
+      if (Object.keys(changes).length === 0) return state
+      const nextDoc = patchParagraphStyleOverrides(state.doc, action.nodeId, changes)
       if (nextDoc === state.doc) return state
       return {
         ...pushDoc(state, nextDoc),

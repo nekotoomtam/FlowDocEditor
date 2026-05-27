@@ -16,6 +16,11 @@ import {
   shouldMoveToNextPage,
 } from "./cursor"
 
+type TocPaginationOptions = {
+  isolateBefore?: boolean
+  isolateAfter?: boolean
+}
+
 function getParagraphText(node: ParagraphNode): string {
   return node.children
     .filter((c) => c.type === "text")
@@ -35,12 +40,13 @@ export function collectTocEntries(sections: PaginatedSection[], doc: DocumentNod
     ps.pages.forEach((page) => {
       page.fragments.forEach((frag) => {
         if (frag.nodeType !== "paragraph") return
+        if (frag.parentNodeId !== section.bodyRootId) return
         const node = section.nodes[frag.nodeId]
         if (node?.type !== "paragraph" || !node.props.headingLevel) return
         entries.push({
           nodeId: frag.nodeId,
           text: getParagraphText(node),
-          level: node.props.headingLevel as 1 | 2 | 3,
+          level: node.props.headingLevel,
           pageNumber: frag.pageIndex + 1 + pageNumberOffset,
         })
       })
@@ -136,12 +142,18 @@ export function paginateTocPlaceholder(
   contentBottom: number,
   cursor: PageFlowCursor,
   parentNodeId?: string,
+  options: TocPaginationOptions = {},
 ): PageFlowCursor {
   let current = cursor
+  if (options.isolateBefore && current.cursorY > contentTop + 1) {
+    current = advancePage(current, contentTop)
+  }
+
   if (shouldMoveToNextPage(current.cursorY, contentBottom) ||
     shouldMoveBlockToNextPage(current.cursorY, box.height, contentTop, contentBottom)) {
     current = advancePage(current, contentTop)
   }
+
   pushFragment(pages, template, {
     nodeId: box.nodeId,
     nodeType: "toc",
@@ -153,5 +165,7 @@ export function paginateTocPlaceholder(
     height: box.height,
     lines: [],
   })
-  return { ...current, cursorY: current.cursorY + box.height }
+
+  const afterToc = { ...current, cursorY: current.cursorY + box.height }
+  return options.isolateAfter ? advancePage(afterToc, contentTop) : afterToc
 }

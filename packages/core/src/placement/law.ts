@@ -229,6 +229,10 @@ function isPageBreakSource(document: DocumentNode, source?: DragSource | null): 
   return getSourceBlockType(document, source) === "page-break"
 }
 
+function isTocSource(document: DocumentNode, source?: DragSource | null): boolean {
+  return getSourceBlockType(document, source) === "toc"
+}
+
 function isRowStackTarget(location: NodeLocation | null, rowId: string): location is NodeLocation & {
   node: Extract<LayoutNode, { type: "stack" | "flow-stack" }>
   parent: Extract<LayoutNode, { type: "row" | "flow-row" }> & { childIds: string[] }
@@ -343,6 +347,9 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     if (isPageBreakSource(document, source) && location.node.type !== "body") {
       return err(rawIntent, "invalid-parent", "Page breaks can only be inserted in the body flow.")
     }
+    if (isTocSource(document, source) && location.node.type !== "body") {
+      return err(rawIntent, "invalid-parent", "TOC can only be inserted in the body flow.")
+    }
     if (isFlowStackSource(document, source)) {
       if (location.node.type !== "body") {
         return err(rawIntent, "invalid-parent", "Flow stack can only move into a row or become a new row.")
@@ -386,6 +393,9 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     }
     if (isPageBreakSource(document, source) && location.parent.type !== "body") {
       return err(rawIntent, "invalid-parent", "Page breaks can only be inserted in the body flow.")
+    }
+    if (isTocSource(document, source) && location.parent.type !== "body") {
+      return err(rawIntent, "invalid-parent", "TOC can only be inserted in the body flow.")
     }
     const parentIsHeaderFooterZoneRoot = location.parent.type === "stack" &&
       isHeaderFooterZoneRootId(location.section, location.parent.id)
@@ -467,6 +477,9 @@ function resolveNodeLaw(document: DocumentNode, rawIntent: RawPlacementIntent, s
     if (isPageBreakSource(document, source)) {
       return err(rawIntent, "invalid-zone", "Page breaks can only be placed above, below, or inside the body.")
     }
+    if (isTocSource(document, source)) {
+      return err(rawIntent, "invalid-zone", "TOC can only be placed above, below, or inside the body.")
+    }
     if (isFlowStackSource(document, source)) {
       return err(rawIntent, "invalid-zone", "Flow stack can only be inserted into an existing flow row or moved as a full row.")
     }
@@ -508,6 +521,9 @@ function resolveRowOuterLaw(document: DocumentNode, rawIntent: RawPlacementInten
   }
   if (isPageBreakSource(document, source) && rowLocation.parent.type !== "body") {
     return err(rawIntent, "invalid-parent", "Page breaks can only be inserted in the body flow.")
+  }
+  if (isTocSource(document, source) && rowLocation.parent.type !== "body") {
+    return err(rawIntent, "invalid-parent", "TOC can only be inserted in the body flow.")
   }
 
   const sourceNodeId = getSourceNodeId(source)
@@ -605,6 +621,9 @@ function resolveRowStackLaw(document: DocumentNode, rawIntent: RawPlacementInten
   if (zone === "center") {
     if (isPageBreakSource(document, source)) {
       return err(rawIntent, "invalid-zone", "Page breaks can only be inserted in the body flow.")
+    }
+    if (isTocSource(document, source)) {
+      return err(rawIntent, "invalid-zone", "TOC can only be inserted in the body flow.")
     }
     if (isFlowStackSource(document, source)) {
       return err(rawIntent, "invalid-zone", "Flow stack must be inserted before or after an existing column.")

@@ -12,6 +12,7 @@ import {
   EditorCanvas,
   pageViewScopedEditPropsAffectPage,
   resolveInlineEditVisualOffsetY,
+  shouldRenderLazyPageFrame,
   shouldStartInlineEditOnSingleClick,
 } from "../EditorCanvas"
 import type { DragState } from "../editorReducer"
@@ -709,6 +710,7 @@ function renderCanvas(
     onHeaderFooterZonePointerDown: noop,
     onHeaderFooterReservedResizeStart: noop,
     scale: 1,
+    activePageIndex: null,
     selectedNodeId,
     selectionAnchorNodeId: options.selectionAnchorNodeId ?? selectedNodeId,
     isLayoutLoading: false,
@@ -782,6 +784,36 @@ function marginDragHandle(markup: string, side: "top" | "right" | "bottom" | "le
 }
 
 describe("EditorCanvas page memoization", () => {
+  it("renders only visible or forced page frames when lazy rendering is enabled", () => {
+    const visible = new Set(["0-0"])
+    const forced = new Set(["0-4"])
+
+    expect(shouldRenderLazyPageFrame({
+      lazyEnabled: false,
+      pageKey: "0-20",
+      visiblePageKeys: visible,
+      forcedPageKeys: forced,
+    })).toBe(true)
+    expect(shouldRenderLazyPageFrame({
+      lazyEnabled: true,
+      pageKey: "0-0",
+      visiblePageKeys: visible,
+      forcedPageKeys: forced,
+    })).toBe(true)
+    expect(shouldRenderLazyPageFrame({
+      lazyEnabled: true,
+      pageKey: "0-4",
+      visiblePageKeys: visible,
+      forcedPageKeys: forced,
+    })).toBe(true)
+    expect(shouldRenderLazyPageFrame({
+      lazyEnabled: true,
+      pageKey: "0-20",
+      visiblePageKeys: visible,
+      forcedPageKeys: forced,
+    })).toBe(false)
+  })
+
   it("scopes WYSIWYG draft prop changes to pages that render the edited paragraph", () => {
     const activePage = pageWithFragments(0, [textFragment("active-p", "Active", 72)])
     const otherPage = pageWithFragments(1, [textFragment("other-p", "Other", 72, { pageIndex: 1 })])

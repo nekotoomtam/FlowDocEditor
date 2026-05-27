@@ -54,6 +54,46 @@ function docWithFlowParagraph(): DocumentNode {
   } as DocumentNode
 }
 
+function docWithBodyParagraph(): DocumentNode {
+  const doc = docWithFlowParagraph()
+  const section = doc.document.sections[0]
+  const paragraph = section.nodes.p1
+  if (paragraph.type !== "paragraph") throw new Error("expected paragraph fixture")
+  section.nodes = {
+    body: { id: "body", type: "body", props: {}, childIds: ["p1"] },
+    p1: paragraph,
+  }
+  return doc
+}
+
+function docWithToc(): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 72, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 72, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["toc1"] },
+          toc1: { id: "toc1", type: "toc", props: { title: "สารบัญ", maxLevel: 6 } },
+        },
+      }],
+    },
+  } as DocumentNode
+}
+
 function docWithFlowTable(): DocumentNode {
   return {
     version: 1,
@@ -393,7 +433,7 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"paragraph-panel-style\"")
     expect(markup).toContain("data-testid=\"paragraph-style-preset\"")
     expect(markup).toContain("data-testid=\"paragraph-style-detach\"")
-    expect(markup).toContain("TOR Heading 1")
+    expect(markup).not.toContain("TOR Heading 1")
     expect(markup).toContain("data-testid=\"paragraph-font-family\"")
     expect(markup).toContain("role=\"combobox\"")
     expect(markup).toContain("Sarabun")
@@ -404,7 +444,94 @@ describe("PropertyPanel selection context", () => {
     expect(markup).toContain("data-testid=\"paragraph-text-color-palette-well\"")
     expect(markup).toContain("data-testid=\"paragraph-text-color-palette-value\"")
     expect(markup).toContain("data-testid=\"paragraph-text-color-palette-toggle\"")
+    expect(markup).not.toContain("data-testid=\"paragraph-heading-6\"")
     expect(markup).toContain("aria-selected=\"true\"")
+  })
+
+  it("shows document heading controls only for direct body paragraphs", () => {
+    const noop = () => undefined
+    const bodyMarkup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithBodyParagraph(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "p1",
+      selectionAnchorNodeId: "p1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onSelectStyleResource: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+        fitToWidth: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+    const tableMarkup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithFlowTable(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "p1",
+      selectionAnchorNodeId: "p1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onSelectStyleResource: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+        fitToWidth: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(bodyMarkup).toContain("data-testid=\"paragraph-heading-6\"")
+    expect(bodyMarkup).toContain("TOR Heading 1")
+    expect(tableMarkup).not.toContain("data-testid=\"paragraph-heading-6\"")
+    expect(tableMarkup).not.toContain("TOR Heading 1")
+  })
+
+  it("renders TOC max heading controls through H6", () => {
+    const noop = () => undefined
+    const markup = renderToStaticMarkup(createElement(PropertyPanel, {
+      doc: docWithToc(),
+      registry: { version: 1, fields: [] },
+      selectedNodeId: "toc1",
+      selectionAnchorNodeId: "toc1",
+      onUpdateProps: noop,
+      onUpdateText: noop,
+      onUpdateFieldRef: noop,
+      onUpdateParagraphBoxStyle: noop,
+      onSelectContextNode: noop,
+      onDelete: noop,
+      tableOps: {
+        addRow: noop,
+        removeRow: noop,
+        addCol: noop,
+        removeCol: noop,
+      },
+      flowRowOps: {
+        addCol: noop,
+        resizePair: noop,
+      },
+    }))
+
+    expect(markup).toContain("Max heading level")
+    expect(markup).toContain("data-testid=\"toc-max-heading-6\"")
   })
 
   it("renders selected paragraph list context without editing list metadata", () => {

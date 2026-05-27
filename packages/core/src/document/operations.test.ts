@@ -665,6 +665,78 @@ describe("paragraph list operations", () => {
     expect(() => assertDocument(doc)).not.toThrow()
   })
 
+  it("applies Enter and Backspace list operations inside a flow-stack without moving stack children", () => {
+    const parent = makeParagraph("p0", [{ id: "t0", type: "text", text: "Parent" }])
+    const left = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello " },
+      { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+    ])
+    const right = makeParagraph("p2", [{ id: "t3", type: "text", text: "Right stack" }])
+    let doc = withTorListDefinitions(makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p0", "p1"] },
+      fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] },
+      p0: parent,
+      p1: left,
+      p2: right,
+    }, ["fr1"]))
+    doc = applyParagraphList(doc, "p0", { instanceId: "tor-main", level: 0, itemId: "tor.parent" })
+    doc = applyParagraphList(doc, "p1", { instanceId: "tor-main", level: 1, itemId: "tor.left" })
+    doc = applyParagraphList(doc, "p2", { instanceId: "tor-main", level: 0, itemId: "tor.right" })
+
+    const split = splitListItemAtIndex(doc, "p1", "Hello ".length, { itemId: "tor.left.split" })
+    const insertedId = split.newNodeId
+    expect(insertedId).toBeTruthy()
+    const splitSection = split.doc.document.sections[0]
+    const splitStack = splitSection.nodes.fs1
+    const rightStack = splitSection.nodes.fs2
+
+    expect(splitStack.type).toBe("flow-stack")
+    expect(rightStack.type).toBe("flow-stack")
+    if (splitStack.type !== "flow-stack" || rightStack.type !== "flow-stack") return
+    expect(splitStack.childIds).toEqual(["p0", "p1", insertedId])
+    expect(rightStack.childIds).toEqual(["p2"])
+    expect(textRunSummary(getParagraph(split.doc, "p1"))).toEqual([
+      { type: "text", text: "Hello ", style: undefined },
+    ])
+    expect(textRunSummary(getParagraph(split.doc, insertedId))).toEqual([
+      { type: "text", text: "world", style: { fontStyle: "italic" } },
+    ])
+    expect(getParagraph(split.doc, insertedId).props.list).toEqual({
+      instanceId: "tor-main",
+      level: 1,
+      itemId: "tor.left.split",
+    })
+    expect(resolveListMarkers(split.doc).get(insertedId)?.markerText).toBe("1.2")
+    expect(() => assertDocument(split.doc)).not.toThrow()
+
+    const outdented = backspaceListItemAtStart(split.doc, insertedId)
+    expect(getParagraph(outdented, insertedId).props.list).toEqual({
+      instanceId: "tor-main",
+      level: 0,
+      itemId: "tor.left.split",
+    })
+
+    const cleared = backspaceListItemAtStart(outdented, insertedId)
+    expect(getParagraph(cleared, insertedId).props.list).toBeUndefined()
+
+    const empty = makeParagraph("empty", [{ id: "empty-t", type: "text", text: "" }])
+    let exitDoc = withTorListDefinitions(makeDoc({
+      fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
+      fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: ["empty"] },
+      empty,
+    }, ["fr1"]))
+    exitDoc = applyParagraphList(exitDoc, "empty", { instanceId: "tor-main", level: 0, itemId: "tor.empty" })
+
+    const exited = exitListItem(exitDoc, "empty")
+    const exitStack = exited.document.sections[0].nodes.fs1
+    expect(exitStack.type).toBe("flow-stack")
+    if (exitStack.type !== "flow-stack") return
+    expect(exitStack.childIds).toEqual(["empty"])
+    expect(getParagraph(exited, "empty").props.list).toBeUndefined()
+    expect(() => assertDocument(exited)).not.toThrow()
+  })
+
   it("sets and clears numbering restart metadata", () => {
     const p = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
     let doc = withTorListDefinitions(makeDoc({ p1: p }, ["p1"]))
@@ -2765,7 +2837,7 @@ describe("flow-row / flow-stack operations", () => {
     expect(paragraph.props.spacingAfter).toEqual(pt(9))
   })
 
-  it("inserts divider and page-break palette blocks with authored defaults", () => {
+  it("inserts divider, TOC, and page-break palette blocks with authored defaults", () => {
     const doc = makeDoc({}, [])
 
     const withDivider = applyPlacementOperation(
@@ -2791,10 +2863,27 @@ describe("flow-row / flow-stack operations", () => {
       style: "solid",
     })
 
-    const withPageBreak = applyPlacementOperation(
+    const withToc = applyPlacementOperation(
       withDivider,
       "section",
       { kind: "insert-after", parentId: "body", parentType: "body", index: 1, anchorNodeId: divider.id },
+      { source: "palette", blockType: "toc" },
+    )
+    const tocSection = withToc.document.sections[0]
+    const tocBody = tocSection.nodes.body
+
+    expect(() => assertDocument(withToc)).not.toThrow()
+    expect(tocBody.type).toBe("body")
+    if (tocBody.type !== "body") return
+    const toc = tocSection.nodes[tocBody.childIds[1]]
+    expect(toc.type).toBe("toc")
+    if (toc.type !== "toc") return
+    expect(toc.props).toEqual({ title: "สารบัญ", maxLevel: 3 })
+
+    const withPageBreak = applyPlacementOperation(
+      withToc,
+      "section",
+      { kind: "insert-after", parentId: "body", parentType: "body", index: 2, anchorNodeId: toc.id },
       { source: "palette", blockType: "page-break" },
     )
     const pageBreakSection = withPageBreak.document.sections[0]
@@ -2803,7 +2892,7 @@ describe("flow-row / flow-stack operations", () => {
     expect(() => assertDocument(withPageBreak)).not.toThrow()
     expect(pageBreakBody.type).toBe("body")
     if (pageBreakBody.type !== "body") return
-    const pageBreak = pageBreakSection.nodes[pageBreakBody.childIds[1]]
+    const pageBreak = pageBreakSection.nodes[pageBreakBody.childIds[2]]
     expect(pageBreak.type).toBe("page-break")
     if (pageBreak.type !== "page-break") return
     expect(pageBreak.props).toEqual({})

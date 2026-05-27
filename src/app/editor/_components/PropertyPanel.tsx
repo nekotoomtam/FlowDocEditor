@@ -39,8 +39,12 @@ import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from ".
 type DocNode = LayoutNode | FlowTableRowNode | FlowTableCellNode
 type DividerNode = Extract<LayoutNode, { type: "divider" }>
 type DividerLineStyle = DividerNode["props"]["style"]
+type HeadingLevelValue = NonNullable<ParagraphStyleProperties["headingLevel"]>
 type ParagraphPanelTab = "text" | "box" | "style"
 type FlowContainerPanelTab = "layout" | "box"
+
+const PARAGRAPH_HEADING_LEVEL_OPTIONS: Array<HeadingLevelValue | undefined> = [undefined, 1, 2, 3, 4, 5, 6]
+const TOC_MAX_LEVEL_OPTIONS: HeadingLevelValue[] = [1, 2, 3, 4, 5, 6]
 
 interface TableOps {
   addRow: (tableId: string, afterIndex?: number) => void
@@ -110,6 +114,15 @@ function displayNodeType(nodeType: DocNode["type"]): string {
 
 function isTopLevel(doc: DocumentNode, nodeId: string): boolean {
   return doc.document.sections.some((s) => s.nodes[nodeId] != null)
+}
+
+function isDirectBodyParagraph(doc: DocumentNode, nodeId: string): boolean {
+  for (const section of doc.document.sections) {
+    const body = section.nodes[section.bodyRootId]
+    if (body?.type !== "body" || !body.childIds.includes(nodeId)) continue
+    return section.nodes[nodeId]?.type === "paragraph"
+  }
+  return false
 }
 
 function deleteButtonLabel(nodeType: DocNode["type"]): string {
@@ -212,6 +225,7 @@ const PARAGRAPH_STYLE_PRESET_OPTIONS = FLOWDOC_PARAGRAPH_STYLE_PRESET_IDS.map((s
   return {
     id: style.id,
     label: style.name ?? style.id,
+    headingLevel: style.props.headingLevel,
   }
 })
 
@@ -2130,6 +2144,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
         {node.type === "paragraph" && (() => {
           const text = getParagraphText(node)
           const canEditText = isTextRunOnlyParagraph(node)
+          const canUseDocumentHeading = isDirectBodyParagraph(doc, selectedNodeId)
           const fieldRefs = getParagraphFieldRefs(node)
           const effectiveNode: ParagraphNode = {
             ...node,
@@ -2153,7 +2168,8 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
             if (onUpdateParagraphTextStyle) onUpdateParagraphTextStyle(selectedNodeId, changes)
             else onUpdateProps(selectedNodeId, { ...changes })
           }
-          const updateHeadingLevel = (level: 1 | 2 | 3 | undefined) => {
+          const updateHeadingLevel = (level: HeadingLevelValue | undefined) => {
+            if (!canUseDocumentHeading) return
             if (usesStyleOverrideLayer && onUpdateParagraphStyleOverrides) {
               onUpdateParagraphStyleOverrides(selectedNodeId, { headingLevel: level ?? null })
               return
@@ -2224,7 +2240,10 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
           ] as const
           const currentStyleId = node.props.paragraphStyleId ?? ""
           const currentStyle = currentStyleId ? doc.document.styles?.paragraphStyles?.[currentStyleId] : undefined
-          const currentPresetStyleId = (FLOWDOC_PARAGRAPH_STYLE_PRESET_IDS as readonly string[]).includes(currentStyleId)
+          const availableStylePresetOptions = PARAGRAPH_STYLE_PRESET_OPTIONS.filter((option) =>
+            canUseDocumentHeading || option.headingLevel == null
+          )
+          const currentPresetStyleId = availableStylePresetOptions.some((option) => option.id === currentStyleId)
             ? currentStyleId
             : ""
           const currentStyleLabel = currentStyle ? currentStyle.name ?? currentStyle.id : currentStyleId || "None"
@@ -2381,20 +2400,22 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                   </div>
                 </div>
 
-                <div>
-                  <label style={label}>Heading level</label>
-                  <div style={{ display: "flex", gap: 4 }}>
-                    {([undefined, 1, 2, 3] as const).map((lvl) => {
-                      const active = (effectiveProps.headingLevel ?? undefined) === lvl
-                      return (
-                        <button key={String(lvl)} onClick={() => updateHeadingLevel(lvl)}
-                          style={{ flex: 1, padding: "4px 0", fontSize: 10, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: active ? "#dbeafe" : "#fafafa", color: active ? "#1d4ed8" : "#6b7280", fontWeight: active ? "bold" : "normal" }}>
-                          {lvl === undefined ? "—" : `H${lvl}`}
-                        </button>
-                      )
-                    })}
+                {canUseDocumentHeading && (
+                  <div>
+                    <label style={label}>Heading level</label>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 4 }}>
+                      {PARAGRAPH_HEADING_LEVEL_OPTIONS.map((lvl) => {
+                        const active = (effectiveProps.headingLevel ?? undefined) === lvl
+                        return (
+                          <button key={String(lvl)} data-testid={`paragraph-heading-${lvl ?? "none"}`} onClick={() => updateHeadingLevel(lvl)}
+                            style={{ flex: 1, padding: "4px 0", fontSize: 10, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: active ? "#dbeafe" : "#fafafa", color: active ? "#1d4ed8" : "#6b7280", fontWeight: active ? "bold" : "normal" }}>
+                            {lvl === undefined ? "—" : `H${lvl}`}
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
+                )}
               </section>
               <section
                 id="paragraph-panel-box"
@@ -2437,7 +2458,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                     style={input}
                   >
                     <option value="">None</option>
-                    {PARAGRAPH_STYLE_PRESET_OPTIONS.map((option) => (
+                    {availableStylePresetOptions.map((option) => (
                       <option key={option.id} value={option.id}>{option.label}</option>
                     ))}
                   </select>
@@ -3354,11 +3375,11 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
               </div>
               <div>
                 <label style={label}>Max heading level</label>
-                <div style={{ display: "flex", gap: 4 }}>
-                  {([1, 2, 3] as const).map((lvl) => {
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 4 }}>
+                  {TOC_MAX_LEVEL_OPTIONS.map((lvl) => {
                     const active = (toc.props.maxLevel ?? 3) === lvl
                     return (
-                      <button key={lvl} onClick={() => onUpdateProps(selectedNodeId, { maxLevel: lvl })}
+                      <button key={lvl} data-testid={`toc-max-heading-${lvl}`} onClick={() => onUpdateProps(selectedNodeId, { maxLevel: lvl })}
                         style={{ flex: 1, padding: "4px 0", fontSize: 10, cursor: "pointer", border: "1px solid #e5e7eb", borderRadius: 4, background: active ? "#dbeafe" : "#fafafa", color: active ? "#1d4ed8" : "#6b7280", fontWeight: active ? "bold" : "normal" }}>
                         H{lvl}
                       </button>

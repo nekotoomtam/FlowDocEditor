@@ -37,6 +37,10 @@ Users should be able to:
   logical document tree; `Add` hosts block and field palette entry points.
 - The center canvas owns the paged visual editing surface and should not need to
   carry broad document-structure navigation tools.
+- Long documents may virtualize off-viewport page rendering in the center
+  canvas, but page frames used for scrolling/navigation must remain present and
+  virtualization must not change authored document state, pagination output,
+  undo/redo, PDF export, or DOCX export behavior.
 - The right rail owns details for the current task: `Properties` for the
   selected or active object and `Page` for section/page setup.
 - `Design` should default to outline/layout editing, `Fields` should surface
@@ -48,7 +52,15 @@ Users should be able to:
   interaction rules are explicitly designed.
 - The Add panel may expose `Divider` as an authored visible block in document
   and header/footer-safe scopes. It may expose `Page break` only in document
-  body scope until non-body semantics are designed.
+  body scope until non-body semantics are designed. It may expose `TOC` only in
+  document body scope as an authored placeholder for generated heading entries.
+  Body-flow TOC renders as an isolated generated page: pagination starts it on a
+  clean page and moves following body content to the next page without inserting
+  an authored `page-break` node. TOC entries are collected from direct body
+  paragraph headings only; heading-styled paragraphs inside stacks, columns, and
+  table cells are visual/local headings in this slice. Paragraph heading controls
+  and heading paragraph presets should be exposed only when the selected paragraph
+  is a direct body child.
 - Outline reorder is limited to direct children of a section `body`, within the
   same section body. It mutates only the logical `body.childIds` order through a
   core document operation.

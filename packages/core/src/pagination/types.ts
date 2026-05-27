@@ -1,4 +1,5 @@
 import type { LineRun, LineSegment } from "../layout"
+import type { HeadingLevel } from "../schema"
 
 /**
  * Pagination types — รู้จัก page และ cursor
@@ -181,7 +182,7 @@ export interface PaginatedLine {
 export interface TocEntry {
   nodeId: string
   text: string
-  level: 1 | 2 | 3
+  level: HeadingLevel
   pageNumber: number  // 1-based
 }
 

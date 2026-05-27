@@ -200,6 +200,32 @@ describe("isWysiwygTextEngineFragmentEligible", () => {
       pageIndex: 0,
     })).toBe(true)
   })
+
+  it("uses the fresh post-structural paginated snapshot for newly split paragraphs", () => {
+    const secondParagraph: ParagraphNode = {
+      ...paragraph,
+      id: "p2",
+      children: [{ id: "t2", type: "text", text: "Next item" }],
+    }
+    const doc = makeDoc({
+      body: { id: "body", type: "body", props: {}, childIds: ["p1", "p2"] },
+      p1: paragraph,
+      p2: secondParagraph,
+    })
+    const stalePaginated = makePaginated()
+    const structuralPaginated = makePaginated({ nodeId: "p2", y: 36 })
+
+    expect(isWysiwygTextEngineFragmentEligible({
+      doc,
+      paginated: stalePaginated,
+      nodeId: "p2",
+    })).toBe(false)
+    expect(isWysiwygTextEngineFragmentEligible({
+      doc,
+      paginated: structuralPaginated,
+      nodeId: "p2",
+    })).toBe(true)
+  })
 })
 
 describe("isParagraphInsideFlowStack", () => {

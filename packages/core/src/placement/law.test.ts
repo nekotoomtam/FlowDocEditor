@@ -302,44 +302,46 @@ describe("placement law flow-row / flow-stack sources", () => {
     })
   })
 
-  it("allows page-break insertion only in the body flow", () => {
+  it("allows body-only document controls only in the body flow", () => {
     const doc = makeDoc({
       p1: makeParagraph("p1", "Before"),
       fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1"] },
       fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 100 }, childIds: [] },
     }, ["p1", "fr1"])
 
-    const bodyResult = resolvePlacementLaw(
-      doc,
-      {
-        zone: "bottom",
-        intent: "insertBelow",
-        target: { kind: "node", nodeId: "p1", nodeType: "paragraph" },
-      },
-      { source: "palette", blockType: "page-break" },
-    )
-    const stackResult = resolvePlacementLaw(
-      doc,
-      {
-        zone: "center",
-        intent: "insertInside",
-        target: { kind: "node", nodeId: "fs1", nodeType: "flow-stack" },
-      },
-      { source: "palette", blockType: "page-break" },
-    )
+    ;(["page-break", "toc"] as const).forEach((blockType) => {
+      const bodyResult = resolvePlacementLaw(
+        doc,
+        {
+          zone: "bottom",
+          intent: "insertBelow",
+          target: { kind: "node", nodeId: "p1", nodeType: "paragraph" },
+        },
+        { source: "palette", blockType },
+      )
+      const stackResult = resolvePlacementLaw(
+        doc,
+        {
+          zone: "center",
+          intent: "insertInside",
+          target: { kind: "node", nodeId: "fs1", nodeType: "flow-stack" },
+        },
+        { source: "palette", blockType },
+      )
 
-    expect(bodyResult.ok).toBe(true)
-    if (bodyResult.ok) {
-      expect(bodyResult.value.operation).toMatchObject({
-        kind: "insert-after",
-        parentId: "body",
-        parentType: "body",
-        anchorNodeId: "p1",
-      })
-    }
-    expect(stackResult.ok).toBe(false)
-    if (stackResult.ok) return
-    expect(stackResult.error.code).toBe("invalid-parent")
+      expect(bodyResult.ok).toBe(true)
+      if (bodyResult.ok) {
+        expect(bodyResult.value.operation).toMatchObject({
+          kind: "insert-after",
+          parentId: "body",
+          parentType: "body",
+          anchorNodeId: "p1",
+        })
+      }
+      expect(stackResult.ok).toBe(false)
+      if (stackResult.ok) return
+      expect(stackResult.error.code).toBe("invalid-parent")
+    })
   })
 
   it("rejects non-content blocks inside a flow-stack", () => {

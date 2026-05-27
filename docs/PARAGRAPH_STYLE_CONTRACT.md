@@ -45,7 +45,7 @@ interface ParagraphStyleProperties {
   textIndent?: UnitValue
   indentLeft?: UnitValue
   indentRight?: UnitValue
-  headingLevel?: 1 | 2 | 3
+  headingLevel?: 1 | 2 | 3 | 4 | 5 | 6
   keepWithNext?: boolean
   box?: ParagraphBoxStyle
 }

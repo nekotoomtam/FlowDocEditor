@@ -361,9 +361,14 @@ Current policy direction:
 - flow-table cell content: splits by the same measured line boundaries as body
   paragraphs within breakable non-rowspan rows and spanning-cell row-boundary
   continuation slices
-- TOC placeholder: estimated-height placeholder in pass 1; if generated TOC
-  content is taller than the placeholder, pass 2 repaginates with the corrected
-  height before rendering TOC lines
+- TOC placeholder: body-flow TOC starts on a clean page and advances following
+  body content to the next page without adding a hidden `page-break` node. A
+  trailing TOC does not create a blank following page. It uses an estimated-height
+  placeholder based only on direct body paragraph headings in pass 1; if generated
+  TOC content is taller than the placeholder, pass 2 repaginates with the
+  corrected height before rendering TOC lines. Heading-styled paragraphs inside
+  stacks, columns, and table cells are visual/local headings and are not TOC
+  entries in this slice
 
 A node type without a defined split policy should move as a whole block or use a
 documented overflow fallback.

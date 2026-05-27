@@ -12,7 +12,7 @@ import {
   TOR_HEADING1_PARAGRAPH_STYLE_ID,
 } from "@/document"
 import { getPageDimensions } from "@/pagination"
-import type { DocumentNode, ParagraphNode } from "@/schema"
+import type { DocumentNode, LayoutNode, ParagraphNode } from "@/schema"
 import { pt } from "@/schema"
 import { createInitialEditorState, reducer } from "../editorReducer"
 
@@ -206,6 +206,72 @@ function docWithListedParagraphs(): DocumentNode {
   }
 }
 
+function docWithListedFlowStack(): DocumentNode {
+  const nodes: Record<string, LayoutNode> = {
+    body: { id: "body", type: "body", props: {}, childIds: ["fr1"] },
+    fr1: { id: "fr1", type: "flow-row", props: {}, childIds: ["fs1", "fs2"] },
+    fs1: { id: "fs1", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p0", "p1"] },
+    fs2: { id: "fs2", type: "flow-stack", props: { widthShare: 50 }, childIds: ["p2"] },
+    p0: {
+      id: "p0",
+      type: "paragraph",
+      props: {
+        ...DEFAULT_PARAGRAPH_PROPS,
+        list: { instanceId: "tor-main", level: 0, itemId: "tor.stack.parent" },
+      },
+      children: [{ id: "t0", type: "text", text: "stack parent" }],
+    },
+    p1: {
+      id: "p1",
+      type: "paragraph",
+      props: {
+        ...DEFAULT_PARAGRAPH_PROPS,
+        list: { instanceId: "tor-main", level: 1, itemId: "tor.stack.left" },
+      },
+      children: [
+        { id: "t1", type: "text", text: "Hello ", style: { fontWeight: "bold" } },
+        { id: "t2", type: "text", text: "world", style: { fontStyle: "italic" } },
+      ],
+    },
+    p2: {
+      id: "p2",
+      type: "paragraph",
+      props: {
+        ...DEFAULT_PARAGRAPH_PROPS,
+        list: { instanceId: "tor-main", level: 0, itemId: "tor.stack.right" },
+      },
+      children: [{ id: "t3", type: "text", text: "right stack" }],
+    },
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      listStyles: getAllListStylePresets(),
+      listInstances: {
+        "tor-main": { id: "tor-main", styleId: "tor-clause" },
+      },
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: pt(72),
+            right: pt(72),
+            bottom: pt(72),
+            left: pt(72),
+          },
+        },
+        nodes,
+      }],
+    },
+  }
+}
+
 describe("editorReducer rich text range actions", () => {
   it("applies text-run style to only the requested range", () => {
     const state = createInitialEditorState(docWithParagraph())
@@ -275,6 +341,31 @@ describe("editorReducer paragraph style actions", () => {
     expect(clearedParagraph.props.paragraphStyleId).toBeUndefined()
     expect(clearedParagraph.props.styleOverrides).toBeUndefined()
     expect(cleared.past).toHaveLength(2)
+  })
+
+  it("ignores document heading actions for non-body paragraphs", () => {
+    const state = createInitialEditorState(docWithListedFlowStack())
+    const styled = reducer(state, {
+      type: "APPLY_PARAGRAPH_STYLE_PRESET",
+      nodeId: "p1",
+      styleId: TOR_HEADING1_PARAGRAPH_STYLE_ID,
+    })
+    const directHeading = reducer(state, {
+      type: "UPDATE_PROPS",
+      nodeId: "p1",
+      changes: { headingLevel: 1 },
+    })
+    const patched = reducer(state, {
+      type: "PATCH_PARAGRAPH_STYLE_OVERRIDES",
+      nodeId: "p1",
+      changes: { fontSize: pt(18), headingLevel: 1 },
+    })
+    const paragraph = patched.doc.document.sections[0].nodes.p1 as ParagraphNode
+
+    expect(styled).toBe(state)
+    expect(directHeading).toBe(state)
+    expect(paragraph.props.styleOverrides).toEqual({ fontSize: pt(18) })
+    expect(paragraph.props.headingLevel).toBeUndefined()
   })
 
   it("resets paragraph style overrides from the editor reducer", () => {
@@ -509,6 +600,36 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(inserted.props.list?.itemId).toBe(newNodeId)
   })
 
+  it("uses the latest edit text before splitting a listed flow-stack paragraph", () => {
+    const state = createInitialEditorState(docWithListedFlowStack())
+    const next = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "p1",
+      splitIndex: "Stack draft ".length,
+      text: "Stack draft child",
+    })
+    const newNodeId = next.lastSplitNodeId
+    expect(newNodeId).toBeTruthy()
+    if (!newNodeId) return
+
+    const section = next.doc.document.sections[0]
+    const stack = section.nodes.fs1
+    const rightStack = section.nodes.fs2
+    const first = section.nodes.p1 as ParagraphNode
+    const inserted = section.nodes[newNodeId] as ParagraphNode
+
+    expect(stack.type).toBe("flow-stack")
+    expect(rightStack.type).toBe("flow-stack")
+    if (stack.type !== "flow-stack" || rightStack.type !== "flow-stack") return
+    expect(stack.childIds).toEqual(["p0", "p1", newNodeId])
+    expect(rightStack.childIds).toEqual(["p2"])
+    expect(first.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("Stack draft ")
+    expect(inserted.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("child")
+    expect(first.props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "tor.stack.left" })
+    expect(inserted.props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: newNodeId })
+    expect(next.past).toHaveLength(1)
+  })
+
   it("exits a listed paragraph when the current edit text is empty", () => {
     const state = createInitialEditorState(docWithListedParagraphs())
     const next = reducer(state, {
@@ -518,6 +639,28 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     })
     const paragraph = next.doc.document.sections[0].nodes.p1 as ParagraphNode
 
+    expect(paragraph.props.list).toBeUndefined()
+    expect(paragraph.children).toEqual([
+      { id: expect.any(String), type: "text", text: "", style: { fontWeight: "bold" } },
+    ])
+    expect(next.listExitNodeId).toBe("p1")
+    expect(next.past).toHaveLength(1)
+  })
+
+  it("exits an empty listed flow-stack paragraph without changing stack topology", () => {
+    const state = createInitialEditorState(docWithListedFlowStack())
+    const next = reducer(state, {
+      type: "EXIT_LIST_ITEM",
+      nodeId: "p1",
+      text: "",
+    })
+    const section = next.doc.document.sections[0]
+    const stack = section.nodes.fs1
+    const paragraph = section.nodes.p1 as ParagraphNode
+
+    expect(stack.type).toBe("flow-stack")
+    if (stack.type !== "flow-stack") return
+    expect(stack.childIds).toEqual(["p0", "p1"])
     expect(paragraph.props.list).toBeUndefined()
     expect(paragraph.children).toEqual([
       { id: expect.any(String), type: "text", text: "", style: { fontWeight: "bold" } },
@@ -579,6 +722,27 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(paragraph.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: "tor.item.1" })
     expect(paragraph.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("Hello edited world")
     expect(next.listLevelChangeResult).toEqual({ nodeId: "p1", caretIndex: 0 })
+    expect(next.past).toHaveLength(1)
+  })
+
+  it("outdents a flow-stack list item on Backspace while preserving latest draft text and caret", () => {
+    const state = createInitialEditorState(docWithListedFlowStack())
+    const next = reducer(state, {
+      type: "BACKSPACE_LIST_ITEM_AT_START",
+      nodeId: "p1",
+      text: "Draft stack child",
+      caretIndex: "Draft".length,
+    })
+    const section = next.doc.document.sections[0]
+    const stack = section.nodes.fs1
+    const paragraph = section.nodes.p1 as ParagraphNode
+
+    expect(stack.type).toBe("flow-stack")
+    if (stack.type !== "flow-stack") return
+    expect(stack.childIds).toEqual(["p0", "p1"])
+    expect(paragraph.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: "tor.stack.left" })
+    expect(paragraph.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("Draft stack child")
+    expect(next.listLevelChangeResult).toEqual({ nodeId: "p1", caretIndex: "Draft".length })
     expect(next.past).toHaveLength(1)
   })
 

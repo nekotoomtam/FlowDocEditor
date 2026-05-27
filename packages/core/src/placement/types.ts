@@ -9,7 +9,7 @@ import type { LayoutNode } from "../schema"
 
 // ─── Drag Source ──────────────────────────────────────────────────────────────
 
-export type PaletteBlockType = "paragraph" | "divider" | "page-break" | "row" | "columns" | "flow-columns" | "flow-table"
+export type PaletteBlockType = "paragraph" | "divider" | "page-break" | "toc" | "row" | "columns" | "flow-columns" | "flow-table"
 
 export interface PaletteTableSize {
   rows: number

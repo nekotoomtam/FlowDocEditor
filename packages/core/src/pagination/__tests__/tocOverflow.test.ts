@@ -3,7 +3,7 @@ import { paginateDocument } from "../index"
 import { assertPaginatedDocument } from "../assertPaginated"
 import { defaultTextMeasurer, defaultWordBreaker, TOC_ENTRY_FS, TOC_ENTRY_LH, TOC_TITLE_FS, TOC_TITLE_LH, TOC_TITLE_AFTER } from "../../layout"
 import { pt } from "../../schema"
-import type { DocumentNode, LayoutNode, ParagraphNode } from "../../schema"
+import type { DocumentNode, FlowTableNode, HeadingLevel, LayoutNode, ParagraphNode } from "../../schema"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -15,10 +15,11 @@ const PAGE = {
   orientation: "portrait" as const,
   margin: { top: pt(72), right: pt(72), bottom: pt(72), left: pt(72) },
 }
+const CONTENT_TOP = 72
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function makePara(id: string, text: string, headingLevel?: 1 | 2 | 3): ParagraphNode {
+function makePara(id: string, text: string, headingLevel?: HeadingLevel): ParagraphNode {
   return {
     id,
     type: "paragraph",
@@ -98,6 +99,10 @@ function findTocFragment(result: ReturnType<typeof paginate>) {
   return undefined
 }
 
+function findFragment(result: ReturnType<typeof paginate>, nodeId: string) {
+  return result.sections.flatMap((section) => section.pages).flatMap((page) => page.fragments).find((frag) => frag.nodeId === nodeId)
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("TOC overflow — two-pass repagination", () => {
@@ -140,6 +145,88 @@ describe("TOC overflow — two-pass repagination", () => {
     expect(toc!.lines).toHaveLength(4) // title + 3 entries
   })
 
+  it("isolates following body content onto the next page", () => {
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [{
+          id: "sec",
+          type: "section",
+          page: PAGE,
+          bodyRootId: "body",
+          nodes: {
+            body: { id: "body", type: "body", props: {}, childIds: ["toc", "h1"] },
+            toc: { id: "toc", type: "toc", props: { title: "สารบัญ" } },
+            h1: makePara("h1", "Heading after TOC", 1),
+          },
+        }],
+      },
+    }
+
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const toc = findFragment(result, "toc")
+    const heading = findFragment(result, "h1")
+    expect(result.sections[0].pages).toHaveLength(2)
+    expect(toc?.pageIndex).toBe(0)
+    expect(toc?.y).toBe(CONTENT_TOP)
+    expect(heading?.pageIndex).toBe(1)
+    expect(heading?.y).toBe(CONTENT_TOP)
+    expect(result.tocEntries.find((entry) => entry.nodeId === "h1")?.pageNumber).toBe(2)
+  })
+
+  it("starts a body TOC on a clean page when authored after content", () => {
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [{
+          id: "sec",
+          type: "section",
+          page: PAGE,
+          bodyRootId: "body",
+          nodes: {
+            body: { id: "body", type: "body", props: {}, childIds: ["intro", "toc", "h1"] },
+            intro: makePara("intro", "Intro before TOC"),
+            toc: { id: "toc", type: "toc", props: { title: "สารบัญ" } },
+            h1: makePara("h1", "Heading after isolated TOC", 1),
+          },
+        }],
+      },
+    }
+
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const intro = findFragment(result, "intro")
+    const toc = findFragment(result, "toc")
+    const heading = findFragment(result, "h1")
+    expect(result.sections[0].pages).toHaveLength(3)
+    expect(intro?.pageIndex).toBe(0)
+    expect(toc?.pageIndex).toBe(1)
+    expect(toc?.y).toBe(CONTENT_TOP)
+    expect(heading?.pageIndex).toBe(2)
+    expect(heading?.y).toBe(CONTENT_TOP)
+  })
+
+  it("does not create a blank following page for a trailing body TOC", () => {
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [makeTocSection("toc")],
+      },
+    }
+
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    expect(result.sections[0].pages).toHaveLength(1)
+    expect(findFragment(result, "toc")?.pageIndex).toBe(0)
+  })
+
   it("overflow: TOC in section 1, many headings in section 2 — fragment height grows to fit", () => {
     // Section 1 has TOC with 0 local headings → estimate = titleH + 1*entryH
     // Section 2 has 20 headings → actual = titleH + 20*entryH → overflow → pass 2
@@ -180,6 +267,112 @@ describe("TOC overflow — two-pass repagination", () => {
       expect(entry.pageNumber).toBeGreaterThanOrEqual(1)
     }
     expect(result.tocEntries).toHaveLength(20)
+  })
+
+  it("includes H4-H6 headings when the TOC max level allows them", () => {
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [{
+          id: "sec",
+          type: "section",
+          page: PAGE,
+          bodyRootId: "body",
+          nodes: {
+            body: { id: "body", type: "body", props: {}, childIds: ["toc", "h4", "h6"] },
+            toc: { id: "toc", type: "toc", props: { title: "สารบัญ", maxLevel: 6 } },
+            h4: makePara("h4", "Fourth level", 4),
+            h6: makePara("h6", "Sixth level", 6),
+          },
+        }],
+      },
+    }
+
+    const result = paginate(doc)
+    const toc = findTocFragment(result)
+
+    expect(result.tocEntries.map((entry) => [entry.nodeId, entry.level])).toEqual([
+      ["h4", 4],
+      ["h6", 6],
+    ])
+    expect(toc?.lines?.some((line) => line.text.includes("Fourth level"))).toBe(true)
+    expect(toc?.lines?.some((line) => line.text.includes("Sixth level"))).toBe(true)
+  })
+
+  it("filters deeper headings above the TOC max level", () => {
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [{
+          id: "sec",
+          type: "section",
+          page: PAGE,
+          bodyRootId: "body",
+          nodes: {
+            body: { id: "body", type: "body", props: {}, childIds: ["toc", "h4", "h6"] },
+            toc: { id: "toc", type: "toc", props: { title: "สารบัญ", maxLevel: 4 } },
+            h4: makePara("h4", "Fourth level", 4),
+            h6: makePara("h6", "Sixth level", 6),
+          },
+        }],
+      },
+    }
+
+    const result = paginate(doc)
+    const toc = findTocFragment(result)
+
+    expect(toc?.lines?.some((line) => line.text.includes("Fourth level"))).toBe(true)
+    expect(toc?.lines?.some((line) => line.text.includes("Sixth level"))).toBe(false)
+  })
+
+  it("collects only direct body paragraph headings", () => {
+    const flowTable: FlowTableNode = {
+      id: "ft",
+      type: "flow-table",
+      props: {},
+      columns: [{ width: pt(240) }],
+      rowIds: ["ftr"],
+      nodes: {
+        ftr: { id: "ftr", type: "flow-table-row", props: {}, cellIds: ["ftc"] },
+        ftc: { id: "ftc", type: "flow-table-cell", props: {}, childIds: ["table-h"] },
+        "table-h": makePara("table-h", "Nested table heading", 1),
+      },
+    }
+    const doc: DocumentNode = {
+      version: 1,
+      document: {
+        id: "doc",
+        sections: [{
+          id: "sec",
+          type: "section",
+          page: PAGE,
+          bodyRootId: "body",
+          nodes: {
+            body: { id: "body", type: "body", props: {}, childIds: ["toc", "body-h", "fr", "ft"] },
+            toc: { id: "toc", type: "toc", props: { title: "สารบัญ", maxLevel: 6 } },
+            "body-h": makePara("body-h", "Direct body heading", 1),
+            fr: { id: "fr", type: "flow-row", props: {}, childIds: ["fs"] },
+            fs: { id: "fs", type: "flow-stack", props: { widthShare: 100 }, childIds: ["stack-h"] },
+            "stack-h": makePara("stack-h", "Nested stack heading", 1),
+            ft: flowTable,
+          },
+        }],
+      },
+    }
+
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const toc = findTocFragment(result)
+    expect(findFragment(result, "stack-h")).toBeDefined()
+    expect(findFragment(result, "table-h")).toBeDefined()
+    expect(result.tocEntries.map((entry) => entry.nodeId)).toEqual(["body-h"])
+    expect(toc?.height).toBeCloseTo(TITLE_H + ENTRY_H, 1)
+    expect(toc?.lines?.some((line) => line.text.includes("Direct body heading"))).toBe(true)
+    expect(toc?.lines?.some((line) => line.text.includes("Nested stack heading"))).toBe(false)
+    expect(toc?.lines?.some((line) => line.text.includes("Nested table heading"))).toBe(false)
   })
 
   it("overflow: assertPaginatedDocument passes after two-pass repagination", () => {
