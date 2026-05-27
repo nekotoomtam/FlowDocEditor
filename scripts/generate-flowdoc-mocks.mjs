@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 
-const now = new Date().toISOString()
+const now = process.env.FLOWDOC_MOCK_NOW ?? new Date().toISOString()
 const rootDir = process.cwd()
 const outputDirs = [
   path.resolve(rootDir, "public/mock"),
@@ -352,7 +352,7 @@ function buildPackage(variant) {
     },
   }
 
-  return {
+  const pack = {
     packageVersion: 2,
     kind: "document",
     id: docId,
@@ -377,6 +377,77 @@ function buildPackage(variant) {
         "approved.date": "2026-05-27",
       },
     },
+  }
+  pack.mockData = createMockData(pack)
+  return pack
+}
+
+function paragraphTextContent(node) {
+  return node.children
+    .filter((child) => child.type === "text")
+    .map((child) => child.text)
+    .join("")
+}
+
+function collectDirectBodyHeadingEntries(document, maxLevel) {
+  const entries = []
+  for (const section of document.document.sections) {
+    const body = section.nodes[section.bodyRootId]
+    if (!body || body.type !== "body") continue
+    for (const nodeId of body.childIds) {
+      const node = section.nodes[nodeId]
+      if (node?.type !== "paragraph") continue
+      const level = node.props.headingLevel
+      if (!level || level > maxLevel) continue
+      entries.push({
+        nodeId,
+        text: paragraphTextContent(node),
+        level,
+      })
+    }
+  }
+  return entries
+}
+
+function collectMockTocSummaries(pack) {
+  const summaries = []
+  for (const section of pack.document.document.sections) {
+    const body = section.nodes[section.bodyRootId]
+    if (!body || body.type !== "body") continue
+    for (const nodeId of body.childIds) {
+      const node = section.nodes[nodeId]
+      if (node?.type !== "toc") continue
+      const maxLevel = node.props.maxLevel ?? 3
+      const entries = collectDirectBodyHeadingEntries(pack.document, maxLevel)
+      summaries.push({
+        nodeId,
+        title: node.props.title ?? "สารบัญ",
+        maxLevel,
+        entryCount: entries.length,
+        entries,
+      })
+    }
+  }
+  return summaries
+}
+
+function collectHeadingCounts(pack) {
+  const counts = {}
+  const entries = collectDirectBodyHeadingEntries(pack.document, 6)
+  for (const entry of entries) {
+    const key = `h${entry.level}`
+    counts[key] = (counts[key] ?? 0) + 1
+  }
+  return counts
+}
+
+function createMockData(pack) {
+  return {
+    version: 1,
+    generatedAt: now,
+    purpose: "simulated TOC fixture data for large-document editor/export testing",
+    headingCounts: collectHeadingCounts(pack),
+    toc: collectMockTocSummaries(pack),
   }
 }
 

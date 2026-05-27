@@ -10,12 +10,12 @@ export default function Home() {
         document layout engine — work in progress
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 280 }}>
-        <Link href="/editor" style={{
+        <Link href="/library" style={{
           display: "block", padding: "10px 18px",
           background: "#2563eb", color: "white", borderRadius: 6,
           textDecoration: "none", fontSize: 13, textAlign: "center",
         }}>
-          Editor
+          Document Library
         </Link>
       </div>
     </div>

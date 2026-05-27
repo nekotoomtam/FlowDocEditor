@@ -355,6 +355,73 @@ function makePaginated(): PaginatedDocument {
   }
 }
 
+function makeTocDoc(): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: { value: 72, unit: "pt" },
+            right: { value: 36, unit: "pt" },
+            bottom: { value: 72, unit: "pt" },
+            left: { value: 36, unit: "pt" },
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["toc"] },
+          toc: { id: "toc", type: "toc", props: { title: "สารบัญ", maxLevel: 6 } },
+        },
+      }],
+    },
+  } as unknown as DocumentNode
+}
+
+function makeTocPaginated(overrides: Partial<PageFragment> = {}): PaginatedDocument {
+  const tocFragment: PageFragment = {
+    nodeId: "toc",
+    nodeType: "toc",
+    parentNodeId: "body",
+    pageIndex: 0,
+    x: 36,
+    y: 72,
+    width: 228,
+    height: 84,
+    renderProps,
+    lines: [
+      { text: "สารบัญ", x: 36, y: 72, width: 228, height: 24, fontSize: 16 },
+      { text: "บทที่ 1 ภาพรวมเอกสาร ........ 3", x: 36, y: 100, width: 228, height: 14, fontSize: 10 },
+      { text: "1.1 ขอบเขต ........ 4", x: 48, y: 114, width: 216, height: 14, fontSize: 10 },
+    ],
+    ...overrides,
+  }
+
+  return {
+    sections: [{
+      sectionId: "section",
+      pages: [{
+        index: 0,
+        width: 300,
+        height: 400,
+        contentBox: { x: 36, y: 72, width: 228, height: 256 },
+        fragments: [tocFragment],
+        headerFragments: [],
+        footerFragments: [],
+      }],
+    }],
+    tocEntries: [
+      { nodeId: "h1", text: "บทที่ 1 ภาพรวมเอกสาร", level: 1, pageNumber: 3 },
+      { nodeId: "h2", text: "1.1 ขอบเขต", level: 2, pageNumber: 4 },
+    ],
+  }
+}
+
 function makeDividerPageBreakDoc(): DocumentNode {
   return {
     version: 1,
@@ -782,6 +849,30 @@ function canvasSelectedPathChrome(markup: string): string {
 function marginDragHandle(markup: string, side: "top" | "right" | "bottom" | "left"): string {
   return markup.match(new RegExp(`<rect[^>]*data-testid="page-margin-drag-handle"[^>]*data-side="${side}"[^>]*>`))?.[0] ?? ""
 }
+
+describe("EditorCanvas TOC rendering", () => {
+  it("renders generated body TOC lines", () => {
+    const markup = renderCanvas(makeTocPaginated(), makeTocDoc())
+
+    expect(markup).toContain("data-node-type=\"toc\"")
+    expect(markup).toContain("สารบัญ")
+    expect(markup).toContain("บทที่ 1 ภาพรวมเอกสาร")
+    expect(markup).toContain("1.1 ขอบเขต")
+  })
+
+  it("clips oversized body TOC chrome to the current page content box", () => {
+    const markup = renderCanvas(makeTocPaginated({ height: 500 }), makeTocDoc(), "toc")
+    const tocClipPath = markup.match(/<clipPath id="[^"]*toc[^"]*"><rect[^>]*><\/rect><\/clipPath>/)?.[0] ?? ""
+    const tocGroup = markup.match(/<g[^>]*data-testid="editor-fragment"[^>]*data-node-id="toc"[\s\S]*?<\/g>/)?.[0] ?? ""
+
+    expect(tocClipPath).toContain("y=\"72\"")
+    expect(tocClipPath).toContain("height=\"256\"")
+    expect(tocGroup).toContain("height=\"256\"")
+    expect(tocGroup).toContain("height=\"258\"")
+    expect(tocGroup).not.toContain("height=\"500\"")
+    expect(tocGroup).not.toContain("height=\"502\"")
+  })
+})
 
 describe("EditorCanvas page memoization", () => {
   it("renders only visible or forced page frames when lazy rendering is enabled", () => {

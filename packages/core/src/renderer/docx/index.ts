@@ -867,6 +867,23 @@ function buildToc(fragment: PageFragment): Paragraph[] {
     .map((line) => {
       const size = ptToHalfPoints(line.fontSize ?? fragment.renderProps!.fontSize)
       const indentLeft = Math.max(0, line.x - fragment.x)
+      const pageNumberRun = [...(line.runs ?? [])].reverse().find((run) => run.sourceType === "pageNumber")
+      if (pageNumberRun) {
+        const prefix = line.text.slice(0, pageNumberRun.start).trimEnd()
+        return new Paragraph({
+          children: [
+            new TextRun({ text: prefix, size, font: resolveDocxFontName(fragment.renderProps!.fontFamilyKey) }),
+            new TextRun({
+              children: [new Tab(), pageNumberRun.text],
+              size,
+              font: resolveDocxFontName(fragment.renderProps!.fontFamilyKey),
+            }),
+          ],
+          indent: { left: ptToTwips(indentLeft) },
+          tabStops: [{ type: TabStopType.RIGHT, position: ptToTwips(Math.max(0, fragment.width - indentLeft)) }],
+          spacing: { after: ptToTwips(2) },
+        })
+      }
       return new Paragraph({
         children: [new TextRun({ text: line.text, size, font: resolveDocxFontName(fragment.renderProps!.fontFamilyKey) })],
         indent: { left: ptToTwips(indentLeft) },

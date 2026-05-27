@@ -1,6 +1,7 @@
 "use client"
 
 import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
+import { DocumentPrepareOverlay } from "@/app/_components/DocumentPrepareOverlay"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
 import { assertDocument, canRemoveFlowTableColumn, canRemoveFlowTableRow, clampSectionReservedZones, createDefaultDocument, createUniqueListPresetInstanceId, normalizeDocument, resolveParagraphListContext } from "@/document"
 import type { FlowDocListStylePresetId } from "@/document"
@@ -176,6 +177,13 @@ import {
   type EditorWorkflowNavItem,
 } from "./shell/EditorToolbar"
 import { EditorLeftRail, type EditorLeftRailMode } from "./shell/EditorLeftRail"
+import {
+  clearDocumentPrepareHandoff,
+  getDocumentPrepareStep,
+  readDocumentPrepareHandoff,
+  type DocumentPrepareHandoff,
+  type DocumentPrepareStepId,
+} from "./documentLibrary"
 
 export type { DragState } from "./editorReducer"
 
@@ -917,10 +925,21 @@ function createBrowserPaginationWorker(): Worker | null {
   }
 }
 
+type EditorPrepareOverlayStatus = "visible" | "fading" | "hidden"
+
+function readInitialDocumentPrepareHandoff(): DocumentPrepareHandoff | null {
+  if (typeof window === "undefined") return null
+  return readDocumentPrepareHandoff(window.sessionStorage)
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function EditorShell() {
   const initialTestScenario = useMemo(() => resolveEditorTestScenarioFromLocation(), [])
+  const initialPrepareHandoff = useMemo(() => readInitialDocumentPrepareHandoff(), [])
+  const [documentPrepareHandoff, setDocumentPrepareHandoff] = useState<DocumentPrepareHandoff | null>(initialPrepareHandoff)
+  const [documentPrepareStepId, setDocumentPrepareStepId] = useState<DocumentPrepareStepId>("editor-start-session")
+  const [documentPrepareOverlayStatus, setDocumentPrepareOverlayStatus] = useState<EditorPrepareOverlayStatus>("visible")
   const [scale, setScale] = useState(0.6)
   const [zoomMode, setZoomMode] = useState<ZoomMode>("fit")
   const [workflowMode, setWorkflowMode] = useState<WorkflowMode>("design")
@@ -1893,6 +1912,29 @@ export default function EditorShell() {
     setDocumentIoStatus({ type: "info", message: "Saved FlowDoc package v2 JSON." })
   }, [dataSnapshot, finalizeInlineEditBeforeAction, packageFieldRegistry])
 
+  const replaceDocumentFromParseResult = useCallback((
+    result: DocumentParseResult,
+    successMessage: (result: Extract<DocumentParseResult, { ok: true }>) => string,
+  ): boolean => {
+    if (!result.ok) {
+      setDocumentIoStatus({ type: "error", message: documentParseFailureMessage(result.reason) })
+      return false
+    }
+
+    const doc = result.doc
+    resetInlineEditStateForDocumentReplace()
+    clearWysiwygDraftPagination()
+    endWysiwygTextSession()
+    setSelectedStyleResource(null)
+    setPackageFieldRegistry(fieldRegistryFromDocumentParseResult(result))
+    setDataSnapshot(dataSnapshotFromDocumentParseResult(result))
+    setPartialPreviewPaginated(null)
+    setBrowserPreviewLayout(createEditorPreviewPlaceholderLayoutState())
+    dispatch({ type: "LOAD_DOCUMENT", doc })
+    setDocumentIoStatus({ type: "info", message: successMessage(result) })
+    return true
+  }, [clearWysiwygDraftPagination, endWysiwygTextSession, resetInlineEditStateForDocumentReplace])
+
   const handleImportJson = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -1900,28 +1942,14 @@ export default function EditorShell() {
     const reader = new FileReader()
     reader.onload = (ev) => {
       const result = parsePersistedDocument(ev.target?.result as string)
-      if (result.ok) {
-        const doc = result.doc
-        resetInlineEditStateForDocumentReplace()
-        clearWysiwygDraftPagination()
-        endWysiwygTextSession()
-        setSelectedStyleResource(null)
-        setPackageFieldRegistry(fieldRegistryFromDocumentParseResult(result))
-        setDataSnapshot(dataSnapshotFromDocumentParseResult(result))
-        setPartialPreviewPaginated(null)
-        setBrowserPreviewLayout(createEditorPreviewPlaceholderLayoutState())
-        dispatch({ type: "LOAD_DOCUMENT", doc })
-        setDocumentIoStatus({ type: "info", message: documentImportSuccessMessage(result.source, result.fieldRegistryIssues) })
-      } else {
-        setDocumentIoStatus({ type: "error", message: documentParseFailureMessage(result.reason) })
-      }
+      replaceDocumentFromParseResult(result, (okResult) => documentImportSuccessMessage(okResult.source, okResult.fieldRegistryIssues))
     }
     reader.onerror = () => {
       setDocumentIoStatus({ type: "error", message: "Could not read this file." })
     }
     reader.readAsText(file)
     e.target.value = ""
-  }, [clearWysiwygDraftPagination, endWysiwygTextSession, resetInlineEditStateForDocumentReplace])
+  }, [replaceDocumentFromParseResult])
 
   const handleNewDocument = useCallback(() => {
     if (!confirm("สร้างเอกสารใหม่? history จะถูกล้าง")) return
@@ -3617,6 +3645,33 @@ export default function EditorShell() {
     ]
   const showLayoutLoadingOverlay = isLayoutLoading && !suppressLayoutLoadingOverlay
   const showBrowserPreviewLayoutPreparing = shouldBlockEditorPreviewCanvas(browserPreviewLayout)
+  const showDocumentPrepareOverlay = documentPrepareOverlayStatus !== "hidden"
+  const showInlineInitialLayoutLoading = showBrowserPreviewLayoutPreparing && !showDocumentPrepareOverlay
+  const documentPrepareStep = getDocumentPrepareStep(documentPrepareStepId)
+  const documentPrepareTitle = documentPrepareHandoff?.templateTitle ?? null
+
+  useEffect(() => {
+    if (documentPrepareOverlayStatus !== "visible") return
+    if (showBrowserPreviewLayoutPreparing) {
+      setDocumentPrepareStepId("editor-build-layout")
+      return
+    }
+    setDocumentPrepareStepId("editor-ready")
+    const timeoutId = window.setTimeout(() => {
+      setDocumentPrepareOverlayStatus("fading")
+    }, 160)
+    return () => window.clearTimeout(timeoutId)
+  }, [documentPrepareOverlayStatus, showBrowserPreviewLayoutPreparing])
+
+  useEffect(() => {
+    if (documentPrepareOverlayStatus !== "fading") return
+    const timeoutId = window.setTimeout(() => {
+      setDocumentPrepareOverlayStatus("hidden")
+      setDocumentPrepareHandoff(null)
+      clearDocumentPrepareHandoff(window.sessionStorage)
+    }, 240)
+    return () => window.clearTimeout(timeoutId)
+  }, [documentPrepareOverlayStatus])
 
   return (
     <div
@@ -3636,6 +3691,13 @@ export default function EditorShell() {
       onWheelCapture={handleWheelCapture}
       tabIndex={-1}
     >
+      {showDocumentPrepareOverlay && (
+        <DocumentPrepareOverlay
+          step={documentPrepareStep}
+          templateTitle={documentPrepareTitle}
+          fadingOut={documentPrepareOverlayStatus === "fading"}
+        />
+      )}
       <div
         ref={resizePreviewRef}
         data-testid="column-resize-preview"
@@ -3787,7 +3849,7 @@ export default function EditorShell() {
           onResetZoom={resetZoom}
           onFitZoom={fitZoom}
         >
-          {showBrowserPreviewLayoutPreparing ? (
+          {showInlineInitialLayoutLoading ? (
             <div
               data-testid="initial-layout-loading"
               aria-live="polite"

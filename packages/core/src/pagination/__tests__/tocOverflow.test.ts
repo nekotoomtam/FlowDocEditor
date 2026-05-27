@@ -99,6 +99,13 @@ function findTocFragment(result: ReturnType<typeof paginate>) {
   return undefined
 }
 
+function findTocFragments(result: ReturnType<typeof paginate>) {
+  return result.sections
+    .flatMap((section) => section.pages)
+    .flatMap((page) => page.fragments)
+    .filter((frag) => frag.nodeType === "toc")
+}
+
 function findFragment(result: ReturnType<typeof paginate>, nodeId: string) {
   return result.sections.flatMap((section) => section.pages).flatMap((page) => page.fragments).find((frag) => frag.nodeId === nodeId)
 }
@@ -267,6 +274,48 @@ describe("TOC overflow — two-pass repagination", () => {
       expect(entry.pageNumber).toBeGreaterThanOrEqual(1)
     }
     expect(result.tocEntries).toHaveLength(20)
+  })
+
+  it("overflow: generated TOC splits across pages when entries exceed one content page", () => {
+    const doc = makeTwoSectionDoc(90)
+    const result = paginate(doc)
+    assertPaginatedDocument(result)
+
+    const tocFragments = findTocFragments(result)
+    expect(tocFragments.length).toBeGreaterThan(1)
+    expect(tocFragments[0].continuesFrom).toBe(false)
+    expect(tocFragments[0].isContinued).toBe(true)
+    expect(tocFragments.at(-1)?.continuesFrom).toBe(true)
+    expect(tocFragments.at(-1)?.isContinued).toBe(false)
+    expect(tocFragments.map((fragment) => fragment.fragmentIndex)).toEqual(
+      tocFragments.map((_, index) => index),
+    )
+
+    const tocLines = tocFragments.flatMap((fragment) => fragment.lines ?? [])
+    expect(tocLines).toHaveLength(91)
+    for (const fragment of tocFragments) {
+      const page = result.sections
+        .flatMap((section) => section.pages)
+        .find((candidate) => candidate.index === fragment.pageIndex)
+      if (!page) throw new Error(`page ${fragment.pageIndex} not found`)
+      expect(fragment.height).toBeLessThanOrEqual(page.contentBox.height + 0.5)
+      for (const line of fragment.lines ?? []) {
+        expect(line.y + line.height).toBeLessThanOrEqual(page.contentBox.y + page.contentBox.height + 0.5)
+      }
+    }
+  })
+
+  it("right-aligns generated TOC page-number runs to the TOC right edge", () => {
+    const doc = makeTwoSectionDoc(3)
+    const result = paginate(doc)
+    const toc = findTocFragment(result)
+    if (!toc) throw new Error("TOC fragment not found")
+    const entryLine = toc.lines?.find((line) => line.runs?.some((run) => run.sourceType === "pageNumber"))
+    if (!entryLine) throw new Error("TOC entry line not found")
+
+    const pageNumberRun = entryLine.runs?.find((run) => run.sourceType === "pageNumber")
+    if (!pageNumberRun) throw new Error("TOC page-number run not found")
+    expect(entryLine.x + pageNumberRun.x + pageNumberRun.width).toBeCloseTo(toc.x + toc.width, 1)
   })
 
   it("includes H4-H6 headings when the TOC max level allows them", () => {

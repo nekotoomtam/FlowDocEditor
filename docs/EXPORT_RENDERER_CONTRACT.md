@@ -140,6 +140,28 @@ tiers may guide whether to investigate page batching, chunked PDF merge,
 background export jobs, true streaming, or a renderer/library change, but they
 must not by themselves change pagination semantics or block a successful export.
 
+### Future Follow-Up: Real-Data Export Performance
+
+Current long-document export timing is a useful stress baseline, but it should
+not be treated as final performance architecture until real field/data binding
+and image-heavy documents exist. When those inputs are available, revisit export
+performance using the API export profile fields (`pageCount`, `fragmentCount`,
+`paginateMs`, `renderMs`, `pdfPageRenderMs`, `pdfFinalizeMs`, and `totalMs`) to
+identify whether the bottleneck is data binding, pagination, PDF page drawing,
+PDF finalization, or download preparation.
+
+Likely follow-up options are:
+
+- surface or persist export profiles for real customer-like documents
+- add server-originated progress reporting through a job, polling, or streaming
+  design instead of client-only staged feedback
+- evaluate reusing authoritative `/api/paginate` output by document hash when
+  the preview document has already been checked
+- make PDF page batch size configurable for benchmarking before changing the
+  default
+- investigate `pdf-lib` finalization and zero-width glyph patching only if
+  `pdfFinalizeMs` is a measured bottleneck
+
 ## DOCX Contract
 
 DOCX is an exchange format, not a pixel-perfect layout target.

@@ -1,4 +1,4 @@
-import type { DocumentNode, DocumentSection, LayoutNode } from "../schema"
+import type { DocumentNode, DocumentSection, LayoutNode, TocNode } from "../schema"
 import { resolveDocumentParagraphStyles } from "../document/paragraphStyles"
 import { resolveListMarkers } from "../document/listNumbering"
 import {
@@ -368,6 +368,7 @@ function paginateVerticalContainer(
       current = paginateTocPlaceholder(child, pages, template, contentTop, contentBottom, current, box.nodeId, {
         isolateBefore: true,
         isolateAfter: shouldTocAdvanceAfter(box.children, index),
+        node,
       })
       return
     }
@@ -418,7 +419,11 @@ function paginateFlowBox(
     case "flow-table-cell":
       throw new Error(`${box.nodeType} pagination is owned by flow-table`)
     case "toc":
-      return paginateTocPlaceholder(box, pages, template, contentTop, contentBottom, cursor, parentNodeId)
+      return paginateTocPlaceholder(box, pages, template, contentTop, contentBottom, cursor, parentNodeId, {
+        node: section.nodes[box.nodeId]?.type === "toc"
+          ? section.nodes[box.nodeId] as unknown as TocNode
+          : undefined,
+      })
   }
 }
 
@@ -786,10 +791,10 @@ export function paginateDocument(
     // Pass 2: repaginate with corrected TOC heights; page numbers may shift
     const sections2 = runAllSections(layoutDoc, measurer, wb, overrides, onSplitDecision, listNumbering)
     const entries2 = collectTocEntries(sections2, layoutDoc)
-    fillTocFragments(sections2, layoutDoc, entries2)
+    fillTocFragments(sections2, layoutDoc, entries2, measurer)
     return { sections: sections2, tocEntries: entries2 }
   }
 
-  fillTocFragments(sections1, layoutDoc, entries1)
+  fillTocFragments(sections1, layoutDoc, entries1, measurer)
   return { sections: sections1, tocEntries: entries1 }
 }

@@ -366,9 +366,10 @@ Current policy direction:
   trailing TOC does not create a blank following page. It uses an estimated-height
   placeholder based only on direct body paragraph headings in pass 1; if generated
   TOC content is taller than the placeholder, pass 2 repaginates with the
-  corrected height before rendering TOC lines. Heading-styled paragraphs inside
-  stacks, columns, and table cells are visual/local headings and are not TOC
-  entries in this slice
+  corrected height and emits continuation `toc` fragments across as many pages
+  as needed before rendering TOC lines. TOC page-number runs are positioned
+  against the TOC right edge. Heading-styled paragraphs inside stacks, columns,
+  and table cells are visual/local headings and are not TOC entries in this slice
 
 A node type without a defined split policy should move as a whole block or use a
 documented overflow fallback.

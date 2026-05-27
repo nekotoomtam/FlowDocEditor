@@ -992,6 +992,37 @@ function fragmentInteractionHeight(fragment: PageFragment): number {
     : fragment.height
 }
 
+function fragmentVisibleInteractionHeight(fragment: PageFragment, page: PaginatedPage): number {
+  const height = fragmentInteractionHeight(fragment)
+  if (fragment.nodeType !== "toc") return height
+
+  const pageContentBottom = page.contentBox.y + page.contentBox.height
+  return Math.max(1, Math.min(height, pageContentBottom - fragment.y))
+}
+
+function fragmentClipPathRect(fragment: PageFragment, page: PaginatedPage, scale: number): {
+  x: number
+  y: number
+  width: number
+  height: number
+} {
+  if (fragment.nodeType === "toc") {
+    return {
+      x: fragment.x * scale,
+      y: fragment.y * scale,
+      width: fragment.width * scale,
+      height: fragmentVisibleInteractionHeight(fragment, page) * scale,
+    }
+  }
+
+  return {
+    x: fragment.x * scale,
+    y: -9999,
+    width: fragment.width * scale,
+    height: 19998,
+  }
+}
+
 function renderDividerFragment(fragment: PageFragment, scale: number) {
   const props = fragment.dividerRenderProps
   if (!props || props.thickness <= 0) return null
@@ -2423,9 +2454,10 @@ function PageView({
         {[...renderFragments, ...zoneFragments].map((f, i) => {
           const displayFragment = resolveDisplayFragment(f)
           const clipPathId = buildEditorFragmentClipPathId(pageKey, displayFragment, i)
+          const clipRect = fragmentClipPathRect(displayFragment, page, scale)
           return (
           <clipPath key={`${clipPathId}-${i}`} id={clipPathId}>
-            <rect x={displayFragment.x * scale} y={-9999} width={displayFragment.width * scale} height={19998} />
+            <rect x={clipRect.x} y={clipRect.y} width={clipRect.width} height={clipRect.height} />
           </clipPath>
           )
         })}
@@ -2540,7 +2572,7 @@ function PageView({
         const docNode = nodeById.get(f.nodeId)
         const isEmpty = (f.nodeType === "stack" || f.nodeType === "flow-stack") && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
         // visual override ระหว่าง resize
-        let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = fragmentInteractionHeight(displayFragment)
+        let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = fragmentVisibleInteractionHeight(displayFragment, page)
         if (resizeDrag?.type === "stack" && (f.nodeType === "stack" || f.nodeType === "flow-stack")) {
           if (f.nodeId === resizeDrag.leftStackId) {
             fragWidth = resizeDrag.currentDocX - f.x
@@ -2719,7 +2751,7 @@ function PageView({
             )}
 
             {/* ── text lines หรือ inline editor ── */}
-            {f.nodeType === "paragraph" && (
+            {(f.nodeType === "paragraph" || f.nodeType === "toc") && (
               <ParagraphTextSurface
                 fragment={displayFragment}
                 doc={doc}
