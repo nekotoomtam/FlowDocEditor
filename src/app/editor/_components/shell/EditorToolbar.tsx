@@ -9,6 +9,7 @@ import type { EditorTextMeasurerStatus } from "../editorTextMeasurerState"
 
 export type EditorWorkflowMode = "design" | "fields" | "fill" | "render"
 export type EditorExportFormat = "pdf" | "docx"
+export type EditorExportFeedbackStage = "preflight" | "uploading" | "processing" | "downloading"
 
 export interface EditorWorkflowNavItem {
   mode: EditorWorkflowMode
@@ -23,6 +24,15 @@ export interface EditorDocumentIoStatus {
   message: string
 }
 
+export interface EditorExportFeedback {
+  format: EditorExportFormat
+  stage: EditorExportFeedbackStage
+  title: string
+  detail: string
+  steps: string[]
+  startedAt: number
+}
+
 export interface EditorToolbarProps {
   workflowMode: EditorWorkflowMode
   workflowNavItems: EditorWorkflowNavItem[]
@@ -35,6 +45,8 @@ export interface EditorToolbarProps {
   exportError: string | null
   exportReadinessStatusReason: string | null
   exportReadinessMessage: string | null
+  exportFeedback: EditorExportFeedback | null
+  exportFeedbackElapsedMs: number | null
   documentIoStatus: EditorDocumentIoStatus | null
   dragStatusLabel: string | null
   isExporting: boolean
@@ -213,6 +225,15 @@ const errorStatusStyle: CSSProperties = {
   whiteSpace: "nowrap",
 }
 
+const exportFeedbackStatusStyle: CSSProperties = {
+  fontSize: 10,
+  color: "#2563eb",
+  maxWidth: 300,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+}
+
 const toolbarButtonStyle = (disabled = false): CSSProperties => ({
   padding: "4px 8px",
   fontSize: 11,
@@ -243,6 +264,26 @@ const toggleButtonStyle = (active: boolean, activeColor: string, activeBackgroun
   color: active ? activeColor : "#374151",
 })
 
+function formatExportFeedbackElapsed(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) return "0:00"
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${String(seconds).padStart(2, "0")}`
+}
+
+function exportFeedbackTooltip(feedback: EditorExportFeedback, elapsedMs: number | null): string {
+  const lines = [
+    `${feedback.format.toUpperCase()} export: ${feedback.title}`,
+    feedback.detail,
+    `Elapsed: ${formatExportFeedbackElapsed(elapsedMs)}`,
+  ]
+  if (feedback.steps.length > 0) {
+    lines.push("", "This stage includes:", ...feedback.steps.map((step) => `- ${step}`))
+  }
+  return lines.join("\n")
+}
+
 function EditorStatusRegion({
   fontFallback,
   editorTextMeasurerStatus,
@@ -252,6 +293,8 @@ function EditorStatusRegion({
   exportError,
   exportReadinessStatusReason,
   exportReadinessMessage,
+  exportFeedback,
+  exportFeedbackElapsedMs,
   documentIoStatus,
   dragStatusLabel,
 }: Pick<
@@ -264,6 +307,8 @@ function EditorStatusRegion({
   | "exportError"
   | "exportReadinessStatusReason"
   | "exportReadinessMessage"
+  | "exportFeedback"
+  | "exportFeedbackElapsedMs"
   | "documentIoStatus"
   | "dragStatusLabel"
 >) {
@@ -312,7 +357,15 @@ function EditorStatusRegion({
           export blocked: {exportReadinessStatusReason}
         </span>
       )}
-      {documentIoStatus && (
+      {exportFeedback && !exportError ? (
+        <span
+          data-testid="export-feedback-status"
+          title={exportFeedbackTooltip(exportFeedback, exportFeedbackElapsedMs)}
+          style={exportFeedbackStatusStyle}
+        >
+          {exportFeedback.format.toUpperCase()} export: {exportFeedback.title} ({formatExportFeedbackElapsed(exportFeedbackElapsedMs)})
+        </span>
+      ) : documentIoStatus && (
         <span
           data-testid="document-io-status"
           title={documentIoStatus.message}
@@ -358,6 +411,8 @@ export function EditorToolbar({
   exportError,
   exportReadinessStatusReason,
   exportReadinessMessage,
+  exportFeedback,
+  exportFeedbackElapsedMs,
   documentIoStatus,
   dragStatusLabel,
   isExporting,
@@ -423,6 +478,8 @@ export function EditorToolbar({
             exportError={exportError}
             exportReadinessStatusReason={exportReadinessStatusReason}
             exportReadinessMessage={exportReadinessMessage}
+            exportFeedback={exportFeedback}
+            exportFeedbackElapsedMs={exportFeedbackElapsedMs}
             documentIoStatus={documentIoStatus}
             dragStatusLabel={dragStatusLabel}
           />
@@ -436,7 +493,11 @@ export function EditorToolbar({
                 title={!canExport && exportReadinessMessage ? `Export blocked: ${exportReadinessMessage}` : undefined}
                 style={exportButtonStyle(disabled)}
               >
-                {isExporting ? "…" : `Export ${format.toUpperCase()}`}
+                {isExporting
+                  ? exportFeedback?.format === format
+                    ? `Exporting ${format.toUpperCase()}`
+                    : format.toUpperCase()
+                  : `Export ${format.toUpperCase()}`}
               </button>
             )
           })}

@@ -169,6 +169,9 @@ import {
 } from "./shell/editorCanvasNavigation"
 import {
   EditorToolbar,
+  type EditorExportFeedback,
+  type EditorExportFeedbackStage,
+  type EditorExportFormat,
   type EditorWorkflowMode,
   type EditorWorkflowNavItem,
 } from "./shell/EditorToolbar"
@@ -420,6 +423,77 @@ function clampScale(value: number): number {
 
 function firstVisibleExportReadinessReason(reasons: string[]): string | null {
   return reasons.find((reason) => !TRANSIENT_EXPORT_READINESS_REASONS.has(reason)) ?? null
+}
+
+function buildExportFeedback(
+  format: EditorExportFormat,
+  stage: EditorExportFeedbackStage,
+  startedAt: number,
+): EditorExportFeedback {
+  if (stage === "preflight") {
+    return {
+      format,
+      stage,
+      startedAt,
+      title: "Checking readiness",
+      detail: "Checking active edit, server layout, font, and layout gates.",
+      steps: [
+        "Finish active edit if needed",
+        "Check export readiness",
+        "Confirm server layout and warning gates",
+      ],
+    }
+  }
+  if (stage === "uploading") {
+    return {
+      format,
+      stage,
+      startedAt,
+      title: "Sending document",
+      detail: "Sending the current FlowDoc document to the export API.",
+      steps: [
+        "Serialize current document",
+        "POST to /api/export",
+        "Wait for server processing to start",
+      ],
+    }
+  }
+  if (stage === "processing") {
+    return {
+      format,
+      stage,
+      startedAt,
+      title: "Creating file",
+      detail: "Server is validating, paginating, rendering, and finalizing the export.",
+      steps: format === "pdf"
+        ? [
+          "Validate document shape",
+          "Paginate with runtime fonts",
+          "Assert layout and blocking warnings",
+          "Render PDF page batches",
+          "Finalize PDF binary",
+        ]
+        : [
+          "Validate document shape",
+          "Paginate with runtime fonts",
+          "Assert layout and blocking warnings",
+          "Serialize DOCX package",
+          "Finalize DOCX binary",
+        ],
+    }
+  }
+  return {
+    format,
+    stage,
+    startedAt,
+    title: "Preparing download",
+    detail: "The export response is ready; creating the browser download.",
+    steps: [
+      "Read export profile header",
+      "Create download blob",
+      "Trigger browser download",
+    ],
+  }
 }
 
 function fieldRegistryFromDocumentParseResult(result: DocumentParseResult): FieldRegistryV1 {
@@ -943,6 +1017,8 @@ export default function EditorShell() {
   const [headerFooterEditMode, setHeaderFooterEditMode] = useState<HeaderFooterEditMode | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [exportFeedback, setExportFeedback] = useState<EditorExportFeedback | null>(null)
+  const [exportFeedbackTick, setExportFeedbackTick] = useState(0)
   const [documentIoStatus, setDocumentIoStatus] = useState<{ type: "info" | "error"; message: string } | null>(null)
   const [localSaveStatus, setLocalSaveStatus] = useState<"saved" | "saving">("saved")
   const resizePreviewRef = useRef<HTMLDivElement | null>(null)
@@ -955,6 +1031,14 @@ export default function EditorShell() {
   const [driftReport, setDriftReport] = useState<DriftReport | null>(null)
   const showDriftRef = useRef(showDrift)
   useEffect(() => { showDriftRef.current = showDrift }, [showDrift])
+  useEffect(() => {
+    if (!exportFeedback) return
+    const intervalId = window.setInterval(() => setExportFeedbackTick((tick) => tick + 1), 1000)
+    return () => window.clearInterval(intervalId)
+  }, [exportFeedback])
+  const exportFeedbackElapsedMs = useMemo(() => (
+    exportFeedback ? Date.now() - exportFeedback.startedAt : null
+  ), [exportFeedback, exportFeedbackTick])
   const rightRailDisplayWidth = rightRailCollapsed
     ? RIGHT_RAIL_COLLAPSED_WIDTH
     : rightRailResizeDrag?.previewWidth ?? rightRailWidth
@@ -2171,7 +2255,9 @@ export default function EditorShell() {
 
   useEffect(() => () => hideResizePreview(), [hideResizePreview])
 
-  const handleExport = useCallback(async (format: "pdf" | "docx") => {
+  const handleExport = useCallback(async (format: EditorExportFormat) => {
+    const exportStartedAt = Date.now()
+    setExportFeedback(buildExportFeedback(format, "preflight", exportStartedAt))
     const finalizedActiveEdit = finalizeInlineEditBeforeAction()
     const exportDoc = resolvePreviewDoc(docRef.current)
     const formatLabel = format.toUpperCase()
@@ -2183,6 +2269,7 @@ export default function EditorShell() {
       : exportReadiness
     const blockedReason = formatExportReadinessMessage(readiness)
     if (blockedReason) {
+      setExportFeedback(null)
       setDocumentIoStatus(null)
       setExportError(`${formatLabel} export blocked: ${blockedReason}`)
       return
@@ -2197,11 +2284,14 @@ export default function EditorShell() {
     })
     setIsExporting(true)
     try {
-      const res = await fetch("/api/export", {
+      setExportFeedback(buildExportFeedback(format, "uploading", exportStartedAt))
+      const exportRequest = fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ doc: exportDoc, format }),
       })
+      setExportFeedback(buildExportFeedback(format, "processing", exportStartedAt))
+      const res = await exportRequest
       if (!res.ok) {
         const responseText = await res.text()
         let errorCode: string | null = null
@@ -2231,6 +2321,7 @@ export default function EditorShell() {
         return
       }
       const exportProfile = parseFlowDocExportProfileHeader(res.headers.get(FLOWDOC_EXPORT_PROFILE_HEADER))
+      setExportFeedback(buildExportFeedback(format, "downloading", exportStartedAt))
       setDocumentIoStatus({ type: "info", message: `Preparing ${formatLabel} download...` })
       setFontFallback(false)
       const blob = await res.blob()
@@ -2253,6 +2344,7 @@ export default function EditorShell() {
       console.error("export error:", err)
     } finally {
       setIsExporting(false)
+      setExportFeedback(null)
     }
   }, [exportReadiness, finalizeInlineEditBeforeAction, resolvePreviewDoc])
 
@@ -3584,6 +3676,8 @@ export default function EditorShell() {
         exportError={exportError}
         exportReadinessStatusReason={exportReadinessStatusReason}
         exportReadinessMessage={exportReadinessMessage}
+        exportFeedback={exportFeedback}
+        exportFeedbackElapsedMs={exportFeedbackElapsedMs}
         documentIoStatus={documentIoStatus}
         dragStatusLabel={state.drag ? `dragging ${describeDragSource(state.drag.source)} — Esc to cancel` : null}
         isExporting={isExporting}
