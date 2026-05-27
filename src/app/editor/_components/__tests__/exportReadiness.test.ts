@@ -82,6 +82,15 @@ describe("export readiness", () => {
       .toContain("server pagination failed")
   })
 
+  it("blocks export while the browser preview layout is not full", () => {
+    expect(getExportReadiness(baseInput({ previewLayoutStatus: "placeholder" })).reasons)
+      .toContain("browser preview layout is still preparing")
+    expect(getExportReadiness(baseInput({ previewLayoutStatus: "settling" })).reasons)
+      .toContain("browser preview layout is still settling")
+    expect(getExportReadiness(baseInput({ previewLayoutStatus: "partial" })).reasons)
+      .toContain("browser preview layout is partial")
+  })
+
   it("blocks export on runtime font fallback and page-break drift", () => {
     const readiness = getExportReadiness(baseInput({
       fontFallback: true,

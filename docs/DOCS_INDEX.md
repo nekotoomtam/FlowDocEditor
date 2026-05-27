@@ -49,6 +49,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | Real OS WYSIWYG IME verification | `docs/WYSIWYG_STAGE4C_IME_MATRIX.md` |
 | Stage 4C WYSIWYG IME evidence log | `docs/WYSIWYG_STAGE4C_IME_RESULTS.md` |
 | Layout/pagination engine rules | `docs/LAYOUT_ENGINE_SPEC.md` |
+| Lazy/incremental pagination design | `docs/LAZY_PAGINATION_PLAN.md` |
 | Page-boundary behavior | `docs/CROSS_PAGE_BEHAVIOR.md` |
 | Planned flow-row/flow-stack cross-page primitive | `docs/FLOW_ROW_STACK_SPEC.md` |
 | Flow-row/flow-stack 0.5.0 implementation roadmap | `docs/FLOW_ROW_STACK_ROADMAP.md` |
@@ -115,6 +116,8 @@ Start with:
 
 - `docs/CROSS_PAGE_BEHAVIOR.md`
 - `docs/LAYOUT_ENGINE_SPEC.md`
+- `docs/LAZY_PAGINATION_PLAN.md` when changing editor lazy pagination,
+  checkpointing, or partial preview behavior
 - `docs/LIST_NUMBERING_CONTRACT.md` when paragraph list numbering or marker continuation is in scope
 - `docs/TEST_STRATEGY.md`
 

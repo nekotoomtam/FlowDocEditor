@@ -6,6 +6,7 @@ import JSZip from "jszip"
 import { PDFDocument as PdfLibDocument } from "pdf-lib"
 import { POST as exportPost } from "../export/route"
 import { POST as paginatePost } from "../paginate/route"
+import { FLOWDOC_EXPORT_PROFILE_HEADER, parseFlowDocExportProfileHeader } from "../../_lib/exportProfile"
 import {
   resetRuntimeFontCacheForTests,
   RUNTIME_FONT_FALLBACK_VALUE,
@@ -260,6 +261,16 @@ describe("API route contract smoke", () => {
     expect(response.headers.get("content-type")).toBe("application/pdf")
     expect(response.headers.get("content-disposition")).toContain('filename="document.pdf"')
     expect(response.headers.get(RUNTIME_FONT_RESPONSE_HEADER)).toBeNull()
+    const profile = parseFlowDocExportProfileHeader(response.headers.get(FLOWDOC_EXPORT_PROFILE_HEADER))
+    expect(profile).toMatchObject({
+      format: "pdf",
+      pageCount: 1,
+      pdfPageBatchSize: 20,
+    })
+    expect(profile?.fragmentCount).toBeGreaterThan(0)
+    expect(profile?.paginateMs).toEqual(expect.any(Number))
+    expect(profile?.renderMs).toEqual(expect.any(Number))
+    expect(profile?.totalMs).toEqual(expect.any(Number))
 
     const bytes = await responseBytes(response)
     expect(String.fromCharCode(...bytes.slice(0, 4))).toBe("%PDF")

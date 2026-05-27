@@ -24,6 +24,25 @@ import type { RenderResult, Renderer, FontProvider } from "../shared"
 const PDF_TEXT_COLOR = rgb(0, 0, 0)
 // Marks that can shape to zero-advance glyphs; pdf-lib can omit those widths.
 const PDF_ZERO_ADVANCE_WIDTH_TEXT_PATTERN = /[\u0300-\u036F\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/
+export const DEFAULT_PDF_RENDER_PAGE_BATCH_SIZE = 20
+
+export type PdfRenderProgressPhase =
+  | "rendering-pages"
+  | "finalizing"
+
+export interface PdfRenderProgress {
+  phase: PdfRenderProgressPhase
+  renderedPages: number
+  totalPages: number
+  batchIndex?: number
+  batchCount?: number
+}
+
+export interface PdfRendererOptions {
+  fontProvider?: FontProvider
+  pageBatchSize?: number
+  onProgress?: (progress: PdfRenderProgress) => void | Promise<void>
+}
 
 type FontkitGlyph = {
   advanceWidth: number
@@ -397,24 +416,74 @@ export function resolvePdfListMarkerDrawingPrimitive(
 
 // ─── Renderer ─────────────────────────────────────────────────────────────────
 
+function isFontProvider(value: FontProvider | PdfRendererOptions): value is FontProvider {
+  return typeof (value as FontProvider).getFont === "function"
+}
+
+function resolvePdfPageBatchSize(value: number | undefined): number {
+  if (value == null || !Number.isFinite(value)) return DEFAULT_PDF_RENDER_PAGE_BATCH_SIZE
+  return Math.max(1, Math.floor(value))
+}
+
+function collectPdfPages(doc: PaginatedDocument): PaginatedPage[] {
+  return doc.sections.flatMap((section) => section.pages)
+}
+
+function yieldPdfRenderBatch(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 export class PdfRenderer implements Renderer {
-  constructor(private readonly fontProvider?: FontProvider) {}
+  private readonly fontProvider?: FontProvider
+  private readonly pageBatchSize: number
+  private readonly onProgress?: PdfRendererOptions["onProgress"]
+
+  constructor(fontProviderOrOptions?: FontProvider | PdfRendererOptions) {
+    const options = fontProviderOrOptions && isFontProvider(fontProviderOrOptions)
+      ? { fontProvider: fontProviderOrOptions }
+      : fontProviderOrOptions
+    this.fontProvider = options?.fontProvider
+    this.pageBatchSize = resolvePdfPageBatchSize(options?.pageBatchSize)
+    this.onProgress = options?.onProgress
+  }
 
   async render(doc: PaginatedDocument): Promise<RenderResult> {
     const pdfDoc = await PDFDocument.create()
     pdfDoc.registerFontkit(fontkit)
     const fontCache = new Map<string, PdfFontCacheEntry>()
     const zeroAdvanceGlyphIdsByFontName = new Map<string, Set<number>>()
+    const pages = collectPdfPages(doc)
+    const totalPages = pages.length
+    const batchCount = totalPages === 0 ? 0 : Math.ceil(totalPages / this.pageBatchSize)
 
-    for (const section of doc.sections) {
-      for (const page of section.pages) {
+    for (let startIndex = 0, batchIndex = 0; startIndex < totalPages; startIndex += this.pageBatchSize, batchIndex += 1) {
+      const batch = pages.slice(startIndex, startIndex + this.pageBatchSize)
+      for (const page of batch) {
         await this.renderPage(pdfDoc, fontCache, zeroAdvanceGlyphIdsByFontName, page)
       }
+      await this.emitProgress({
+        phase: "rendering-pages",
+        renderedPages: startIndex + batch.length,
+        totalPages,
+        batchIndex,
+        batchCount,
+      })
+      if (startIndex + batch.length < totalPages) await yieldPdfRenderBatch()
     }
 
+    await this.emitProgress({
+      phase: "finalizing",
+      renderedPages: totalPages,
+      totalPages,
+      batchCount,
+    })
     const buffer = await pdfDoc.save()
     const patchedBuffer = await patchPdfZeroAdvanceGlyphWidths(buffer, zeroAdvanceGlyphIdsByFontName)
     return { buffer: patchedBuffer, mimeType: "application/pdf", extension: "pdf" }
+  }
+
+  private async emitProgress(progress: PdfRenderProgress): Promise<void> {
+    await this.onProgress?.(progress)
   }
 
   private async renderPage(

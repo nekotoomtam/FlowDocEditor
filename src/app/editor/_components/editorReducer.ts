@@ -1,5 +1,4 @@
-import { defaultTextMeasurer } from "@/layout"
-import { paginateDocument, type PaginatedDocument } from "@/pagination"
+import type { PaginatedDocument } from "@/pagination"
 import {
   addFlowStackColumn,
   addFlowTableColumn,
@@ -54,6 +53,7 @@ import type { DocumentNode, LayoutNode, ParagraphNode, ParagraphStyleProperties 
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import type { DragSource, PlacementOperation, PlacementPreview } from "@/placement/types"
 import { loadDocumentFromStorage } from "./documentPersistence"
+import { createEditorPlaceholderPaginatedDocument } from "./editorInitialPagination"
 import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import {
@@ -153,10 +153,6 @@ type EditorAction =
 function loadFromStorage(): DocumentNode | null {
   const result = loadDocumentFromStorage(localStorage)
   return result.ok ? result.doc : null
-}
-
-function paginate(doc: DocumentNode): PaginatedDocument {
-  return paginateDocument(doc, defaultTextMeasurer)
 }
 
 export function resizeColumnsDocument(
@@ -267,7 +263,7 @@ export function createInitialEditorState(initialDocOverride?: DocumentNode | nul
     past: [],
     doc: initialDoc,
     future: [],
-    paginated: paginate(initialDoc),
+    paginated: createEditorPlaceholderPaginatedDocument(initialDoc),
     drag: null,
     selectedNodeId: null,
     selectionAnchorNodeId: null,
@@ -462,7 +458,7 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
     }
     case "LOAD_DOCUMENT": {
       const normalizedDoc = normalizeDocument(ensureReservedZoneRoots(action.doc))
-      return { ...state, past: [], doc: normalizedDoc, future: [], paginated: action.paginated ?? paginate(normalizedDoc), selectedNodeId: null, selectionAnchorNodeId: null, drag: null }
+      return { ...state, past: [], doc: normalizedDoc, future: [], paginated: action.paginated ?? createEditorPlaceholderPaginatedDocument(normalizedDoc), selectedNodeId: null, selectionAnchorNodeId: null, drag: null }
     }
     case "TABLE_ADD_ROW":
       return updateTableStructure(

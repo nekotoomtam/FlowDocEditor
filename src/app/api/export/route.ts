@@ -2,15 +2,21 @@ import { NextRequest, NextResponse } from "next/server"
 import { assertPaginatedDocument, collectPaginatedLayoutWarnings, filterBlockingLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
 import { thaiWordBreaker } from "@/layout/word-breaker"
 import { createFontkitMeasurer } from "@/layout/font-measurer"
-import { PdfRenderer, DocxRenderer } from "@/renderer"
+import { DEFAULT_PDF_RENDER_PAGE_BATCH_SIZE, PdfRenderer, DocxRenderer } from "@/renderer"
 import { assertDocument, DocumentAssertionError } from "@/document"
 import { DEFAULT_FONT_KEY } from "@/font-registry"
 import type { FontVariantKey } from "@/font-registry"
 import type { FontProvider } from "@/renderer"
+import {
+  FLOWDOC_EXPORT_PROFILE_HEADER,
+  serializeFlowDocExportProfile,
+  type FlowDocExportProfile,
+} from "../../_lib/exportProfile"
 import { loadRuntimeFontMapSync, loadRuntimeFontSync, runtimeFontFallbackHeaders } from "../runtimeFont"
 
 // Measurer cache — preloads the runtime font catalog for keyed paragraph metrics.
 let cachedMeasurer: ReturnType<typeof createFontkitMeasurer> | null = null
+const PDF_EXPORT_PAGE_BATCH_SIZE = DEFAULT_PDF_RENDER_PAGE_BATCH_SIZE
 
 function getMeasurer(fontBuffer: Uint8Array) {
   if (cachedMeasurer) return cachedMeasurer
@@ -26,9 +32,22 @@ const fontProvider: FontProvider = {
   },
 }
 
+function countPaginatedPages(paginated: Awaited<ReturnType<typeof paginateDocument>>): number {
+  return paginated.sections.reduce((sum, section) => sum + section.pages.length, 0)
+}
+
+function countPaginatedFragments(paginated: Awaited<ReturnType<typeof paginateDocument>>): number {
+  return paginated.sections.reduce((sectionSum, section) => (
+    sectionSum + section.pages.reduce((pageSum, page) => (
+      pageSum + page.headerFragments.length + page.fragments.length + page.footerFragments.length
+    ), 0)
+  ), 0)
+}
+
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  const exportStartedAt = Date.now()
   let body: { doc?: unknown; format?: unknown }
   try {
     body = await req.json() as { doc?: unknown; format?: unknown }
@@ -63,15 +82,21 @@ export async function POST(req: NextRequest) {
   }
 
   let paginated
+  let paginateMs = 0
   try {
+    const paginateStartedAt = Date.now()
     paginated = paginateDocument(doc, getMeasurer(defaultFont), thaiWordBreaker)
+    paginateMs = Date.now() - paginateStartedAt
   } catch (err) {
     console.error("[FlowDoc] /api/export: pagination failed:", err)
     return NextResponse.json({ error: "Pagination failed", detail: String(err) }, { status: 500 })
   }
 
+  let assertMs = 0
   try {
+    const assertStartedAt = Date.now()
     assertPaginatedDocument(paginated)
+    assertMs = Date.now() - assertStartedAt
   } catch (err) {
     console.error("[FlowDoc] /api/export: layout assertion failed:", err)
     return NextResponse.json({ error: "Layout assertion failed", detail: String(err) }, { status: 500 })
@@ -90,13 +115,46 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const renderer = format === "pdf" ? new PdfRenderer(fontProvider) : new DocxRenderer({ sourceDocument: doc, fontProvider })
+  const pageCount = countPaginatedPages(paginated)
+  const fragmentCount = countPaginatedFragments(paginated)
+  let pdfFinalizingStartedAt: number | null = null
+  const renderer = format === "pdf"
+    ? new PdfRenderer({
+        fontProvider,
+        pageBatchSize: PDF_EXPORT_PAGE_BATCH_SIZE,
+        onProgress: (progress) => {
+          if (progress.phase === "finalizing") pdfFinalizingStartedAt = Date.now()
+        },
+      })
+    : new DocxRenderer({ sourceDocument: doc, fontProvider })
+  const renderStartedAt = Date.now()
   const result = await renderer.render(paginated)
+  const renderMs = Date.now() - renderStartedAt
+  const pdfFinalizeMs = pdfFinalizingStartedAt === null
+    ? undefined
+    : Date.now() - pdfFinalizingStartedAt
+  const pdfPageRenderMs = pdfFinalizeMs === undefined
+    ? undefined
+    : renderMs - pdfFinalizeMs
+  const exportProfile: FlowDocExportProfile = {
+    format,
+    pageCount,
+    fragmentCount,
+    paginateMs,
+    assertMs,
+    renderMs,
+    totalMs: Date.now() - exportStartedAt,
+  }
+  if (pdfPageRenderMs !== undefined) exportProfile.pdfPageRenderMs = pdfPageRenderMs
+  if (pdfFinalizeMs !== undefined) exportProfile.pdfFinalizeMs = pdfFinalizeMs
+  if (format === "pdf") exportProfile.pdfPageBatchSize = PDF_EXPORT_PAGE_BATCH_SIZE
+  console.info("[FlowDoc] /api/export profile:", exportProfile)
 
   return new NextResponse(Buffer.from(result.buffer), {
     headers: {
       "Content-Type": result.mimeType,
       "Content-Disposition": `attachment; filename="document.${result.extension}"`,
+      [FLOWDOC_EXPORT_PROFILE_HEADER]: serializeFlowDocExportProfile(exportProfile),
     },
   })
 }

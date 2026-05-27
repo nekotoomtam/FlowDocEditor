@@ -6,7 +6,7 @@ import JSZip from "jszip"
 import { LineCapStyle, PDFArray, PDFDict, PDFDocument as PdfLibDocument, PDFName, PDFNumber } from "pdf-lib"
 import { PdfRenderer, resolveFragmentBoxDrawingPrimitives, resolveParagraphBoxDrawingPrimitives, resolvePdfBorderLineOptions, resolvePdfListMarkerDrawingPrimitive } from "../pdf"
 import { DocxRenderer } from "../docx"
-import { paginateDocument, resolvePaginatedLinePdfBaselineY, type PageFragment } from "../../pagination"
+import { paginateDocument, resolvePaginatedLinePdfBaselineY, type PaginatedDocument, type PaginatedPage, type PageFragment } from "../../pagination"
 import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
 import { ptToTwips } from "../shared"
 import type { FontProvider } from "../shared"
@@ -175,6 +175,28 @@ function makeHeaderFooterFlowHeavyRendererDoc(mode: "body" | "full" = "body"): D
 
 function paginate(doc: DocumentNode) {
   return paginateDocument(doc, defaultTextMeasurer, defaultWordBreaker)
+}
+
+function makeBlankPaginatedPage(index: number, width: number, height = 200): PaginatedPage {
+  return {
+    index,
+    width,
+    height,
+    contentBox: { x: 20, y: 20, width: Math.max(1, width - 40), height: Math.max(1, height - 40) },
+    fragments: [],
+    headerFragments: [],
+    footerFragments: [],
+  }
+}
+
+function makeBlankPaginatedDocument(pageWidths: number[]): PaginatedDocument {
+  return {
+    tocEntries: [],
+    sections: [{
+      sectionId: "batch-section",
+      pages: pageWidths.map((width, index) => makeBlankPaginatedPage(index, width)),
+    }],
+  }
 }
 
 async function readDocxXml(buffer: Uint8Array, path: string): Promise<string> {
@@ -407,6 +429,32 @@ describe("PdfRenderer smoke tests", () => {
     expect(result.buffer.length).toBeGreaterThan(0)
     // PDF starts with %PDF header
     expect(String.fromCharCode(...result.buffer.slice(0, 4))).toBe("%PDF")
+  })
+
+  it("renders PDF pages in configurable batches while preserving page order", async () => {
+    const progress: Array<{ phase: string; renderedPages: number; totalPages: number; batchIndex?: number; batchCount?: number }> = []
+    const renderer = new PdfRenderer({
+      pageBatchSize: 2,
+      onProgress: (event) => { progress.push(event) },
+    })
+    const paginated = makeBlankPaginatedDocument([300, 310, 320, 330, 340])
+
+    const result = await renderer.render(paginated)
+    const renderedPdf = await PdfLibDocument.load(result.buffer)
+
+    expect(renderedPdf.getPageCount()).toBe(5)
+    expect(renderedPdf.getPages().map((page) => page.getWidth())).toEqual([300, 310, 320, 330, 340])
+    expect(progress.filter((event) => event.phase === "rendering-pages")).toEqual([
+      { phase: "rendering-pages", renderedPages: 2, totalPages: 5, batchIndex: 0, batchCount: 3 },
+      { phase: "rendering-pages", renderedPages: 4, totalPages: 5, batchIndex: 1, batchCount: 3 },
+      { phase: "rendering-pages", renderedPages: 5, totalPages: 5, batchIndex: 2, batchCount: 3 },
+    ])
+    expect(progress[progress.length - 1]).toEqual({
+      phase: "finalizing",
+      renderedPages: 5,
+      totalPages: 5,
+      batchCount: 3,
+    })
   })
 
   it("requests the matching font variant for paragraph-level bold and italic text", async () => {

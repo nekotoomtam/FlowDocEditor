@@ -41,6 +41,22 @@ Users should be able to:
   canvas, but page frames used for scrolling/navigation must remain present and
   virtualization must not change authored document state, pagination output,
   undo/redo, PDF export, or DOCX export behavior.
+- Long document startup may show a lightweight pagination shell and complete
+  browser preview pagination in a background worker. Until that preview result
+  returns, the editor should show a preparing-layout state instead of exposing
+  stale document/page geometry for editing. This is an editor responsiveness
+  optimization only; core pagination, server/API pagination, export, undo/redo,
+  and authored document state remain unchanged.
+- Browser preview layout readiness is explicit editor state:
+  `placeholder`, `settling`, `partial`, or `full`. The editor may use
+  non-full states for responsive preview behavior, but final export readiness
+  must not treat a non-full browser preview layout as complete. The `partial`
+  state is an editor-only display lane for visible-window pagination. It must
+  not be written into reducer history, undo/redo snapshots, export payloads, or
+  server-owned pagination state unless a later design promotes it intentionally.
+  Browser workers may emit partial layout only for structures with explicit
+  partial-pagination support; unsupported structures must stay on the full
+  pagination path.
 - The right rail owns details for the current task: `Properties` for the
   selected or active object and `Page` for section/page setup.
 - `Design` should default to outline/layout editing, `Fields` should surface

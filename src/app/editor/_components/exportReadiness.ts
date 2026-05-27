@@ -2,9 +2,11 @@ import type { DocumentDataReadinessIssue } from "@/readiness"
 import { filterBlockingLayoutWarnings, type LayoutWarningSummary } from "@/pagination"
 import type { DriftReport } from "./comparePagination"
 import type { LayoutStatus } from "./layoutReconciliation"
+import { isEditorPreviewLayoutFull, type EditorPreviewLayoutStatus } from "./editorPreviewLayoutStatus"
 
 export interface ExportReadinessInput {
   layoutStatus: LayoutStatus
+  previewLayoutStatus?: EditorPreviewLayoutStatus
   layoutError: boolean
   serverLayoutCheckedForCurrentPreview: boolean
   fontFallback: boolean
@@ -35,6 +37,13 @@ export function selectAuthoritativeLayoutWarnings({
 function layoutPendingReason(layoutStatus: LayoutStatus): string {
   if (layoutStatus === "reconciling") return "server layout check is still running"
   return "server layout has not checked the current document"
+}
+
+function previewLayoutPendingReason(status: EditorPreviewLayoutStatus): string | null {
+  if (isEditorPreviewLayoutFull(status)) return null
+  if (status === "placeholder") return "browser preview layout is still preparing"
+  if (status === "partial") return "browser preview layout is partial"
+  return "browser preview layout is still settling"
 }
 
 function firstFillReadinessError(issues: DocumentDataReadinessIssue[] | undefined): string {
@@ -74,6 +83,7 @@ function hasBodyGeometryDrift(driftReport: DriftReport | null): boolean {
 
 export function getExportReadiness({
   layoutStatus,
+  previewLayoutStatus = "full",
   layoutError,
   serverLayoutCheckedForCurrentPreview,
   fontFallback,
@@ -86,6 +96,8 @@ export function getExportReadiness({
   const reasons: string[] = []
 
   if (layoutError) reasons.push("server pagination failed")
+  const previewReason = previewLayoutPendingReason(previewLayoutStatus)
+  if (previewReason) reasons.push(previewReason)
   if (layoutStatus !== "server-checked" || !serverLayoutCheckedForCurrentPreview) {
     reasons.push(layoutPendingReason(layoutStatus))
   }

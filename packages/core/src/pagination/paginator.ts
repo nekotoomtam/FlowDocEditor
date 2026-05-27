@@ -1,10 +1,12 @@
-import type { DocumentNode, DocumentSection } from "../schema"
+import type { DocumentNode, DocumentSection, LayoutNode } from "../schema"
 import { resolveDocumentParagraphStyles } from "../document/paragraphStyles"
 import { resolveListMarkers } from "../document/listNumbering"
 import {
   flowSection,
   flowZone,
+  measureDivider,
   measureParagraph,
+  measureSpacer,
   paragraphBoxLeftInset,
   paragraphBoxTopInset,
 } from "../layout"
@@ -53,6 +55,56 @@ import { toListMarkerRenderProps, withListBodyIndent, type ListNumberingPaginati
  */
 
 export { buildPaginatedLines, buildPositionedParagraphLines } from "./paginator/paragraph"
+
+export type BodyBasicsIncrementalUnsupportedReason =
+  | "invalid-body-root"
+  | "unsupported-body-child"
+
+export interface BodyBasicsIncrementalUnsupportedResult {
+  status: "unsupported"
+  reason: BodyBasicsIncrementalUnsupportedReason
+  sectionId: string
+  nodeId?: string
+  nodeType?: string
+}
+
+export type TryPaginateDocumentBodyBasicsIncrementallyResult =
+  | { status: "supported"; paginated: PaginatedDocument }
+  | BodyBasicsIncrementalUnsupportedResult
+
+export interface BodyBasicsVisibleWindowOptions {
+  pageIndex: number
+  marginPages?: number
+}
+
+export interface BodyBasicsVisibleWindowCoverage {
+  startPageIndex: number
+  endPageIndex: number
+  requestedPageIndex: number
+  completedDocument: boolean
+}
+
+export type TryPaginateDocumentBodyBasicsVisibleWindowResult =
+  | {
+      status: "supported"
+      paginated: PaginatedDocument
+      coverage: BodyBasicsVisibleWindowCoverage
+    }
+  | BodyBasicsIncrementalUnsupportedResult
+
+interface BodyBasicsSectionPaginationOptions {
+  stopAfterPageIndex?: number
+}
+
+type BodyBasicsSectionPaginationResult =
+  | {
+      status: "supported"
+      section: PaginatedSection
+      completedSection: boolean
+    }
+  | BodyBasicsIncrementalUnsupportedResult
+
+const STREAMING_BODY_BASIC_NODE_TYPES = new Set(["paragraph", "spacer", "divider", "page-break"])
 
 // ─── Paragraph Pagination ─────────────────────────────────────────────────────
 
@@ -216,6 +268,65 @@ function shouldTocAdvanceAfter(children: FlowBox[], index: number): boolean {
   const nextChild = children[index + 1]
   if (!nextChild || nextChild.nodeType === "page-break") return false
   return true
+}
+
+function flowBodyBasicNode(
+  node: LayoutNode,
+  x: number,
+  width: number,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+): FlowBox | null {
+  switch (node.type) {
+    case "paragraph": {
+      const measured = measureParagraph(node, width, measurer, wordBreaker)
+      return {
+        nodeId: node.id,
+        nodeType: "paragraph",
+        x,
+        y: 0,
+        width,
+        height: measured.totalHeight,
+        children: [],
+      }
+    }
+    case "spacer": {
+      const measured = measureSpacer(node, width)
+      return {
+        nodeId: node.id,
+        nodeType: "spacer",
+        x,
+        y: 0,
+        width,
+        height: measured.height,
+        children: [],
+      }
+    }
+    case "divider": {
+      const measured = measureDivider(node, width)
+      return {
+        nodeId: node.id,
+        nodeType: "divider",
+        x,
+        y: 0,
+        width,
+        height: measured.height,
+        children: [],
+      }
+    }
+    case "page-break":
+      return {
+        nodeId: node.id,
+        nodeType: "page-break",
+        x,
+        y: 0,
+        width,
+        height: 0,
+        children: [],
+      }
+    default:
+      return null
+  }
 }
 
 function paginateVerticalContainer(
@@ -389,6 +500,155 @@ function paginateSection(
   return { sectionId: section.id, pages: densePages }
 }
 
+function tryPaginateSectionBodyBasicsIncrementally(
+  section: DocumentSection,
+  startPageIndex: number,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
+  listNumbering?: ListNumberingPaginationContext,
+  options: BodyBasicsSectionPaginationOptions = {},
+): BodyBasicsSectionPaginationResult {
+  const body = section.nodes[section.bodyRootId]
+  if (body?.type !== "body") {
+    return {
+      status: "unsupported",
+      reason: "invalid-body-root",
+      sectionId: section.id,
+      nodeId: section.bodyRootId,
+      nodeType: body?.type,
+    }
+  }
+
+  for (const childId of body.childIds) {
+    const node = section.nodes[childId]
+    if (!node || !STREAMING_BODY_BASIC_NODE_TYPES.has(node.type)) {
+      return {
+        status: "unsupported",
+        reason: "unsupported-body-child",
+        sectionId: section.id,
+        nodeId: childId,
+        nodeType: node?.type ?? "missing",
+      }
+    }
+  }
+
+  const metrics = getPageMetrics(section.page)
+  const template = createEmptyPage(startPageIndex, metrics)
+  const pages: PaginatedPage[] = []
+  const contentTop = metrics.contentBox.y
+  const contentBottom = metrics.contentBox.y + metrics.contentBox.height
+  const bodyPadding = Math.max(0, body.props.padding ?? 0)
+  const contentX = metrics.contentBox.x + bodyPadding
+  const contentWidth = Math.max(0, metrics.contentBox.width - bodyPadding * 2)
+  const zoneHorizontalBox = resolveHeaderFooterHorizontalBox(section.page, metrics.contentBox, metrics.pageWidth)
+  const pageNumberOffset = section.page.pageNumberStart !== undefined
+    ? section.page.pageNumberStart - startPageIndex - 1
+    : 0
+  let cursor: PageFlowCursor = { pageIndex: startPageIndex, cursorY: contentTop, pageNumberOffset }
+  const flowBoxes = body.childIds.map((childId) => {
+    const node = section.nodes[childId]
+    return node ? flowBodyBasicNode(node, contentX, contentWidth, measurer, wordBreaker) : null
+  })
+  let completedSection = true
+
+  for (const [index, child] of flowBoxes.entries()) {
+    if (!child) continue
+    const node = section.nodes[child.nodeId]
+    if (
+      node?.type === "paragraph" &&
+      (node.props.keepWithNext ?? false) &&
+      index + 1 < flowBoxes.length
+    ) {
+      const nextChild = flowBoxes[index + 1]
+      if (nextChild) {
+        const combinedHeight = child.height + nextChild.height
+        if (
+          cursor.cursorY > contentTop + 1 &&
+          shouldMoveBlockToNextPage(cursor.cursorY, combinedHeight, contentTop, contentBottom)
+        ) {
+          cursor = advancePage(cursor, contentTop)
+        }
+      }
+    }
+
+    cursor = paginateFlowBox(
+      child,
+      section,
+      measurer,
+      pages,
+      template,
+      contentTop,
+      contentBottom,
+      cursor,
+      body.id,
+      wordBreaker,
+      onSplitDecision,
+      listNumbering,
+    )
+
+    if (
+      options.stopAfterPageIndex != null &&
+      cursor.pageIndex > options.stopAfterPageIndex
+    ) {
+      completedSection = index === flowBoxes.length - 1
+      break
+    }
+  }
+
+  if (pages.length === 0) pages.push(createEmptyPage(startPageIndex, metrics))
+
+  const headerReserved = Math.max(0, section.page.headerReserved ?? 0)
+  const footerReserved = Math.max(0, section.page.footerReserved ?? 0)
+  const headerY = contentTop - headerReserved
+  const footerY = contentBottom
+  const headerZoneBox = { x: zoneHorizontalBox.x, y: headerY, width: zoneHorizontalBox.width, height: headerReserved }
+  const footerZoneBox = { x: zoneHorizontalBox.x, y: footerY, width: zoneHorizontalBox.width, height: footerReserved }
+
+  const defaultHeaderBox = flowZone(section, section.headerRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker)
+  const defaultFooterBox = flowZone(section, section.footerRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker)
+  const hasFirstPageHeader = section.headerFirstPageRootId !== undefined
+  const hasFirstPageFooter = section.footerFirstPageRootId !== undefined
+  const firstPageHeaderBox = hasFirstPageHeader
+    ? flowZone(section, section.headerFirstPageRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker)
+    : defaultHeaderBox
+  const firstPageFooterBox = hasFirstPageFooter
+    ? flowZone(section, section.footerFirstPageRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker)
+    : defaultFooterBox
+
+  const defaultHeaderFragments = buildZoneFragments(defaultHeaderBox, section, measurer, wordBreaker)
+  const defaultFooterFragments = buildZoneFragments(defaultFooterBox, section, measurer, wordBreaker)
+  const firstPageHeaderFragments = hasFirstPageHeader
+    ? buildZoneFragments(firstPageHeaderBox, section, measurer, wordBreaker)
+    : defaultHeaderFragments
+  const firstPageFooterFragments = hasFirstPageFooter
+    ? buildZoneFragments(firstPageFooterBox, section, measurer, wordBreaker)
+    : defaultFooterFragments
+
+  const densePages = pages.filter((p): p is PaginatedPage => p != null)
+  if (!completedSection) {
+    while (densePages.length > 1 && densePages[densePages.length - 1].fragments.length === 0) {
+      densePages.pop()
+    }
+  }
+
+  densePages.forEach((page, idx) => {
+    const isFirst = idx === 0
+    const hFrags = isFirst ? firstPageHeaderFragments : defaultHeaderFragments
+    const fFrags = isFirst ? firstPageFooterFragments : defaultFooterFragments
+    page.headerFragments = cloneZoneFragmentsForPage(hFrags, page.index, pageNumberOffset)
+    page.footerFragments = cloneZoneFragmentsForPage(fFrags, page.index, pageNumberOffset)
+    page.headerZoneBox = { ...headerZoneBox }
+    page.footerZoneBox = { ...footerZoneBox }
+  })
+
+  return {
+    status: "supported",
+    section: { sectionId: section.id, pages: densePages },
+    completedSection,
+  }
+}
+
 // ─── Document Entry ───────────────────────────────────────────────────────────
 
 function runAllSections(
@@ -408,6 +668,100 @@ function runAllSections(
     pageIndex += paginated.pages.length - 1
   })
   return sections
+}
+
+export function tryPaginateDocumentBodyBasicsIncrementally(
+  doc: DocumentNode,
+  measurer: TextMeasurer,
+  wordBreaker?: WordBreaker,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
+): TryPaginateDocumentBodyBasicsIncrementallyResult {
+  const wb = wordBreaker ?? defaultWordBreaker
+  const layoutDoc = resolveDocumentParagraphStyles(doc)
+  const listNumbering: ListNumberingPaginationContext = {
+    markers: resolveListMarkers(layoutDoc),
+    styles: layoutDoc.document.listStyles ?? {},
+  }
+  let pageIndex = 0
+  const sections: PaginatedSection[] = []
+
+  for (const [index, section] of layoutDoc.document.sections.entries()) {
+    if (index > 0) pageIndex += 1
+    const result = tryPaginateSectionBodyBasicsIncrementally(
+      section,
+      pageIndex,
+      measurer,
+      wb,
+      onSplitDecision,
+      listNumbering,
+    )
+    if (result.status === "unsupported") return result
+    sections.push(result.section)
+    pageIndex += result.section.pages.length - 1
+  }
+
+  const tocEntries = collectTocEntries(sections, layoutDoc)
+  return {
+    status: "supported",
+    paginated: { sections, tocEntries },
+  }
+}
+
+export function tryPaginateDocumentBodyBasicsVisibleWindow(
+  doc: DocumentNode,
+  measurer: TextMeasurer,
+  options: BodyBasicsVisibleWindowOptions,
+  wordBreaker?: WordBreaker,
+  onSplitDecision?: (d: ParagraphSplitDecision) => void,
+): TryPaginateDocumentBodyBasicsVisibleWindowResult {
+  const requestedPageIndex = Math.max(0, Math.floor(options.pageIndex))
+  const marginPages = Math.max(0, Math.floor(options.marginPages ?? 0))
+  const stopAfterPageIndex = requestedPageIndex + marginPages
+  const wb = wordBreaker ?? defaultWordBreaker
+  const layoutDoc = resolveDocumentParagraphStyles(doc)
+  const listNumbering: ListNumberingPaginationContext = {
+    markers: resolveListMarkers(layoutDoc),
+    styles: layoutDoc.document.listStyles ?? {},
+  }
+  let pageIndex = 0
+  const sections: PaginatedSection[] = []
+  let completedDocument = true
+
+  for (const [index, section] of layoutDoc.document.sections.entries()) {
+    if (index > 0) pageIndex += 1
+    const result = tryPaginateSectionBodyBasicsIncrementally(
+      section,
+      pageIndex,
+      measurer,
+      wb,
+      onSplitDecision,
+      listNumbering,
+      { stopAfterPageIndex },
+    )
+    if (result.status === "unsupported") return result
+    sections.push(result.section)
+    pageIndex += result.section.pages.length - 1
+    const latestPageIndex = result.section.pages[result.section.pages.length - 1]?.index ?? pageIndex
+    if (!result.completedSection || (latestPageIndex >= stopAfterPageIndex && index < layoutDoc.document.sections.length - 1)) {
+      completedDocument = false
+      break
+    }
+  }
+
+  const tocEntries = collectTocEntries(sections, layoutDoc)
+  const allPages = sections.flatMap((section) => section.pages)
+  const endPageIndex = allPages.reduce((max, page) => Math.max(max, page.index), 0)
+
+  return {
+    status: "supported",
+    paginated: { sections, tocEntries },
+    coverage: {
+      startPageIndex: 0,
+      endPageIndex,
+      requestedPageIndex,
+      completedDocument,
+    },
+  }
 }
 
 export function paginateDocument(

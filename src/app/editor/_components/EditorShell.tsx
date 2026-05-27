@@ -44,6 +44,11 @@ import {
   resolveRightRailResizeStartWidth,
 } from "./rightRailResize"
 import { SAMPLE_FIELD_REGISTRY_V1 } from "@/app/_lib/fieldRegistry"
+import {
+  FLOWDOC_EXPORT_PROFILE_HEADER,
+  formatFlowDocExportProfileSummary,
+  parseFlowDocExportProfileHeader,
+} from "@/app/_lib/exportProfile"
 import { createBrowserTextMeasurer } from "./browserTextMeasurer"
 import {
   isEditorTextMeasurerReady,
@@ -65,6 +70,17 @@ import {
 import type { DriftReport } from "./comparePagination"
 import { resolveSamePreviewOptimisticLayout, type LayoutStatus, type OptimisticLayoutSnapshot } from "./layoutReconciliation"
 import { formatExportReadinessMessage, getExportReadiness, selectAuthoritativeLayoutWarnings } from "./exportReadiness"
+import {
+  createEditorPreviewPlaceholderLayoutState,
+  markEditorPreviewLayoutFull,
+  markEditorPreviewLayoutPartial,
+  markEditorPreviewLayoutSettling,
+  shouldBlockEditorPreviewCanvas,
+} from "./editorPreviewLayoutStatus"
+import {
+  resolveEditorDisplayPaginated,
+  type EditorPartialPreviewPaginated,
+} from "./editorPreviewDisplay"
 import { findWysiwygPageIndexInFragmentRanges, getWysiwygParagraphFragmentRanges } from "./wysiwygCaretMapping"
 import {
   WYSIWYG_INLINE_EDIT_ENABLED,
@@ -144,6 +160,8 @@ import { createInitialEditorState, reducer, resizeColumnsDocument, type DragStat
 import { buildSelectionContext } from "./selectionContext"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import { EditorCanvasColumn } from "./shell/EditorCanvasColumn"
+import { shouldUseBackgroundBrowserPagination } from "./browserPaginationStrategy"
+import type { BrowserPaginationWorkerRequest, BrowserPaginationWorkerResponse } from "./browserPaginationWorkerTypes"
 import {
   collectEditorPageNavItems,
   findFirstPageIndexForNode,
@@ -311,6 +329,7 @@ const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
 const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 0
+const BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES = 4
 // Keep hard reflow from settling between real key-repeat events; live echo
 // carries immediate feedback until the typing burst pauses.
 const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 450
@@ -814,6 +833,16 @@ function EditorCanvasPerfProfiler({
   )
 }
 
+function createBrowserPaginationWorker(): Worker | null {
+  if (typeof Worker === "undefined") return null
+  try {
+    return new Worker(new URL("./browserPaginationWorker.ts", import.meta.url), { type: "module" })
+  } catch (error) {
+    console.error("browser pagination worker unavailable:", error)
+    return null
+  }
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function EditorShell() {
@@ -832,7 +861,8 @@ export default function EditorShell() {
   const selectedStyleResourceId = selectedStyleResource?.id ?? null
   const [editorTextMeasurer, setEditorTextMeasurer] = useState<TextMeasurer>(() => createBrowserTextMeasurer())
   const [editorTextMeasurerStatus, setEditorTextMeasurerStatus] = useState<EditorTextMeasurerStatus>("loading")
-  const [initialLayoutReady, setInitialLayoutReady] = useState(false)
+  const [browserPreviewLayout, setBrowserPreviewLayout] = useState(createEditorPreviewPlaceholderLayoutState)
+  const [partialPreviewPaginated, setPartialPreviewPaginated] = useState<EditorPartialPreviewPaginated | null>(null)
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
   useEffect(() => {
     let cancelled = false
@@ -872,7 +902,6 @@ export default function EditorShell() {
       : bindDocumentWithSnapshot(doc, { registry: packageFieldRegistry, snapshot: dataSnapshot }).doc
   ), [dataSnapshot, isTemplateMode, packageFieldRegistry])
   const previewDoc = useMemo(() => resolvePreviewDoc(state.doc), [resolvePreviewDoc, state.doc])
-  const isInitialLayoutPreparing = !initialLayoutReady
   const dataReadiness = useMemo(() => assessDocumentDataReadiness({
     doc: state.doc,
     registry: packageFieldRegistry,
@@ -981,6 +1010,11 @@ export default function EditorShell() {
   useEffect(() => { packageFieldRegistryRef.current = packageFieldRegistry }, [packageFieldRegistry])
   useEffect(() => { dataSnapshotRef.current = dataSnapshot }, [dataSnapshot])
   useEffect(() => { paginatedRef.current = state.paginated })
+  const displayPaginated = useMemo(() => resolveEditorDisplayPaginated({
+    authoritativePaginated: state.paginated,
+    partialPreviewPaginated,
+    previewLayout: browserPreviewLayout,
+  }), [browserPreviewLayout, partialPreviewPaginated, state.paginated])
   useEffect(() => {
     if (!selectedStyleResource) return
     const exists = selectedStyleResource.kind === "paragraph-style"
@@ -1042,7 +1076,7 @@ export default function EditorShell() {
   useEffect(() => { inlineEditPageIndexRef.current = inlineEditPageIndex }, [inlineEditPageIndex])
   const inlineEditVisualLockedRef = useRef(inlineEditVisualLocked)
   useEffect(() => { inlineEditVisualLockedRef.current = inlineEditVisualLocked }, [inlineEditVisualLocked])
-  const editorPageItems = useMemo(() => collectEditorPageNavItems(state.paginated), [state.paginated])
+  const editorPageItems = useMemo(() => collectEditorPageNavItems(displayPaginated), [displayPaginated])
   const selectedContextItems = useMemo(() => (
     isTemplateMode
       ? buildSelectionContext(state.doc, state.selectionAnchorNodeId ?? state.selectedNodeId)
@@ -1054,8 +1088,8 @@ export default function EditorShell() {
       ? selectedContextItems[selectedContextItems.length - 1].label
       : "Canvas"
   const selectedPageIndex = useMemo(() => (
-    findFirstPageIndexForNode(state.paginated, state.selectionAnchorNodeId ?? state.selectedNodeId)
-  ), [state.paginated, state.selectedNodeId, state.selectionAnchorNodeId])
+    findFirstPageIndexForNode(displayPaginated, state.selectionAnchorNodeId ?? state.selectedNodeId)
+  ), [displayPaginated, state.selectedNodeId, state.selectionAnchorNodeId])
   const firstPageIndex = editorPageItems[0]?.pageIndex ?? 0
   const currentCanvasPageIndex = inlineEditPageIndex ?? viewPageIndex ?? selectedPageIndex ?? firstPageIndex
   const canvasSectionLabel = `Section ${activeSectionIndex + 1}`
@@ -1790,7 +1824,9 @@ export default function EditorShell() {
         setSelectedStyleResource(null)
         setPackageFieldRegistry(fieldRegistryFromDocumentParseResult(result))
         setDataSnapshot(dataSnapshotFromDocumentParseResult(result))
-        dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
+        setPartialPreviewPaginated(null)
+        setBrowserPreviewLayout(createEditorPreviewPlaceholderLayoutState())
+        dispatch({ type: "LOAD_DOCUMENT", doc })
         setDocumentIoStatus({ type: "info", message: documentImportSuccessMessage(result.source, result.fieldRegistryIssues) })
       } else {
         setDocumentIoStatus({ type: "error", message: documentParseFailureMessage(result.reason) })
@@ -1801,7 +1837,7 @@ export default function EditorShell() {
     }
     reader.readAsText(file)
     e.target.value = ""
-  }, [clearWysiwygDraftPagination, endWysiwygTextSession, paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
+  }, [clearWysiwygDraftPagination, endWysiwygTextSession, resetInlineEditStateForDocumentReplace])
 
   const handleNewDocument = useCallback(() => {
     if (!confirm("สร้างเอกสารใหม่? history จะถูกล้าง")) return
@@ -1812,8 +1848,10 @@ export default function EditorShell() {
     setSelectedStyleResource(null)
     setPackageFieldRegistry(SAMPLE_FIELD_REGISTRY_V1)
     setDataSnapshot(createEmptyDataSnapshot())
-    dispatch({ type: "LOAD_DOCUMENT", doc, paginated: paginatePreviewDoc(doc) })
-  }, [clearWysiwygDraftPagination, endWysiwygTextSession, paginatePreviewDoc, resetInlineEditStateForDocumentReplace])
+    setPartialPreviewPaginated(null)
+    setBrowserPreviewLayout(createEditorPreviewPlaceholderLayoutState())
+    dispatch({ type: "LOAD_DOCUMENT", doc })
+  }, [clearWysiwygDraftPagination, endWysiwygTextSession, resetInlineEditStateForDocumentReplace])
 
   const handleCanvasScaleChange = useCallback((nextScale: number) => {
     setScale(clampScale(nextScale))
@@ -2037,6 +2075,8 @@ export default function EditorShell() {
   const serverPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutVersionRef = useRef(0)
   const browserPaginationGenerationRef = useRef(0)
+  const browserPaginationWorkerRef = useRef<Worker | null>(null)
+  const browserPaginationWorkerRequestIdRef = useRef(0)
   const suppressNextLayoutLoadingOverlayRef = useRef(false)
   const precomputedBrowserPaginationRef = useRef<OptimisticLayoutSnapshot | null>(null)
   const optimisticLayoutRef = useRef<OptimisticLayoutSnapshot | null>(null)
@@ -2050,6 +2090,7 @@ export default function EditorShell() {
   const layoutWarningSource = serverLayoutCheckedForCurrentPreview ? "server" : "preview"
   const exportReadiness = useMemo(() => getExportReadiness({
     layoutStatus,
+    previewLayoutStatus: browserPreviewLayout.status,
     layoutError,
     serverLayoutCheckedForCurrentPreview,
     fontFallback,
@@ -2064,6 +2105,7 @@ export default function EditorShell() {
     dataReadiness.issues,
     driftReport,
     fontFallback,
+    browserPreviewLayout.status,
     isTemplateMode,
     layoutError,
     layoutStatus,
@@ -2074,8 +2116,18 @@ export default function EditorShell() {
   useEffect(() => {
     browserPaginationGenerationRef.current += 1
   }, [inlineEditNodeId])
+  useEffect(() => () => {
+    browserPaginationWorkerRef.current?.terminate()
+    browserPaginationWorkerRef.current = null
+  }, [])
   const suppressNextLayoutLoadingOverlay = useCallback(() => {
     suppressNextLayoutLoadingOverlayRef.current = true
+  }, [])
+  const getBrowserPaginationWorker = useCallback(() => {
+    if (!browserPaginationWorkerRef.current) {
+      browserPaginationWorkerRef.current = createBrowserPaginationWorker()
+    }
+    return browserPaginationWorkerRef.current
   }, [])
 
   const renderResizePreview = useCallback((drag: ResizeDrag | null) => {
@@ -2131,11 +2183,18 @@ export default function EditorShell() {
       : exportReadiness
     const blockedReason = formatExportReadinessMessage(readiness)
     if (blockedReason) {
+      setDocumentIoStatus(null)
       setExportError(`${formatLabel} export blocked: ${blockedReason}`)
       return
     }
 
     setExportError(null)
+    setDocumentIoStatus({
+      type: "info",
+      message: format === "pdf"
+        ? "Exporting PDF: paginating and rendering page batches..."
+        : "Exporting DOCX: paginating and rendering...",
+    })
     setIsExporting(true)
     try {
       const res = await fetch("/api/export", {
@@ -2154,10 +2213,12 @@ export default function EditorShell() {
         } catch { }
         if (errorCode === "FONT_FALLBACK_BLOCKED") {
           setFontFallback(true)
+          setDocumentIoStatus(null)
           setExportError(`${formatLabel} export blocked: runtime font fallback is active`)
           return
         }
         if (errorCode === LAYOUT_WARNINGS_BLOCKED_CODE) {
+          setDocumentIoStatus(null)
           setExportError(`${formatLabel} export blocked: layout warnings block final export`)
           return
         }
@@ -2165,9 +2226,12 @@ export default function EditorShell() {
       }
       if (res.headers.get(FLOWDOC_FONT_HEADER) === FLOWDOC_FONT_FALLBACK_VALUE) {
         setFontFallback(true)
+        setDocumentIoStatus(null)
         setExportError(`${formatLabel} export blocked: runtime font fallback is active`)
         return
       }
+      const exportProfile = parseFlowDocExportProfileHeader(res.headers.get(FLOWDOC_EXPORT_PROFILE_HEADER))
+      setDocumentIoStatus({ type: "info", message: `Preparing ${formatLabel} download...` })
       setFontFallback(false)
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
@@ -2178,8 +2242,13 @@ export default function EditorShell() {
       a.click()
       document.body.removeChild(a)
       setTimeout(() => URL.revokeObjectURL(url), 100)
+      setDocumentIoStatus({
+        type: "info",
+        message: formatFlowDocExportProfileSummary(exportProfile) ?? `${formatLabel} export ready.`,
+      })
       setExportError(null)
     } catch (err) {
+      setDocumentIoStatus(null)
       setExportError(`${formatLabel} export failed. Please try again.`)
       console.error("export error:", err)
     } finally {
@@ -2233,6 +2302,8 @@ export default function EditorShell() {
       ...summarizePaginatedForWysiwygPerf(paginated),
     })
     optimisticLayoutRef.current = { doc: previewDoc, paginated }
+    setPartialPreviewPaginated(null)
+    setBrowserPreviewLayout(markEditorPreviewLayoutFull(browserPaginationGenerationRef.current))
     dispatch({ type: "SET_PAGINATED", paginated })
   }, [editorTextMeasurer, inlineEditNodeId, previewDoc])
 
@@ -2246,49 +2317,135 @@ export default function EditorShell() {
     // Entering edit mode changes inlineEditNodeId but not previewDoc, so this
     // effect only reruns when the draft document or measurement inputs change.
     const generation = ++browserPaginationGenerationRef.current
+    setPartialPreviewPaginated(null)
     const inlineEditNodeIdAtSchedule = inlineEditNodeIdRef.current
     const inlineEditDraftVersionAtSchedule = inlineEditNodeIdAtSchedule
       ? inlineEditDraftVersionRef.current
       : null
     const debounceMs = inlineEditNodeIdAtSchedule ? INLINE_EDIT_PREVIEW_DEBOUNCE_MS : 16
+    const useBackgroundPagination = shouldUseBackgroundBrowserPagination({
+      doc: previewDoc,
+      canUseWorker: typeof Worker !== "undefined",
+      inlineEditNodeId: inlineEditNodeIdAtSchedule,
+    })
     const precomputedPagination = precomputedBrowserPaginationRef.current
     if (precomputedPagination) {
       precomputedBrowserPaginationRef.current = null
       if (precomputedPagination.doc === previewDoc) {
         optimisticLayoutRef.current = precomputedPagination
+        setPartialPreviewPaginated(null)
         if (isEditorTextMeasurerReady(editorTextMeasurerStatus)) {
-          setInitialLayoutReady(true)
+          setBrowserPreviewLayout(markEditorPreviewLayoutFull(generation))
         }
         return () => undefined
       }
     }
+    setBrowserPreviewLayout((current) => markEditorPreviewLayoutSettling(generation, {
+      blocksCanvas: current.blocksCanvas || useBackgroundPagination,
+    }))
     interactiveDebounceRef.current = setTimeout(() => {
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
-      const startedAt = startWysiwygPerfSpan()
-      const paginated = paginateDocument(previewDoc, editorTextMeasurer)
-      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
-        nodeId: inlineEditNodeIdAtSchedule ?? undefined,
-        draftVersion: inlineEditDraftVersionAtSchedule,
-        scheduledDelayMs: debounceMs,
-        source: inlineEditNodeIdAtSchedule ? "inline-edit-preview" : "document-preview",
-        ...summarizePaginatedForWysiwygPerf(paginated),
-      })
-      if (generation !== browserPaginationGenerationRef.current) return
-      if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
-      optimisticLayoutRef.current = { doc: previewDoc, paginated }
-      dispatch({ type: "SET_PAGINATED", paginated })
-      if (isEditorTextMeasurerReady(editorTextMeasurerStatus)) {
-        setInitialLayoutReady(true)
+
+      const commitPagination = (
+        paginated: PaginatedDocument,
+        startedAt: number,
+        source: string,
+        extra: Record<string, unknown> = {},
+      ) => {
+        finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
+          nodeId: inlineEditNodeIdAtSchedule ?? undefined,
+          draftVersion: inlineEditDraftVersionAtSchedule,
+          scheduledDelayMs: debounceMs,
+          source,
+          ...extra,
+          ...summarizePaginatedForWysiwygPerf(paginated),
+        })
+        if (generation !== browserPaginationGenerationRef.current) return
+        if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
+        optimisticLayoutRef.current = { doc: previewDoc, paginated }
+        paginatedRef.current = paginated
+        setPartialPreviewPaginated(null)
+        if (isEditorTextMeasurerReady(editorTextMeasurerStatus) || source === "document-preview-worker") {
+          setBrowserPreviewLayout(markEditorPreviewLayoutFull(generation))
+        } else {
+          setBrowserPreviewLayout(markEditorPreviewLayoutSettling(generation, { blocksCanvas: true }))
+        }
+        dispatch({ type: "SET_PAGINATED", paginated })
+        if (inlineEditDraftVersionAtSchedule !== null) {
+          markInlineEditVisualFresh(inlineEditDraftVersionAtSchedule)
+        }
       }
-      if (inlineEditDraftVersionAtSchedule !== null) {
-        markInlineEditVisualFresh(inlineEditDraftVersionAtSchedule)
+
+      const runMainThreadPagination = (source: string) => {
+        const startedAt = startWysiwygPerfSpan()
+        const paginated = paginateDocument(previewDoc, editorTextMeasurer)
+        commitPagination(paginated, startedAt, source)
       }
+
+      if (useBackgroundPagination) {
+        const worker = getBrowserPaginationWorker()
+        if (worker) {
+          const startedAt = startWysiwygPerfSpan()
+          const requestId = ++browserPaginationWorkerRequestIdRef.current
+          let requestSettled = false
+
+          const fallbackToMainThread = (reason: string) => {
+            if (requestSettled) return
+            if (generation !== browserPaginationGenerationRef.current) return
+            if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
+            requestSettled = true
+            console.error("browser pagination worker failed:", reason)
+            runMainThreadPagination("document-preview-worker-fallback")
+          }
+
+          worker.onmessage = (event: MessageEvent<BrowserPaginationWorkerResponse>) => {
+            const response = event.data
+            if (!response || response.requestId !== requestId) return
+            if (generation !== browserPaginationGenerationRef.current) return
+            if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
+            if (requestSettled) return
+            if (response.type === "partial") {
+              setPartialPreviewPaginated({
+                generation,
+                requestId,
+                paginated: response.paginated,
+              })
+              setBrowserPreviewLayout(markEditorPreviewLayoutPartial(generation))
+              return
+            }
+            if (response.type === "error") {
+              fallbackToMainThread(response.message)
+              return
+            }
+            requestSettled = true
+            commitPagination(response.paginated, startedAt, "document-preview-worker", {
+              workerMeasurerStatus: response.measurerStatus,
+            })
+          }
+          worker.onerror = (event) => {
+            fallbackToMainThread(event.message || "worker error")
+          }
+          const request: BrowserPaginationWorkerRequest = {
+            type: "paginate",
+            requestId,
+            doc: previewDoc,
+            visibleWindow: {
+              pageIndex: currentCanvasPageIndex,
+              marginPages: BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES,
+            },
+          }
+          worker.postMessage(request)
+          return
+        }
+      }
+
+      runMainThreadPagination(inlineEditNodeIdAtSchedule ? "inline-edit-preview" : "document-preview")
     }, debounceMs)
 
     return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorTextMeasurer, editorTextMeasurerStatus, fontReadyVersion, markInlineEditVisualFresh, previewDoc])
+  }, [editorTextMeasurer, editorTextMeasurerStatus, fontReadyVersion, getBrowserPaginationWorker, markInlineEditVisualFresh, previewDoc])
 
   // Server pagination — export layout truth. The editor canvas
   // keeps the browser preview so normal display and inline editing share the
@@ -3367,6 +3524,7 @@ export default function EditorShell() {
       { mode: "render", label: "Render", description: exportReadiness.canExport ? "Ready to export" : "Check export", icon: "R", badge: exportReadiness.canExport ? undefined : "!" },
     ]
   const showLayoutLoadingOverlay = isLayoutLoading && !suppressLayoutLoadingOverlay
+  const showBrowserPreviewLayoutPreparing = shouldBlockEditorPreviewCanvas(browserPreviewLayout)
 
   return (
     <div
@@ -3376,6 +3534,8 @@ export default function EditorShell() {
       data-wysiwyg-text-engine-enabled={WYSIWYG_TEXT_ENGINE_ENABLED ? "true" : "false"}
       data-wysiwyg-rich-text-draft-enabled={WYSIWYG_RICH_TEXT_DRAFT_ENABLED ? "true" : "false"}
       data-wysiwyg-perf-trace-enabled={WYSIWYG_PERF_TRACE_ENABLED ? "true" : "false"}
+      data-preview-layout-status={browserPreviewLayout.status}
+      data-preview-layout-blocking={browserPreviewLayout.blocksCanvas ? "true" : "false"}
       style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : (headerFooterReservedDrag && !headerFooterReservedDrag.committed) ? "ns-resize" : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) || (headerFooterReservedDrag && !headerFooterReservedDrag.committed) ? "none" : undefined }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -3533,7 +3693,7 @@ export default function EditorShell() {
           onResetZoom={resetZoom}
           onFitZoom={fitZoom}
         >
-          {isInitialLayoutPreparing ? (
+          {showBrowserPreviewLayoutPreparing ? (
             <div
               data-testid="initial-layout-loading"
               aria-live="polite"
@@ -3547,7 +3707,7 @@ export default function EditorShell() {
               onRender={handleEditorCanvasProfilerRender}
             >
               <EditorCanvas
-                paginated={state.paginated}
+                paginated={displayPaginated}
                 doc={previewDoc}
                 drag={isTemplateMode ? state.drag : null}
                 scale={scale}

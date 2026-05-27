@@ -119,6 +119,27 @@ PDF should:
 PDF may still have target-specific drawing limitations, but visual drift from
 authoritative pagination should be treated as a bug unless explicitly accepted.
 
+PDF rendering may process already-paginated pages in fixed-size batches for
+responsiveness, profiling, and future progress reporting. The batch boundary
+must be a render execution detail only: it must not change page order, page
+count, fragment geometry, font selection, layout warnings, export response
+shape, or the requirement that export receives a complete asserted
+`PaginatedDocument`. The current default PDF render batch size is 20 pages.
+Because the current renderer uses `pdf-lib`, final `save()` still produces a
+whole PDF buffer at the end; batched rendering is not true streaming.
+
+Successful `/api/export` responses may include an
+`X-FlowDoc-Export-Profile` header with compact timing and size metadata for the
+completed export. This header is observability metadata only: clients must not
+use it as a layout source of truth, and its presence must not change the binary
+PDF/DOCX body or content-disposition behavior.
+
+Large-export classification is also observability only. Fewer than 100 pages is
+standard, 100 to 299 pages is large, and 300 or more pages is very-large. These
+tiers may guide whether to investigate page batching, chunked PDF merge,
+background export jobs, true streaming, or a renderer/library change, but they
+must not by themselves change pagination semantics or block a successful export.
+
 ## DOCX Contract
 
 DOCX is an exchange format, not a pixel-perfect layout target.
