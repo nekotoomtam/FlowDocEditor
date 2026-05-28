@@ -22,6 +22,374 @@ Each entry should include:
 
 ---
 
+## 2026-05-28
+
+### Bump Editor Layout Responsiveness Baseline To 0.6.21
+
+Goal: Accept the Phase 0-3 editor layout responsiveness work as the next
+project release-readiness marker before moving to the next performance phase.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.20` to `0.6.21`.
+- Updated the root lockfile package metadata to match.
+- Updated the project version marker test to assert the accepted `0.6.21`
+  baseline.
+- Updated versioning docs so the current baseline points at `0.6.21`.
+- Kept persisted document/package schema versions unchanged.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WORK_LOG.md`
+
+Verification performed:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+
+Notes or follow-ups:
+
+- No git tag was created; project versions remain release-readiness markers.
+- This patch does not change `DocumentNode.version`, FlowDoc package version,
+  storage package version, pagination semantics, undo/redo, or export behavior.
+
+### Phase 0 Editor Layout Interaction Guard
+
+Goal: Keep normal editor actions from feeling like a full document reload while
+the browser/server layout pipelines settle.
+
+Completed:
+
+- Kept browser preview settling non-blocking once a usable canvas layout is
+  already visible; the initial placeholder/document-prepare path remains
+  blocking.
+- Preserved page navigation by falling back to the nearest available page index
+  instead of the first page when the current page is temporarily absent after a
+  layout update.
+- Suppressed the server layout loading overlay for drag/drop reorder, outline
+  reorder, table row/column operations, Flow Row column insertion, and Flow Row
+  pair resize so the old canvas can remain visible while layout catches up.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/editorPreviewLayoutStatus.ts`
+- `src/app/editor/_components/shell/editorCanvasNavigation.ts`
+- `src/app/editor/_components/__tests__/editorPreviewLayoutStatus.test.ts`
+- `src/app/editor/_components/__tests__/editorCanvasNavigation.test.ts`
+
+Verification performed:
+
+- `npm.cmd test -- src/app/editor/_components/__tests__/editorPreviewLayoutStatus.test.ts src/app/editor/_components/__tests__/editorCanvasNavigation.test.ts`
+- `npm.cmd run type-check`
+- Headless browser smoke on `http://localhost:4000/editor`: editor shell loaded,
+  preview status reached `full`, preview blocking was `false`, initial layout
+  loading was gone, and no console/page errors were reported.
+
+Notes or follow-ups:
+
+- This is a Phase 0 guard only. It does not implement action classification,
+  measurement cache, incremental pagination, or patch-based worker layout.
+- A focused stress-document manual/browser check should still verify page 15/150
+  drag, add, and reorder behavior against the user's long mock document.
+
+### Phase 1 WYSIWYG Responsive Finalize
+
+Goal: Make clicking away from or switching a WYSIWYG paragraph respond before
+the full preview/layout pipeline settles.
+
+Completed:
+
+- Added a responsive WYSIWYG finalize mode that commits the paragraph/rich-text
+  draft to the document model while reusing the current paginated preview for
+  the immediate UI response.
+- Deferred canvas click inline-edit startup until after the selection paint so
+  the active node can update before the edit layer work begins.
+- Routed blur, background click, palette drag, canvas drag start, and context
+  selection through the responsive finalize path where those actions should not
+  block on full pagination.
+- Routed WYSIWYG keyboard exit and undo/redo pre-dispatch finalization through
+  the same responsive path, and skipped the synchronous full-document
+  `inline-edit-exit-pagination` pass while the WYSIWYG text engine is active.
+- Added WYSIWYG perf event markers for `inline-edit-start` and
+  `inline-edit-finalize` so stress-document click latency can be inspected.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `scripts/wysiwyg-stress-lifecycle-smoke.mjs`
+- `package.json`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd test -- src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts src/app/editor/_components/__tests__/editorPreviewLayoutStatus.test.ts`
+- Headless Playwright smoke on `http://localhost:4000/editor` with
+  `public/mock/flowdoc-stress-mock.flowdoc.json`: loaded 227 pages / 6,644
+  fragments, clicked from `p_00114` to `li_00116` on page 15, reached the next
+  inline-edit layer in about 632ms, kept `data-preview-layout-blocking=false`,
+  showed no initial layout loading overlay, and reported no console/page
+  errors. Perf trace recorded `inline-edit-finalize` with
+  `source=responsive-preview` at about 36.8ms.
+- Follow-up stress smoke for WYSIWYG exit + delete + undo restored `p_00114`
+  without initial layout loading or preview blocking. The previous synchronous
+  exit pagination event was absent, and `inline-edit-finalize` recorded
+  `source=responsive-preview` at about 54.8ms.
+- Added `npm run smoke:wysiwyg-stress-lifecycle` as a permanent guard for the
+  same stress lifecycle path. Running it against `http://localhost:4000/editor`
+  with `flowdoc-stress-mock.flowdoc.json` reported click switch around 323ms,
+  WYSIWYG exit around 253ms, responsive finalize around 36.3ms / 34.6ms, no
+  preview blocking, no initial layout loading overlay, and undo settling
+  without treating the canvas as blocked.
+
+Notes or follow-ups:
+
+- This does not implement incremental pagination, action classification, cache,
+  or patch-based worker layout.
+- Structural text edits can still need background layout settling; this slice
+  only removes the synchronous full-pagination cost from common WYSIWYG exit and
+  switch interactions.
+
+### Phase 1b WYSIWYG Stress Typing Guard
+
+Goal: Reduce typing delay inside the stress document without changing document
+schema, pagination semantics, undo/redo, or export behavior.
+
+Completed:
+
+- Deferred text-changing WYSIWYG draft sync from the active text layer back to
+  the editor shell through a latest-only quiet window, while keeping the local
+  active paragraph as the immediate visual truth.
+- Kept synchronous flushes for edit completion, blur completion, unmount, rich
+  text shortcuts, and rich-text-toolbar focus so commit/style commands do not
+  read stale text.
+- Wrapped deferred parent/session draft sync in `startTransition` so local input
+  can stay responsive while the editor shell catches up.
+- Cached the paginated page/fragment summary used by the WYSIWYG perf profiler
+  so trace-gated React commit events do not scan the full stress document on
+  every commit.
+- Extended `scripts/wysiwyg-smoothness-probe.mjs` so it can wait for large
+  documents, scroll lazy-rendered pages into view, and target stress-document
+  paragraphs directly.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd test -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- Stress smoothness probe on `http://localhost:4000/editor` with
+  `public/mock/flowdoc-stress-mock.flowdoc.json`, `p_00114`, page index `14`,
+  burst `80`, interval `0`: before this slice the probe reported roughly
+  `paintLatencyMs.p50=49.6`, `p95=135.5`, `p99=158.2`, `max=162.6`, and
+  `jankCount=6`; after this slice it reported `p50=24.2`, `p95=54.5`,
+  `p99=94.4`, `max=196.3`, and `jankCount=1`.
+
+Notes or follow-ups:
+
+- The active page still commits once per local visual typing update, so this is
+  not the final render-architecture fix. A future page/node selector split or
+  imperative text-layer lane may be needed to push p95 closer to one frame.
+- The next user-reported follow-up is the brief display drift on mouse release.
+
+### Phase 1c WYSIWYG Pointer Release Stability
+
+Goal: Avoid a transient display mismatch when releasing the mouse after a
+WYSIWYG range-selection drag.
+
+Completed:
+
+- Kept the local pointer-selection preview visible after pointerup until the
+  authoritative editor/session selection catches up, avoiding a one-frame
+  fallback to stale selection/caret state.
+- Cleared the optimistic local preview automatically once the parent selection
+  matches, so the preview remains editor-only and does not become document or
+  history state.
+- Extended the WYSIWYG smoothness selection probe to sample the first frames
+  after mouse release and report `releaseMissingOverlayCount`.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd test -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygTextCommit.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- Stress selection probe on `http://localhost:4000/editor` with
+  `public/mock/flowdoc-stress-mock.flowdoc.json`, `p_00114`, page index `14`,
+  40 pointer moves: `overlayVisibleCount=40`, `releaseMissingOverlayCount=0`,
+  and no console/page errors.
+
+Notes or follow-ups:
+
+- This protects the WYSIWYG range-selection release path. Other mouse-release
+  paths such as structural drag/drop or resize still rely on their existing
+  lifecycle guards and should be checked separately if the user reproduces a
+  distinct glitch.
+- Undo/redo can still produce several visible-page React commits around
+  100-200ms on the 227-page stress mock; the next improvement belongs to
+  page/render dependency reduction rather than full-pagination removal.
+- User feedback to carry forward: fast typing can still feel slightly delayed,
+  and mouse release after drag/selection can briefly show a wrong display state.
+  These are tracked as separate typing/render/interaction follow-ups, not part
+  of this lifecycle guard slice.
+
+### Phase 2 Action Classification Foundation
+
+Goal: Add the shared action classification layer so editor interactions can
+decide layout feedback from action intent instead of scattered manual overlay
+guards.
+
+Completed:
+
+- Exported the `EditorAction` union for type-safe classification outside the
+  reducer without changing reducer behavior.
+- Added `editorActionClassifier` with `uiImpact`, `layoutScope`, and `priority`
+  classification for selection, visual-only style edits, metric edits,
+  structural body edits, table edits, document layout edits, and document load.
+- Added a single `dispatchEditorAction` wrapper in `EditorShell` that suppresses
+  the full-canvas server layout loading overlay for visible/background actions
+  while leaving `LOAD_DOCUMENT` on the existing blocking prepare path.
+- Routed high-impact user actions through the wrapper: undo/redo, paragraph/list
+  structural edits, canvas/property table operations, flow-row operations,
+  drag/drop commit, resize/margin commits, property/style-panel edits, rich-text
+  toolbar style updates, and delete actions.
+- Documented the action-classification contract in the editor UX contract.
+
+Files changed:
+
+- `src/app/editor/_components/editorReducer.ts`
+- `src/app/editor/_components/editorActionClassifier.ts`
+- `src/app/editor/_components/__tests__/editorActionClassifier.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/EDITOR_UX_CONTRACT.md`
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd test -- src/app/editor/_components/__tests__/editorActionClassifier.test.ts src/app/editor/_components/__tests__/editorPreviewLayoutStatus.test.ts`
+- Lightweight Playwright check against existing `http://localhost:4000/editor`:
+  editor shell/canvas visible, `data-preview-layout-status=full`,
+  `data-preview-layout-blocking=false`, no initial/canvas loading overlay, and
+  no console/page errors.
+
+Notes or follow-ups:
+
+- This foundation does not skip pagination yet; it only centralizes action
+  intent and loading-overlay policy. The next slices can use the same
+  classifier to avoid unnecessary pagination for visual-only actions and to feed
+  visible-window/incremental layout work.
+- Border style/width changes are intentionally treated as layout-affecting.
+  Border color-only optimization was not added because current box updates often
+  send full border side objects.
+
+### Phase 2 Test Harness Cleanup
+
+Goal: Make the editor smoke harness usable again against the current WYSIWYG
+text-engine path before moving to the next performance phase.
+
+Completed:
+
+- Added an inline text-control smoke adapter that can detect either the legacy
+  `textarea` editor or the current `data-wysiwyg-text-engine-layer` plus hidden
+  input bridge.
+- Routed smoke paragraph editing, selection, Thai composition, stack paragraph
+  editing, and table-cell Backspace checks through the adapter.
+- Kept legacy continuation-fragment textarea checks for the old path, but skip
+  them explicitly when the current text-engine path is active.
+- Strengthened the fieldRef check so field paragraphs must not enter any inline
+  text edit control, not just a textarea.
+
+Files changed:
+
+- `scripts/editor-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WORK_LOG.md`
+
+Verification performed:
+
+- `node --check scripts/editor-smoke.mjs`
+- `SMOKE_BASE_URL=http://localhost:4000/editor npm.cmd run smoke:editor`
+
+Notes or follow-ups:
+
+- This is test-harness cleanup only. It does not change editor behavior,
+  pagination, undo/redo, export, or the action classifier.
+- The skipped continuation checks are legacy-textarea-specific. A future
+  text-engine continuation smoke can be added separately if that path needs the
+  same multi-fragment coverage.
+
+### Phase 3 Visual-only Browser Preview Fast Lane
+
+Goal: Start using the action-classification foundation to avoid browser full
+pagination for safe visual-only actions.
+
+Completed:
+
+- Added a visual-only paginated update helper that reuses existing page/fragment
+  geometry and patches paragraph render props for text color, underline,
+  strikethrough, paragraph box fill, and visual paragraph style definition
+  changes.
+- Wired the helper into the browser preview pagination effect so supported
+  visual-only actions update `state.paginated` immediately from the existing
+  snapshot instead of scheduling browser full pagination.
+- Kept server `/api/paginate` reconciliation active in the background so export
+  truth and drift/readiness checks still use the current document.
+- Extended the editor smoke harness with a paragraph text-color check that
+  requires the browser perf trace to record `source=visual-only-fast-lane` and
+  asserts the initial layout loading overlay does not appear.
+- Left unsupported visual-only cases, such as rich range edits that need new
+  line runs, on the normal browser pagination path.
+- Documented the conservative fast-lane contract in the editor UX contract.
+
+Files changed:
+
+- `src/app/editor/_components/editorVisualOnlyPagination.ts`
+- `src/app/editor/_components/__tests__/editorVisualOnlyPagination.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `scripts/editor-smoke.mjs`
+- `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WORK_LOG.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorVisualOnlyPagination.test.ts src/app/editor/_components/__tests__/editorActionClassifier.test.ts`
+- `npm.cmd run type-check`
+- `node --check scripts/editor-smoke.mjs`
+- `$env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:editor`
+
+Notes or follow-ups:
+
+- `npm.cmd test -- ...` was not a valid focused gate here because the root
+  script runs the whole core suite first; two pre-existing PDF golden tests
+  timed out before app tests ran.
+- Browser smoke now covers the visual-only text color fast lane through the
+  Property Panel palette. Rich selected-range color changes still fall back to
+  the normal browser pagination path because they need run/line updates.
+- This is not incremental pagination. Metric and structural edits still use the
+  existing browser/server layout pipeline.
+
 ## 2026-05-25
 
 ### Add Authored Divider And Page Break Nodes

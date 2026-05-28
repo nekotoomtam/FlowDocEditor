@@ -9,6 +9,7 @@ import {
   buildEditorFragmentRenderKey,
   buildWysiwygDraftVisualPreview,
   buildWysiwygTableCellDraftVisualChromeFragments,
+  buildWysiwygTextPointerFragmentIndex,
   EditorCanvas,
   pageViewScopedEditPropsAffectPage,
   resolveInlineEditVisualOffsetY,
@@ -909,6 +910,8 @@ describe("EditorCanvas page memoization", () => {
     const activePage = pageWithFragments(0, [textFragment("active-p", "Active", 72)])
     const otherPage = pageWithFragments(1, [textFragment("other-p", "Other", 72, { pageIndex: 1 })])
     const props = {
+      selectedNodeId: null,
+      selectionAnchorNodeId: null,
       inlineEditNodeId: "active-p",
       inlineEditPageIndex: 0,
       wysiwygTextDraftNodeId: "active-p",
@@ -926,6 +929,8 @@ describe("EditorCanvas page memoization", () => {
     activePage.headerFragments = [textFragment("header-p", "Header", 36)]
     const otherPage = pageWithFragments(1, [textFragment("other-p", "Other", 72, { pageIndex: 1 })])
     const props = {
+      selectedNodeId: null,
+      selectionAnchorNodeId: null,
       inlineEditNodeId: "header-p",
       inlineEditPageIndex: 0,
       wysiwygTextDraftNodeId: "header-p",
@@ -943,6 +948,8 @@ describe("EditorCanvas page memoization", () => {
     const previewFragment = textFragment("active-p", "Draft", 72, { pageIndex: 1, continuesFrom: true })
     const previewPage = pageWithFragments(1, [textFragment("other-page-p", "Other", 72, { pageIndex: 1 })])
     const props = {
+      selectedNodeId: null,
+      selectionAnchorNodeId: null,
       inlineEditNodeId: "active-p",
       inlineEditPageIndex: 0,
       wysiwygTextDraftNodeId: "active-p",
@@ -958,6 +965,49 @@ describe("EditorCanvas page memoization", () => {
 
     expect(pageViewScopedEditPropsAffectPage(sourcePage, props)).toBe(true)
     expect(pageViewScopedEditPropsAffectPage(previewPage, props)).toBe(true)
+  })
+
+  it("scopes selected structural node prop changes to pages that contain the node", () => {
+    const selectedPage = pageWithFragments(0, [
+      { ...textFragment("table-1", "Table", 72), nodeType: "flow-table" },
+    ])
+    const otherPage = pageWithFragments(1, [textFragment("other-p", "Other", 72, { pageIndex: 1 })])
+    const props = {
+      selectedNodeId: "table-1",
+      selectionAnchorNodeId: "table-1",
+      inlineEditNodeId: null,
+      inlineEditPageIndex: null,
+      wysiwygTextDraftNodeId: null,
+      wysiwygDraftVisualPreview: null,
+      wysiwygTableCellDraftVisualChromeByPageIndex: new Map<number, PageFragment[]>(),
+      wysiwygTextPointerFragments: [],
+    }
+
+    expect(pageViewScopedEditPropsAffectPage(selectedPage, props)).toBe(true)
+    expect(pageViewScopedEditPropsAffectPage(otherPage, props)).toBe(false)
+  })
+
+  it("indexes WYSIWYG pointer fragments by paragraph node", () => {
+    const pageKeyByPageIndex = new Map([[0, "0-0"], [1, "0-1"]])
+    const firstPage = pageWithFragments(0, [
+      textFragment("active-p", "Active", 72),
+      textFragment("other-p", "Other", 96),
+    ])
+    firstPage.headerFragments = [textFragment("header-p", "Header", 36)]
+    const secondPage = pageWithFragments(1, [
+      textFragment("active-p", "Active continued", 72, { pageIndex: 1 }),
+    ])
+    const paginated: PaginatedDocument = {
+      tocEntries: [],
+      sections: [{ sectionId: "s1", pages: [firstPage, secondPage] }],
+    }
+
+    const index = buildWysiwygTextPointerFragmentIndex(paginated, pageKeyByPageIndex)
+
+    expect(index.targetsByNodeId.get("active-p")?.map((target) => target.pageKey)).toEqual(["0-0", "0-1"])
+    expect(index.targetsByNodeId.get("header-p")?.map((target) => target.pageKey)).toEqual(["0-0"])
+    expect(index.bodyParagraphFragmentCountByNodeId.get("active-p")).toBe(2)
+    expect(index.bodyParagraphFragmentCountByNodeId.get("header-p")).toBeUndefined()
   })
 })
 

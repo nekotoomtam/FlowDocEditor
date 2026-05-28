@@ -55,18 +55,23 @@ documents into `localStorage`, explicitly enables
 - no unexpected layout error badge is visible
 - header/footer preview text renders from `PaginatedDocument` zone fragments and
   remains read-only/non-interactive
-- paragraph inline edit commits multiline text
+- paragraph inline edit commits multiline text through either the legacy
+  textarea control or the current WYSIWYG text-engine layer/input bridge
 - same-fragment drag selection produces a visible WYSIWYG selection overlay
 - stack paragraph inline edit keeps document-visual layout parity while typing
 - Thai paragraph inline edit keeps composition/IME fallback visible and commits
   Thai text with combining marks and emoji
+- paragraph text color from the property-panel palette takes the visual-only
+  browser preview fast lane and does not show the initial layout loading overlay
 - table-cell paragraph inline edit exposes the guarded visual contract
 - continuation-fragment inline edit can start from a three-fragment paragraph,
   keep textarea values bounded to fragment slices, relocate the active textarea
   when caret tracking moves across pages after typing settles, type across
   browser reflow without duplicate/garbled visible text, stay focused, undo/redo
-  as one edit session, and Backspace across the continuation boundary
-- fieldRef paragraphs do not enter plain textarea inline edit
+  as one edit session, and Backspace across the continuation boundary. These
+  continuation checks are legacy-textarea-specific and are skipped with an
+  explicit log when the current text-engine path is active.
+- fieldRef paragraphs do not enter any inline text edit control
 - flow-table-cell paragraph Backspace at the true start does not call body-paragraph
   merge or corrupt the table
 - autosave writes `FlowDocPackage v2` to localStorage
@@ -226,6 +231,22 @@ changes.
 - Run undo, then redo.
 - Confirm the paragraph returns to the same visible layout after redo.
 - Watch for flicker, jump, unwanted scroll, or text disappearing.
+
+### WYSIWYG Stress Lifecycle
+
+Use when changing WYSIWYG enter/exit, undo/redo, loading overlay suppression,
+or preview layout status on large documents.
+
+- Run `npm run smoke:wysiwyg-stress-lifecycle`.
+- The smoke loads `public/mock/flowdoc-stress-mock.flowdoc.json`, jumps to page
+  15, switches between two paragraph/list fragments, exits WYSIWYG, deletes the
+  selected fragment, and runs Undo.
+- Confirm the run reports no initial layout loading overlay, no preview layout
+  blocking, no `settled-preview` finalize event, and no synchronous
+  `inline-edit-exit-pagination` event.
+- If investigating typing lag, run `npm run smoke:wysiwyg-smoothness` separately
+  because that probe measures keypress-to-paint and render jank rather than the
+  lifecycle/undo path.
 
 ### WYSIWYG Text Engine Stage 3 Stress
 

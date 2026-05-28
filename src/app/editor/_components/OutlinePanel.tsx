@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { memo, useState } from "react"
 import { buildStyleManagerState, resolveListMarkers } from "@/document"
 import type { StyleManagerListGroupItem } from "@/document"
 import type { DocumentNode, LayoutNode } from "@/schema"
@@ -763,7 +763,7 @@ function findLastBodyChildRow(root: HTMLElement, dragState: OutlineDragState): H
   return rows.length > 0 ? rows[rows.length - 1] : null
 }
 
-export function OutlinePanel({
+function OutlinePanelImpl({
   doc,
   selectedNodeId,
   selectedListGroupId = null,
@@ -886,3 +886,6 @@ export function OutlinePanel({
     </div>
   )
 }
+
+export const OutlinePanel = memo(OutlinePanelImpl)
+OutlinePanel.displayName = "OutlinePanel"

@@ -28,6 +28,13 @@ Adjust burst:
 $env:PROBE_BURST_LENGTH="200"; $env:PROBE_INTERVAL_MS="20"; npm.cmd run smoke:wysiwyg-smoothness
 ```
 
+Run against the long stress mock and scroll the lazy canvas to page 15 before
+clicking the target paragraph:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/flowdoc-stress-mock.flowdoc.json"; $env:PROBE_TARGET_NODE_ID="p_00114"; $env:PROBE_TARGET_PAGE_INDEX="14"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
 Run the range-selection drag probe:
 
 ```powershell
@@ -63,6 +70,7 @@ selected mode (`typing` by default, plus `space-repeat`, `delete`, `enter`,
 | `perfEvents.countByKind.text-engine-pointer-hit-test` | pointer point-to-text-offset mapping cost | should stay below one frame |
 | `perfEvents.countByKind.text-engine-selection-overlay` | selection highlight rectangle geometry cost | should stay below one frame |
 | `perfEvents.countByKind.editor-canvas-react-commit` | React commit cost for the editor canvas subtree while tracing is enabled | investigate when it appears in `longestEvent` or exceeds one frame |
+| `probe.releaseMissingOverlayCount` | selection-release frames where the highlight vanished after mouseup | should be 0 in selection mode |
 | `perfEvents.overFrameBudget` | events whose `durationMs` exceeded 16ms | low single-digits OK; many = work over frame budget |
 | `perfEvents.jankCount` | events whose `durationMs` exceeded 100ms | should be 0 |
 | `perfEvents.longestEvent` | slowest event recorded | review the `kind` if `durationMs` > 100 |
@@ -88,6 +96,7 @@ needs a different gate.
 | Enter/newline growth feels laggy | `PROBE_MODE=enter` with `typingLayer.*`, page-boundary data, and latency metrics |
 | Word wrapping while typing feels laggy | `PROBE_MODE=wrap-typing` with `typingLayer.*`, page-boundary data, and latency metrics |
 | Range selection drag feels laggy / late paint | `PROBE_MODE=selection` with `paintLatencyMs.*` |
+| Selection briefly disappears on mouse release | `PROBE_MODE=selection` with `probe.releaseMissingOverlayCount` |
 | Big stutter / freeze | `paintLatencyMs.max`, `perfEvents.jankCount` |
 | Editor re-paginates the whole doc while typing | `perfEvents.countByKind.browser-preview-pagination` |
 | Some keystrokes take much longer than others | `paintLatencyMs.p99` vs `p50` |

@@ -22,6 +22,10 @@ const RESIZE_MOVE_COUNT = Number(process.env.PROBE_RESIZE_MOVE_COUNT ?? 70)
 const RESIZE_MOVE_DISTANCE_PX = Number(process.env.PROBE_RESIZE_DISTANCE_PX ?? 180)
 const SELECTION_MOVE_COUNT = Number(process.env.PROBE_SELECTION_MOVE_COUNT ?? 70)
 const CAPTURE_TYPING_LAYER_STATE = process.env.PROBE_CAPTURE_LINE_WRAP === "1"
+const READY_TIMEOUT_MS = Number(process.env.PROBE_READY_TIMEOUT_MS ?? 15000)
+const TARGET_PAGE_INDEX = process.env.PROBE_TARGET_PAGE_INDEX == null
+  ? null
+  : Number(process.env.PROBE_TARGET_PAGE_INDEX)
 const FRAME_BUDGET_MS = 16
 const JANK_BUDGET_MS = 100
 
@@ -37,6 +41,15 @@ const configuredTargetNodeId = process.env.PROBE_TARGET_NODE_ID?.trim() || null
 
 const paragraphFragmentSelector = `[data-testid="editor-fragment"][data-node-type="paragraph"]`
 const resizeHandleSelector = `[data-testid="column-resize-handle"]`
+const editorShellSelector = `[data-testid="editor-shell"]`
+
+function pageFrameSelector(pageIndex) {
+  return `[data-testid="editor-page-frame"][data-page-index="${pageIndex}"]`
+}
+
+function paragraphSelectorForPage(pageIndex) {
+  return `${pageFrameSelector(pageIndex)} [data-testid="editor-fragment"][data-node-type="paragraph"]`
+}
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -76,7 +89,7 @@ async function resolveTargetNodeId(page) {
   if (configuredTargetNodeId) return configuredTargetNodeId
   if (!probeFlowDocFile) return DEFAULT_TARGET_NODE_ID
 
-  await page.locator(paragraphFragmentSelector).first().waitFor({ state: "attached", timeout: 15000 })
+  await page.locator(paragraphFragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
   const candidates = await page.locator(paragraphFragmentSelector).evaluateAll((nodes) => nodes
     .map((node) => {
       const element = node
@@ -222,6 +235,47 @@ async function waitForDoubleAnimationFrame(page) {
   }))
 }
 
+async function captureSelectionReleaseSamples(page, frameCount = 4) {
+  return await page.evaluate((count) => new Promise((resolve) => {
+    const samples = []
+    const sample = () => {
+      const layer = document.querySelector('[data-wysiwyg-text-engine-layer="true"]')
+      samples.push({
+        overlayCount: document.querySelectorAll('[data-wysiwyg-selection="true"]').length,
+        localPreview: layer?.getAttribute("data-wysiwyg-local-selection-preview") === "true",
+      })
+      if (samples.length >= count) {
+        resolve(samples)
+        return
+      }
+      requestAnimationFrame(sample)
+    }
+    sample()
+  }), frameCount)
+}
+
+async function waitForEditorReady(page) {
+  await page.waitForSelector(editorShellSelector, { timeout: READY_TIMEOUT_MS })
+  await page.waitForFunction((selector) => (
+    document.querySelector(selector)?.getAttribute("data-preview-layout-blocking") === "false"
+  ), editorShellSelector, { timeout: READY_TIMEOUT_MS })
+}
+
+async function prepareProbeViewport(page) {
+  await waitForEditorReady(page)
+  if (TARGET_PAGE_INDEX === null || !Number.isFinite(TARGET_PAGE_INDEX)) return
+
+  const frameSelector = pageFrameSelector(TARGET_PAGE_INDEX)
+  await page.waitForSelector(frameSelector, { timeout: READY_TIMEOUT_MS })
+  await page.evaluate((selector) => {
+    document.querySelector(selector)?.scrollIntoView({ block: "start" })
+  }, frameSelector)
+  await page.waitForFunction((selector) => (
+    document.querySelectorAll(selector).length > 0
+  ), paragraphSelectorForPage(TARGET_PAGE_INDEX), { timeout: READY_TIMEOUT_MS })
+  await waitForDoubleAnimationFrame(page)
+}
+
 async function waitForServer(url, server, timeoutMs = 60000) {
   const startedAt = Date.now()
   let lastError = null
@@ -282,7 +336,7 @@ async function runTypingProbe(page) {
   const fragmentSelector = fragmentSelectorForNode(targetNodeId)
   const bridgeSelector = bridgeSelectorForNode(targetNodeId)
   const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
-  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: 15000 })
+  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
 
   // Click into target paragraph to enter the text-engine bridge.
   await page.locator(fragmentSelector).first().click()
@@ -442,7 +496,7 @@ async function runSelectionProbe(page) {
   const bridgeSelector = bridgeSelectorForNode(targetNodeId)
   const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
   const fragment = page.locator(fragmentSelector).first()
-  await fragment.waitFor({ state: "attached", timeout: 15000 })
+  await fragment.waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
 
   await fragment.click()
   await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
@@ -481,6 +535,7 @@ async function runSelectionProbe(page) {
   }
 
   await page.mouse.up()
+  const releaseSamples = await captureSelectionReleaseSamples(page)
   const perfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
 
   const paintLatencies = moves.map((move) => move.paintLatencyMs).sort((a, b) => a - b)
@@ -492,6 +547,8 @@ async function runSelectionProbe(page) {
       mode: "selection",
       moveCount: SELECTION_MOVE_COUNT,
       overlayVisibleCount,
+      releaseSamples,
+      releaseMissingOverlayCount: releaseSamples.filter((sample) => sample.overlayCount === 0).length,
     },
     paintLatencyMs: {
       p50: percentile(paintLatencies, 0.5),
@@ -534,7 +591,8 @@ async function runProbe() {
       }, probeDocument.raw)
     }
 
-    await page.goto(scenarioUrl(), { waitUntil: "domcontentloaded" })
+    await page.goto(scenarioUrl(), { waitUntil: "domcontentloaded", timeout: READY_TIMEOUT_MS })
+    await prepareProbeViewport(page)
     const probeResult = PROBE_MODE === "resize"
       ? await runResizeProbe(page)
       : PROBE_MODE === "selection"
@@ -550,6 +608,8 @@ async function runProbe() {
         ...probeResult.action,
         targetNodeId: probeResult.targetNodeId,
         flowDocFile: probeDocument?.path ?? null,
+        readyTimeoutMs: READY_TIMEOUT_MS,
+        targetPageIndex: TARGET_PAGE_INDEX,
       },
       paintLatencyMs: probeResult.paintLatencyMs,
       ...(probeResult.keystrokeTotalMs ? { keystrokeTotalMs: probeResult.keystrokeTotalMs } : {}),

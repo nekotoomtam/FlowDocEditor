@@ -1,4 +1,4 @@
-import type { CSSProperties, PointerEvent } from "react"
+import { useCallback, type CSSProperties, type PointerEvent } from "react"
 import type { DocumentNode } from "@/schema"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DragSource } from "@/placement/types"
@@ -28,6 +28,9 @@ interface EditorLeftRailProps {
 }
 
 const LEFT_RAIL_WIDTH = 260
+
+const noopSelectNode = () => undefined
+const noopSelectStyleResource = () => undefined
 
 const leftRailShellStyle: CSSProperties = {
   width: LEFT_RAIL_WIDTH,
@@ -109,6 +112,8 @@ export function EditorLeftRail({
   onReorderBodyChild,
   onDragStart,
 }: EditorLeftRailProps) {
+  const openAddPanel = useCallback(() => onModeChange("add"), [onModeChange])
+
   return (
     <div data-testid="editor-left-rail" data-mode={mode} style={leftRailShellStyle}>
       <div data-testid="editor-left-rail-sidebar" style={leftRailSidebarStyle}>
@@ -154,8 +159,8 @@ export function EditorLeftRail({
             doc={outlineDoc}
             selectedNodeId={editable ? selectedNodeId : null}
             selectedListGroupId={activeOutlineListGroupId ?? (selectedStyleResource?.kind === "list-group" ? selectedStyleResource.id : null)}
-            onAddShortcut={editable ? () => onModeChange("add") : undefined}
-            onSelect={editable ? onSelectNode : () => undefined}
+            onAddShortcut={editable ? openAddPanel : undefined}
+            onSelect={editable ? onSelectNode : noopSelectNode}
             onSelectListGroup={editable ? onSelectOutlineListGroup : undefined}
             onReorderBodyChild={editable ? onReorderBodyChild : undefined}
           />
@@ -172,7 +177,7 @@ export function EditorLeftRail({
             doc={styleDoc}
             selectedResource={selectedStyleResource}
             editable={editable}
-            onSelectResource={editable ? onSelectStyleResource : () => undefined}
+            onSelectResource={editable ? onSelectStyleResource : noopSelectStyleResource}
           />
         )}
       </div>

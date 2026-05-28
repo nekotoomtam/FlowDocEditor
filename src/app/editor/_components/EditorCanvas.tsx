@@ -1329,6 +1329,60 @@ function countParagraphFragments(paginated: PaginatedDocument, nodeId: string): 
     .length
 }
 
+export interface WysiwygTextPointerFragmentIndex {
+  targetsByNodeId: Map<string, WysiwygTextPointerFragmentTarget[]>
+  bodyParagraphFragmentCountByNodeId: Map<string, number>
+}
+
+function addWysiwygTextPointerFragmentTarget(
+  targetsByNodeId: Map<string, WysiwygTextPointerFragmentTarget[]>,
+  fragment: PageFragment,
+  pageKeyByPageIndex: ReadonlyMap<number, string>,
+): void {
+  if (fragment.nodeType !== "paragraph") return
+  const pageKey = pageKeyByPageIndex.get(fragment.pageIndex)
+  if (!pageKey) return
+  const targets = targetsByNodeId.get(fragment.nodeId)
+  if (targets) {
+    targets.push({ pageKey, fragment })
+  } else {
+    targetsByNodeId.set(fragment.nodeId, [{ pageKey, fragment }])
+  }
+}
+
+export function buildWysiwygTextPointerFragmentIndex(
+  paginated: PaginatedDocument,
+  pageKeyByPageIndex: ReadonlyMap<number, string>,
+): WysiwygTextPointerFragmentIndex {
+  const targetsByNodeId = new Map<string, WysiwygTextPointerFragmentTarget[]>()
+  const bodyParagraphFragmentCountByNodeId = new Map<string, number>()
+
+  for (const section of paginated.sections) {
+    for (const page of section.pages) {
+      for (const fragment of page.fragments) {
+        addWysiwygTextPointerFragmentTarget(targetsByNodeId, fragment, pageKeyByPageIndex)
+        if (fragment.nodeType === "paragraph") {
+          bodyParagraphFragmentCountByNodeId.set(
+            fragment.nodeId,
+            (bodyParagraphFragmentCountByNodeId.get(fragment.nodeId) ?? 0) + 1,
+          )
+        }
+      }
+      for (const fragment of page.headerFragments) {
+        addWysiwygTextPointerFragmentTarget(targetsByNodeId, fragment, pageKeyByPageIndex)
+      }
+      for (const fragment of page.footerFragments) {
+        addWysiwygTextPointerFragmentTarget(targetsByNodeId, fragment, pageKeyByPageIndex)
+      }
+    }
+  }
+
+  return {
+    targetsByNodeId,
+    bodyParagraphFragmentCountByNodeId,
+  }
+}
+
 function isTableCellId(doc: DocumentNode, nodeId: string | null | undefined): boolean {
   if (!nodeId) return false
   for (const section of doc.document.sections) {
@@ -3311,6 +3365,8 @@ function PageView({
 type PageViewProps = Parameters<typeof PageView>[0]
 const PAGE_VIEW_TRANSIENT_PROP_KEYS: Array<keyof PageViewProps> = ["resizeDrag", "minHeightDrag", "marginDrag", "marginEditMode", "headerFooterEditMode", "headerFooterReservedDrag", "headerFooterZoneScroll"]
 const PAGE_VIEW_SCOPED_EDIT_PROP_KEYS: Array<keyof PageViewProps> = [
+  "selectedNodeId",
+  "selectionAnchorNodeId",
   "inlineEditVisualFresh",
   "inlineEditNodeId",
   "inlineEditCaretIndex",
@@ -3329,6 +3385,8 @@ const PAGE_VIEW_SCOPED_EDIT_PROP_KEYS: Array<keyof PageViewProps> = [
 ]
 
 interface PageViewScopedEditProps {
+  selectedNodeId: string | null
+  selectionAnchorNodeId: string | null
   inlineEditNodeId: string | null
   inlineEditPageIndex: number | null
   wysiwygTextDraftNodeId: string | null
@@ -3392,10 +3450,21 @@ function pageHasNodeFragment(page: PaginatedPage, nodeId: string | null): boolea
   )
 }
 
+function pageHasAnyNodeFragment(page: PaginatedPage, nodeId: string | null): boolean {
+  if (!nodeId) return false
+  return [
+    ...page.fragments,
+    ...(page.headerFragments ?? []),
+    ...(page.footerFragments ?? []),
+  ].some((fragment) => fragment.nodeId === nodeId)
+}
+
 export function pageViewScopedEditPropsAffectPage(
   page: PaginatedPage,
   props: PageViewScopedEditProps,
 ): boolean {
+  if (pageHasAnyNodeFragment(page, props.selectedNodeId)) return true
+  if (pageHasAnyNodeFragment(page, props.selectionAnchorNodeId)) return true
   if (pageHasNodeFragment(page, props.inlineEditNodeId)) return true
   if (pageHasNodeFragment(page, props.wysiwygTextDraftNodeId)) return true
   if (props.inlineEditPageIndex === page.index && props.inlineEditNodeId !== null) return true
@@ -3749,6 +3818,9 @@ export function EditorCanvas({
     }
     return byPageIndex
   }, [sections])
+  const wysiwygTextPointerFragmentIndex = useMemo(() =>
+    buildWysiwygTextPointerFragmentIndex(paginated, pageKeyByPageIndex),
+  [paginated, pageKeyByPageIndex])
   const shouldLazyRenderPages = typeof IntersectionObserver !== "undefined" && totalPageCount > LAZY_PAGE_RENDER_THRESHOLD
   const setPageFrameRef = useCallback((key: string, el: HTMLDivElement | null) => {
     const previous = pageFrameRefs.current.get(key)
@@ -3773,7 +3845,7 @@ export function EditorCanvas({
     wysiwygTextEngineEnabled &&
     wysiwygTextDraftNodeId &&
     inlineEditNodeId === wysiwygTextDraftNodeId &&
-    countParagraphFragments(paginated, wysiwygTextDraftNodeId) > 1,
+    (wysiwygTextPointerFragmentIndex.bodyParagraphFragmentCountByNodeId.get(wysiwygTextDraftNodeId) ?? 0) > 1,
   )
   const wysiwygDraftVisualPreview = useMemo(() => {
     if (!wysiwygTextEngineEnabled) return null
@@ -3834,14 +3906,10 @@ export function EditorCanvas({
   [paginated, wysiwygDraftVisualPreview])
   const wysiwygTextPointerFragments = useMemo<WysiwygTextPointerFragmentTarget[]>(() => {
     if (!wysiwygTextEngineEnabled || !wysiwygTextDraftNodeId) return []
-    const sourceFragments = wysiwygDraftVisualPreview?.fragments ?? sections.flatMap((section) =>
-      section.pages.flatMap((page) =>
-        [...page.fragments, ...page.headerFragments, ...page.footerFragments].filter((fragment) =>
-          fragment.nodeId === wysiwygTextDraftNodeId &&
-          fragment.nodeType === "paragraph"
-        ),
-      ),
-    )
+    const sourceFragments = wysiwygDraftVisualPreview?.fragments ?? null
+    if (!sourceFragments) {
+      return wysiwygTextPointerFragmentIndex.targetsByNodeId.get(wysiwygTextDraftNodeId) ?? []
+    }
 
     return sourceFragments
       .map((fragment): WysiwygTextPointerFragmentTarget | null => {
@@ -3851,7 +3919,7 @@ export function EditorCanvas({
       .filter((target): target is WysiwygTextPointerFragmentTarget => target !== null)
   }, [
     pageKeyByPageIndex,
-    sections,
+    wysiwygTextPointerFragmentIndex,
     wysiwygDraftVisualPreview,
     wysiwygTextDraftNodeId,
     wysiwygTextEngineEnabled,

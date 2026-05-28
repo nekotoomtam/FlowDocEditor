@@ -21,6 +21,7 @@ import {
   inlineEditTextareaOutline,
   inlineEditTextareaTextColor,
   hasWysiwygTextDraftChange,
+  isWysiwygRichTextToolbarFocusTarget,
   isWysiwygTextSessionFocusTarget,
   paragraphWithWysiwygFragmentRenderProps,
   resolvePointerSelectionWheelScrollDelta,
@@ -29,6 +30,7 @@ import {
   resolveWysiwygLiveTextEcho,
   resolveSelectionOverlayRectsInFragmentWithPerf,
   resolveTrailingWhitespaceCaretOverlayInFragment,
+  resolveWysiwygDraftSyncDelayMs,
   resolveWysiwygTextPointerOffsetFromFragmentTargets,
   resolveWysiwygPointerSelectionState,
   resolveWysiwygWordSelectionRange,
@@ -369,8 +371,11 @@ describe("ParagraphTextSurface focus behavior", () => {
     expect(isWysiwygTextSessionFocusTarget(bridge, "p1")).toBe(true)
     expect(isWysiwygTextSessionFocusTarget(nextBridge, "p1")).toBe(true)
     expect(isWysiwygTextSessionFocusTarget(toolbarButton, "p1")).toBe(true)
+    expect(isWysiwygRichTextToolbarFocusTarget(toolbarButton, "p1")).toBe(true)
     expect(isWysiwygTextSessionFocusTarget(outsideBridge, "p1")).toBe(false)
     expect(isWysiwygTextSessionFocusTarget(outsideToolbarButton, "p1")).toBe(false)
+    expect(isWysiwygRichTextToolbarFocusTarget(outsideToolbarButton, "p1")).toBe(false)
+    expect(isWysiwygRichTextToolbarFocusTarget(bridge, "p1")).toBe(false)
     expect(isWysiwygTextSessionFocusTarget(null, "p1")).toBe(false)
   })
 })
@@ -986,6 +991,30 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       { text: "Hello", caretOffset: 5, selection: { anchorOffset: 5, focusOffset: 5 } },
       { text: "Hello ", caretOffset: 6, selection: { anchorOffset: 6, focusOffset: 6 } },
     )).toBe(false)
+  })
+
+  it("uses a quiet window for deferred text draft sync", () => {
+    expect(resolveWysiwygDraftSyncDelayMs({
+      firstRequestedAtMs: 1000,
+      nowMs: 1040,
+      quietWindowMs: 120,
+      maxLagMs: 500,
+    })).toBe(120)
+  })
+
+  it("caps deferred text draft sync by max lag", () => {
+    expect(resolveWysiwygDraftSyncDelayMs({
+      firstRequestedAtMs: 1000,
+      nowMs: 1460,
+      quietWindowMs: 120,
+      maxLagMs: 500,
+    })).toBe(40)
+    expect(resolveWysiwygDraftSyncDelayMs({
+      firstRequestedAtMs: 1000,
+      nowMs: 1500,
+      quietWindowMs: 120,
+      maxLagMs: 500,
+    })).toBe(0)
   })
 
   it("clips text-engine live echo to the active fragment", () => {

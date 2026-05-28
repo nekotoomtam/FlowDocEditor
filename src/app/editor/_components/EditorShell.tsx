@@ -3,7 +3,7 @@
 import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
 import { DocumentPrepareOverlay } from "@/app/_components/DocumentPrepareOverlay"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
-import { assertDocument, canRemoveFlowTableColumn, canRemoveFlowTableRow, clampSectionReservedZones, createDefaultDocument, createUniqueListPresetInstanceId, normalizeDocument, resolveParagraphListContext } from "@/document"
+import { assertDocument, canRemoveFlowTableColumn, canRemoveFlowTableRow, clampSectionReservedZones, createDefaultDocument, createUniqueListPresetInstanceId, getTextRunParagraphText, normalizeDocument, resolveParagraphListContext } from "@/document"
 import type { FlowDocListStylePresetId } from "@/document"
 import {
   resizeFlowTableColumnPair as resizeFlowTableColumnPairForPreview,
@@ -28,6 +28,7 @@ import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import { EditorCanvas, type CanvasTableAction } from "./EditorCanvas"
 import { ListToolbar } from "./ListToolbar"
 import { ListResourceInspectorPanel } from "./ListResourceInspectorPanel"
+import type { OutlineBodyChildReorder } from "./OutlinePanel"
 import { PropertyPanel } from "./PropertyPanel"
 import { StyleDefinitionPanel } from "./StyleDefinitionPanel"
 import type { StyleManagerResourceSelection } from "./StyleManagerPanel"
@@ -76,6 +77,7 @@ import {
   markEditorPreviewLayoutFull,
   markEditorPreviewLayoutPartial,
   markEditorPreviewLayoutSettling,
+  markEditorPreviewLayoutSettlingFromCurrent,
   shouldBlockEditorPreviewCanvas,
 } from "./editorPreviewLayoutStatus"
 import {
@@ -136,7 +138,6 @@ import {
 } from "./richTextDraftCommands"
 import { resolvePersistableWysiwygDocument } from "./wysiwygDraftPersistence"
 import {
-  findEditorPageKeyByPageIndex,
   scrollElementIntoNearestView,
   scrollElementIntoStartView,
   shouldFollowInlineEditPageChange,
@@ -157,15 +158,18 @@ import {
 } from "./flowStackResize"
 import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
 import { useAnimationFrameState } from "./useAnimationFrameState"
-import { createInitialEditorState, reducer, resizeColumnsDocument, type DragState } from "./editorReducer"
+import { createInitialEditorState, reducer, resizeColumnsDocument, type DragState, type EditorAction } from "./editorReducer"
+import { classifyEditorAction, shouldSuppressLayoutLoadingOverlayForEditorAction, type EditorActionClassification } from "./editorActionClassifier"
+import { tryApplyVisualOnlyPaginatedUpdate } from "./editorVisualOnlyPagination"
 import { buildSelectionContext } from "./selectionContext"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import { EditorCanvasColumn } from "./shell/EditorCanvasColumn"
 import { shouldUseBackgroundBrowserPagination } from "./browserPaginationStrategy"
 import type { BrowserPaginationWorkerRequest, BrowserPaginationWorkerResponse } from "./browserPaginationWorkerTypes"
 import {
-  collectEditorPageNavItems,
-  findFirstPageIndexForNode,
+  buildEditorPageNavigationIndex,
+  findFirstPageIndexForNodeInIndex,
+  findNearestPageIndexInItems,
   type EditorPageNavItem,
 } from "./shell/editorCanvasNavigation"
 import {
@@ -202,7 +206,20 @@ interface PendingDrag {
   clientX: number
   clientY: number
   clickAction?: PendingClickAction
+  finalizeOnDragStart?: boolean
 }
+
+interface DeferredInlineEditStart {
+  frameId: number | null
+  timeoutId: number | null
+}
+
+interface PendingEditorActionClassification {
+  action: EditorAction
+  classification: EditorActionClassification
+}
+
+type WysiwygFinalizeMode = "settled-preview" | "responsive-preview"
 
 interface WysiwygDraftPaginationRequest {
   nodeId: string
@@ -339,6 +356,7 @@ type CanvasFlowTableActionTarget =
 const MIN_SCALE = 0.3
 const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
+const OUTLINE_SELECTION_IDLE_TIMEOUT_MS = 1500
 const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 0
 const BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES = 4
 // Keep hard reflow from settling between real key-repeat events; live echo
@@ -986,9 +1004,57 @@ export default function EditorShell() {
   const activeOutlineListGroupId = selectedStyleResource?.kind === "list-group"
     ? selectedStyleResource.id
     : selectedParagraphListContext?.instanceId ?? null
+  const [outlineSelectionState, setOutlineSelectionState] = useState(() => ({
+    selectedNodeId: state.selectedNodeId,
+    activeListGroupId: activeOutlineListGroupId,
+  }))
   const activeSectionIndex = useMemo(() => (
     findSectionIndexForNode(state.doc, state.selectedNodeId)
   ), [state.doc, state.selectedNodeId])
+  useEffect(() => {
+    let frameId: number | null = null
+    let idleId: number | null = null
+    let timeoutId: number | null = null
+
+    const syncOutlineSelection = () => {
+      setOutlineSelectionState((current) => {
+        if (
+          current.selectedNodeId === state.selectedNodeId &&
+          current.activeListGroupId === activeOutlineListGroupId
+        ) {
+          return current
+        }
+        return {
+          selectedNodeId: state.selectedNodeId,
+          activeListGroupId: activeOutlineListGroupId,
+        }
+      })
+    }
+
+    frameId = window.requestAnimationFrame(() => {
+      frameId = null
+      if (typeof window.requestIdleCallback === "function") {
+        idleId = window.requestIdleCallback(() => {
+          idleId = null
+          syncOutlineSelection()
+        }, { timeout: OUTLINE_SELECTION_IDLE_TIMEOUT_MS })
+        return
+      }
+
+      timeoutId = window.setTimeout(() => {
+        timeoutId = null
+        syncOutlineSelection()
+      }, OUTLINE_SELECTION_IDLE_TIMEOUT_MS)
+    })
+
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId)
+      if (idleId !== null && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleId)
+      }
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+    }
+  }, [activeOutlineListGroupId, state.selectedNodeId])
   const resolvePreviewDoc = useCallback((doc: DocumentNode) => (
     isTemplateMode
       ? doc
@@ -1007,6 +1073,17 @@ export default function EditorShell() {
   const editorRootRef = useRef<HTMLDivElement | null>(null)
   const pageRefs = useRef<Map<string, HTMLElement>>(new Map())
   const pendingDragRef = useRef<PendingDrag | null>(null)
+  const deferredInlineEditStartRef = useRef<DeferredInlineEditStart | null>(null)
+  const pendingEditorActionClassificationRef = useRef<PendingEditorActionClassification | null>(null)
+  const suppressNextLayoutLoadingOverlayRef = useRef(false)
+  const dispatchEditorAction = useCallback((action: EditorAction) => {
+    const classification = classifyEditorAction(action)
+    pendingEditorActionClassificationRef.current = { action, classification }
+    if (shouldSuppressLayoutLoadingOverlayForEditorAction(action, classification)) {
+      suppressNextLayoutLoadingOverlayRef.current = true
+    }
+    dispatch(action)
+  }, [])
   const pendingDragMoveRef = useRef<PendingDragMove | null>(null)
   const dragMoveFrameRef = useRef<number | null>(null)
   const {
@@ -1100,6 +1177,7 @@ export default function EditorShell() {
   const packageFieldRegistryRef = useRef(packageFieldRegistry)
   const dataSnapshotRef = useRef(dataSnapshot)
   const paginatedRef = useRef(state.paginated)
+  const paginatedPerfSummaryRef = useRef(summarizePaginatedForWysiwygPerf(state.paginated))
   const wasInlineEditingRef = useRef(false)
   const wysiwygDraftPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wysiwygDraftPaginationFrameRef = useRef<number | null>(null)
@@ -1112,7 +1190,10 @@ export default function EditorShell() {
   useEffect(() => { docRef.current = state.doc }, [state.doc])
   useEffect(() => { packageFieldRegistryRef.current = packageFieldRegistry }, [packageFieldRegistry])
   useEffect(() => { dataSnapshotRef.current = dataSnapshot }, [dataSnapshot])
-  useEffect(() => { paginatedRef.current = state.paginated })
+  useEffect(() => {
+    paginatedRef.current = state.paginated
+    paginatedPerfSummaryRef.current = summarizePaginatedForWysiwygPerf(state.paginated)
+  }, [state.paginated])
   const displayPaginated = useMemo(() => resolveEditorDisplayPaginated({
     authoritativePaginated: state.paginated,
     partialPreviewPaginated,
@@ -1161,25 +1242,28 @@ export default function EditorShell() {
     getParagraphText: getParagraphTextFromDoc,
     paginatePreviewDoc,
     selectNode: (nodeId) => {
-      dispatch({ type: "SELECT_NODE", nodeId })
+      dispatchEditorAction({ type: "SELECT_NODE", nodeId })
       if (nodeId) setRightRailMode("properties")
     },
     updateInlineTextDraft: (nodeId, text) => {
       const startedAt = startWysiwygPerfSpan()
-      dispatch({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
+      dispatchEditorAction({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text })
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-draft-update", startedAt, {
         nodeId,
         textLength: text.length,
       })
     },
-    commitInlineTextEdit: (payload) => dispatch({ type: "COMMIT_INLINE_TEXT_EDIT", ...payload }),
+    commitInlineTextEdit: (payload) => dispatchEditorAction({ type: "COMMIT_INLINE_TEXT_EDIT", ...payload }),
     setPaginated: (paginated) => dispatch({ type: "SET_PAGINATED", paginated }),
   })
   const inlineEditPageIndexRef = useRef<number | null>(inlineEditPageIndex)
   useEffect(() => { inlineEditPageIndexRef.current = inlineEditPageIndex }, [inlineEditPageIndex])
   const inlineEditVisualLockedRef = useRef(inlineEditVisualLocked)
   useEffect(() => { inlineEditVisualLockedRef.current = inlineEditVisualLocked }, [inlineEditVisualLocked])
-  const editorPageItems = useMemo(() => collectEditorPageNavItems(displayPaginated), [displayPaginated])
+  const editorPageNavigation = useMemo(() => buildEditorPageNavigationIndex(displayPaginated), [displayPaginated])
+  const editorPageItems = editorPageNavigation.pageItems
+  const editorPageKeyByPageIndexRef = useRef<Map<number, string>>(editorPageNavigation.pageKeyByPageIndex)
+  useEffect(() => { editorPageKeyByPageIndexRef.current = editorPageNavigation.pageKeyByPageIndex }, [editorPageNavigation])
   const selectedContextItems = useMemo(() => (
     isTemplateMode
       ? buildSelectionContext(state.doc, state.selectionAnchorNodeId ?? state.selectedNodeId)
@@ -1191,8 +1275,9 @@ export default function EditorShell() {
       ? selectedContextItems[selectedContextItems.length - 1].label
       : "Canvas"
   const selectedPageIndex = useMemo(() => (
-    findFirstPageIndexForNode(displayPaginated, state.selectionAnchorNodeId ?? state.selectedNodeId)
-  ), [displayPaginated, state.selectedNodeId, state.selectionAnchorNodeId])
+    findFirstPageIndexForNodeInIndex(editorPageNavigation, state.selectionAnchorNodeId ?? state.selectedNodeId)
+  ), [editorPageNavigation, state.selectedNodeId, state.selectionAnchorNodeId])
+  const editorPageCount = editorPageItems.length
   const firstPageIndex = editorPageItems[0]?.pageIndex ?? 0
   const currentCanvasPageIndex = inlineEditPageIndex ?? viewPageIndex ?? selectedPageIndex ?? firstPageIndex
   const canvasSectionLabel = `Section ${activeSectionIndex + 1}`
@@ -1218,12 +1303,12 @@ export default function EditorShell() {
       return
     }
     if (viewPageIndex !== null && !editorPageItems.some((page) => page.pageIndex === viewPageIndex)) {
-      setViewPageIndex(editorPageItems[0].pageIndex)
+      setViewPageIndex(findNearestPageIndexInItems(editorPageItems, viewPageIndex))
     }
   }, [editorPageItems, viewPageIndex])
 
   const requestInlineEditPageFollow = useCallback((pageIndex: number) => {
-    const pageKey = findEditorPageKeyByPageIndex(paginatedRef.current, pageIndex)
+    const pageKey = editorPageKeyByPageIndexRef.current.get(pageIndex) ?? null
     if (!pageKey) return
     const scrollPage = () => {
       scrollElementIntoNearestView(pageRefs.current.get(pageKey))
@@ -1396,7 +1481,7 @@ export default function EditorShell() {
         selectionCollapsed: selection.anchorOffset === selection.focusOffset,
         selectionRangeLength: Math.abs(selection.focusOffset - selection.anchorOffset),
       } : {}),
-      ...summarizePaginatedForWysiwygPerf(paginatedRef.current),
+      ...paginatedPerfSummaryRef.current,
     })
   }, [])
 
@@ -1649,36 +1734,48 @@ export default function EditorShell() {
     return richTextCommand ? applyActiveRichTextDraftCommand(nodeId, richTextCommand) : false
   }, [applyActiveRichTextDraftCommand])
 
-  const finalizeWysiwygTextSessionBeforeAction = useCallback((): boolean => {
+  const finalizeWysiwygTextSessionBeforeAction = useCallback((mode: WysiwygFinalizeMode = "settled-preview"): boolean => {
+    const useResponsivePreview = mode === "responsive-preview"
     if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED) {
       const richSession = richWysiwygDraftSessionState
       if (WYSIWYG_TEXT_ENGINE_ENABLED && richSession.nodeId && richSession.draft) {
-        const afterDoc = replaceEditableParagraphInDocument(docRef.current, richSession.nodeId, richSession.draft.paragraph)
+        const richDraft = richSession.draft
+        const finalizeStartedAt = startWysiwygPerfSpan()
+        const afterDoc = replaceEditableParagraphInDocument(docRef.current, richSession.nodeId, richDraft.paragraph)
         try {
           assertDocument(afterDoc)
         } catch (error) {
           console.error("WYSIWYG rich text finalize produced invalid document:", error)
           return false
         }
-        const afterPaginated = paginatePreviewDoc(afterDoc)
+        const afterPaginated = useResponsivePreview ? paginatedRef.current : paginatePreviewDoc(afterDoc)
         const history = consumeInlineEditHistory(richSession.nodeId)
         docRef.current = afterDoc
         paginatedRef.current = afterPaginated
+        if (useResponsivePreview) suppressNextLayoutLoadingOverlayRef.current = true
         dispatch({
           type: "COMMIT_WYSIWYG_RICH_TEXT_EDIT",
           nodeId: richSession.nodeId,
-          paragraph: richSession.draft.paragraph,
+          paragraph: richDraft.paragraph,
           history,
           afterPaginated,
         })
         clearWysiwygDraftPagination()
         endWysiwygTextSession()
         resetInlineEditStateForDocumentReplace()
+        finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-finalize", finalizeStartedAt, {
+          nodeId: richSession.nodeId,
+          textLength: (getTextRunParagraphText(richDraft.paragraph) ?? "").length,
+          source: mode,
+          richDraft: true,
+          ...summarizePaginatedForWysiwygPerf(afterPaginated),
+        })
         return true
       }
     }
     const session = wysiwygTextSessionState
     if (!WYSIWYG_TEXT_ENGINE_ENABLED || !session.nodeId) return false
+    const finalizeStartedAt = startWysiwygPerfSpan()
     const afterDoc = replaceEditableParagraphTextInDocument(docRef.current, session.nodeId, session.draftText)
     try {
       assertDocument(afterDoc)
@@ -1686,10 +1783,11 @@ export default function EditorShell() {
       console.error("WYSIWYG text finalize produced invalid document:", error)
       return false
     }
-    const afterPaginated = paginatePreviewDoc(afterDoc)
+    const afterPaginated = useResponsivePreview ? paginatedRef.current : paginatePreviewDoc(afterDoc)
     const history = consumeInlineEditHistory(session.nodeId)
     docRef.current = afterDoc
     paginatedRef.current = afterPaginated
+    if (useResponsivePreview) suppressNextLayoutLoadingOverlayRef.current = true
     dispatch({
       type: "COMMIT_WYSIWYG_TEXT_EDIT",
       nodeId: session.nodeId,
@@ -1701,6 +1799,12 @@ export default function EditorShell() {
     clearWysiwygDraftPagination()
     endWysiwygTextSession()
     resetInlineEditStateForDocumentReplace()
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-finalize", finalizeStartedAt, {
+      nodeId: session.nodeId,
+      textLength: session.draftText.length,
+      source: mode,
+      ...summarizePaginatedForWysiwygPerf(afterPaginated),
+    })
     return true
   }, [
     clearWysiwygDraftPagination,
@@ -1712,14 +1816,21 @@ export default function EditorShell() {
     wysiwygTextSessionState,
   ])
 
-  const finalizeInlineEditBeforeAction = useCallback((): boolean => {
-    if (finalizeWysiwygTextSessionBeforeAction()) return true
+  const finalizeInlineEditBeforeAction = useCallback((mode: WysiwygFinalizeMode = "settled-preview"): boolean => {
+    if (finalizeWysiwygTextSessionBeforeAction(mode)) return true
     return finalizeLegacyInlineEditBeforeAction()
   }, [finalizeLegacyInlineEditBeforeAction, finalizeWysiwygTextSessionBeforeAction])
+  const finalizeInlineEditBeforeResponsiveAction = useCallback((): boolean => (
+    finalizeInlineEditBeforeAction("responsive-preview")
+  ), [finalizeInlineEditBeforeAction])
+  const finalizeInlineEditBeforeActionRef = useRef(finalizeInlineEditBeforeAction)
+  useEffect(() => {
+    finalizeInlineEditBeforeActionRef.current = finalizeInlineEditBeforeAction
+  }, [finalizeInlineEditBeforeAction])
 
-  const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null) => {
+  const handleInlineEditStart = useCallback((nodeId: string, caretIndex: number | null = null, pageIndex: number | null = null, finalizeMode: WysiwygFinalizeMode = "settled-preview") => {
     if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionState.nodeId && wysiwygTextSessionState.nodeId !== nodeId) {
-      finalizeInlineEditBeforeAction()
+      finalizeInlineEditBeforeAction(finalizeMode)
     }
     startInlineEditSession(nodeId, caretIndex, pageIndex)
     if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
@@ -1740,12 +1851,56 @@ export default function EditorShell() {
     startWysiwygTextSession(nodeId, caretIndex, pageIndex)
   }, [
     clearWysiwygDraftPagination,
-    finalizeInlineEditBeforeAction,
     endWysiwygTextSession,
+    finalizeInlineEditBeforeAction,
     moveWysiwygTextCaret,
     startInlineEditSession,
     startWysiwygTextSession,
     wysiwygTextSessionState.nodeId,
+  ])
+
+  const cancelDeferredInlineEditStart = useCallback(() => {
+    const pending = deferredInlineEditStartRef.current
+    if (!pending) return
+    if (pending.frameId !== null) window.cancelAnimationFrame(pending.frameId)
+    if (pending.timeoutId !== null) window.clearTimeout(pending.timeoutId)
+    deferredInlineEditStartRef.current = null
+  }, [])
+
+  useEffect(() => () => cancelDeferredInlineEditStart(), [cancelDeferredInlineEditStart])
+
+  const scheduleInlineEditStartAfterSelectionPaint = useCallback((clickAction: PendingClickAction) => {
+    cancelDeferredInlineEditStart()
+
+    const runAfterPaint = () => {
+      const timeoutId = window.setTimeout(() => {
+        const pending = deferredInlineEditStartRef.current
+        if (!pending || pending.timeoutId !== timeoutId) return
+        deferredInlineEditStartRef.current = null
+
+        const startedAt = startWysiwygPerfSpan()
+        handleInlineEditStart(clickAction.nodeId, clickAction.caretIndex, clickAction.pageIndex, "responsive-preview")
+        finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-start", startedAt, {
+          nodeId: clickAction.nodeId,
+          pageIndex: clickAction.pageIndex,
+          pageCount: editorPageCount,
+          source: "canvas-click-deferred",
+        })
+      }, 0)
+      deferredInlineEditStartRef.current = { frameId: null, timeoutId }
+    }
+
+    if (typeof window.requestAnimationFrame !== "function") {
+      runAfterPaint()
+      return
+    }
+
+    const frameId = window.requestAnimationFrame(runAfterPaint)
+    deferredInlineEditStartRef.current = { frameId, timeoutId: null }
+  }, [
+    cancelDeferredInlineEditStart,
+    editorPageCount,
+    handleInlineEditStart,
   ])
 
   const handleInlineEditEnd = useCallback((nodeId?: string, reason: "blur" | "keyboard" = "keyboard") => {
@@ -1754,13 +1909,13 @@ export default function EditorShell() {
       requestAnimationFrame(() => editorRootRef.current?.focus())
     }
     if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionState.nodeId && (!nodeId || nodeId === wysiwygTextSessionState.nodeId)) {
-      finalizeInlineEditBeforeAction()
+      finalizeInlineEditBeforeResponsiveAction()
       restoreEditorFocus()
       return
     }
     endInlineEditSession(nodeId, reason)
     restoreEditorFocus()
-  }, [endInlineEditSession, finalizeInlineEditBeforeAction, wysiwygTextSessionState.nodeId])
+  }, [endInlineEditSession, finalizeInlineEditBeforeAction, finalizeInlineEditBeforeResponsiveAction, wysiwygTextSessionState.nodeId])
 
   const handleWysiwygTextDraftChange = useCallback((nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => {
     if (wysiwygTextSessionState.nodeId !== nodeId) return
@@ -1971,17 +2126,17 @@ export default function EditorShell() {
 
   const handleUndo = useCallback(() => {
     if (!isTemplateMode) return
-    const hadInlineEdit = finalizeInlineEditBeforeAction()
+    const hadInlineEdit = finalizeInlineEditBeforeResponsiveAction()
     if (state.past.length === 0 && !hadInlineEdit) return
-    dispatch({ type: "UNDO" })
-  }, [finalizeInlineEditBeforeAction, isTemplateMode, state.past])
+    dispatchEditorAction({ type: "UNDO" })
+  }, [dispatchEditorAction, finalizeInlineEditBeforeResponsiveAction, isTemplateMode, state.past])
 
   const handleRedo = useCallback(() => {
     if (!isTemplateMode) return
-    const hadInlineEdit = finalizeInlineEditBeforeAction()
+    const hadInlineEdit = finalizeInlineEditBeforeResponsiveAction()
     if (state.future.length === 0 && !hadInlineEdit) return
-    dispatch({ type: "REDO" })
-  }, [finalizeInlineEditBeforeAction, isTemplateMode, state.future])
+    dispatchEditorAction({ type: "REDO" })
+  }, [dispatchEditorAction, finalizeInlineEditBeforeResponsiveAction, isTemplateMode, state.future])
 
   const setManualScale = useCallback((nextScale: number) => {
     setZoomMode("manual")
@@ -2043,8 +2198,8 @@ export default function EditorShell() {
       clearWysiwygDraftPagination()
       endWysiwygTextSession()
     }
-    dispatch({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex, text, history })
-  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
+    dispatchEditorAction({ type: "SPLIT_PARAGRAPH", nodeId, splitIndex, text, history })
+  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, dispatchEditorAction, endWysiwygTextSession])
 
   const handleMergeParagraph = useCallback((nodeId: string, text?: string) => {
     const history = consumeInlineEditHistory(nodeId)
@@ -2052,13 +2207,13 @@ export default function EditorShell() {
       clearWysiwygDraftPagination()
       endWysiwygTextSession()
     }
-    dispatch({ type: "MERGE_PARAGRAPH", nodeId, text, history })
-  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
+    dispatchEditorAction({ type: "MERGE_PARAGRAPH", nodeId, text, history })
+  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, dispatchEditorAction, endWysiwygTextSession])
 
   const handleExitListItem = useCallback((nodeId: string, text?: string) => {
     const history = consumeInlineEditHistory(nodeId)
-    dispatch({ type: "EXIT_LIST_ITEM", nodeId, text, history })
-  }, [consumeInlineEditHistory])
+    dispatchEditorAction({ type: "EXIT_LIST_ITEM", nodeId, text, history })
+  }, [consumeInlineEditHistory, dispatchEditorAction])
 
   const handleChangeListItemLevel = useCallback((
     nodeId: string,
@@ -2071,8 +2226,8 @@ export default function EditorShell() {
       clearWysiwygDraftPagination()
       endWysiwygTextSession()
     }
-    dispatch({ type: "CHANGE_LIST_ITEM_LEVEL", nodeId, direction, text, caretIndex, history })
-  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
+    dispatchEditorAction({ type: "CHANGE_LIST_ITEM_LEVEL", nodeId, direction, text, caretIndex, history })
+  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, dispatchEditorAction, endWysiwygTextSession])
 
   const handleBackspaceListItemAtStart = useCallback((nodeId: string, text?: string, caretIndex?: number | null) => {
     const history = consumeInlineEditHistory(nodeId)
@@ -2080,8 +2235,8 @@ export default function EditorShell() {
       clearWysiwygDraftPagination()
       endWysiwygTextSession()
     }
-    dispatch({ type: "BACKSPACE_LIST_ITEM_AT_START", nodeId, text, caretIndex, history })
-  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, endWysiwygTextSession])
+    dispatchEditorAction({ type: "BACKSPACE_LIST_ITEM_AT_START", nodeId, text, caretIndex, history })
+  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, dispatchEditorAction, endWysiwygTextSession])
 
   const handleToggleListPreset = useCallback((
     nodeId: string,
@@ -2097,7 +2252,7 @@ export default function EditorShell() {
     const targetInstanceId = isClearingSamePreset
       ? listContext.instanceId
       : createUniqueListPresetInstanceId(docRef.current, styleId)
-    dispatch({ type: "TOGGLE_LIST_PRESET", nodeId, styleId, instanceId: targetInstanceId || instanceId, level })
+    dispatchEditorAction({ type: "TOGGLE_LIST_PRESET", nodeId, styleId, instanceId: targetInstanceId || instanceId, level })
     if (isClearingSamePreset) {
       setSelectedStyleResource(null)
       setRightRailMode("properties")
@@ -2106,15 +2261,15 @@ export default function EditorShell() {
     setSelectedStyleResource({ kind: "list-group", id: targetInstanceId })
     setLeftRailMode("styles")
     openRightRailMode("style")
-  }, [finalizeInlineEditBeforeAction, openRightRailMode])
+  }, [dispatchEditorAction, finalizeInlineEditBeforeAction, openRightRailMode])
 
   const handleToolbarChangeListItemLevel = useCallback((nodeId: string, direction: ListLevelChangeDirection) => {
     const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
     const finalized = finalizeInlineEditBeforeAction()
     if (hadWysiwygTextSession && !finalized) return
-    dispatch({ type: "CHANGE_LIST_ITEM_LEVEL", nodeId, direction, refocus: false })
+    dispatchEditorAction({ type: "CHANGE_LIST_ITEM_LEVEL", nodeId, direction, refocus: false })
     setRightRailMode("properties")
-  }, [finalizeInlineEditBeforeAction])
+  }, [dispatchEditorAction, finalizeInlineEditBeforeAction])
 
   const startInlineEditAfterModelStructuralChange = useCallback((nodeId: string, caretIndex: number | null) => {
     const structuralPaginated = startInlineEditAfterStructuralChange(nodeId, caretIndex)
@@ -2189,7 +2344,6 @@ export default function EditorShell() {
   const browserPaginationGenerationRef = useRef(0)
   const browserPaginationWorkerRef = useRef<Worker | null>(null)
   const browserPaginationWorkerRequestIdRef = useRef(0)
-  const suppressNextLayoutLoadingOverlayRef = useRef(false)
   const precomputedBrowserPaginationRef = useRef<OptimisticLayoutSnapshot | null>(null)
   const optimisticLayoutRef = useRef<OptimisticLayoutSnapshot | null>(null)
   const optimisticLayoutWarnings = useMemo(() => collectPaginatedLayoutWarnings(state.paginated), [state.paginated])
@@ -2231,9 +2385,6 @@ export default function EditorShell() {
   useEffect(() => () => {
     browserPaginationWorkerRef.current?.terminate()
     browserPaginationWorkerRef.current = null
-  }, [])
-  const suppressNextLayoutLoadingOverlay = useCallback(() => {
-    suppressNextLayoutLoadingOverlayRef.current = true
   }, [])
   const getBrowserPaginationWorker = useCallback(() => {
     if (!browserPaginationWorkerRef.current) {
@@ -2415,6 +2566,10 @@ export default function EditorShell() {
     const wasInlineEditing = wasInlineEditingRef.current
     wasInlineEditingRef.current = inlineEditNodeId !== null
     if (!wasInlineEditing || inlineEditNodeId !== null) return
+    if (WYSIWYG_TEXT_ENGINE_ENABLED) {
+      setPartialPreviewPaginated(null)
+      return
+    }
     const startedAt = startWysiwygPerfSpan()
     const paginated = paginateDocument(previewDoc, editorTextMeasurer)
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-exit-pagination", startedAt, {
@@ -2460,9 +2615,32 @@ export default function EditorShell() {
         return () => undefined
       }
     }
-    setBrowserPreviewLayout((current) => markEditorPreviewLayoutSettling(generation, {
-      blocksCanvas: current.blocksCanvas || useBackgroundPagination,
-    }))
+
+    const pendingActionClassification = pendingEditorActionClassificationRef.current
+    pendingEditorActionClassificationRef.current = null
+    const visualOnlyUpdate = tryApplyVisualOnlyPaginatedUpdate({
+      action: pendingActionClassification?.action,
+      classification: pendingActionClassification?.classification,
+      currentPaginated: paginatedRef.current,
+      nextPreviewDoc: previewDoc,
+    })
+    if (visualOnlyUpdate) {
+      const startedAt = startWysiwygPerfSpan()
+      optimisticLayoutRef.current = { doc: previewDoc, paginated: visualOnlyUpdate.paginated }
+      paginatedRef.current = visualOnlyUpdate.paginated
+      setPartialPreviewPaginated(null)
+      setBrowserPreviewLayout(markEditorPreviewLayoutFull(generation))
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
+        source: "visual-only-fast-lane",
+        commandType: pendingActionClassification?.action.type,
+        layoutAffecting: false,
+        ...summarizePaginatedForWysiwygPerf(visualOnlyUpdate.paginated),
+      })
+      dispatch({ type: "SET_PAGINATED", paginated: visualOnlyUpdate.paginated })
+      return () => undefined
+    }
+
+    setBrowserPreviewLayout((current) => markEditorPreviewLayoutSettlingFromCurrent(generation, current))
     interactiveDebounceRef.current = setTimeout(() => {
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
@@ -2685,9 +2863,10 @@ export default function EditorShell() {
   }, [])
 
   const handleBackgroundPointerDown = useCallback(() => {
+    cancelDeferredInlineEditStart()
     setSelectedStyleResource(null)
     if (headerFooterEditMode) {
-      if (inlineEditNodeId) finalizeInlineEditBeforeAction()
+      if (inlineEditNodeId) finalizeInlineEditBeforeResponsiveAction()
       setHeaderFooterEditMode(null)
       dispatch({ type: "SELECT_NODE", nodeId: null })
       setRightRailMode("page")
@@ -2700,14 +2879,14 @@ export default function EditorShell() {
       return
     }
     if (inlineEditNodeId) {
-      finalizeInlineEditBeforeAction()
+      finalizeInlineEditBeforeResponsiveAction()
       dispatch({ type: "SELECT_NODE", nodeId: null })
       setRightRailMode("page")
       return
     }
     dispatch({ type: "SELECT_NODE", nodeId: null })
     setRightRailMode("page")
-  }, [finalizeInlineEditBeforeAction, headerFooterEditMode, inlineEditNodeId, marginEditMode])
+  }, [cancelDeferredInlineEditStart, finalizeInlineEditBeforeResponsiveAction, headerFooterEditMode, inlineEditNodeId, marginEditMode])
 
   const enterMarginEditMode = useCallback((sectionIndex: number) => {
     finalizeInlineEditBeforeAction()
@@ -2726,13 +2905,13 @@ export default function EditorShell() {
   const enterHeaderFooterEditMode = useCallback((sectionIndex: number, zone: "header" | "footer") => {
     finalizeInlineEditBeforeAction()
     dispatch({ type: "SELECT_NODE", nodeId: null })
-    dispatch({ type: "ENSURE_HEADER_FOOTER_ZONE_VISIBLE", sectionIndex, zone })
+    dispatchEditorAction({ type: "ENSURE_HEADER_FOOTER_ZONE_VISIBLE", sectionIndex, zone })
     setRightRailMode("page")
     setMarginEditMode(null)
     setMarginDrag(null)
     setHeaderFooterReservedDrag(null)
     setHeaderFooterEditMode({ sectionIndex, zone })
-  }, [finalizeInlineEditBeforeAction, setHeaderFooterReservedDrag, setMarginDrag])
+  }, [dispatchEditorAction, finalizeInlineEditBeforeAction, setHeaderFooterReservedDrag, setMarginDrag])
 
   const exitHeaderFooterEditMode = useCallback(() => {
     if (inlineEditNodeId) finalizeInlineEditBeforeAction()
@@ -2921,21 +3100,30 @@ export default function EditorShell() {
   const startPaletteDrag = useCallback((source: DragSource, e: React.PointerEvent) => {
     if (headerFooterEditMode && !isHeaderFooterSupportedDragSource(source)) return
     e.preventDefault()
-    finalizeInlineEditBeforeAction()
+    cancelDeferredInlineEditStart()
+    finalizeInlineEditBeforeResponsiveAction()
     setSelectedStyleResource(null)
     dispatch({ type: "DRAG_START", source, clientX: e.clientX, clientY: e.clientY })
-  }, [finalizeInlineEditBeforeAction, headerFooterEditMode])
+  }, [cancelDeferredInlineEditStart, finalizeInlineEditBeforeResponsiveAction, headerFooterEditMode])
 
   // Canvas fragment pointerDown: wait for movement before committing to drag
   const startNodePointerDown = useCallback((source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => {
     e.preventDefault()
-    finalizeInlineEditBeforeAction()
+    cancelDeferredInlineEditStart()
+    const deferFinalizeUntilClickResolves = clickAction?.type === "inline-edit"
+    if (!deferFinalizeUntilClickResolves) finalizeInlineEditBeforeResponsiveAction()
     setSelectedStyleResource(null)
-    pendingDragRef.current = { source, clientX: e.clientX, clientY: e.clientY, clickAction }
-  }, [finalizeInlineEditBeforeAction])
+    pendingDragRef.current = {
+      source,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      clickAction,
+      finalizeOnDragStart: deferFinalizeUntilClickResolves,
+    }
+  }, [cancelDeferredInlineEditStart, finalizeInlineEditBeforeResponsiveAction])
 
   const selectContextNode = useCallback((nodeId: string) => {
-    finalizeInlineEditBeforeAction()
+    finalizeInlineEditBeforeResponsiveAction()
     setSelectedStyleResource(null)
     dispatch({
       type: "SELECT_NODE",
@@ -2943,21 +3131,34 @@ export default function EditorShell() {
       anchorNodeId: state.selectionAnchorNodeId ?? nodeId,
     })
     setRightRailMode("properties")
-  }, [finalizeInlineEditBeforeAction, state.selectionAnchorNodeId])
+  }, [finalizeInlineEditBeforeResponsiveAction, state.selectionAnchorNodeId])
 
   const selectStyleResource = useCallback((resource: Exclude<StyleManagerResourceSelection, null>) => {
-    finalizeInlineEditBeforeAction()
+    finalizeInlineEditBeforeActionRef.current()
     setSelectedStyleResource(resource)
     setLeftRailMode("styles")
     openRightRailMode("style")
-  }, [finalizeInlineEditBeforeAction, openRightRailMode])
+  }, [openRightRailMode])
 
   const selectOutlineListGroup = useCallback((instanceId: string) => {
-    finalizeInlineEditBeforeAction()
+    finalizeInlineEditBeforeActionRef.current()
     setSelectedStyleResource({ kind: "list-group", id: instanceId })
     setLeftRailMode("outline")
     openRightRailMode("style")
-  }, [finalizeInlineEditBeforeAction, openRightRailMode])
+  }, [openRightRailMode])
+
+  const selectLeftRailNode = useCallback((nodeId: string) => {
+    setSelectedStyleResource(null)
+    dispatchEditorAction({ type: "SELECT_NODE", nodeId })
+    setRightRailMode("properties")
+  }, [dispatchEditorAction])
+
+  const reorderLeftRailBodyChild = useCallback((request: OutlineBodyChildReorder) => {
+    finalizeInlineEditBeforeActionRef.current()
+    setSelectedStyleResource(null)
+    dispatchEditorAction({ type: "REORDER_BODY_CHILD", ...request })
+    setRightRailMode("properties")
+  }, [dispatchEditorAction])
 
   const startCloneDragPointerDown = useCallback((nodeId: string, e: React.PointerEvent<SVGGElement>) => {
     startNodePointerDown({ source: "document-copy", nodeId }, e)
@@ -2965,39 +3166,39 @@ export default function EditorShell() {
 
   const deleteNodeFromCanvas = useCallback((nodeId: string) => {
     finalizeInlineEditBeforeAction()
-    dispatch({ type: "DELETE_NODE", nodeId })
+    dispatchEditorAction({ type: "DELETE_NODE", nodeId })
     setRightRailMode("page")
-  }, [finalizeInlineEditBeforeAction])
+  }, [dispatchEditorAction, finalizeInlineEditBeforeAction])
 
   const applyCanvasTableAction = useCallback((nodeId: string, action: CanvasTableAction) => {
     finalizeInlineEditBeforeAction()
     const target = resolveCanvasFlowTableActionTarget(state.doc, nodeId, action)
     if (!target) return
     if (target.type === "add-row") {
-      dispatch({ type: "TABLE_ADD_ROW", tableId: target.tableId, afterIndex: target.afterIndex })
+      dispatchEditorAction({ type: "TABLE_ADD_ROW", tableId: target.tableId, afterIndex: target.afterIndex })
       setRightRailMode("properties")
       return
     }
     if (target.type === "delete-row") {
-      dispatch({ type: "TABLE_REMOVE_ROW", tableId: target.tableId, rowIndex: target.rowIndex })
+      dispatchEditorAction({ type: "TABLE_REMOVE_ROW", tableId: target.tableId, rowIndex: target.rowIndex })
       dispatch({ type: "SELECT_NODE", nodeId: target.tableId, anchorNodeId: target.tableId })
       setRightRailMode("properties")
       return
     }
     if (target.type === "add-column") {
-      dispatch({ type: "TABLE_ADD_COL", tableId: target.tableId, afterIndex: target.afterIndex })
+      dispatchEditorAction({ type: "TABLE_ADD_COL", tableId: target.tableId, afterIndex: target.afterIndex })
       setRightRailMode("properties")
       return
     }
     if (target.type === "delete-column") {
-      dispatch({ type: "TABLE_REMOVE_COL", tableId: target.tableId, colIndex: target.colIndex })
+      dispatchEditorAction({ type: "TABLE_REMOVE_COL", tableId: target.tableId, colIndex: target.colIndex })
       dispatch({ type: "SELECT_NODE", nodeId: target.tableId, anchorNodeId: target.tableId })
       setRightRailMode("properties")
       return
     }
-    dispatch({ type: "DELETE_NODE", nodeId: target.tableId })
+    dispatchEditorAction({ type: "DELETE_NODE", nodeId: target.tableId })
     setRightRailMode("page")
-  }, [finalizeInlineEditBeforeAction, state.doc])
+  }, [dispatchEditorAction, finalizeInlineEditBeforeAction, state.doc])
 
   const activateWorkflowMode = useCallback((nextMode: WorkflowMode) => {
     finalizeInlineEditBeforeAction()
@@ -3323,8 +3524,9 @@ export default function EditorShell() {
         const dx = e.clientX - pendingDragRef.current.clientX
         const dy = e.clientY - pendingDragRef.current.clientY
         if (Math.hypot(dx, dy) > 5) {
-          const { source } = pendingDragRef.current
+          const { source, finalizeOnDragStart } = pendingDragRef.current
           pendingDragRef.current = null
+          if (finalizeOnDragStart) finalizeInlineEditBeforeResponsiveAction()
           dispatch({ type: "DRAG_START", source, clientX: e.clientX, clientY: e.clientY })
           scheduleDragMove({ clientX: e.clientX, clientY: e.clientY, sourceOverride: source })
         }
@@ -3335,6 +3537,7 @@ export default function EditorShell() {
     },
     [
       headerFooterReservedDragRef,
+      finalizeInlineEditBeforeResponsiveAction,
       marginDragRef,
       minHeightDragRef,
       resizeDragRef,
@@ -3354,8 +3557,7 @@ export default function EditorShell() {
       // Commit header/footer reserved-height drag
       const activeHeaderFooterReservedDrag = headerFooterReservedDragRef.current
       if (activeHeaderFooterReservedDrag && !activeHeaderFooterReservedDrag.committed) {
-        suppressNextLayoutLoadingOverlay()
-        dispatch({
+        dispatchEditorAction({
           type: "UPDATE_RESERVED_ZONES",
           sectionIndex: activeHeaderFooterReservedDrag.sectionIndex,
           reserved: activeHeaderFooterReservedDrag.currentReserved,
@@ -3367,16 +3569,14 @@ export default function EditorShell() {
       // Commit margin resize
       const activeMarginDrag = marginDragRef.current
       if (activeMarginDrag && !activeMarginDrag.committed) {
-        suppressNextLayoutLoadingOverlay()
-        dispatch({ type: "UPDATE_MARGIN", sectionIndex: activeMarginDrag.sectionIndex, margin: activeMarginDrag.currentMargins })
+        dispatchEditorAction({ type: "UPDATE_MARGIN", sectionIndex: activeMarginDrag.sectionIndex, margin: activeMarginDrag.currentMargins })
         setMarginDrag(null)
         return
       }
       // Commit minHeight resize
       const activeMinHeightDrag = minHeightDragRef.current
       if (activeMinHeightDrag && !activeMinHeightDrag.committed) {
-        suppressNextLayoutLoadingOverlay()
-        dispatch({ type: "RESIZE_ROW_MIN_HEIGHT", rowId: activeMinHeightDrag.rowId, minHeight: activeMinHeightDrag.currentMinHeight })
+        dispatchEditorAction({ type: "RESIZE_ROW_MIN_HEIGHT", rowId: activeMinHeightDrag.rowId, minHeight: activeMinHeightDrag.currentMinHeight })
         setMinHeightDrag(null)
         return
       }
@@ -3403,8 +3603,7 @@ export default function EditorShell() {
           const nextPreviewDoc = resolvePreviewDoc(nextDoc)
           const nextPaginated = paginateDocument(nextPreviewDoc, editorTextMeasurer)
           precomputedBrowserPaginationRef.current = { doc: nextPreviewDoc, paginated: nextPaginated }
-          suppressNextLayoutLoadingOverlay()
-          dispatch({
+          dispatchEditorAction({
             type: "RESIZE_TABLE_COLUMN_PAIR",
             tableId: activeResizeDrag.tableId,
             leftColIndex: activeResizeDrag.leftColIndex,
@@ -3435,8 +3634,7 @@ export default function EditorShell() {
         const nextPreviewDoc = resolvePreviewDoc(nextDoc)
         const nextPaginated = paginateDocument(nextPreviewDoc, editorTextMeasurer)
         precomputedBrowserPaginationRef.current = { doc: nextPreviewDoc, paginated: nextPaginated }
-        suppressNextLayoutLoadingOverlay()
-        dispatch({
+        dispatchEditorAction({
           type: "RESIZE_COLUMNS",
           leftStackId,
           leftShare: newLeftShare,
@@ -3460,7 +3658,7 @@ export default function EditorShell() {
             anchorNodeId: clickAction.nodeId,
           })
           setRightRailMode("properties")
-          handleInlineEditStart(clickAction.nodeId, clickAction.caretIndex, clickAction.pageIndex)
+          scheduleInlineEditStartAfterSelectionPaint(clickAction)
           return
         }
         if (source.source === "document") {
@@ -3482,7 +3680,7 @@ export default function EditorShell() {
         }, state.drag.source)
 
         if (lawResult.ok) {
-          dispatch({ type: "DRAG_COMMIT", op: lawResult.value.operation, sectionId })
+          dispatchEditorAction({ type: "DRAG_COMMIT", op: lawResult.value.operation, sectionId })
           return
         }
       }
@@ -3491,7 +3689,6 @@ export default function EditorShell() {
     [
       computePreview,
       cancelScheduledDragMove,
-      handleInlineEditStart,
       headerFooterReservedDragRef,
       marginDragRef,
       minHeightDragRef,
@@ -3502,15 +3699,17 @@ export default function EditorShell() {
       setMarginDrag,
       setMinHeightDrag,
       setResizeDrag,
+      scheduleInlineEditStartAfterSelectionPaint,
       state.doc,
       state.drag,
-      suppressNextLayoutLoadingOverlay,
+      dispatchEditorAction,
       hideResizePreview,
     ],
   )
 
   const handlePointerCancel = useCallback(() => {
     pendingDragRef.current = null
+    cancelDeferredInlineEditStart()
     cancelScheduledDragMove()
     hideResizePreview()
     if (resizeDragRef.current && !resizeDragRef.current.committed) setResizeDrag(null)
@@ -3520,6 +3719,7 @@ export default function EditorShell() {
     if (state.drag) dispatch({ type: "DRAG_CANCEL" })
   }, [
     cancelScheduledDragMove,
+    cancelDeferredInlineEditStart,
     headerFooterReservedDragRef,
     hideResizePreview,
     marginDragRef,
@@ -3599,7 +3799,7 @@ export default function EditorShell() {
     if (e.key === "Delete" && state.selectedNodeId && !state.drag) {
       if (isTextInput) return
       e.preventDefault()
-      dispatch({ type: "DELETE_NODE", nodeId: state.selectedNodeId })
+      dispatchEditorAction({ type: "DELETE_NODE", nodeId: state.selectedNodeId })
       setRightRailMode("page")
     }
     if (hasPlatformShortcutModifier(e) && !e.shiftKey && shortcutKey === "z") {
@@ -3616,6 +3816,7 @@ export default function EditorShell() {
     }
   }, [
     handleWysiwygRichTextShortcut,
+    dispatchEditorAction,
     handleInlineEditEnd,
     handleRedo,
     handleUndo,
@@ -3788,14 +3989,14 @@ export default function EditorShell() {
                 const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
                 const finalized = finalizeInlineEditBeforeAction()
                 if (hadWysiwygTextSession && !finalized) return
-                dispatch({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })
+                dispatchEditorAction({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })
               }}
               onUpdateTextRunStyleRange={(nodeId, start, end, changes) => {
                 if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
                 const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
                 const finalized = finalizeInlineEditBeforeAction()
                 if (hadWysiwygTextSession && !finalized) return
-                dispatch({ type: "UPDATE_TEXT_RUN_STYLE_RANGE", nodeId, start, end, changes })
+                dispatchEditorAction({ type: "UPDATE_TEXT_RUN_STYLE_RANGE", nodeId, start, end, changes })
               }}
             />
           </>
@@ -3808,27 +4009,18 @@ export default function EditorShell() {
           mode={leftRailMode}
           outlineDoc={isTemplateMode ? state.doc : previewDoc}
           styleDoc={state.doc}
-          selectedNodeId={state.selectedNodeId}
+          selectedNodeId={outlineSelectionState.selectedNodeId}
           selectedStyleResource={selectedStyleResource}
-          activeOutlineListGroupId={activeOutlineListGroupId}
+          activeOutlineListGroupId={outlineSelectionState.activeListGroupId}
           registry={packageFieldRegistry}
           editable={isTemplateMode}
           isDragging={!!state.drag}
           addPaletteScope={headerFooterEditMode ? "headerFooter" : "document"}
           onModeChange={setLeftRailMode}
-          onSelectNode={(nodeId) => {
-            setSelectedStyleResource(null)
-            dispatch({ type: "SELECT_NODE", nodeId })
-            setRightRailMode("properties")
-          }}
+          onSelectNode={selectLeftRailNode}
           onSelectOutlineListGroup={selectOutlineListGroup}
           onSelectStyleResource={selectStyleResource}
-          onReorderBodyChild={(request) => {
-            finalizeInlineEditBeforeAction()
-            setSelectedStyleResource(null)
-            dispatch({ type: "REORDER_BODY_CHILD", ...request })
-            setRightRailMode("properties")
-          }}
+          onReorderBodyChild={reorderLeftRailBodyChild}
           onDragStart={startPaletteDrag}
         />
         <EditorCanvasColumn
@@ -4053,15 +4245,15 @@ export default function EditorShell() {
                     editable={isTemplateMode}
                     onUpdateMargin={(sectionIndex, margin) => {
                       if (!isTemplateMode) return
-                      dispatch({ type: "UPDATE_MARGIN", sectionIndex, margin })
+                      dispatchEditorAction({ type: "UPDATE_MARGIN", sectionIndex, margin })
                     }}
                     onUpdateReservedZones={(sectionIndex, reserved, priority) => {
                       if (!isTemplateMode) return
-                      dispatch({ type: "UPDATE_RESERVED_ZONES", sectionIndex, reserved, priority })
+                      dispatchEditorAction({ type: "UPDATE_RESERVED_ZONES", sectionIndex, reserved, priority })
                     }}
                     onToggleReservedZone={(sectionIndex, zone, enabled) => {
                       if (!isTemplateMode) return
-                      dispatch({
+                      dispatchEditorAction({
                         type: enabled ? "ENSURE_HEADER_FOOTER_ZONE_VISIBLE" : "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY",
                         sectionIndex,
                         zone,
@@ -4069,7 +4261,7 @@ export default function EditorShell() {
                     }}
                     onUpdateHeaderFooterMode={(sectionIndex, mode) => {
                       if (!isTemplateMode) return
-                      dispatch({ type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE", sectionIndex, mode })
+                      dispatchEditorAction({ type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE", sectionIndex, mode })
                     }}
                   />
                 </div>
@@ -4083,12 +4275,12 @@ export default function EditorShell() {
                       onPatchStyleDefinition={(styleId, patch) => {
                         if (!isTemplateMode) return
                         finalizeInlineEditBeforeAction()
-                        dispatch({ type: "PATCH_PARAGRAPH_STYLE_DEFINITION", styleId, patch })
+                        dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_DEFINITION", styleId, patch })
                       }}
                       onRenameStyleDefinition={(styleId, name) => {
                         if (!isTemplateMode) return
                         finalizeInlineEditBeforeAction()
-                        dispatch({ type: "RENAME_PARAGRAPH_STYLE_DEFINITION", styleId, name })
+                        dispatchEditorAction({ type: "RENAME_PARAGRAPH_STYLE_DEFINITION", styleId, name })
                       }}
                     />
                   ) : (
@@ -4106,34 +4298,48 @@ export default function EditorShell() {
                       registry={packageFieldRegistry}
                       selectedNodeId={state.selectedNodeId}
                       selectionAnchorNodeId={state.selectionAnchorNodeId}
-                      onUpdateProps={(nodeId, changes) => dispatch({ type: "UPDATE_PROPS", nodeId, changes })}
-                      onUpdateText={(nodeId, text) => dispatch({ type: "UPDATE_TEXT", nodeId, text })}
-                      onUpdateParagraphTextStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })}
-                      onApplyParagraphStylePreset={(nodeId, styleId) => dispatch({ type: "APPLY_PARAGRAPH_STYLE_PRESET", nodeId, styleId })}
-                      onUpdateParagraphStyleBoxOverrides={(nodeId, changes) => dispatch({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX", nodeId, changes })}
-                      onUpdateParagraphStyleOverrides={(nodeId, changes) => dispatch({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDES", nodeId, changes })}
-                      onClearParagraphStyle={(nodeId) => dispatch({ type: "CLEAR_PARAGRAPH_STYLE", nodeId })}
-                      onDetachParagraphStyle={(nodeId) => dispatch({ type: "DETACH_PARAGRAPH_STYLE", nodeId })}
-                      onResetParagraphStyleOverrides={(nodeId) => dispatch({ type: "RESET_PARAGRAPH_STYLE_OVERRIDES", nodeId })}
-                      onUpdateFieldRef={(fieldRefId, changes) => dispatch({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
-                      onUpdateParagraphBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
-                      onUpdateFlowStackBoxStyle={(nodeId, changes) => dispatch({ type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId, changes })}
-                      onUpdateFlowTableCellSpan={(cellId, changes) => dispatch({ type: "UPDATE_FLOW_TABLE_CELL_SPAN", cellId, changes })}
-                      onSelectNode={(nodeId) => dispatch({ type: "SELECT_NODE", nodeId, anchorNodeId: nodeId })}
+                      onUpdateProps={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PROPS", nodeId, changes })}
+                      onUpdateText={(nodeId, text) => dispatchEditorAction({ type: "UPDATE_TEXT", nodeId, text })}
+                      onUpdateParagraphTextStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })}
+                      onApplyParagraphStylePreset={(nodeId, styleId) => dispatchEditorAction({ type: "APPLY_PARAGRAPH_STYLE_PRESET", nodeId, styleId })}
+                      onUpdateParagraphStyleBoxOverrides={(nodeId, changes) => dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX", nodeId, changes })}
+                      onUpdateParagraphStyleOverrides={(nodeId, changes) => dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDES", nodeId, changes })}
+                      onClearParagraphStyle={(nodeId) => dispatchEditorAction({ type: "CLEAR_PARAGRAPH_STYLE", nodeId })}
+                      onDetachParagraphStyle={(nodeId) => dispatchEditorAction({ type: "DETACH_PARAGRAPH_STYLE", nodeId })}
+                      onResetParagraphStyleOverrides={(nodeId) => dispatchEditorAction({ type: "RESET_PARAGRAPH_STYLE_OVERRIDES", nodeId })}
+                      onUpdateFieldRef={(fieldRefId, changes) => dispatchEditorAction({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
+                      onUpdateParagraphBoxStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
+                      onUpdateFlowStackBoxStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId, changes })}
+                      onUpdateFlowTableCellSpan={(cellId, changes) => dispatchEditorAction({ type: "UPDATE_FLOW_TABLE_CELL_SPAN", cellId, changes })}
+                      onSelectNode={(nodeId) => dispatchEditorAction({ type: "SELECT_NODE", nodeId, anchorNodeId: nodeId })}
                       onSelectContextNode={selectContextNode}
                       onSelectListGroup={selectOutlineListGroup}
                       onSelectStyleResource={selectStyleResource}
-                      onDelete={(nodeId) => dispatch({ type: "DELETE_NODE", nodeId })}
+                      onDelete={(nodeId) => dispatchEditorAction({ type: "DELETE_NODE", nodeId })}
                       tableOps={{
-                        addRow: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_ROW", tableId, afterIndex }),
-                        removeRow: (tableId, rowIndex) => dispatch({ type: "TABLE_REMOVE_ROW", tableId, rowIndex }),
-                        addCol: (tableId, afterIndex) => dispatch({ type: "TABLE_ADD_COL", tableId, afterIndex }),
-                        removeCol: (tableId, colIndex) => dispatch({ type: "TABLE_REMOVE_COL", tableId, colIndex }),
-                        fitToWidth: (tableId) => dispatch({ type: "TABLE_FIT_TO_WIDTH", tableId }),
+                        addRow: (tableId, afterIndex) => {
+                          dispatchEditorAction({ type: "TABLE_ADD_ROW", tableId, afterIndex })
+                        },
+                        removeRow: (tableId, rowIndex) => {
+                          dispatchEditorAction({ type: "TABLE_REMOVE_ROW", tableId, rowIndex })
+                        },
+                        addCol: (tableId, afterIndex) => {
+                          dispatchEditorAction({ type: "TABLE_ADD_COL", tableId, afterIndex })
+                        },
+                        removeCol: (tableId, colIndex) => {
+                          dispatchEditorAction({ type: "TABLE_REMOVE_COL", tableId, colIndex })
+                        },
+                        fitToWidth: (tableId) => {
+                          dispatchEditorAction({ type: "TABLE_FIT_TO_WIDTH", tableId })
+                        },
                       }}
                       flowRowOps={{
-                        addCol: (rowId, stackId, position = "after") => dispatch({ type: "FLOW_ROW_ADD_COL", rowId, stackId, position }),
-                        resizePair: (leftStackId, rightStackId, leftShare, rightShare) => dispatch({ type: "RESIZE_COLUMNS", leftStackId, rightStackId, leftShare, rightShare }),
+                        addCol: (rowId, stackId, position = "after") => {
+                          dispatchEditorAction({ type: "FLOW_ROW_ADD_COL", rowId, stackId, position })
+                        },
+                        resizePair: (leftStackId, rightStackId, leftShare, rightShare) => {
+                          dispatchEditorAction({ type: "RESIZE_COLUMNS", leftStackId, rightStackId, leftShare, rightShare })
+                        },
                       }}
                     />
                   ) : (

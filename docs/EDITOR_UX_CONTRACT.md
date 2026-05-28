@@ -221,12 +221,14 @@ Paragraph box styling is defined in
   repeat must not create document history, pagination, or nested-update loops
   beyond the actual text changes.
 - Text-changing WYSIWYG draft sync may coalesce parent/session updates to the
-  latest payload per animation frame so typing, Space repeat, Backspace repeat,
-  and line wrapping do not push every key through the whole editor tree. Pending
-  draft sync must still flush before edit completion, blur completion, rich text
-  shortcut handling, and unmount cleanup so commit/style commands never read a
-  stale final character. Stale parent props must not overwrite a newer local
-  draft while that local draft is still the active visual truth.
+  latest payload across a short quiet window so typing, Space repeat, Backspace
+  repeat, and line wrapping do not push every key through the whole editor tree.
+  The local active paragraph remains the immediate visual truth while the parent
+  sync is pending. Pending draft sync must still flush before edit completion,
+  blur completion, rich text toolbar focus, rich text shortcut handling, and
+  unmount cleanup so commit/style commands never read a stale final character.
+  Stale parent props must not overwrite a newer local draft while that local
+  draft is still the active visual truth.
 - In the FlowDoc-owned text-engine lane, ArrowLeft/ArrowRight/ArrowUp/ArrowDown
   should update the transient caret/selection state from FlowDoc text and line
   geometry. Vertical ArrowUp/ArrowDown navigation should use the rendered
@@ -538,6 +540,37 @@ classified:
 - Selection, caret, drag, resize, and inline-edit transaction snapshots are
   ephemeral interaction state only.
 
+## Action Classification
+
+Editor actions should be classified before they are allowed to influence layout
+feedback. The shared classification vocabulary is:
+
+- `uiImpact`: `none`, `selection`, `visual`, `layout`, or `structure`
+- `layoutScope`: `none`, `node`, `block`, `table`, `from-index`, or `document`
+- `priority`: `sync`, `visible`, or `background`
+
+Selection, hover, drag preview, and clear-result actions are sync interaction
+state and must not request blocking layout feedback. Visual-only authored
+changes such as text color, underline, strikethrough, paragraph box fill, and
+style rename can reconcile server layout in the background while keeping the
+canvas visible. For visual-only actions that can be represented by patching the
+existing `PaginatedDocument` render props, the browser preview may take a
+visual-only fast lane: reuse the current page/fragment geometry, repaint the
+affected paragraph render props, and let server/API pagination reconcile in the
+background for export truth. Metric or structural changes may still require
+browser/server layout, but normal editor actions should suppress the full-canvas
+loading wash and preserve the current visible layout while the layout status
+settles.
+
+The visual-only fast lane must be conservative. If an action needs new line
+runs, new wrapping, different geometry, TOC page-number changes, or any
+unsupported render-prop transformation, it must fall back to the normal browser
+pagination path rather than showing stale or ambiguous document state.
+
+Initial document load remains a separate blocking path owned by the document
+prepare/placeholder flow. Action classification must not make an unloaded
+document look ready.
+
 ## Status And Feedback
 
 The editor should surface important degraded states:
@@ -567,6 +600,9 @@ Common checks:
 - table cell: select from canvas and confirm `TABLE-CELL` panel appears
 - table operation: insert/delete column and confirm table outline/count changes
 - status: confirm no unexpected layout error appears
+- visual-only style change: changing text color or paragraph fill should repaint
+  the visible paragraph without a full-canvas loading wash; export readiness may
+  still wait for the background server check
 
 The browser check does not replace core tests. It protects human-facing feel.
 

@@ -2,6 +2,7 @@ import type { PaginatedDocument } from "@/pagination"
 
 export type WysiwygPerfEventKind =
   | "inline-edit-draft-update"
+  | "inline-edit-start"
   | "inline-edit-selection-update"
   | "rich-draft-style-command"
   | "text-engine-pointer-frame"
@@ -9,6 +10,7 @@ export type WysiwygPerfEventKind =
   | "text-engine-pointer-selection-apply"
   | "text-engine-selection-overlay"
   | "editor-canvas-react-commit"
+  | "inline-edit-finalize"
   | "inline-edit-exit-pagination"
   | "active-paragraph-measure"
   | "text-engine-draft-measure"

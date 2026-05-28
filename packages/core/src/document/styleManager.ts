@@ -1,8 +1,10 @@
 import type {
   DocumentNode,
   DocumentStyleDefinitions,
+  FlowTableNode,
   ListInstance,
   ListStyleDefinition,
+  ParagraphNode,
   ParagraphStyleDefinition,
 } from "../schema"
 import {
@@ -19,7 +21,7 @@ import {
 } from "./listPresets"
 import type { FlowDocListStylePresetId } from "./listPresets"
 import { orderedDocumentParagraphs } from "./documentTraversal"
-import { resolveListMarkers } from "./listNumbering"
+import { resolveListMarkers, type ResolvedListMarker } from "./listNumbering"
 
 export const STYLE_MANAGER_PARAGRAPH_STYLE_GROUP_ID = "paragraph-styles"
 export const STYLE_MANAGER_LIST_STYLE_GROUP_ID = "list-styles"
@@ -321,13 +323,55 @@ export function buildListGroupManagerItems(doc: DocumentNode): StyleManagerListG
     .sort(compareListGroupItems)
 }
 
+function findParagraphNodeById(doc: DocumentNode, paragraphId: string): ParagraphNode | null {
+  for (const section of doc.document.sections) {
+    const node = section.nodes[paragraphId]
+    if (node?.type === "paragraph") return node
+
+    for (const candidate of Object.values(section.nodes)) {
+      if (candidate.type !== "flow-table") continue
+      const inner = (candidate as unknown as FlowTableNode).nodes[paragraphId]
+      if (inner?.type === "paragraph") return inner as ParagraphNode
+    }
+  }
+  return null
+}
+
+function summarizeListInstanceFromMarkers(
+  doc: DocumentNode,
+  instanceId: string,
+  markers: Map<string, ResolvedListMarker>,
+): {
+  itemCount: number
+  firstMarkerText?: string
+  lastMarkerText?: string
+} {
+  const summary: {
+    itemCount: number
+    firstMarkerText?: string
+    lastMarkerText?: string
+  } = { itemCount: 0 }
+
+  for (const paragraph of orderedDocumentParagraphs(doc)) {
+    const list = paragraph.props.list
+    if (!list || list.instanceId !== instanceId) continue
+    const marker = markers.get(paragraph.id)
+    summary.itemCount += 1
+    if (marker) {
+      summary.firstMarkerText ??= marker.markerText
+      summary.lastMarkerText = marker.markerText
+    }
+  }
+
+  return summary
+}
+
 export function resolveParagraphListContext(
   doc: DocumentNode,
   paragraphId: string | null | undefined,
 ): StyleManagerParagraphListContext | null {
   if (!paragraphId) return null
-  const paragraphs = orderedDocumentParagraphs(doc)
-  const paragraph = paragraphs.find((candidate) => candidate.id === paragraphId)
+  const paragraph = findParagraphNodeById(doc, paragraphId)
   const list = paragraph?.props.list
   if (!paragraph || !list) return null
 
@@ -335,22 +379,23 @@ export function resolveParagraphListContext(
   const style = instance ? doc.document.listStyles?.[instance.styleId] : undefined
   if (!instance || !style) return null
 
-  const marker = resolveListMarkers(doc).get(paragraph.id)
-  const group = buildListGroupManagerItems(doc).find((item) => item.id === instance.id)
+  const markers = resolveListMarkers(doc)
+  const marker = markers.get(paragraph.id)
+  const group = summarizeListInstanceFromMarkers(doc, instance.id, markers)
   return {
     paragraphId: paragraph.id,
     instanceId: instance.id,
-    groupLabel: group?.label ?? listGroupLabel(instance),
+    groupLabel: listGroupLabel(instance),
     styleId: style.id,
     styleLabel: listStyleLabel(style.id),
     level: list.level,
     userLevel: list.level + 1,
     itemId: list.itemId,
-    itemCount: group?.itemCount ?? 0,
+    itemCount: group.itemCount,
     ...(marker?.markerText ? { markerText: marker.markerText } : {}),
     ...(marker?.ordinal != null ? { ordinal: marker.ordinal } : {}),
-    ...(group?.firstMarkerText ? { firstMarkerText: group.firstMarkerText } : {}),
-    ...(group?.lastMarkerText ? { lastMarkerText: group.lastMarkerText } : {}),
+    ...(group.firstMarkerText ? { firstMarkerText: group.firstMarkerText } : {}),
+    ...(group.lastMarkerText ? { lastMarkerText: group.lastMarkerText } : {}),
   }
 }
 

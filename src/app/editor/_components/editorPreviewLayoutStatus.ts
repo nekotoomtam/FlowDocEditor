@@ -29,6 +29,15 @@ export function markEditorPreviewLayoutSettling(
   }
 }
 
+export function markEditorPreviewLayoutSettlingFromCurrent(
+  generation: number,
+  current: EditorPreviewLayoutState,
+): EditorPreviewLayoutState {
+  return markEditorPreviewLayoutSettling(generation, {
+    blocksCanvas: current.blocksCanvas,
+  })
+}
+
 export function markEditorPreviewLayoutPartial(generation: number): EditorPreviewLayoutState {
   return {
     status: "partial",

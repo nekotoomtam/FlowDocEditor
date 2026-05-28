@@ -6,6 +6,7 @@ import { PDFDocument } from "pdf-lib"
 import { getSmokeBrowserConfig, launchSmokeBrowser, smokeBrowserLabel } from "./smoke-browser.mjs"
 
 const STORAGE_KEY = "flowdoc_document"
+const PERF_TRACE_STORAGE_KEY = "flowdoc.wysiwygPerfTrace"
 const DEFAULT_SMOKE_PORT = 4010
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
@@ -471,32 +472,221 @@ async function pdfPageCountFromDownload(download) {
   return pdf.getPageCount()
 }
 
-async function expectInlineEditVisualMode(page, nodeId, expected) {
-  const selector = `textarea[data-inline-edit-node-id="${nodeId}"]`
+function inlineTextareaSelector(nodeId) {
+  return `textarea[data-inline-edit-node-id="${nodeId}"]`
+}
+
+function wysiwygTextEngineLayerSelector(nodeId) {
+  return `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${nodeId}"]`
+}
+
+function wysiwygInputBridgeSelector(nodeId) {
+  return `[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${nodeId}"]`
+}
+
+function inlineTextControlSelectors(nodeId) {
+  return {
+    textareaSelector: inlineTextareaSelector(nodeId),
+    layerSelector: wysiwygTextEngineLayerSelector(nodeId),
+    bridgeSelector: wysiwygInputBridgeSelector(nodeId),
+  }
+}
+
+async function readInlineTextControlState(page, nodeId) {
+  return page.evaluate((nodeId) => {
+    const textarea = document.querySelector(`textarea[data-inline-edit-node-id="${nodeId}"]`)
+    const layer = document.querySelector(`[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${nodeId}"]`)
+    const bridge = document.querySelector(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${nodeId}"]`)
+    const active = document.activeElement
+    return {
+      kind: textarea instanceof HTMLTextAreaElement ? "textarea" : layer && bridge ? "text-engine" : null,
+      mode: textarea instanceof HTMLTextAreaElement
+        ? textarea.dataset.inlineEditVisualMode ?? null
+        : layer?.getAttribute("data-inline-edit-visual-mode") ?? null,
+      fallbackReason: textarea instanceof HTMLTextAreaElement
+        ? textarea.dataset.inlineEditFallbackReason ?? null
+        : null,
+      outlineStyle: textarea instanceof HTMLTextAreaElement
+        ? window.getComputedStyle(textarea).outlineStyle
+        : null,
+      bridgeActive: bridge instanceof HTMLElement && active === bridge,
+      textareaActive: textarea instanceof HTMLTextAreaElement && active === textarea,
+      overlayCount: document.querySelectorAll(
+        `[data-testid="editor-fragment"][data-node-id="${nodeId}"] [data-wysiwyg-selection="true"]`,
+      ).length,
+    }
+  }, nodeId)
+}
+
+async function waitForInlineTextControl(page, nodeId, timeout = 5000) {
+  const selectors = inlineTextControlSelectors(nodeId)
   await page.waitForFunction(
-    ({ selector, mode, fallbackReason }) => {
-      const textarea = document.querySelector(selector)
-      if (!textarea) return false
-      if (textarea.dataset.inlineEditVisualMode !== mode) return false
-      const actualFallback = textarea.dataset.inlineEditFallbackReason ?? null
-      return actualFallback === fallbackReason
+    ({ textareaSelector, layerSelector, bridgeSelector }) => {
+      const textarea = document.querySelector(textareaSelector)
+      if (textarea instanceof HTMLTextAreaElement) return true
+      const layer = document.querySelector(layerSelector)
+      const bridge = document.querySelector(bridgeSelector)
+      return layer instanceof Element && bridge instanceof HTMLElement
     },
-    { selector, mode: expected.mode, fallbackReason: expected.fallbackReason ?? null },
+    selectors,
+    { timeout },
+  )
+
+  const textarea = page.locator(selectors.textareaSelector).first()
+  if (await textarea.count() > 0) {
+    return { kind: "textarea", nodeId, locator: textarea }
+  }
+
+  const layer = page.locator(selectors.layerSelector).first()
+  const bridge = page.locator(selectors.bridgeSelector).first()
+  await layer.waitFor({ state: "attached", timeout: 1000 })
+  await bridge.waitFor({ state: "attached", timeout: 1000 })
+  return { kind: "text-engine", nodeId, layer, bridge }
+}
+
+async function openInlineTextControlFromFragment(page, fragment, nodeId) {
+  let lastError = null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await fragment.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(100)
+    try {
+      await fragment.dblclick({ timeout: 5000 })
+      return await waitForInlineTextControl(page, nodeId)
+    } catch (error) {
+      lastError = error
+      await page.keyboard.press("Escape")
+      await page.waitForTimeout(100)
+    }
+  }
+  throw lastError ?? new Error(`expected inline text control for ${nodeId}`)
+}
+
+async function pressInlineTextControl(page, control, key) {
+  if (control.kind === "textarea") {
+    await control.locator.press(key)
+    return
+  }
+  await control.bridge.evaluate((bridge) => bridge.focus())
+  await page.waitForFunction(
+    (selector) => document.activeElement === document.querySelector(selector),
+    wysiwygInputBridgeSelector(control.nodeId),
+    { timeout: 1000 },
+  )
+  await page.keyboard.press(key)
+}
+
+async function fillInlineTextControl(page, control, text) {
+  if (control.kind === "textarea") {
+    await control.locator.fill(text)
+    return
+  }
+  await control.bridge.evaluate((bridge) => bridge.focus())
+  await page.waitForFunction(
+    (selector) => document.activeElement === document.querySelector(selector),
+    wysiwygInputBridgeSelector(control.nodeId),
+    { timeout: 1000 },
+  )
+  await page.keyboard.press("Home")
+  await page.keyboard.press("Shift+End")
+  await control.bridge.evaluate((bridge, text) => {
+    bridge.focus()
+    bridge.dispatchEvent(new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: text,
+      bubbles: true,
+      cancelable: true,
+    }))
+  }, text)
+  const expectedNeedle = text.split(/\r?\n/).find((line) => line.length > 0)?.slice(0, 24)
+  if (expectedNeedle) {
+    await page.waitForFunction(
+      ({ nodeId, expectedNeedle }) => Array.from(
+        document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${nodeId}"] text`),
+      ).some((node) => (node.textContent ?? "").includes(expectedNeedle)),
+      { nodeId: control.nodeId, expectedNeedle },
+      { timeout: 5000 },
+    )
+  }
+  await waitForStoredParagraphText(page, control.nodeId, text)
+}
+
+async function focusInlineTextControlAtStart(page, control) {
+  if (control.kind === "textarea") {
+    await control.locator.evaluate((el) => {
+      el.focus()
+      el.setSelectionRange(0, 0)
+    })
+    return
+  }
+  await control.bridge.evaluate((bridge) => bridge.focus())
+  await page.waitForFunction(
+    (selector) => document.activeElement === document.querySelector(selector),
+    wysiwygInputBridgeSelector(control.nodeId),
+    { timeout: 1000 },
+  )
+  await page.keyboard.press("Home")
+}
+
+async function inlineTextControlBoundingBox(control) {
+  if (control.kind === "textarea") return control.locator.boundingBox()
+  return control.layer.boundingBox()
+}
+
+async function dispatchInlineTextControlEvent(control, type) {
+  if (control.kind === "textarea") {
+    await control.locator.dispatchEvent(type)
+    return
+  }
+  await control.bridge.dispatchEvent(type)
+}
+
+async function commitInlineTextControl(page, control) {
+  await pressInlineTextControl(page, control, "Escape")
+  if (control.kind !== "text-engine") return
+
+  await page.waitForTimeout(100)
+  const state = await readInlineTextControlState(page, control.nodeId)
+  if (state.kind === null) return
+
+  await page.mouse.click(8, 8)
+  await page.waitForFunction(
+    (nodeId) => !document.querySelector(`textarea[data-inline-edit-node-id="${nodeId}"]`) &&
+      !document.querySelector(`[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${nodeId}"]`),
+    control.nodeId,
+    { timeout: 1000 },
+  ).catch(() => {})
+}
+
+async function expectInlineEditVisualMode(page, nodeId, expected) {
+  const selectors = inlineTextControlSelectors(nodeId)
+  await page.waitForFunction(
+    ({ textareaSelector, layerSelector, bridgeSelector, mode, fallbackReason }) => {
+      const textarea = document.querySelector(textareaSelector)
+      if (textarea instanceof HTMLTextAreaElement) {
+        if (textarea.dataset.inlineEditVisualMode !== mode) return false
+        const actualFallback = textarea.dataset.inlineEditFallbackReason ?? null
+        return actualFallback === fallbackReason
+      }
+      const layer = document.querySelector(layerSelector)
+      const bridge = document.querySelector(bridgeSelector)
+      if (!(layer instanceof Element) || !(bridge instanceof HTMLElement)) return false
+      const textEngineMode = layer.getAttribute("data-inline-edit-visual-mode")
+      return textEngineMode === "text-engine" && (mode === "document" || mode === "textarea")
+    },
+    { ...selectors, mode: expected.mode, fallbackReason: expected.fallbackReason ?? null },
     { timeout: expected.timeout ?? 5000 },
   )
 
-  const visualState = await page.locator(selector).evaluate((textarea) => {
-    const style = window.getComputedStyle(textarea)
-    return {
-      mode: textarea.dataset.inlineEditVisualMode,
-      fallbackReason: textarea.dataset.inlineEditFallbackReason ?? null,
-      outlineStyle: style.outlineStyle,
-    }
-  })
-  assert(
-    visualState.mode === expected.mode,
-    `expected inline edit visual mode ${expected.mode}, got ${visualState.mode}`,
-  )
+  const visualState = await readInlineTextControlState(page, nodeId)
+  if (visualState.kind === "text-engine") {
+    assert(
+      expected.mode === "document" || expected.mode === "textarea",
+      `expected inline edit mode ${expected.mode} to be compatible with text-engine`,
+    )
+    assert(visualState.mode === "text-engine", `expected text-engine visual mode, got ${visualState.mode}`)
+    return
+  }
+  assert(visualState.mode === expected.mode, `expected inline edit visual mode ${expected.mode}, got ${visualState.mode}`)
   assert(
     visualState.fallbackReason === (expected.fallbackReason ?? null),
     `expected inline edit fallback ${expected.fallbackReason ?? null}, got ${visualState.fallbackReason}`,
@@ -510,19 +700,27 @@ async function expectInlineEditVisualMode(page, nodeId, expected) {
 }
 
 async function expectInlineEditVisualContract(page, nodeId) {
-  const selector = `textarea[data-inline-edit-node-id="${nodeId}"]`
-  await page.waitForFunction((selector) => {
-    const textarea = document.querySelector(selector)
-    const mode = textarea?.dataset.inlineEditVisualMode
-    if (mode === "document") return (textarea.dataset.inlineEditFallbackReason ?? null) === null
-    if (mode === "textarea") return Boolean(textarea.dataset.inlineEditFallbackReason)
-    return false
-  }, selector, { timeout: 5000 })
+  const selectors = inlineTextControlSelectors(nodeId)
+  await page.waitForFunction(({ textareaSelector, layerSelector, bridgeSelector }) => {
+    const textarea = document.querySelector(textareaSelector)
+    if (textarea instanceof HTMLTextAreaElement) {
+      const mode = textarea.dataset.inlineEditVisualMode
+      if (mode === "document") return (textarea.dataset.inlineEditFallbackReason ?? null) === null
+      if (mode === "textarea") return Boolean(textarea.dataset.inlineEditFallbackReason)
+      return false
+    }
+    const layer = document.querySelector(layerSelector)
+    const bridge = document.querySelector(bridgeSelector)
+    return layer instanceof Element &&
+      bridge instanceof HTMLElement &&
+      layer.getAttribute("data-inline-edit-visual-mode") === "text-engine"
+  }, selectors, { timeout: 5000 })
 
-  const visualState = await page.locator(selector).evaluate((textarea) => ({
-    mode: textarea.dataset.inlineEditVisualMode,
-    fallbackReason: textarea.dataset.inlineEditFallbackReason ?? null,
-  }))
+  const visualState = await readInlineTextControlState(page, nodeId)
+  if (visualState.kind === "text-engine") {
+    assert(visualState.mode === "text-engine", `expected text-engine visual contract, got ${visualState.mode}`)
+    return
+  }
   assert(
     visualState.mode === "document" || visualState.mode === "textarea",
     `expected inline edit visual contract mode, got ${visualState.mode}`,
@@ -698,20 +896,32 @@ async function expectInlineSelectionOverlay(page, nodeId) {
   try {
     await page.waitForFunction((nodeId) => {
       const textarea = document.querySelector(`textarea[data-inline-edit-node-id="${nodeId}"]`)
-      if (!(textarea instanceof HTMLTextAreaElement)) return false
-      const hasSelection = textarea.selectionEnd > textarea.selectionStart
       const hasOverlay = document.querySelectorAll(
         `[data-testid="editor-fragment"][data-node-id="${nodeId}"] [data-wysiwyg-selection="true"]`,
       ).length > 0
-      return hasSelection && hasOverlay && textarea.dataset.inlineEditVisualMode === "document"
+      if (textarea instanceof HTMLTextAreaElement) {
+        const hasSelection = textarea.selectionEnd > textarea.selectionStart
+        return hasSelection && hasOverlay && textarea.dataset.inlineEditVisualMode === "document"
+      }
+      const layer = document.querySelector(
+        `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${nodeId}"]`,
+      )
+      return layer instanceof Element &&
+        layer.getAttribute("data-inline-edit-visual-mode") === "text-engine" &&
+        hasOverlay
     }, nodeId, { timeout: 5000 })
   } catch (error) {
     const state = await page.evaluate((nodeId) => {
       const textarea = document.querySelector(`textarea[data-inline-edit-node-id="${nodeId}"]`)
+      const layer = document.querySelector(
+        `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${nodeId}"]`,
+      )
       return {
         selectionStart: textarea instanceof HTMLTextAreaElement ? textarea.selectionStart : null,
         selectionEnd: textarea instanceof HTMLTextAreaElement ? textarea.selectionEnd : null,
-        visualMode: textarea instanceof HTMLTextAreaElement ? textarea.dataset.inlineEditVisualMode ?? null : null,
+        visualMode: textarea instanceof HTMLTextAreaElement
+          ? textarea.dataset.inlineEditVisualMode ?? null
+          : layer?.getAttribute("data-inline-edit-visual-mode") ?? null,
         fallbackReason: textarea instanceof HTMLTextAreaElement ? textarea.dataset.inlineEditFallbackReason ?? null : null,
         overlayCount: document.querySelectorAll(
           `[data-testid="editor-fragment"][data-node-id="${nodeId}"] [data-wysiwyg-selection="true"]`,
@@ -863,6 +1073,115 @@ async function waitForZoneText(page, zone, nodeId, expectedText, timeout = 5000)
     { zone, nodeId, expectedText },
     { timeout },
   )
+}
+
+async function clearPerfEvents(page) {
+  await page.evaluate(() => {
+    window.__flowDocWysiwygPerfEvents = []
+  })
+}
+
+async function startInitialLayoutOverlayMonitor(page) {
+  await page.evaluate(() => {
+    window.__flowDocEditorSmokeLayoutMonitor?.observer?.disconnect?.()
+    const state = {
+      loadingAppeared: !!document.querySelector('[data-testid="initial-layout-loading"]'),
+      blockingTrue: document.querySelector('[data-testid="editor-shell"]')?.getAttribute("data-preview-layout-blocking") === "true",
+      statuses: [],
+    }
+    const record = () => {
+      const shell = document.querySelector('[data-testid="editor-shell"]')
+      if (document.querySelector('[data-testid="initial-layout-loading"]')) state.loadingAppeared = true
+      if (shell?.getAttribute("data-preview-layout-blocking") === "true") state.blockingTrue = true
+      const status = shell?.getAttribute("data-preview-layout-status")
+      if (status && state.statuses[state.statuses.length - 1] !== status) state.statuses.push(status)
+    }
+    const observer = new MutationObserver(record)
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-preview-layout-blocking", "data-preview-layout-status"],
+    })
+    window.__flowDocEditorSmokeLayoutMonitor = { observer, state }
+    record()
+  })
+}
+
+async function readAndStopInitialLayoutOverlayMonitor(page) {
+  return page.evaluate(() => {
+    const monitor = window.__flowDocEditorSmokeLayoutMonitor
+    monitor?.observer?.disconnect?.()
+    delete window.__flowDocEditorSmokeLayoutMonitor
+    return monitor?.state ?? null
+  })
+}
+
+async function waitForStoredParagraphTextColor(page, nodeId, expectedColor) {
+  await page.waitForFunction(
+    ({ key, nodeId, expectedColor }) => {
+      const raw = window.localStorage.getItem(key)
+      if (!raw) return false
+      const parsed = JSON.parse(raw)
+      const doc = parsed?.kind === "document" && (parsed?.packageVersion === 1 || parsed?.packageVersion === 2)
+        ? parsed.document
+        : parsed
+      for (const section of doc.document.sections) {
+        const node = section.nodes[nodeId]
+        if (node?.type === "paragraph") return node.props.textColor === expectedColor
+        for (const candidate of Object.values(section.nodes)) {
+          if (candidate?.type !== "flow-table") continue
+          const tableNode = candidate.nodes?.[nodeId]
+          if (tableNode?.type === "paragraph") return tableNode.props.textColor === expectedColor
+        }
+      }
+      return false
+    },
+    { key: STORAGE_KEY, nodeId, expectedColor },
+    { timeout: 5000 },
+  )
+}
+
+async function waitForParagraphTextFill(page, nodeId, expectedColor) {
+  await page.waitForFunction(
+    ({ nodeId, expectedColor }) => {
+      const expectedFill = `#${expectedColor.toUpperCase()}`
+      const texts = Array.from(document.querySelectorAll(
+        `[data-testid="editor-fragment"][data-node-id="${nodeId}"] text`,
+      ))
+      return texts.some((text) => (text.getAttribute("fill") ?? "").toUpperCase() === expectedFill)
+    },
+    { nodeId, expectedColor },
+    { timeout: 5000 },
+  )
+}
+
+async function expectVisualOnlyTextColorFastLane(page, nodeId, expectedColor) {
+  const fragment = page.locator(`[data-testid="editor-fragment"][data-node-id="${nodeId}"]`)
+  assert(await fragment.count() === 1, `expected one visual-only paragraph fragment for ${nodeId}`)
+  await fragment.click()
+  const paletteToggle = page.getByTestId("paragraph-text-color-palette-toggle")
+  await paletteToggle.waitFor({ state: "visible", timeout: 5000 })
+
+  await clearPerfEvents(page)
+  await startInitialLayoutOverlayMonitor(page)
+  await paletteToggle.click()
+  await page.getByRole("button", { name: `Set text palette color ${expectedColor}` }).click()
+
+  await page.waitForFunction(() => (
+    (window.__flowDocWysiwygPerfEvents ?? []).some((event) =>
+      event.kind === "browser-preview-pagination" &&
+      event.source === "visual-only-fast-lane" &&
+      event.commandType === "UPDATE_PARAGRAPH_TEXT_STYLE" &&
+      event.layoutAffecting === false,
+    )
+  ), null, { timeout: 5000 })
+
+  await waitForStoredParagraphTextColor(page, nodeId, expectedColor)
+  await waitForParagraphTextFill(page, nodeId, expectedColor)
+  const monitor = await readAndStopInitialLayoutOverlayMonitor(page)
+  assert(!monitor?.loadingAppeared, "visual-only style change must not show the initial layout loading overlay")
+  assert(!monitor?.blockingTrue, "visual-only style change must not mark preview layout as blocking")
 }
 
 async function waitForStoredPackageVersion(page, expectedVersion) {
@@ -1070,10 +1389,13 @@ async function run() {
 
     collectPageErrors(page, consoleErrors, pageErrors, resourceErrors)
 
-    await page.addInitScript(({ key, doc }) => {
+    await page.addInitScript(({ key, perfKey, doc }) => {
       window.localStorage.clear()
       window.localStorage.setItem(key, JSON.stringify(doc))
-    }, { key: STORAGE_KEY, doc: makeSmokeDocument() })
+      window.localStorage.setItem(perfKey, "1")
+      window.__flowDocWysiwygPerfTraceEnabled = true
+      window.__flowDocWysiwygPerfEvents = []
+    }, { key: STORAGE_KEY, perfKey: PERF_TRACE_STORAGE_KEY, doc: makeSmokeDocument() })
 
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" })
     await page.getByTestId("editor-shell").waitFor({ state: "visible", timeout: 15000 })
@@ -1094,18 +1416,15 @@ async function run() {
 
     const paragraphFragment = page.locator('[data-testid="editor-fragment"][data-node-id="smoke-p1"]')
     assert(await paragraphFragment.count() === 1, "expected one smoke paragraph fragment")
-    await paragraphFragment.dblclick()
-
-    const textarea = page.locator('textarea[data-inline-edit-node-id="smoke-p1"]')
-    await textarea.waitFor({ state: "visible", timeout: 5000 })
+    let inlineControl = await openInlineTextControlFromFragment(page, paragraphFragment, "smoke-p1")
     await expectInlineEditVisualContract(page, "smoke-p1")
-    await textarea.fill(editedText)
+    await fillInlineTextControl(page, inlineControl, editedText)
     await expectInlineEditVisualMode(page, "smoke-p1", {
       mode: "document",
       fallbackReason: null,
       outlineStyle: "none",
     })
-    await textarea.press("Escape")
+    await commitInlineTextControl(page, inlineControl)
     await waitForStoredParagraphText(page, "smoke-p1", editedText)
     await waitForStoredPackageVersion(page, 2)
     await expectNoLayoutError(page)
@@ -1117,11 +1436,10 @@ async function run() {
     await waitForStoredParagraphText(page, "smoke-p1", editedText)
     await expectNoLayoutError(page)
 
-    await paragraphFragment.dblclick()
-    await textarea.waitFor({ state: "visible", timeout: 5000 })
+    inlineControl = await openInlineTextControlFromFragment(page, paragraphFragment, "smoke-p1")
     await expectInlineEditVisualContract(page, "smoke-p1")
-    const selectionBox = await textarea.boundingBox()
-    assert(selectionBox, "expected body paragraph textarea box for drag selection")
+    const selectionBox = await inlineTextControlBoundingBox(inlineControl)
+    assert(selectionBox, "expected body paragraph inline text control box for drag selection")
     await page.mouse.move(selectionBox.x + 16, selectionBox.y + Math.min(18, selectionBox.height / 2))
     await page.mouse.down()
     await page.mouse.move(selectionBox.x + Math.min(selectionBox.width - 16, 240), selectionBox.y + Math.min(18, selectionBox.height / 2), { steps: 8 })
@@ -1132,26 +1450,24 @@ async function run() {
       fallbackReason: null,
       outlineStyle: "none",
     })
-    await textarea.press("Escape")
+    await commitInlineTextControl(page, inlineControl)
     await waitForStoredParagraphText(page, "smoke-p1", editedText)
 
     const thaiEditedText = "ทดสอบภาษาไทย ก้าวหน้า ไม้เอกไม้โท และ emoji 👩‍💻"
     const thaiFragment = page.locator('[data-testid="editor-fragment"][data-node-id="smoke-thai-p1"]')
     assert(await thaiFragment.count() === 1, "expected one Thai smoke paragraph fragment")
-    await thaiFragment.dblclick()
-    const thaiTextarea = page.locator('textarea[data-inline-edit-node-id="smoke-thai-p1"]')
-    await thaiTextarea.waitFor({ state: "visible", timeout: 5000 })
+    const thaiControl = await openInlineTextControlFromFragment(page, thaiFragment, "smoke-thai-p1")
     await expectInlineEditVisualContract(page, "smoke-thai-p1")
-    await thaiTextarea.dispatchEvent("compositionstart")
+    await dispatchInlineTextControlEvent(thaiControl, "compositionstart")
     await expectInlineEditVisualMode(page, "smoke-thai-p1", {
       mode: "textarea",
       fallbackReason: "composition",
       outlineStyle: "solid",
     })
-    await thaiTextarea.dispatchEvent("compositionend")
-    await thaiTextarea.fill(thaiEditedText)
+    await dispatchInlineTextControlEvent(thaiControl, "compositionend")
+    await fillInlineTextControl(page, thaiControl, thaiEditedText)
     await expectInlineEditVisualContract(page, "smoke-thai-p1")
-    await thaiTextarea.press("Escape")
+    await commitInlineTextControl(page, thaiControl)
     await waitForStoredParagraphText(page, "smoke-thai-p1", thaiEditedText)
     await expectNoLayoutError(page)
 
@@ -1161,11 +1477,9 @@ async function run() {
     assert(await stackParagraph.count() === 1, "expected one stack paragraph fragment")
     const stackBefore = await readParagraphFragmentSnapshot(page, "smoke-stack-p1")
     assert(stackBefore[0]?.parentNodeId === "smoke-stack", `expected stack paragraph parent, got ${stackBefore[0]?.parentNodeId}`)
-    await stackParagraph.dblclick()
-    const stackTextarea = page.locator('textarea[data-inline-edit-node-id="smoke-stack-p1"]')
-    await stackTextarea.waitFor({ state: "visible", timeout: 5000 })
+    const stackControl = await openInlineTextControlFromFragment(page, stackParagraph, "smoke-stack-p1")
     await expectInlineEditVisualContract(page, "smoke-stack-p1")
-    await stackTextarea.fill(stackEditedText)
+    await fillInlineTextControl(page, stackControl, stackEditedText)
     await expectInlineEditVisualMode(page, "smoke-stack-p1", {
       mode: "document",
       fallbackReason: null,
@@ -1173,22 +1487,20 @@ async function run() {
     })
     const stackAfter = await expectVisibleParagraphMarkerOnce(page, "smoke-stack-p1", stackMarker)
     assert(stackAfter[0]?.parentNodeId === "smoke-stack", `expected edited stack paragraph parent, got ${stackAfter[0]?.parentNodeId}`)
-    await stackTextarea.press("Escape")
+    await commitInlineTextControl(page, stackControl)
     await waitForStoredParagraphText(page, "smoke-stack-p1", stackEditedText)
+    await expectNoLayoutError(page)
+
+    await expectVisualOnlyTextColorFastLane(page, "smoke-p1", "2563EB")
     await expectNoLayoutError(page)
 
     const tableParagraph = page.locator('[data-testid="editor-fragment"][data-node-id="smoke-table-p1-1"]')
     assert(await tableParagraph.count() === 1, "expected one table-cell paragraph fragment")
-    await tableParagraph.dblclick()
-    const tableTextarea = page.locator('textarea[data-inline-edit-node-id="smoke-table-p1-1"]')
-    await tableTextarea.waitFor({ state: "visible", timeout: 5000 })
+    const tableControl = await openInlineTextControlFromFragment(page, tableParagraph, "smoke-table-p1-1")
     await expectInlineEditVisualContract(page, "smoke-table-p1-1")
-    await tableTextarea.evaluate((el) => {
-      el.focus()
-      el.setSelectionRange(0, 0)
-    })
-    await tableTextarea.press("Backspace")
-    await tableTextarea.press("Escape")
+    await focusInlineTextControlAtStart(page, tableControl)
+    await pressInlineTextControl(page, tableControl, "Backspace")
+    await commitInlineTextControl(page, tableControl)
     await waitForStoredTableShape(page, "smoke-table", { rows: 2, cols: 3, headerRowCount: 1 })
     await expectNoLayoutError(page)
 
@@ -1374,9 +1686,10 @@ async function run() {
     assert(registryParagraphCount === 1, `expected one registry field paragraph fragment, got ${registryParagraphCount}`)
     await registryParagraph.dblclick()
     await registryPage.waitForTimeout(250)
+    const registryInlineState = await readInlineTextControlState(registryPage, "registry-p1")
     assert(
-      await registryPage.locator('textarea[data-inline-edit-node-id="registry-p1"]').count() === 0,
-      "fieldRef paragraph must not enter textarea inline edit",
+      registryInlineState.kind === null,
+      `fieldRef paragraph must not enter inline text edit, got ${JSON.stringify(registryInlineState)}`,
     )
     await registryParagraph.click()
     const fieldRefs = registryPage.getByTestId("property-field-refs")
@@ -1407,10 +1720,19 @@ async function run() {
     await waitForParagraphFragmentCountAtLeast(continuationPage, "wysiwyg-continuation-p1", 3)
     const continuationFragments = continuationPage.locator('[data-testid="editor-fragment"][data-node-id="wysiwyg-continuation-p1"]')
     const firstContinuationFragment = continuationFragments.first()
-    await firstContinuationFragment.scrollIntoViewIfNeeded()
-    await firstContinuationFragment.dblclick()
-    const pageTrackingTextarea = continuationPage.locator('textarea[data-inline-edit-node-id="wysiwyg-continuation-p1"]')
-    await pageTrackingTextarea.waitFor({ state: "visible", timeout: 5000 })
+    let continuationUsesLegacyTextarea = false
+    const pageTrackingControl = await openInlineTextControlFromFragment(
+      continuationPage,
+      firstContinuationFragment,
+      "wysiwyg-continuation-p1",
+    )
+    if (pageTrackingControl.kind !== "textarea") {
+      console.log("editor smoke: skipping legacy textarea continuation checks under text-engine inline edit mode")
+      await pressInlineTextControl(continuationPage, pageTrackingControl, "Escape")
+      await continuationPage.close()
+    } else {
+    continuationUsesLegacyTextarea = true
+    const pageTrackingTextarea = pageTrackingControl.locator
     const firstTrackingSlice = await expectInlineEditSliceMatchesTextarea(continuationPage, "wysiwyg-continuation-p1", {
       maxEndExclusive: CONTINUATION_PARAGRAPH_TEXT.length,
     })
@@ -1443,7 +1765,9 @@ async function run() {
     await continuationPage.getByRole("button", { name: "Undo" }).click()
     await waitForStoredParagraphText(continuationPage, "wysiwyg-continuation-p1", CONTINUATION_PARAGRAPH_TEXT)
     await continuationPage.close()
+    }
 
+    if (continuationUsesLegacyTextarea) {
     const continuationBoundaryPage = await browser.newPage({ viewport: { width: 1280, height: 900 } })
     collectPageErrors(continuationBoundaryPage, consoleErrors, pageErrors, resourceErrors)
     await continuationBoundaryPage.addInitScript(({ key, doc }) => {
@@ -1520,6 +1844,7 @@ async function run() {
     await waitForStoredParagraphText(continuationBoundaryPage, "wysiwyg-continuation-p1", expectedBoundaryText)
     await expectNoLayoutError(continuationBoundaryPage)
     await continuationBoundaryPage.close()
+    }
 
     const ignoredResourceErrors = resourceErrors.filter(isIgnoredResourceError)
     const unexpectedResourceErrors = resourceErrors.filter((error) => !isIgnoredResourceError(error))

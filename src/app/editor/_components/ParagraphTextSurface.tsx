@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal, flushSync } from "react-dom"
 import {
   getTextRunParagraphText,
@@ -128,6 +128,8 @@ const INLINE_EDIT_TEXT_COLOR = "#1e40af"
 const WYSIWYG_CARET_BLINK_DURATION = "1.05s"
 const WYSIWYG_TYPING_CARET_HOLD_MS = 650
 const WYSIWYG_TEXT_BLUR_SETTLE_MS = 32
+const WYSIWYG_TEXT_DRAFT_SYNC_QUIET_MS = 120
+const WYSIWYG_TEXT_DRAFT_SYNC_MAX_LAG_MS = 5000
 const POINTER_SELECTION_DRAG_THRESHOLD_PX = 3
 const SVG_TEXT_PRESERVE_WHITESPACE_STYLE: React.CSSProperties = {
   pointerEvents: "none",
@@ -177,6 +179,20 @@ export function isWysiwygTextSessionFocusTarget(
       ) {
         return true
       }
+    }
+    current = current.parentElement
+  }
+  return false
+}
+
+export function isWysiwygRichTextToolbarFocusTarget(
+  element: Element | null | undefined,
+  nodeId: string,
+): boolean {
+  let current: Element | null = element ?? null
+  while (current) {
+    if (current.getAttribute("data-wysiwyg-rich-text-toolbar-node-id") === nodeId) {
+      return true
     }
     current = current.parentElement
   }
@@ -945,6 +961,19 @@ export function areWysiwygDraftSyncPayloadsEqual(
     areWysiwygTextSelectionsEqual(a.selection, b.selection)
 }
 
+export function resolveWysiwygDraftSyncDelayMs(input: {
+  firstRequestedAtMs: number
+  nowMs: number
+  quietWindowMs?: number
+  maxLagMs?: number
+}): number {
+  const quietWindowMs = Math.max(0, input.quietWindowMs ?? WYSIWYG_TEXT_DRAFT_SYNC_QUIET_MS)
+  const maxLagMs = Math.max(quietWindowMs, input.maxLagMs ?? WYSIWYG_TEXT_DRAFT_SYNC_MAX_LAG_MS)
+  const elapsedMs = Math.max(0, input.nowMs - input.firstRequestedAtMs)
+  if (elapsedMs >= maxLagMs) return 0
+  return Math.min(quietWindowMs, maxLagMs - elapsedMs)
+}
+
 export function shouldKeepWysiwygImmediateDraftLayout(
   immediate: WysiwygImmediateDraftLayoutState | null,
   currentDraftText: string,
@@ -1639,6 +1668,8 @@ export function WysiwygTextLayer({
   const isApplyingImmediateVisualStateRef = useRef(false)
   const pendingDraftSyncRef = useRef<WysiwygDraftSyncPayload | null>(null)
   const scheduledDraftSyncFrameRef = useRef<number | null>(null)
+  const scheduledDraftSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingDraftSyncFirstRequestedAtRef = useRef<number | null>(null)
   const onDraftChangeRef = useRef(onDraftChange)
   const nodeIdRef = useRef(fragment.nodeId)
   const traceHotPathPerf = useMemo(() => (
@@ -1733,11 +1764,15 @@ export function WysiwygTextLayer({
   }, [])
 
   const cancelScheduledDraftSyncFrame = useCallback(() => {
-    if (scheduledDraftSyncFrameRef.current === null) return
-    if (typeof cancelAnimationFrame === "function") {
+    if (scheduledDraftSyncFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(scheduledDraftSyncFrameRef.current)
     }
     scheduledDraftSyncFrameRef.current = null
+    if (scheduledDraftSyncTimeoutRef.current !== null) {
+      clearTimeout(scheduledDraftSyncTimeoutRef.current)
+      scheduledDraftSyncTimeoutRef.current = null
+    }
+    pendingDraftSyncFirstRequestedAtRef.current = null
   }, [])
 
   const flushPendingDraftSync = useCallback(() => {
@@ -1764,17 +1799,30 @@ export function WysiwygTextLayer({
     if (areWysiwygDraftSyncPayloadsEqual(pendingDraftSyncRef.current, payload)) return true
     pendingDraftSyncRef.current = payload
     if (!options.defer || typeof requestAnimationFrame !== "function") {
+      pendingDraftSyncFirstRequestedAtRef.current = null
       flushPendingDraftSync()
       return true
     }
-    if (scheduledDraftSyncFrameRef.current !== null) return true
-    scheduledDraftSyncFrameRef.current = requestAnimationFrame(() => {
-      scheduledDraftSyncFrameRef.current = null
+    const nowMs = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now()
+    const firstRequestedAtMs = pendingDraftSyncFirstRequestedAtRef.current ?? nowMs
+    pendingDraftSyncFirstRequestedAtRef.current = firstRequestedAtMs
+    const delayMs = resolveWysiwygDraftSyncDelayMs({ firstRequestedAtMs, nowMs })
+    if (scheduledDraftSyncTimeoutRef.current !== null) {
+      clearTimeout(scheduledDraftSyncTimeoutRef.current)
+      scheduledDraftSyncTimeoutRef.current = null
+    }
+    scheduledDraftSyncTimeoutRef.current = setTimeout(() => {
+      scheduledDraftSyncTimeoutRef.current = null
       const latest = pendingDraftSyncRef.current
       if (!latest || !onDraftChangeRef.current) return
       pendingDraftSyncRef.current = null
-      onDraftChangeRef.current(nodeIdRef.current, latest.text, latest.caretOffset, latest.selection)
-    })
+      pendingDraftSyncFirstRequestedAtRef.current = null
+      startTransition(() => {
+        onDraftChangeRef.current?.(nodeIdRef.current, latest.text, latest.caretOffset, latest.selection)
+      })
+    }, delayMs)
     return true
   }, [flushPendingDraftSync])
 
@@ -1855,9 +1903,14 @@ export function WysiwygTextLayer({
 
   const handleLayerBlur = useCallback((event: React.FocusEvent<SVGGElement>) => {
     const relatedTarget = event.relatedTarget instanceof Element ? event.relatedTarget : null
-    if (isWysiwygTextSessionFocusTarget(relatedTarget, fragment.nodeId)) return
+    if (isWysiwygTextSessionFocusTarget(relatedTarget, fragment.nodeId)) {
+      if (isWysiwygRichTextToolbarFocusTarget(relatedTarget, fragment.nodeId)) {
+        flushPendingDraftSyncImmediately()
+      }
+      return
+    }
     scheduleBlurEndEdit()
-  }, [fragment.nodeId, scheduleBlurEndEdit])
+  }, [flushPendingDraftSyncImmediately, fragment.nodeId, scheduleBlurEndEdit])
 
   const clearInputBridgeText = useCallback((input: HTMLElement | null = inputBridgeRef.current) => {
     if (input) input.textContent = ""
@@ -2199,7 +2252,7 @@ export function WysiwygTextLayer({
       }
       return true
     }
-    setLocalPointerSelectionPreview(null)
+    setLocalPointerSelectionPreview(resolved.selection)
     draftStateRef.current = {
       text,
       caretOffset: resolved.caretOffset,
@@ -2337,6 +2390,14 @@ export function WysiwygTextLayer({
   ])
 
   useEffect(() => () => cancelScheduledPointerSelection(), [cancelScheduledPointerSelection])
+
+  useEffect(() => {
+    if (isPointerSelecting) return
+    const previewSelection = localPointerSelectionPreviewRef.current
+    if (!previewSelection) return
+    if (!areWysiwygTextSelectionsEqual(previewSelection, selection)) return
+    setLocalPointerSelectionPreview(null)
+  }, [isPointerSelecting, selection, setLocalPointerSelectionPreview])
 
   useEffect(() => {
     const input = inputBridgeRef.current
@@ -2828,7 +2889,48 @@ export function WysiwygTextLayer({
   )
 }
 
-export function ParagraphTextSurface({
+function areParagraphTextSurfacePropsEqual(prev: Props, next: Props): boolean {
+  const sameVisualState =
+    prev.fragment === next.fragment &&
+    prev.doc === next.doc &&
+    prev.pageKey === next.pageKey &&
+    prev.clipPathId === next.clipPathId &&
+    prev.scale === next.scale &&
+    prev.visualOffsetY === next.visualOffsetY &&
+    prev.pageContentBottom === next.pageContentBottom &&
+    prev.textMeasurer === next.textMeasurer &&
+    prev.isEditing === next.isEditing &&
+    prev.isVisualFresh === next.isVisualFresh &&
+    prev.wysiwygInlineEditEnabled === next.wysiwygInlineEditEnabled &&
+    prev.wysiwygTextEngineEnabled === next.wysiwygTextEngineEnabled &&
+    prev.wysiwygTextDraftText === next.wysiwygTextDraftText &&
+    prev.wysiwygTextCaretOffset === next.wysiwygTextCaretOffset &&
+    prev.wysiwygTextSelection === next.wysiwygTextSelection &&
+    prev.wysiwygTextVisualDraftLines === next.wysiwygTextVisualDraftLines &&
+    prev.wysiwygTextPointerFragments === next.wysiwygTextPointerFragments &&
+    prev.wysiwygTextDraftPaginationActive === next.wysiwygTextDraftPaginationActive &&
+    prev.showTextSegments === next.showTextSegments &&
+    prev.initialCaretIndex === next.initialCaretIndex
+
+  if (!sameVisualState) return false
+  if (!prev.isEditing && !next.isEditing) return true
+
+  return prev.onChange === next.onChange &&
+    prev.onCaretChange === next.onCaretChange &&
+    prev.onUserEditInteraction === next.onUserEditInteraction &&
+    prev.onHeightChange === next.onHeightChange &&
+    prev.onEndEdit === next.onEndEdit &&
+    prev.onSplitParagraph === next.onSplitParagraph &&
+    prev.onMergeParagraph === next.onMergeParagraph &&
+    prev.onExitListItem === next.onExitListItem &&
+    prev.onChangeListItemLevel === next.onChangeListItemLevel &&
+    prev.onBackspaceListItemAtStart === next.onBackspaceListItemAtStart &&
+    prev.onWysiwygTextDraftChange === next.onWysiwygTextDraftChange &&
+    prev.onWysiwygRichTextShortcut === next.onWysiwygRichTextShortcut &&
+    prev.onWysiwygTextReflowDecision === next.onWysiwygTextReflowDecision
+}
+
+function ParagraphTextSurfaceImpl({
   fragment,
   doc,
   pageKey,
@@ -3419,3 +3521,6 @@ export function ParagraphTextSurface({
     ...(showTextSegments ? renderSegmentDebug(displayFragment.lines, displayFragment, renderProps, scale) ?? [] : []),
   ]
 }
+
+export const ParagraphTextSurface = memo(ParagraphTextSurfaceImpl, areParagraphTextSurfacePropsEqual)
+ParagraphTextSurface.displayName = "ParagraphTextSurface"

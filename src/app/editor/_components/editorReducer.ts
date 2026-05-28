@@ -91,7 +91,7 @@ interface EditorState {
   mergeResult: { prevNodeId: string; caretIndex: number } | null
 }
 
-type EditorAction =
+export type EditorAction =
   | { type: "DRAG_START"; source: DragSource; clientX: number; clientY: number }
   | { type: "DRAG_MOVE"; clientX: number; clientY: number; preview: PlacementPreview | null }
   | { type: "DRAG_COMMIT"; op: PlacementOperation; sectionId: string }

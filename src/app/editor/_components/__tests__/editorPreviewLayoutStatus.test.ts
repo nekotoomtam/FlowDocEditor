@@ -5,6 +5,7 @@ import {
   markEditorPreviewLayoutFull,
   markEditorPreviewLayoutPartial,
   markEditorPreviewLayoutSettling,
+  markEditorPreviewLayoutSettlingFromCurrent,
   shouldBlockEditorPreviewCanvas,
 } from "../editorPreviewLayoutStatus"
 
@@ -30,6 +31,26 @@ describe("editor preview layout status", () => {
       status: "settling",
       blocksCanvas: false,
       generation: 2,
+    })
+  })
+
+  it("keeps settling non-blocking once a usable canvas is already visible", () => {
+    expect(markEditorPreviewLayoutSettlingFromCurrent(
+      3,
+      markEditorPreviewLayoutFull(2),
+    )).toEqual({
+      status: "settling",
+      blocksCanvas: false,
+      generation: 3,
+    })
+
+    expect(markEditorPreviewLayoutSettlingFromCurrent(
+      4,
+      createEditorPreviewPlaceholderLayoutState(),
+    )).toEqual({
+      status: "settling",
+      blocksCanvas: true,
+      generation: 4,
     })
   })
 

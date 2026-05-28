@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest"
 import type { PaginatedDocument, PageFragment } from "@/pagination"
 import {
+  buildEditorPageNavigationIndex,
   collectEditorPageNavItems,
   findFirstPageIndexForNode,
+  findFirstPageIndexForNodeInIndex,
+  findNearestPageIndexInItems,
 } from "../shell/editorCanvasNavigation"
 
 function fragment(partial: Partial<PageFragment> & Pick<PageFragment, "nodeId" | "nodeType">): PageFragment {
@@ -54,7 +57,10 @@ function makePaginated(): PaginatedDocument {
             height: 300,
             contentBox: { x: 10, y: 20, width: 180, height: 250 },
             headerFragments: [],
-            fragments: [fragment({ nodeId: "continued", nodeType: "paragraph", pageIndex: 1 })],
+            fragments: [
+              fragment({ nodeId: "intro", nodeType: "paragraph", pageIndex: 1, y: 40 }),
+              fragment({ nodeId: "continued", nodeType: "paragraph", pageIndex: 1, y: 64 }),
+            ],
             footerFragments: [],
           },
         ],
@@ -94,5 +100,31 @@ describe("editor canvas navigation", () => {
     expect(findFirstPageIndexForNode(paginated, "continued")).toBe(1)
     expect(findFirstPageIndexForNode(paginated, "missing")).toBeNull()
     expect(findFirstPageIndexForNode(paginated, null)).toBeNull()
+  })
+
+  it("builds a reusable navigation index for page and node lookups", () => {
+    const index = buildEditorPageNavigationIndex(makePaginated())
+
+    expect(index.pageItems).toHaveLength(2)
+    expect(index.pageKeyByPageIndex.get(0)).toBe("0-0")
+    expect(index.pageKeyByPageIndex.get(1)).toBe("0-1")
+    expect(findFirstPageIndexForNodeInIndex(index, "header")).toBe(0)
+    expect(findFirstPageIndexForNodeInIndex(index, "intro")).toBe(0)
+    expect(findFirstPageIndexForNodeInIndex(index, "continued")).toBe(1)
+    expect(findFirstPageIndexForNodeInIndex(index, "missing")).toBeNull()
+    expect(index.pageKeysByNodeId.get("intro")).toEqual(["0-0", "0-1"])
+  })
+
+  it("falls back to the nearest page index instead of the first page", () => {
+    const items = [
+      { pageIndex: 0 },
+      { pageIndex: 10 },
+      { pageIndex: 20 },
+    ]
+
+    expect(findNearestPageIndexInItems(items, 18)).toBe(20)
+    expect(findNearestPageIndexInItems(items, 11)).toBe(10)
+    expect(findNearestPageIndexInItems(items, 100)).toBe(20)
+    expect(findNearestPageIndexInItems([], 100)).toBeNull()
   })
 })
