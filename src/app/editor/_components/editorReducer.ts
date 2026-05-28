@@ -56,6 +56,8 @@ import { loadDocumentFromStorage } from "./documentPersistence"
 import { createEditorPlaceholderPaginatedDocument } from "./editorInitialPagination"
 import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
+import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
+import { finishFlowDocPerfSpan, startWysiwygPerfSpan } from "./wysiwygPerformance"
 import {
   commitWysiwygRichTextEditState,
   commitWysiwygTextEditState,
@@ -150,8 +152,18 @@ export type EditorAction =
   | { type: "TOGGLE_LIST_PRESET"; nodeId: string; styleId: FlowDocListStylePresetId; instanceId: string; level?: number; text?: string; paragraph?: ParagraphNode; history?: HistoryEntry }
   | { type: "REORDER_BODY_CHILD"; sectionId: string; sourceNodeId: string; targetNodeId: string; position: "before" | "after" }
 
+let storageLoadInvocationId = 0
+let initialEditorStateInvocationId = 0
+
 function loadFromStorage(): DocumentNode | null {
+  const invocationId = ++storageLoadInvocationId
+  const startedAt = startWysiwygPerfSpan()
   const result = loadDocumentFromStorage(localStorage)
+  finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:storage-document-load", startedAt, {
+    invocationId,
+    ok: result.ok,
+    source: result.ok ? result.source : result.reason,
+  })
   return result.ok ? result.doc : null
 }
 
@@ -257,13 +269,46 @@ function updateTableStructure(
 }
 
 export function createInitialEditorState(initialDocOverride?: DocumentNode | null): EditorState {
-  const sourceDoc = normalizeDocument(ensureReservedZoneRoots(initialDocOverride ?? loadFromStorage() ?? createDefaultDocument("Untitled")))
+  const invocationId = ++initialEditorStateInvocationId
+  const startedAt = startWysiwygPerfSpan()
+  const sourceStartedAt = startWysiwygPerfSpan()
+  const loadedDoc = initialDocOverride ?? loadFromStorage()
+  const sourceDocInput = loadedDoc ?? createDefaultDocument("Untitled")
+  finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:initial-document-source", sourceStartedAt, {
+    invocationId,
+    source: initialDocOverride ? "test-scenario" : loadedDoc ? "storage" : "default",
+    documentId: sourceDocInput.document.id,
+  })
+
+  const reservedStartedAt = startWysiwygPerfSpan()
+  const sourceDoc = normalizeDocument(ensureReservedZoneRoots(sourceDocInput))
+  finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:document-normalize-reserved", reservedStartedAt, {
+    invocationId,
+    documentId: sourceDoc.document.id,
+  })
+
+  const styleStartedAt = startWysiwygPerfSpan()
   const initialDoc = normalizeDocument(ensureBaseParagraphStyle(sourceDoc))
+  finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:document-normalize-base-style", styleStartedAt, {
+    invocationId,
+    documentId: initialDoc.document.id,
+  })
+
+  const placeholderStartedAt = startWysiwygPerfSpan()
+  const paginated = createEditorPlaceholderPaginatedDocument(initialDoc)
+  finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:placeholder-pagination-create", placeholderStartedAt, {
+    invocationId,
+    documentId: initialDoc.document.id,
+  })
+  finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:initial-editor-state-create", startedAt, {
+    invocationId,
+    documentId: initialDoc.document.id,
+  })
   return {
     past: [],
     doc: initialDoc,
     future: [],
-    paginated: createEditorPlaceholderPaginatedDocument(initialDoc),
+    paginated,
     drag: null,
     selectedNodeId: null,
     selectionAnchorNodeId: null,
@@ -457,8 +502,23 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       }
     }
     case "LOAD_DOCUMENT": {
+      const startedAt = startWysiwygPerfSpan()
+      const normalizeStartedAt = startWysiwygPerfSpan()
       const normalizedDoc = normalizeDocument(ensureReservedZoneRoots(action.doc))
-      return { ...state, past: [], doc: normalizedDoc, future: [], paginated: action.paginated ?? createEditorPlaceholderPaginatedDocument(normalizedDoc), selectedNodeId: null, selectionAnchorNodeId: null, drag: null }
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:load-document-normalize", normalizeStartedAt, {
+        documentId: normalizedDoc.document.id,
+      })
+      const placeholderStartedAt = startWysiwygPerfSpan()
+      const paginated = action.paginated ?? createEditorPlaceholderPaginatedDocument(normalizedDoc)
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:load-document-placeholder", placeholderStartedAt, {
+        providedPaginated: action.paginated != null,
+        documentId: normalizedDoc.document.id,
+      })
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:load-document-dispatch", startedAt, {
+        commandType: "LOAD_DOCUMENT",
+        documentId: normalizedDoc.document.id,
+      })
+      return { ...state, past: [], doc: normalizedDoc, future: [], paginated, selectedNodeId: null, selectionAnchorNodeId: null, drag: null }
     }
     case "TABLE_ADD_ROW":
       return updateTableStructure(

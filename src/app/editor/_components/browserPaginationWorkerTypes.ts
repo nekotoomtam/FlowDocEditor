@@ -1,4 +1,4 @@
-import type { PaginatedDocument } from "@/pagination"
+import type { PaginatedDocument, PaginationProfile } from "@/pagination"
 import type { DocumentNode } from "@/schema"
 
 export type BrowserPaginationWorkerMeasurerStatus = "fontkit" | "fallback"
@@ -19,6 +19,17 @@ export interface BrowserPaginationWorkerRequest {
   requestId: number
   doc: DocumentNode
   visibleWindow?: BrowserPaginationWorkerVisibleWindow
+  profilePagination?: boolean
+}
+
+export interface BrowserPaginationWorkerTiming {
+  receivedAtMs: number
+  resolveMeasurerMs: number
+  partialResponseMs?: number
+  computeStartAfterReceiveMs: number
+  computeMs: number
+  responseBuildMs: number
+  totalBeforeSuccessPostMs: number
 }
 
 export type BrowserPaginationWorkerResponse =
@@ -34,6 +45,8 @@ export type BrowserPaginationWorkerResponse =
     requestId: number
     paginated: PaginatedDocument
     measurerStatus: BrowserPaginationWorkerMeasurerStatus
+    paginationProfile?: PaginationProfile
+    workerTiming?: BrowserPaginationWorkerTiming
   }
   | {
     type: "error"

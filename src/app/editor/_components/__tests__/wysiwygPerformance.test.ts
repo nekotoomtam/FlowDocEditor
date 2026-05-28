@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   appendWysiwygPerfEvent,
+  finishFlowDocPerfSpan,
   finishWysiwygPerfSpan,
+  isPaginationProfileRuntimeEnabled,
   isWysiwygPerfTraceRuntimeEnabled,
+  recordFlowDocPerfEvent,
   recordWysiwygPerfEvent,
   summarizePaginatedForWysiwygPerf,
   type WysiwygPerfEvent,
@@ -105,6 +108,14 @@ describe("finishWysiwygPerfSpan", () => {
     })
 
     expect(window.__flowDocWysiwygPerfEvents).toHaveLength(1)
+  })
+
+  it("can enable pagination profiling at runtime from the editor URL", () => {
+    vi.stubGlobal("window", {
+      location: { search: "?flowdocProfilePagination=1" },
+    })
+
+    expect(isPaginationProfileRuntimeEnabled()).toBe(true)
   })
 
   it("appends scalar metadata without storing paragraph text", () => {
@@ -216,5 +227,74 @@ describe("finishWysiwygPerfSpan", () => {
       source: "update",
     })
     expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
+  it("records editor action classification metadata without document content", () => {
+    vi.stubGlobal("window", {})
+
+    finishWysiwygPerfSpan(true, "editor-action-dispatch", 10, {
+      source: "dispatchEditorAction",
+      commandType: "SELECT_NODE",
+      uiImpact: "selection",
+      layoutScope: "none",
+      priority: "sync",
+      layoutAffecting: false,
+      nodeId: "p1",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "editor-action-dispatch",
+      source: "dispatchEditorAction",
+      commandType: "SELECT_NODE",
+      uiImpact: "selection",
+      layoutScope: "none",
+      priority: "sync",
+      layoutAffecting: false,
+      nodeId: "p1",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
+  it("mirrors canonical baseline perf events without document content", () => {
+    vi.stubGlobal("window", {})
+
+    finishWysiwygPerfSpan(true, "browser-preview-pagination", 10, {
+      source: "initial",
+      pageCount: 2,
+      fragmentCount: 12,
+    })
+
+    expect(window.__FLOWDOC_PERF_EVENTS__).toHaveLength(1)
+    expect(window.__FLOWDOC_PERF_EVENTS__?.[0]).toMatchObject({
+      name: "pagination:browser",
+      startMs: 10,
+      detail: {
+        source: "initial",
+        pageCount: 2,
+        fragmentCount: 12,
+      },
+    })
+    expect(JSON.stringify(window.__FLOWDOC_PERF_EVENTS__)).not.toContain("paragraph text")
+  })
+
+  it("records generic FlowDoc perf markers only in the canonical stream", () => {
+    vi.stubGlobal("window", {})
+
+    recordFlowDocPerfEvent(true, {
+      name: "pre-pagination:worker-create",
+      startMs: 12,
+      durationMs: 3,
+      detail: { source: "test" },
+    })
+    finishFlowDocPerfSpan(true, "pre-pagination:preview-doc-create", 20, {
+      mode: "template",
+    })
+
+    expect(window.__FLOWDOC_PERF_EVENTS__?.map((item) => item.name)).toEqual([
+      "pre-pagination:worker-create",
+      "pre-pagination:preview-doc-create",
+    ])
+    expect(window.__flowDocWysiwygPerfEvents).toBeUndefined()
+    expect(JSON.stringify(window.__FLOWDOC_PERF_EVENTS__)).not.toContain("paragraph text")
   })
 })

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { assertPaginatedDocument, collectPaginatedLayoutWarnings, filterBlockingLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument } from "@/pagination"
+import { assertPaginatedDocument, collectPaginatedLayoutWarnings, filterBlockingLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, paginateDocumentWithProfile, type PaginationProfile } from "@/pagination"
 import { thaiWordBreaker } from "@/layout/word-breaker"
 import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { DEFAULT_PDF_RENDER_PAGE_BATCH_SIZE, PdfRenderer, DocxRenderer } from "@/renderer"
@@ -48,14 +48,15 @@ function countPaginatedFragments(paginated: Awaited<ReturnType<typeof paginateDo
 
 export async function POST(req: NextRequest) {
   const exportStartedAt = Date.now()
-  let body: { doc?: unknown; format?: unknown }
+  let body: { doc?: unknown; format?: unknown; profilePagination?: unknown }
   try {
-    body = await req.json() as { doc?: unknown; format?: unknown }
+    body = await req.json() as { doc?: unknown; format?: unknown; profilePagination?: unknown }
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
   const { doc, format } = body
+  const profilePagination = body.profilePagination === true || body.profilePagination === 1 || body.profilePagination === "1"
 
   if (format !== "pdf" && format !== "docx") {
     return NextResponse.json({ error: "Invalid export format" }, { status: 400 })
@@ -83,9 +84,18 @@ export async function POST(req: NextRequest) {
 
   let paginated
   let paginateMs = 0
+  let paginationProfile: PaginationProfile | undefined
   try {
     const paginateStartedAt = Date.now()
-    paginated = paginateDocument(doc, getMeasurer(defaultFont), thaiWordBreaker)
+    if (profilePagination) {
+      const result = paginateDocumentWithProfile(doc, getMeasurer(defaultFont), thaiWordBreaker, undefined, {
+        paginationProfileSource: format === "pdf" ? "export-pdf" : "export-docx",
+      })
+      paginated = result.paginated
+      paginationProfile = result.paginationProfile
+    } else {
+      paginated = paginateDocument(doc, getMeasurer(defaultFont), thaiWordBreaker)
+    }
     paginateMs = Date.now() - paginateStartedAt
   } catch (err) {
     console.error("[FlowDoc] /api/export: pagination failed:", err)
@@ -145,6 +155,7 @@ export async function POST(req: NextRequest) {
     renderMs,
     totalMs: Date.now() - exportStartedAt,
   }
+  if (paginationProfile) exportProfile.paginationProfile = paginationProfile
   if (pdfPageRenderMs !== undefined) exportProfile.pdfPageRenderMs = pdfPageRenderMs
   if (pdfFinalizeMs !== undefined) exportProfile.pdfFinalizeMs = pdfFinalizeMs
   if (format === "pdf") exportProfile.pdfPageBatchSize = PDF_EXPORT_PAGE_BATCH_SIZE

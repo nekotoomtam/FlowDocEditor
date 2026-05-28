@@ -43,6 +43,7 @@ For a quick bug fix, read only enough to avoid contradicting the relevant contra
 | List style/group manager behavior | `docs/LIST_STYLE_MANAGER_CONTRACT.md` |
 | WYSIWYG whitespace contract and Tab decision | `docs/WYSIWYG_WHITESPACE_MATRIX.md` |
 | WYSIWYG typing smoothness probe and thresholds | `docs/WYSIWYG_SMOOTHNESS_PROBE.md` |
+| Large-document performance baseline | `docs/PERFORMANCE_BASELINE.md` |
 | WYSIWYG edit re-entry line-geometry drift probe | `docs/WYSIWYG_REENTER_DRIFT_PROBE.md` |
 | WYSIWYG production enablement gate | `docs/WYSIWYG_PRODUCTION_GATE.md` |
 | Current WYSIWYG Stage 4 review packet | `docs/WYSIWYG_STAGE4_REVIEW_PACKET.md` |

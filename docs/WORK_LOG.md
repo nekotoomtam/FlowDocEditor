@@ -20,6 +20,358 @@ Each entry should include:
 
 ## 2026-05-28
 
+### Profile Remaining Main-Thread Readiness And Interaction Costs
+
+Goal: Add profiling-only markers for the remaining post-font-scheduling
+readiness and interaction bottlenecks without adding caches, refactoring editor
+architecture, or changing layout behavior.
+
+Completed:
+
+- Added document import/storage parse sub-stage markers for storage reads, JSON
+  parse, persisted package parse, document normalize/assert, field registry
+  parse, and field registry validation.
+- Added invocation ids for initial editor-state creation, data snapshot
+  creation, and field registry creation so repeated initialization work is
+  visible in the report.
+- Added React subtree profiling around the left rail and right rail, alongside
+  the existing editor canvas profiler.
+- Extended the baseline JSON and summary with `documentImportBreakdown`,
+  `renderBreakdown`, and `interactionBreakdown`, including scroll/click target
+  lookup timing, browser-clock scroll/click intervals, correlated long tasks,
+  correlated React commits, and inline-edit enter/finalize markers.
+
+Verification performed:
+
+- `node --check scripts/flowdoc-performance-baseline.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/documentPersistence.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `BASELINE_PROFILE_PAGINATION=1 BASELINE_COMPARE_REPORT=reports/perf-baseline-before-font-scheduling/latest.json npm.cmd run perf:baseline`
+- `BASELINE_OUTPUT_DIR=reports/perf-baseline-mainthread-off npm.cmd run perf:baseline`
+- `npm.cmd run test:app`
+
+Observed latest profiled stress run:
+
+- Latest report: `reports/perf-baseline/latest.json`
+- Timestamped report: `reports/perf-baseline/perf-baseline-20260528-182029.json`
+- `editorReadyMs=11871`, `fullReadyMs=12671`, `firstPaginationMs=5208.2`
+- `preNavigationToPaginationStartMs=6339.9`
+- `navigationCompleteToDocumentImported=4885.3ms`
+- `main-thread-long-tasks-before-pagination=2306ms`
+- Initial import/init counts: `initialEditorStateRuns=2`,
+  `dataSnapshotRuns=2`, `fieldRegistryRuns=2`, `storageParseRuns=6`
+- Top import/init costs: persisted package parse `352.3ms`, normalize/assert
+  `337.3ms`, initial editor state `255.1ms`, storage load/parse `206.3ms`
+- Top render-before-pagination cost: left rail mount/updates `811.5ms`
+- Interaction costs: scroll-to-middle `1931ms`, first-click edit `907ms`,
+  edit switch `786ms`, scroll-to-end `889ms`
+- Interaction cause markers: scroll-to-middle had `1317ms` long tasks and one
+  `1170.6ms` React commit; first-click edit had `777ms` long tasks and
+  `563.2ms` React commits; edit switch had `639ms` long tasks and `506.4ms`
+  React commits.
+- Browser layout counts unchanged: `pageCount=227`, `fragmentCount=6644`
+- Console errors: `0`; page errors: `0`
+
+Profiling-off comparison run:
+
+- Report: `reports/perf-baseline-mainthread-off/latest.json`
+- `editorReadyMs=7590`, `fullReadyMs=8107`, `firstPaginationMs=3024.4`
+- `preNavigationToPaginationStartMs=4369.9`
+- `main-thread-long-tasks-before-pagination=1596ms`
+- Initial import/init counts were the same:
+  `initialEditorStateRuns=2`, `dataSnapshotRuns=2`,
+  `fieldRegistryRuns=2`, `storageParseRuns=6`
+- `pagination:browser` event reported `pageCount=227`,
+  `fragmentCount=6644`
+- Console errors: `0`; page errors: `0`
+
+Notes:
+
+- The six storage/package parse runs come from three separate initial
+  lazy-initializer paths: document editor state, data snapshot, and field
+  registry. In this dev baseline each ran twice, which is visible through the
+  added invocation ids.
+- Inline edit entry itself was small in the sampled run (`1.8ms` for first
+  click); most click time was main-thread long tasks and React commit work
+  around selecting/editing the document surface and right rail.
+- This is profiling only. No layout cache, measurement cache, text-width cache,
+  pagination algorithm change, editor architecture refactor, or output layout
+  change was made.
+
+---
+
+### Reduce Initial Pagination Scheduling Waste Around Font Readiness
+
+Goal: Apply a small, low-risk scheduling fix after profiling showed initial
+editor readiness was dominated by fontkit readiness plus stale worker
+pagination responses before the first committed browser pagination request.
+
+Completed:
+
+- Reused the default browser editor fontkit measurer promise so React
+  StrictMode/effect replay does not start duplicate main-thread fontkit setup.
+- Deferred full browser pagination while `editorTextMeasurerStatus` is still
+  `loading`; the existing settling/placeholder state remains visible and the
+  worker request is posted once the browser measurer is ready.
+- Deferred server/API pagination until the browser preview reaches `full`, so
+  initial browser pagination is not competing with server pagination during the
+  editor-ready path.
+- Added fontkit sub-stage markers for main font buffer load and measurer
+  creation, plus `BASELINE_COMPARE_REPORT` so `latest-summary.txt` can show
+  before/after readiness and layout-count comparison.
+
+Verification performed:
+
+- `node --check scripts/flowdoc-performance-baseline.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorTextMeasurerState.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `BASELINE_PROFILE_PAGINATION=1 BASELINE_COMPARE_REPORT=reports/perf-baseline-before-font-scheduling/latest.json npm.cmd run perf:baseline`
+- `npm.cmd run test:app`
+
+Observed latest profiled stress run:
+
+- Latest report: `reports/perf-baseline/latest.json`
+- Timestamped report: `reports/perf-baseline/perf-baseline-20260528-174944.json`
+- `editorReadyMs`: `48068 -> 15128`
+- `firstPaginationMs`: `9342.2 -> 4858`
+- `preNavigationToPaginationStartMs`: `38519 -> 10023.6`
+- `firstWorkerRequestPostedToCommittedPaginationStartMs`: `33427.7 -> 0`
+- `ignoredWorkerResponses`: `2 -> 0`
+- Browser layout counts unchanged: `pageCount=227`, `fragmentCount=6644`
+- Console errors: `0`; page errors: `0`
+
+Notes:
+
+- The slow `~33s` fontkit-readiness shape was not explained by font file size:
+  the latest sub-stage markers show all six font buffers loaded in `362.7ms`
+  and main fontkit measurer creation in `550ms` once server contention was
+  removed from the initial ready path.
+- The avoidable work was stale browser worker pagination while the measurer was
+  loading, plus server pagination contention before browser preview was ready.
+- This is scheduling only. No measurement cache, text-width cache, pagination
+  algorithm change, layout behavior change, export renderer rewrite, or editor
+  architecture refactor was made.
+
+---
+
+### Profile Pre-Pagination Lifecycle Delay
+
+Goal: Explain the large elapsed gap before the first committed browser
+pagination event without optimizing worker, pagination, layout, or rendering.
+
+Completed:
+
+- Added `prePaginationBreakdown` to the baseline JSON and summary output.
+- Added trace-only lifecycle markers for initial document/storage conversion,
+  editor-state creation, preview document creation, fontkit readiness, browser
+  pagination effect scheduling, debounce delay, worker creation, pagination
+  request payload build/post, stale worker responses, server pagination request
+  timing, and worker receive-to-compute boundaries.
+- Added a browser Long Task observer to summarize large synchronous main-thread
+  blocks before the committed pagination request.
+- Kept worker-boundary timings separate from top pre-request stages so
+  post-request worker compute/queue cost is not reported as pre-start delay.
+
+Verification performed:
+
+- `node --check scripts/flowdoc-performance-baseline.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run test:app`
+- profiling-off baseline:
+  `BASELINE_OUTPUT_DIR=reports/perf-baseline-prepagination-off npm.cmd run perf:baseline`
+- profiling-on baseline:
+  `BASELINE_PROFILE_PAGINATION=1 npm.cmd run perf:baseline`
+
+Observed latest profiled stress run:
+
+- Latest report: `reports/perf-baseline/latest.json`
+- Timestamped report: `reports/perf-baseline/perf-baseline-20260528-172409.json`
+- `editorReadyMs=48068`, `firstPaginationMs=9342.2`
+- `preNavigationToPaginationStartMs=38519`
+- `firstWorkerRequestPostedMs=5091.3`
+- `firstWorkerRequestPostedToCommittedPaginationStartMs=33427.7`
+- `font-readiness/fontkit=33609.9ms`
+- stale worker responses: `2` request-id mismatches
+- Console errors: `0`; page errors: `0`
+
+Notes:
+
+- In the latest run, browser pagination was requested early, but the first
+  committed pagination event waited for fontkit readiness and superseded earlier
+  worker responses. Prior validation/off runs showed the same shape with a
+  larger pre-pagination wait.
+- This is profiling only. No cache, worker optimization, pagination algorithm,
+  layout behavior, data binding, export renderer, or editor architecture change
+  was made.
+
+---
+
+### Add Pagination Stage Profiling To Baseline
+
+Goal: Extend the measurement-only FlowDoc performance baseline so large-document
+pagination cost is broken into stable stages before choosing any optimization.
+
+Completed:
+
+- Added an opt-in pagination profiler with aggregated timings, counters,
+  nested stages, top-stage summaries, and source labels for browser/export
+  pagination.
+- Instrumented the current paginator path for document preparation,
+  style/list preparation, flow layout, paragraph measurement, text
+  segmentation, text width measurement, table pagination/row/cell work, page
+  packing, fragment generation, and browser worker overhead.
+- Added `BASELINE_PROFILE_PAGINATION=1` to the baseline runner, report JSON,
+  and summary output.
+- Attached pagination profiles to browser worker pagination and optional
+  `/api/export` PDF/DOCX export profile headers.
+- Added parity coverage proving profiling does not change pagination output for
+  a small fixture.
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- src/pagination/__tests__/profiler.test.ts src/pagination/__tests__/paginationProfile.test.ts`
+- `npm.cmd run test:app -- src/app/_lib/__tests__/exportProfile.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts scripts/flowdoc-performance-stats.test.mjs`
+- `npm.cmd run test:app`
+- `npm.cmd run test:core`
+- `npm.cmd run perf:baseline`
+- `BASELINE_PROFILE_PAGINATION=1 npm.cmd run perf:baseline`
+- `BASELINE_PROFILE_PAGINATION=1 BASELINE_INCLUDE_EXPORT=1 npm.cmd run perf:baseline`
+
+Observed profiled stress run:
+
+- Latest report: `reports/perf-baseline/latest.json`
+- Timestamped report: `reports/perf-baseline/perf-baseline-20260528-163009.json`
+- Sources: `export-pdf`, `export-docx`, and `browser`
+- Browser top stages: `worker-overhead=7261.5ms`,
+  `flow-layout=1867ms`, `page-packing=1601.2ms`
+- Console errors: `0`; page errors: `0`
+
+Notes:
+
+- This is profiling only. It does not add layout caches, measurement caches,
+  data binding, pagination optimization, renderer rewrites, or behavior
+  changes.
+- Top-stage percentages are computed from measured stage totals. Parent stages
+  and child stages can overlap because nested profiling is preserved.
+
+---
+
+### Validate Pagination Profiling Overhead And Readiness Gap
+
+Goal: Compare profiling-off versus profiling-on baseline runs and explain the
+gap between first pagination duration and editor-ready time before choosing an
+optimization target.
+
+Completed:
+
+- Added `readinessBreakdown` to the baseline JSON and summary, using browser
+  `performance.now()` marks for first pagination start/end, editor ready, and
+  full-ready.
+- Clarified browser `worker-overhead` notes in the report: it is derived from
+  browser pagination roundtrip minus worker compute profile and excludes React
+  state apply/render commits and report writing.
+- Ran no-export validation baselines with profiling off and on in separate
+  report directories.
+
+Validation observed:
+
+- Profiling off: `firstPaginationMs=7309.3`, `editorReadyMs=98089`,
+  `postFirstPaginationToEditorReadyMs=298.1`, console/page errors `0`.
+- Profiling on: `firstPaginationMs=8960`, `editorReadyMs=94264`,
+  `postFirstPaginationToEditorReadyMs=280`, console/page errors `0`.
+- In the profiled run, browser pagination started at `85092.7ms`, ended at
+  `94052.7ms`, and editor-ready was reached at `94332.7ms`.
+
+Notes:
+
+- The large difference between `firstPaginationMs` and `editorReadyMs` is mostly
+  before first pagination starts, not after it completes. The observed
+  post-pagination-to-editor-ready gap was about `280ms`.
+- Profiling increased the measured pagination event by about `1.65s` in this
+  one-run comparison, but total editor-ready time varied in the opposite
+  direction because the pre-pagination wait is noisy and dominates the run.
+- This remained validation only; no worker, pagination, rendering, or layout
+  optimization was made.
+
+---
+
+### Harden FlowDoc Performance Baseline Harness
+
+Goal: Finish the measurement-only FlowDoc stress baseline so one command writes
+repeatable JSON performance reports without adding optimization, data binding,
+or editor architecture changes.
+
+Completed:
+
+- Reworked `npm run perf:baseline` around the stress FlowDoc fixture contract,
+  including `BASELINE_FLOWDOC_FILE`, `BASELINE_APP_URL`,
+  `BASELINE_OUTPUT_DIR`, `BASELINE_INCLUDE_EXPORT`,
+  `BASELINE_ALLOW_CONSOLE_ERRORS`, `BASELINE_TIMEOUT_MS`,
+  `BASELINE_HEADFUL`, and `BASELINE_SLOW_MO`.
+- Added clear fixture failure stages for missing files, invalid JSON, and
+  invalid FlowDoc package/document shapes.
+- Added a pure FlowDoc stats collector with coverage for small documents,
+  nested Flow Table cell content, field refs, invalid shapes, and the stress
+  fixture.
+- Added minimal editor test hooks for the loaded document id/title and editable
+  paragraph fragments so the harness can prove it opened the intended fixture
+  and click real editable surfaces.
+- Mirrored existing WYSIWYG perf trace events into
+  `window.__FLOWDOC_PERF_EVENTS__` while preserving the existing
+  `window.__flowDocWysiwygPerfEvents` path.
+- Wrote timestamped and latest JSON reports plus a short summary under
+  `reports/perf-baseline/`.
+- Added `npm run perf:install-browser` for explicit Playwright Chromium setup.
+
+Files changed:
+
+- `scripts/flowdoc-performance-baseline.mjs`
+- `scripts/flowdoc-performance-stats.mjs`
+- `scripts/flowdoc-performance-stats.test.mjs`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `vitest.config.ts`
+- `package.json`
+- `docs/PERFORMANCE_BASELINE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WORK_LOG.md`
+
+Verification performed:
+
+- `node --check scripts/flowdoc-performance-baseline.mjs`
+- `node --check scripts/flowdoc-performance-stats.mjs`
+- `npm.cmd run test:app -- scripts/flowdoc-performance-stats.test.mjs src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts scripts/flowdoc-performance-stats.test.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd run perf:baseline`
+- Missing fixture check with `BASELINE_OUTPUT_DIR=reports/perf-baseline-error-check`
+- Invalid JSON fixture check with `BASELINE_OUTPUT_DIR=reports/perf-baseline-error-check`
+- `BASELINE_FLOWDOC_FILE=.\public\mock\flowdoc-stress-mock.flowdoc.json BASELINE_INCLUDE_EXPORT=1 npm.cmd run perf:baseline`
+
+Baseline observed:
+
+- Latest report: `reports/perf-baseline/latest.json`
+- Stress document stats: `6062` total nodes, `3443` paragraphs, `12` flow
+  tables, `420` Flow Table rows, `2100` Flow Table cells.
+- Latest explicit fixture + export run: `editorReadyMs=31597`,
+  `fullReadyMs=32075`, `firstClickEditMs=746`, `editSwitchMs=625`,
+  `scrollToMiddleMs=1983`, `scrollToEndMs=1173`, `exportPdfMs=132734`,
+  `exportDocxMs=97536`, console errors `0`, page errors `0`.
+
+Notes or follow-ups:
+
+- This is measurement only. It does not add layout caches, binding expansion,
+  pagination optimization, workflow/history changes, WYSIWYG redesign, table
+  behavior changes, or export renderer changes.
+- The likely next optimization investigation should start from measured
+  initial editor readiness/full pagination and export cost, not from a claimed
+  performance improvement in this patch.
+
 ### Bump Editor Layout Responsiveness Baseline To 0.6.21
 
 Goal: Accept the Phase 0-3 editor layout responsiveness work as the next
@@ -53,6 +405,68 @@ Notes or follow-ups:
 - No git tag was created; project versions remain release-readiness markers.
 - This patch does not change `DocumentNode.version`, FlowDoc package version,
   storage package version, pagination semantics, undo/redo, or export behavior.
+
+### Phase 1 Performance Baseline Instrumentation
+
+Goal: Start the large-document performance roadmap with repeatable profiling
+signals before adding caches, render-dependency changes, or incremental
+pagination.
+
+Completed:
+
+- Added `editor-action-dispatch` perf events at the shared
+  `dispatchEditorAction(...)` wrapper, including action type plus
+  `uiImpact`, `layoutScope`, `priority`, and whether the action is
+  layout-affecting.
+- Kept the event opt-in through the existing WYSIWYG perf trace runtime flag.
+- Added `scripts/flowdoc-performance-baseline.mjs`, which loads a FlowDoc mock,
+  counts cache candidates, captures initial editor readiness perf events,
+  clicks two visible paragraphs on a target page, and optionally calls
+  `/api/export` for the existing export profile header.
+- Added `npm run perf:baseline` and documented the command, environment
+  variables, report shape, and current stress-mock baseline.
+- Made the baseline script reuse an existing `http://localhost:4000/editor`
+  dev server when Next refuses to start a second dev server for the same repo.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `scripts/flowdoc-performance-baseline.mjs`
+- `package.json`
+- `docs/PERFORMANCE_BASELINE.md`
+- `docs/DOCS_INDEX.md`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WORK_LOG.md`
+
+Verification performed:
+
+- `node --check scripts/flowdoc-performance-baseline.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run perf:baseline`
+
+Baseline observed:
+
+- Reused existing `http://localhost:4000/editor` with bundled Chromium.
+- Stress mock loaded to `previewStatus=full` in about `102329ms`.
+- Document counters reported `1297` body children, `6062` counted nodes,
+  `3443` paragraphs, `550765` text characters, `12` flow tables, and `420`
+  flow-table rows.
+- Click baseline on page index `14`: `p_00114` first click about `346ms`,
+  switch to `li_00116` about `888ms`.
+- `editor-action-dispatch` max was about `0.1ms`; canvas React commit max was
+  about `117.5ms`; console/page errors were `0`.
+
+Notes or follow-ups:
+
+- Export timing was intentionally skipped in the default baseline run; use
+  `BASELINE_INCLUDE_EXPORT=1` when the next export-specific comparison needs
+  the `/api/export` profile.
+- This patch is instrumentation only. It does not add cache, incremental
+  pagination, patch-worker layout, undo/redo changes, or export behavior
+  changes.
 
 ### Phase 0 Editor Layout Interaction Guard
 

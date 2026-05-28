@@ -82,6 +82,49 @@ export interface DocumentStorageSaveOptions {
   now?: string
 }
 
+interface DocumentPersistencePerfEvent {
+  name: string
+  startMs?: number
+  durationMs?: number
+  detail?: Record<string, unknown>
+}
+
+declare global {
+  interface Window {
+    __FLOWDOC_PERF_EVENTS__?: DocumentPersistencePerfEvent[]
+    __flowDocWysiwygPerfTraceEnabled?: boolean
+  }
+}
+
+function persistencePerfNow(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now()
+}
+
+function recordDocumentPersistencePerfEvent(event: DocumentPersistencePerfEvent): void {
+  if (typeof window === "undefined") return
+  if (!window.__flowDocWysiwygPerfTraceEnabled && !window.__FLOWDOC_PERF_EVENTS__) return
+  const events = window.__FLOWDOC_PERF_EVENTS__ ?? []
+  window.__FLOWDOC_PERF_EVENTS__ = events.length >= 600
+    ? [...events.slice(events.length - 599), event]
+    : [...events, event]
+}
+
+function finishDocumentPersistencePerfSpan(
+  name: string,
+  startedAt: number,
+  detail: Record<string, unknown> = {},
+): void {
+  if (typeof window === "undefined") return
+  recordDocumentPersistencePerfEvent({
+    name,
+    startMs: startedAt,
+    durationMs: Math.max(0, persistencePerfNow() - startedAt),
+    ...(Object.keys(detail).length > 0 ? { detail } : {}),
+  })
+}
+
 export function documentParseFailureMessage(reason: DocumentParseFailureReason): string {
   switch (reason) {
     case "empty":
@@ -205,11 +248,19 @@ function parseDocumentValue(value: unknown): Extract<DocumentParseResult, { ok: 
     return { ok: false, reason: "invalid-document" }
   }
 
+  const normalizeStartedAt = persistencePerfNow()
   try {
     const normalized = normalizeDocument(value as DocumentNode)
     assertDocument(normalized)
+    finishDocumentPersistencePerfSpan("pre-pagination:document-import-normalize-assert", normalizeStartedAt, {
+      ok: true,
+      documentId: normalized.document.id,
+    })
     return { ok: true, doc: normalized, source: "legacy-document" }
   } catch {
+    finishDocumentPersistencePerfSpan("pre-pagination:document-import-normalize-assert", normalizeStartedAt, {
+      ok: false,
+    })
     return { ok: false, reason: "invalid-document" }
   }
 }
@@ -297,10 +348,22 @@ function parsePackageV2Value(value: Record<string, unknown>): DocumentParseResul
     return { ok: false, reason: "invalid-package" }
   }
 
+  const fieldParseStartedAt = persistencePerfNow()
   const fields = parseFieldRegistryValue(value["fields"])
+  finishDocumentPersistencePerfSpan("pre-pagination:document-import-field-registry-parse", fieldParseStartedAt, {
+    ok: Boolean(fields),
+    documentId: id,
+    fieldCount: fields?.fields.length ?? 0,
+  })
   if (!fields) return { ok: false, reason: "invalid-package" }
 
+  const fieldValidationStartedAt = persistencePerfNow()
   const fieldRegistryValidation = validateFieldRegistryReferences(documentResult.doc, fields)
+  finishDocumentPersistencePerfSpan("pre-pagination:document-import-field-registry-validate", fieldValidationStartedAt, {
+    documentId: id,
+    issueCount: fieldRegistryValidation.issues.length,
+    hasErrors: hasFieldRegistryErrors(fieldRegistryValidation),
+  })
   if (hasFieldRegistryErrors(fieldRegistryValidation)) {
     return { ok: false, reason: "invalid-package" }
   }
@@ -389,7 +452,19 @@ export function parsePersistedDocument(raw: string | null | undefined): Document
   if (raw == null || raw.trim() === "") return { ok: false, reason: "empty" }
 
   try {
-    return parsePersistedValue(JSON.parse(raw))
+    const jsonStartedAt = persistencePerfNow()
+    const parsed = JSON.parse(raw)
+    finishDocumentPersistencePerfSpan("pre-pagination:document-import-json-parse", jsonStartedAt, {
+      sizeBytes: raw.length,
+    })
+
+    const parseStartedAt = persistencePerfNow()
+    const result = parsePersistedValue(parsed)
+    finishDocumentPersistencePerfSpan("pre-pagination:document-import-parse-persisted-value", parseStartedAt, {
+      ok: result.ok,
+      source: result.ok ? result.source : result.reason,
+    })
+    return result
   } catch {
     return { ok: false, reason: "invalid-json" }
   }
@@ -425,7 +500,13 @@ export function migratePersistedDocumentPackageToV2(
 
 export function loadDocumentFromStorage(storage: Pick<Storage, "getItem">, key = STORAGE_KEY): DocumentParseResult {
   try {
-    return parsePersistedDocument(storage.getItem(key))
+    const readStartedAt = persistencePerfNow()
+    const raw = storage.getItem(key)
+    finishDocumentPersistencePerfSpan("pre-pagination:document-import-storage-read", readStartedAt, {
+      key,
+      sizeBytes: raw?.length ?? 0,
+    })
+    return parsePersistedDocument(raw)
   } catch {
     return { ok: false, reason: "empty" }
   }

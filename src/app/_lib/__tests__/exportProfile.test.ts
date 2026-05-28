@@ -46,6 +46,32 @@ describe("export profile header", () => {
     expect(formatFlowDocExportProfileSummary(parsed)).toBe("DOCX export ready: 1 page, 110ms total, 75ms render.")
   })
 
+  it("round-trips optional pagination profiling metadata", () => {
+    const profile: FlowDocExportProfile = {
+      format: "pdf",
+      pageCount: 2,
+      fragmentCount: 12,
+      paginateMs: 100,
+      assertMs: 1,
+      renderMs: 50,
+      totalMs: 160,
+      paginationProfile: {
+        version: 1,
+        source: "export-pdf",
+        totalMs: 100,
+        pageCount: 2,
+        fragmentCount: 12,
+        stages: [
+          { name: "paragraph-measure", totalMs: 70, count: 10, avgMs: 7, maxMs: 12, minMs: 1 },
+        ],
+      },
+    }
+
+    const parsed = parseFlowDocExportProfileHeader(serializeFlowDocExportProfile(profile))
+
+    expect(parsed).toEqual(profile)
+  })
+
   it("ignores malformed or incomplete header values", () => {
     expect(parseFlowDocExportProfileHeader(null)).toBeNull()
     expect(parseFlowDocExportProfileHeader("{")).toBeNull()

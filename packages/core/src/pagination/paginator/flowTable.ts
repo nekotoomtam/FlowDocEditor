@@ -29,6 +29,8 @@ import {
   paginateFlowTableRowspanGroupSplit,
 } from "./flowTableRowspan"
 import type { ListNumberingPaginationContext } from "./listMarker"
+import type { PaginationProfiler } from "../profiler"
+import { measureWithPaginationProfile } from "../profiler"
 // ─── Flow Table Pagination ───────────────────────────────────────────────────
 
 export function paginateFlowTable(
@@ -43,6 +45,7 @@ export function paginateFlowTable(
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
   listNumbering?: ListNumberingPaginationContext,
+  profiler?: PaginationProfiler,
 ): PageFlowCursor {
   const tableNode = section.nodes[box.nodeId] as unknown as FlowTableNode
   if (!tableNode || tableNode.type !== "flow-table") return cursor
@@ -71,18 +74,21 @@ export function paginateFlowTable(
 
   const placeHeaders = (c: PageFlowCursor): PageFlowCursor => {
     for (const rowBox of headerBoxes) {
-      c = paginateFlowTableRowFull(
-        rowBox,
-        tableNode,
-        pages,
-        template,
-        c,
-        box.nodeId,
-        measurer,
-        wordBreaker,
-        flowTableGridProps,
-        flowTableCellGridPropsById,
-        listNumbering,
+      c = measureWithPaginationProfile(profiler, "table-row-measure", () =>
+        paginateFlowTableRowFull(
+          rowBox,
+          tableNode,
+          pages,
+          template,
+          c,
+          box.nodeId,
+          measurer,
+          wordBreaker,
+          flowTableGridProps,
+          flowTableCellGridPropsById,
+          listNumbering,
+          profiler,
+        ),
       )
     }
     return c
@@ -139,22 +145,24 @@ export function paginateFlowTable(
         flowTableRowspanGroupAllowsRowBoundarySplit(tableNode, { rowIndices, rowIds, rows, totalHeight, spanningCells })
 
       if (allowsRowBoundarySplit) {
-        current = paginateFlowTableRowspanGroupSplit(
-          { rowIndices, rowIds, rows, totalHeight, spanningCells },
-          box.children,
-          tableNode,
-          pages,
-          template,
-          contentTop,
-          contentBottom,
-          current,
-          box.nodeId,
-          measurer,
-          wordBreaker,
-          flowTableGridProps,
-          flowTableCellGridPropsById,
-          shouldRepeatHeaders ? placeHeaders : undefined,
-          listNumbering,
+        current = measureWithPaginationProfile(profiler, "table-row-measure", () =>
+          paginateFlowTableRowspanGroupSplit(
+            { rowIndices, rowIds, rows, totalHeight, spanningCells },
+            box.children,
+            tableNode,
+            pages,
+            template,
+            contentTop,
+            contentBottom,
+            current,
+            box.nodeId,
+            measurer,
+            wordBreaker,
+            flowTableGridProps,
+            flowTableCellGridPropsById,
+            shouldRepeatHeaders ? placeHeaders : undefined,
+            listNumbering,
+          ),
         )
         continue
       }
@@ -170,18 +178,21 @@ export function paginateFlowTable(
           current = advancePage(current, contentTop)
           if (!isHeaderGroup && shouldRepeatHeaders) current = placeHeaders(current)
         }
-        current = paginateFlowTableRowFull(
-          rowBox,
-          tableNode,
-          pages,
-          template,
-          current,
-          box.nodeId,
-          measurer,
-          wordBreaker,
-          flowTableGridProps,
-          flowTableCellGridPropsById,
-          listNumbering,
+        current = measureWithPaginationProfile(profiler, "table-row-measure", () =>
+          paginateFlowTableRowFull(
+            rowBox,
+            tableNode,
+            pages,
+            template,
+            current,
+            box.nodeId,
+            measurer,
+            wordBreaker,
+            flowTableGridProps,
+            flowTableCellGridPropsById,
+            listNumbering,
+            profiler,
+          ),
         )
       }
       continue
@@ -196,36 +207,42 @@ export function paginateFlowTable(
     const tooTallForOnePage = rowBox.height > contentBottom - contentTop
 
     if (!doesntFit && !tooTallForOnePage) {
-      current = paginateFlowTableRowFull(
-        rowBox,
-        tableNode,
-        pages,
-        template,
-        current,
-        box.nodeId,
-        measurer,
-        wordBreaker,
-        flowTableGridProps,
-        flowTableCellGridPropsById,
-        listNumbering,
+      current = measureWithPaginationProfile(profiler, "table-row-measure", () =>
+        paginateFlowTableRowFull(
+          rowBox,
+          tableNode,
+          pages,
+          template,
+          current,
+          box.nodeId,
+          measurer,
+          wordBreaker,
+          flowTableGridProps,
+          flowTableCellGridPropsById,
+          listNumbering,
+          profiler,
+        ),
       )
     } else if (allowBreak && !isHeaderGroup) {
-      current = paginateFlowTableRowSplit(
-        rowBox,
-        tableNode,
-        pages,
-        template,
-        contentTop,
-        contentBottom,
-        current,
-        box.nodeId,
-        measurer,
-        wordBreaker,
-        flowTableGridProps,
-        flowTableCellGridPropsById,
-        shouldRepeatHeaders ? placeHeaders : undefined,
-        shouldRepeatHeaders ? headerHeight : 0,
-        listNumbering,
+      current = measureWithPaginationProfile(profiler, "table-row-measure", () =>
+        paginateFlowTableRowSplit(
+          rowBox,
+          tableNode,
+          pages,
+          template,
+          contentTop,
+          contentBottom,
+          current,
+          box.nodeId,
+          measurer,
+          wordBreaker,
+          flowTableGridProps,
+          flowTableCellGridPropsById,
+          shouldRepeatHeaders ? placeHeaders : undefined,
+          shouldRepeatHeaders ? headerHeight : 0,
+          listNumbering,
+          profiler,
+        ),
       )
     } else {
       const nextPage = advancePage(current, contentTop)
@@ -234,18 +251,21 @@ export function paginateFlowTable(
         current = nextPage
         if (!isHeaderGroup && shouldRepeatHeaders) current = placeHeaders(current)
       }
-      current = paginateFlowTableRowFull(
-        rowBox,
-        tableNode,
-        pages,
-        template,
-        current,
-        box.nodeId,
-        measurer,
-        wordBreaker,
-        flowTableGridProps,
-        flowTableCellGridPropsById,
-        listNumbering,
+      current = measureWithPaginationProfile(profiler, "table-row-measure", () =>
+        paginateFlowTableRowFull(
+          rowBox,
+          tableNode,
+          pages,
+          template,
+          current,
+          box.nodeId,
+          measurer,
+          wordBreaker,
+          flowTableGridProps,
+          flowTableCellGridPropsById,
+          listNumbering,
+          profiler,
+        ),
       )
     }
   }

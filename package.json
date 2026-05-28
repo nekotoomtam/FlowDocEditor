@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "0.6.21",
+  "version": "0.6.22",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -35,7 +35,9 @@
     "smoke:wysiwyg-thai-repeat": "node scripts/wysiwyg-thai-repeat-reenter-probe.mjs",
     "smoke:wysiwyg-smoothness": "node scripts/wysiwyg-smoothness-probe.mjs",
     "smoke:wysiwyg-stress-lifecycle": "node scripts/wysiwyg-stress-lifecycle-smoke.mjs",
-    "diagnose:wysiwyg-click": "node scripts/wysiwyg-click-diagnostic.mjs"
+    "diagnose:wysiwyg-click": "node scripts/wysiwyg-click-diagnostic.mjs",
+    "perf:baseline": "node scripts/flowdoc-performance-baseline.mjs",
+    "perf:install-browser": "npx playwright install chromium"
   },
   "keywords": [],
   "author": "",

@@ -1573,6 +1573,7 @@ function ZoneFragments({
         data-testid="editor-zone-fragment"
         data-zone={zone}
         data-zone-editable={editableParagraph ? "true" : undefined}
+        data-inline-editable={editableParagraph ? "true" : undefined}
         data-node-id={fragment.nodeId}
         data-node-type={fragment.nodeType}
         data-page-index={fragment.pageIndex}
@@ -2678,6 +2679,7 @@ function PageView({
             data-testid="editor-fragment"
             data-node-id={f.nodeId}
             data-node-type={f.nodeType}
+            data-inline-editable={canInlineEditThisParagraph ? "true" : undefined}
             data-page-index={displayFragment.pageIndex}
             data-fragment-index={displayFragment.fragmentIndex ?? undefined}
             data-line-start={displayFragment.lineStart ?? undefined}

@@ -31,6 +31,8 @@ import {
   flowTableCellSliceTopInset,
 } from "./flowTableCell"
 import type { ListNumberingPaginationContext } from "./listMarker"
+import type { PaginationProfiler } from "../profiler"
+import { measureWithPaginationProfile } from "../profiler"
 
 export function paginateFlowTableRowFull(
   rowBox: FlowBox,
@@ -44,6 +46,7 @@ export function paginateFlowTableRowFull(
   flowTableGridProps: FlowTableGridRenderProps,
   flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
   listNumbering?: ListNumberingPaginationContext,
+  profiler?: PaginationProfiler,
 ): PageFlowCursor {
   pushFragment(pages, template, {
     nodeId: rowBox.nodeId,
@@ -80,7 +83,9 @@ export function paginateFlowTableRowFull(
   }
 
   cellBoxes
-    .flatMap((cellBox) => collectFlowTableCellContents(cellBox, tableNode, measurer, cursor.pageIndex, cursor.cursorY, wordBreaker, cursor.pageNumberOffset, listNumbering))
+    .flatMap((cellBox) => measureWithPaginationProfile(profiler, "table-cell-measure", () =>
+      collectFlowTableCellContents(cellBox, tableNode, measurer, cursor.pageIndex, cursor.cursorY, wordBreaker, cursor.pageNumberOffset, listNumbering),
+    ))
     .sort((a, b) => a.y - b.y || a.x - b.x || a.nodeId.localeCompare(b.nodeId))
     .forEach((fragment) => pushFragment(pages, template, fragment))
 
@@ -103,6 +108,7 @@ export function paginateFlowTableRowSplit(
   repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
   repeatedHeaderHeight: number = 0,
   listNumbering?: ListNumberingPaginationContext,
+  profiler?: PaginationProfiler,
 ): PageFlowCursor {
   const fromSplits = new Map<string, SplitPoint>()
   for (const cellBox of rowBox.children) fromSplits.set(cellBox.nodeId, { childIdx: 0, lineIdx: 0 })
@@ -223,17 +229,19 @@ export function paginateFlowTableRowSplit(
         warnings: sliceWarnings.get(cellBox.nodeId),
       })
 
-      const cellContentFragments = collectFlowTableCellSlice(
-        cellBox,
-        tableNode,
-        measurer,
-        current.pageIndex,
-        current.cursorY,
-        from,
-        to,
-        wordBreaker,
-        current.pageNumberOffset,
-        listNumbering,
+      const cellContentFragments = measureWithPaginationProfile(profiler, "table-cell-measure", () =>
+        collectFlowTableCellSlice(
+          cellBox,
+          tableNode,
+          measurer,
+          current.pageIndex,
+          current.cursorY,
+          from,
+          to,
+          wordBreaker,
+          current.pageNumberOffset,
+          listNumbering,
+        ),
       )
       for (const fragment of cellContentFragments) {
         renderedSliceH = Math.max(renderedSliceH, fragment.y + fragment.height - current.cursorY)

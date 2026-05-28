@@ -1,6 +1,6 @@
 import { DEFAULT_FONT_KEY } from "@/font-registry"
 import { defaultTextMeasurer, type TextMeasurer } from "@/layout"
-import { paginateDocument } from "@/pagination"
+import { paginateDocument, paginateDocumentWithProfile } from "@/pagination"
 import {
   createBrowserFontkitMeasurer,
   loadBrowserFontBuffers,
@@ -40,6 +40,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function workerNowMs(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now()
+}
+
+function roundWorkerMs(value: number): number {
+  return Math.round(value * 10) / 10
+}
+
 type BrowserPaginationWorkerScope = typeof self & {
   onmessage: ((event: MessageEvent<BrowserPaginationWorkerRequest>) => void) | null
   postMessage: (message: BrowserPaginationWorkerResponse) => void
@@ -52,17 +62,42 @@ workerScope.onmessage = (event: MessageEvent<BrowserPaginationWorkerRequest>) =>
   if (request?.type !== "paginate") return
 
   void (async () => {
+    const receivedAt = workerNowMs()
     try {
+      const measurerStartedAt = workerNowMs()
       const { measurer, status } = await resolveWorkerMeasurer()
+      const measurerEndedAt = workerNowMs()
+      const partialStartedAt = workerNowMs()
       const partialResponse = tryBuildBrowserPaginationPartialResponse(request, measurer, status)
+      const partialEndedAt = workerNowMs()
       if (partialResponse) workerScope.postMessage(partialResponse)
-      const paginated = paginateDocument(request.doc, measurer)
+      const computeStartedAt = workerNowMs()
+      const profileResult = request.profilePagination
+        ? paginateDocumentWithProfile(request.doc, measurer, undefined, undefined, { paginationProfileSource: "browser" })
+        : null
+      const paginated = profileResult?.paginated ?? paginateDocument(request.doc, measurer)
+      const computeEndedAt = workerNowMs()
+      const responseBuildStartedAt = workerNowMs()
+      const workerTiming = {
+        receivedAtMs: roundWorkerMs(receivedAt),
+        resolveMeasurerMs: roundWorkerMs(measurerEndedAt - measurerStartedAt),
+        ...(partialResponse ? { partialResponseMs: roundWorkerMs(partialEndedAt - partialStartedAt) } : {}),
+        computeStartAfterReceiveMs: roundWorkerMs(computeStartedAt - receivedAt),
+        computeMs: roundWorkerMs(computeEndedAt - computeStartedAt),
+        responseBuildMs: 0,
+        totalBeforeSuccessPostMs: 0,
+      }
       const response: BrowserPaginationWorkerResponse = {
         type: "success",
         requestId: request.requestId,
         paginated,
         measurerStatus: status,
+        paginationProfile: profileResult?.paginationProfile,
+        workerTiming,
       }
+      const responseBuildEndedAt = workerNowMs()
+      workerTiming.responseBuildMs = roundWorkerMs(responseBuildEndedAt - responseBuildStartedAt)
+      workerTiming.totalBeforeSuccessPostMs = roundWorkerMs(responseBuildEndedAt - receivedAt)
       workerScope.postMessage(response)
     } catch (error) {
       const response: BrowserPaginationWorkerResponse = {

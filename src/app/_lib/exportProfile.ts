@@ -1,3 +1,5 @@
+import type { PaginationProfile, PaginationStageTiming } from "@/pagination"
+
 export const FLOWDOC_EXPORT_PROFILE_HEADER = "X-FlowDoc-Export-Profile"
 export const FLOWDOC_LARGE_EXPORT_PAGE_THRESHOLD = 100
 export const FLOWDOC_VERY_LARGE_EXPORT_PAGE_THRESHOLD = 300
@@ -16,6 +18,7 @@ export interface FlowDocExportProfile {
   pdfPageRenderMs?: number
   pdfFinalizeMs?: number
   pdfPageBatchSize?: number
+  paginationProfile?: PaginationProfile
 }
 
 const requiredNumberFields = [
@@ -51,6 +54,32 @@ function assignOptionalFiniteNumber(
   if (value !== null) profile[key] = value
 }
 
+function isStageTiming(value: unknown): value is PaginationStageTiming {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  if (typeof record.name !== "string") return false
+  if (typeof record.totalMs !== "number" || !Number.isFinite(record.totalMs)) return false
+  if (record.count !== undefined && (typeof record.count !== "number" || !Number.isFinite(record.count))) return false
+  if (record.avgMs !== undefined && (typeof record.avgMs !== "number" || !Number.isFinite(record.avgMs))) return false
+  if (record.maxMs !== undefined && (typeof record.maxMs !== "number" || !Number.isFinite(record.maxMs))) return false
+  if (record.minMs !== undefined && (typeof record.minMs !== "number" || !Number.isFinite(record.minMs))) return false
+  if (record.children !== undefined) {
+    if (!Array.isArray(record.children)) return false
+    if (!record.children.every(isStageTiming)) return false
+  }
+  return true
+}
+
+function isPaginationProfile(value: unknown): value is PaginationProfile {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  if (typeof record.version !== "number") return false
+  if (typeof record.source !== "string") return false
+  if (typeof record.totalMs !== "number" || !Number.isFinite(record.totalMs)) return false
+  if (!Array.isArray(record.stages) || !record.stages.every(isStageTiming)) return false
+  return true
+}
+
 export function serializeFlowDocExportProfile(profile: FlowDocExportProfile): string {
   return JSON.stringify(profile)
 }
@@ -76,6 +105,7 @@ export function parseFlowDocExportProfileHeader(value: string | null): FlowDocEx
       totalMs: requiredNumbers[5] ?? 0,
     }
     for (const key of optionalNumberFields) assignOptionalFiniteNumber(profile, record, key)
+    if (isPaginationProfile(record.paginationProfile)) profile.paginationProfile = record.paginationProfile
     return profile
   } catch {
     return null

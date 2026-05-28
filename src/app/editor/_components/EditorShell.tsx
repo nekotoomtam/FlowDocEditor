@@ -92,8 +92,11 @@ import {
   WYSIWYG_TEXT_ENGINE_ENABLED,
 } from "./wysiwygInlineEditConfig"
 import {
+  finishFlowDocPerfSpan,
   finishWysiwygPerfSpan,
+  isPaginationProfileRuntimeEnabled,
   isWysiwygPerfTraceRuntimeEnabled,
+  recordFlowDocPerfEvent,
   recordWysiwygPerfEvent,
   startWysiwygPerfSpan,
   summarizePaginatedForWysiwygPerf,
@@ -933,17 +936,67 @@ function EditorCanvasPerfProfiler({
   )
 }
 
+function EditorSubtreePerfProfiler({
+  enabled,
+  id,
+  children,
+}: {
+  enabled: boolean
+  id: string
+  children: ReactNode
+}) {
+  const handleRender = useCallback<ProfilerOnRenderCallback>((
+    profilerId,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      name: "react:subtree-commit",
+      startMs: startTime,
+      durationMs: Math.max(0, actualDuration),
+      detail: {
+        id: profilerId,
+        source: phase,
+        baseDurationMs: Math.max(0, baseDuration),
+        commitTime,
+      },
+    })
+  }, [])
+
+  if (!enabled) return <>{children}</>
+  return (
+    <Profiler id={id} onRender={handleRender}>
+      {children}
+    </Profiler>
+  )
+}
+
 function createBrowserPaginationWorker(): Worker | null {
   if (typeof Worker === "undefined") return null
+  const startedAt = startWysiwygPerfSpan()
   try {
-    return new Worker(new URL("./browserPaginationWorker.ts", import.meta.url), { type: "module" })
+    const worker = new Worker(new URL("./browserPaginationWorker.ts", import.meta.url), { type: "module" })
+    finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-create", startedAt, {
+      source: "document-preview-worker",
+    })
+    return worker
   } catch (error) {
+    finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-create", startedAt, {
+      source: "document-preview-worker",
+      failed: true,
+      message: error instanceof Error ? error.message : String(error),
+    })
     console.error("browser pagination worker unavailable:", error)
     return null
   }
 }
 
 type EditorPrepareOverlayStatus = "visible" | "fading" | "hidden"
+let dataSnapshotCreateInvocationId = 0
+let fieldRegistryCreateInvocationId = 0
 
 function readInitialDocumentPrepareHandoff(): DocumentPrepareHandoff | null {
   if (typeof window === "undefined") return null
@@ -977,8 +1030,24 @@ export default function EditorShell() {
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
   useEffect(() => {
     let cancelled = false
+    const startedAt = startWysiwygPerfSpan()
+    recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      name: "pre-pagination:font-readiness-start",
+      startMs: startedAt,
+    })
     const fallbackMeasurer = createBrowserTextMeasurer()
-    resolveBrowserEditorTextMeasurer(fallbackMeasurer).then((next) => {
+    resolveBrowserEditorTextMeasurer(fallbackMeasurer, undefined, undefined, (event) => {
+      recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        name: `pre-pagination:${event.name}`,
+        startMs: event.startMs,
+        durationMs: event.durationMs,
+        detail: event.detail,
+      })
+    }).then((next) => {
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:font-readiness", startedAt, {
+        status: next.status,
+        cancelled,
+      })
       if (cancelled) return
       setEditorTextMeasurer(next.measurer)
       setEditorTextMeasurerStatus(next.status)
@@ -987,16 +1056,45 @@ export default function EditorShell() {
     return () => { cancelled = true }
   }, [])
   const [mode, setMode] = useState<"template" | "fill">("template")
-  const [dataSnapshot, setDataSnapshot] = useState<DataSnapshotV1>(() => (
-    initialTestScenario
-      ? createEmptyDataSnapshot()
-      : dataSnapshotFromDocumentParseResult(loadDocumentFromStorage(localStorage))
-  ))
-  const [packageFieldRegistry, setPackageFieldRegistry] = useState<FieldRegistryV1>(() => (
-    initialTestScenario
-      ? SAMPLE_FIELD_REGISTRY_V1
-      : fieldRegistryFromDocumentParseResult(loadDocumentFromStorage(localStorage))
-  ))
+  const [dataSnapshot, setDataSnapshot] = useState<DataSnapshotV1>(() => {
+    const invocationId = ++dataSnapshotCreateInvocationId
+    const startedAt = startWysiwygPerfSpan()
+    if (initialTestScenario) {
+      const snapshot = createEmptyDataSnapshot()
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:data-snapshot-create", startedAt, {
+        invocationId,
+        source: "test-scenario",
+      })
+      return snapshot
+    }
+    const result = loadDocumentFromStorage(localStorage)
+    const snapshot = dataSnapshotFromDocumentParseResult(result)
+    finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:data-snapshot-create", startedAt, {
+      invocationId,
+      source: result.ok ? result.source : result.reason,
+    })
+    return snapshot
+  })
+  const [packageFieldRegistry, setPackageFieldRegistry] = useState<FieldRegistryV1>(() => {
+    const invocationId = ++fieldRegistryCreateInvocationId
+    const startedAt = startWysiwygPerfSpan()
+    if (initialTestScenario) {
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:field-registry-create", startedAt, {
+        invocationId,
+        source: "test-scenario",
+        fieldCount: SAMPLE_FIELD_REGISTRY_V1.fields.length,
+      })
+      return SAMPLE_FIELD_REGISTRY_V1
+    }
+    const result = loadDocumentFromStorage(localStorage)
+    const registry = fieldRegistryFromDocumentParseResult(result)
+    finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:field-registry-create", startedAt, {
+      invocationId,
+      source: result.ok ? result.source : result.reason,
+      fieldCount: registry.fields.length,
+    })
+    return registry
+  })
   const isTemplateMode = mode === "template"
   const selectedParagraphListContext = useMemo(() => (
     resolveParagraphListContext(state.doc, state.selectedNodeId)
@@ -1060,7 +1158,26 @@ export default function EditorShell() {
       ? doc
       : bindDocumentWithSnapshot(doc, { registry: packageFieldRegistry, snapshot: dataSnapshot }).doc
   ), [dataSnapshot, isTemplateMode, packageFieldRegistry])
-  const previewDoc = useMemo(() => resolvePreviewDoc(state.doc), [resolvePreviewDoc, state.doc])
+  const previewDoc = useMemo(() => {
+    const startedAt = startWysiwygPerfSpan()
+    const nextPreviewDoc = resolvePreviewDoc(state.doc)
+    finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:preview-doc-create", startedAt, {
+      mode,
+      documentId: nextPreviewDoc.document.id,
+    })
+    return nextPreviewDoc
+  }, [mode, resolvePreviewDoc, state.doc])
+  useEffect(() => {
+    recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      name: "pre-pagination:editor-shell-mounted",
+      startMs: startWysiwygPerfSpan(),
+      detail: {
+        documentId: state.doc.document.id,
+      },
+    })
+    // The first mount marker intentionally captures only the initial shell commit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const dataReadiness = useMemo(() => assessDocumentDataReadiness({
     doc: state.doc,
     registry: packageFieldRegistry,
@@ -1077,12 +1194,21 @@ export default function EditorShell() {
   const pendingEditorActionClassificationRef = useRef<PendingEditorActionClassification | null>(null)
   const suppressNextLayoutLoadingOverlayRef = useRef(false)
   const dispatchEditorAction = useCallback((action: EditorAction) => {
+    const startedAt = startWysiwygPerfSpan()
     const classification = classifyEditorAction(action)
     pendingEditorActionClassificationRef.current = { action, classification }
     if (shouldSuppressLayoutLoadingOverlayForEditorAction(action, classification)) {
       suppressNextLayoutLoadingOverlayRef.current = true
     }
     dispatch(action)
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "editor-action-dispatch", startedAt, {
+      source: "dispatchEditorAction",
+      commandType: action.type,
+      uiImpact: classification.uiImpact,
+      layoutScope: classification.layoutScope,
+      priority: classification.priority,
+      layoutAffecting: classification.layoutScope !== "none",
+    })
   }, [])
   const pendingDragMoveRef = useRef<PendingDragMove | null>(null)
   const dragMoveFrameRef = useRef<number | null>(null)
@@ -2603,6 +2729,20 @@ export default function EditorShell() {
       canUseWorker: typeof Worker !== "undefined",
       inlineEditNodeId: inlineEditNodeIdAtSchedule,
     })
+    const effectStartedAt = startWysiwygPerfSpan()
+    recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      name: "pre-pagination:browser-pagination-effect-start",
+      startMs: effectStartedAt,
+      detail: {
+        generation,
+        debounceMs,
+        useBackgroundPagination,
+        documentId: previewDoc.document.id,
+        measurerStatus: editorTextMeasurerStatus,
+        fontReadyVersion,
+        inlineEditNodeId: inlineEditNodeIdAtSchedule,
+      },
+    })
     const precomputedPagination = precomputedBrowserPaginationRef.current
     if (precomputedPagination) {
       precomputedBrowserPaginationRef.current = null
@@ -2641,7 +2781,39 @@ export default function EditorShell() {
     }
 
     setBrowserPreviewLayout((current) => markEditorPreviewLayoutSettlingFromCurrent(generation, current))
+    if (!isEditorTextMeasurerReady(editorTextMeasurerStatus)) {
+      recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        name: "pre-pagination:browser-pagination-deferred-for-font-readiness",
+        startMs: startWysiwygPerfSpan(),
+        detail: {
+          generation,
+          measurerStatus: editorTextMeasurerStatus,
+          fontReadyVersion,
+        },
+      })
+      return () => undefined
+    }
+    const scheduleStartedAt = startWysiwygPerfSpan()
+    recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      name: "pre-pagination:browser-pagination-schedule-requested",
+      startMs: scheduleStartedAt,
+      detail: {
+        generation,
+        debounceMs,
+        useBackgroundPagination,
+        measurerStatus: editorTextMeasurerStatus,
+        fontReadyVersion,
+      },
+    })
     interactiveDebounceRef.current = setTimeout(() => {
+      interactiveDebounceRef.current = null
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:browser-pagination-debounce-delay", scheduleStartedAt, {
+        generation,
+        requestedDelayMs: debounceMs,
+        useBackgroundPagination,
+        measurerStatus: editorTextMeasurerStatus,
+        fontReadyVersion,
+      })
       if (generation !== browserPaginationGenerationRef.current) return
       if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
 
@@ -2682,6 +2854,7 @@ export default function EditorShell() {
       }
 
       if (useBackgroundPagination) {
+        const profilePagination = isPaginationProfileRuntimeEnabled()
         const worker = getBrowserPaginationWorker()
         if (worker) {
           const startedAt = startWysiwygPerfSpan()
@@ -2699,9 +2872,61 @@ export default function EditorShell() {
 
           worker.onmessage = (event: MessageEvent<BrowserPaginationWorkerResponse>) => {
             const response = event.data
-            if (!response || response.requestId !== requestId) return
-            if (generation !== browserPaginationGenerationRef.current) return
-            if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) return
+            if (!response) return
+            if (response.requestId !== requestId) {
+              recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+                name: "pre-pagination:worker-response-ignored",
+                startMs: startWysiwygPerfSpan(),
+                detail: {
+                  reason: "request-id-mismatch",
+                  activeRequestId: requestId,
+                  responseRequestId: response.requestId,
+                  activeGeneration: generation,
+                  currentGeneration: browserPaginationGenerationRef.current,
+                  responseType: response.type,
+                  ...(response.type === "success" ? {
+                    workerMeasurerStatus: response.measurerStatus,
+                    ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
+                  } : {}),
+                },
+              })
+              return
+            }
+            if (generation !== browserPaginationGenerationRef.current) {
+              recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+                name: "pre-pagination:worker-response-ignored",
+                startMs: startWysiwygPerfSpan(),
+                detail: {
+                  reason: "generation-mismatch",
+                  requestId,
+                  responseGeneration: generation,
+                  currentGeneration: browserPaginationGenerationRef.current,
+                  responseType: response.type,
+                  ...(response.type === "success" ? {
+                    workerMeasurerStatus: response.measurerStatus,
+                    ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
+                  } : {}),
+                },
+              })
+              return
+            }
+            if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) {
+              recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+                name: "pre-pagination:worker-response-ignored",
+                startMs: startWysiwygPerfSpan(),
+                detail: {
+                  reason: "inline-edit-node-changed",
+                  requestId,
+                  generation,
+                  responseType: response.type,
+                  ...(response.type === "success" ? {
+                    workerMeasurerStatus: response.measurerStatus,
+                    ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
+                  } : {}),
+                },
+              })
+              return
+            }
             if (requestSettled) return
             if (response.type === "partial") {
               setPartialPreviewPaginated({
@@ -2719,11 +2944,14 @@ export default function EditorShell() {
             requestSettled = true
             commitPagination(response.paginated, startedAt, "document-preview-worker", {
               workerMeasurerStatus: response.measurerStatus,
+              ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
+              ...(response.paginationProfile ? { paginationProfile: response.paginationProfile } : {}),
             })
           }
           worker.onerror = (event) => {
             fallbackToMainThread(event.message || "worker error")
           }
+          const requestBuildStartedAt = startWysiwygPerfSpan()
           const request: BrowserPaginationWorkerRequest = {
             type: "paginate",
             requestId,
@@ -2732,8 +2960,20 @@ export default function EditorShell() {
               pageIndex: currentCanvasPageIndex,
               marginPages: BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES,
             },
+            profilePagination,
           }
+          finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-request-payload-built", requestBuildStartedAt, {
+            requestId,
+            generation,
+            profilePagination,
+            visiblePageIndex: currentCanvasPageIndex,
+          })
+          const postStartedAt = startWysiwygPerfSpan()
           worker.postMessage(request)
+          finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-request-posted", postStartedAt, {
+            requestId,
+            generation,
+          })
           return
         }
       }
@@ -2741,7 +2981,19 @@ export default function EditorShell() {
       runMainThreadPagination(inlineEditNodeIdAtSchedule ? "inline-edit-preview" : "document-preview")
     }, debounceMs)
 
-    return () => { if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current) }
+    return () => {
+      if (interactiveDebounceRef.current) {
+        clearTimeout(interactiveDebounceRef.current)
+        recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          name: "pre-pagination:browser-pagination-schedule-cancelled",
+          startMs: startWysiwygPerfSpan(),
+          detail: {
+            generation,
+            debounceMs,
+          },
+        })
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorTextMeasurer, editorTextMeasurerStatus, fontReadyVersion, getBrowserPaginationWorker, markInlineEditVisualFresh, previewDoc])
 
@@ -2763,21 +3015,61 @@ export default function EditorShell() {
     suppressNextLayoutLoadingOverlayRef.current = false
     setSuppressLayoutLoadingOverlay(suppressLoadingOverlay)
 
+    if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
+
+    if (browserPreviewLayout.status !== "full") {
+      recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        name: "pre-pagination:server-pagination-deferred-for-browser-preview",
+        startMs: startWysiwygPerfSpan(),
+        detail: {
+          layoutVersion,
+          previewStatus: browserPreviewLayout.status,
+        },
+      })
+      return () => {
+        cancelled = true
+        if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
+      }
+    }
+
     window.addEventListener("pagehide", cancelForPageTransition, { once: true })
 
-    if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
+    const serverScheduleStartedAt = startWysiwygPerfSpan()
+    recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      name: "pre-pagination:server-pagination-schedule-requested",
+      startMs: serverScheduleStartedAt,
+      detail: {
+        layoutVersion,
+      },
+    })
     serverPaginationDebounceRef.current = setTimeout(() => {
+      serverPaginationDebounceRef.current = null
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:server-pagination-debounce-delay", serverScheduleStartedAt, {
+        layoutVersion,
+      })
       controller = new AbortController()
       setIsLayoutLoading(true)
       setLayoutStatus("reconciling")
 
+      const requestBuildStartedAt = startWysiwygPerfSpan()
+      const requestBody = JSON.stringify(previewDoc)
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:server-pagination-request-built", requestBuildStartedAt, {
+        layoutVersion,
+        sizeBytes: requestBody.length,
+      })
+      const requestStartedAt = startWysiwygPerfSpan()
       void fetch("/api/paginate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(previewDoc),
+        body: requestBody,
         signal: controller.signal,
       })
         .then(async (res) => {
+          finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:server-pagination-response", requestStartedAt, {
+            layoutVersion,
+            ok: res.ok,
+            status: res.status,
+          })
           if (!res.ok) {
             const message = await res.text()
             throw new Error(`paginate failed: ${res.status} ${message}`)
@@ -2846,7 +3138,7 @@ export default function EditorShell() {
       if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
       controller?.abort()
     }
-  }, [previewDoc])
+  }, [browserPreviewLayout.status, previewDoc])
 
   useEffect(() => {
     if (!isLayoutLoading) {
@@ -3882,6 +4174,8 @@ export default function EditorShell() {
       data-wysiwyg-text-engine-enabled={WYSIWYG_TEXT_ENGINE_ENABLED ? "true" : "false"}
       data-wysiwyg-rich-text-draft-enabled={WYSIWYG_RICH_TEXT_DRAFT_ENABLED ? "true" : "false"}
       data-wysiwyg-perf-trace-enabled={WYSIWYG_PERF_TRACE_ENABLED ? "true" : "false"}
+      data-document-id={state.doc.document.id}
+      data-document-title={state.doc.document.meta?.title ?? undefined}
       data-preview-layout-status={browserPreviewLayout.status}
       data-preview-layout-blocking={browserPreviewLayout.blocksCanvas ? "true" : "false"}
       style={{ fontFamily: "monospace", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", cursor: state.drag ? "grabbing" : (resizeDrag && !resizeDrag.committed) ? "col-resize" : (minHeightDrag && !minHeightDrag.committed) ? "row-resize" : (marginDrag && !marginDrag.committed) ? (marginDrag.side === "left" || marginDrag.side === "right" ? "ew-resize" : "ns-resize") : (headerFooterReservedDrag && !headerFooterReservedDrag.committed) ? "ns-resize" : "default", userSelect: state.drag || (resizeDrag && !resizeDrag.committed) || (minHeightDrag && !minHeightDrag.committed) || (marginDrag && !marginDrag.committed) || (headerFooterReservedDrag && !headerFooterReservedDrag.committed) ? "none" : undefined }}
@@ -4005,24 +4299,26 @@ export default function EditorShell() {
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <EditorLeftRail
-          mode={leftRailMode}
-          outlineDoc={isTemplateMode ? state.doc : previewDoc}
-          styleDoc={state.doc}
-          selectedNodeId={outlineSelectionState.selectedNodeId}
-          selectedStyleResource={selectedStyleResource}
-          activeOutlineListGroupId={outlineSelectionState.activeListGroupId}
-          registry={packageFieldRegistry}
-          editable={isTemplateMode}
-          isDragging={!!state.drag}
-          addPaletteScope={headerFooterEditMode ? "headerFooter" : "document"}
-          onModeChange={setLeftRailMode}
-          onSelectNode={selectLeftRailNode}
-          onSelectOutlineListGroup={selectOutlineListGroup}
-          onSelectStyleResource={selectStyleResource}
-          onReorderBodyChild={reorderLeftRailBodyChild}
-          onDragStart={startPaletteDrag}
-        />
+        <EditorSubtreePerfProfiler enabled={wysiwygPerfTraceActive} id="left-rail">
+          <EditorLeftRail
+            mode={leftRailMode}
+            outlineDoc={isTemplateMode ? state.doc : previewDoc}
+            styleDoc={state.doc}
+            selectedNodeId={outlineSelectionState.selectedNodeId}
+            selectedStyleResource={selectedStyleResource}
+            activeOutlineListGroupId={outlineSelectionState.activeListGroupId}
+            registry={packageFieldRegistry}
+            editable={isTemplateMode}
+            isDragging={!!state.drag}
+            addPaletteScope={headerFooterEditMode ? "headerFooter" : "document"}
+            onModeChange={setLeftRailMode}
+            onSelectNode={selectLeftRailNode}
+            onSelectOutlineListGroup={selectOutlineListGroup}
+            onSelectStyleResource={selectStyleResource}
+            onReorderBodyChild={reorderLeftRailBodyChild}
+            onDragStart={startPaletteDrag}
+          />
+        </EditorSubtreePerfProfiler>
         <EditorCanvasColumn
           saveStatusLabel={localSaveStatusLabel}
           saveStatusTone={localSaveStatusTone}
@@ -4237,6 +4533,7 @@ export default function EditorShell() {
           </div>
           {rightRailContentVisible && (
             <div data-testid="editor-right-rail-content" style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+              <EditorSubtreePerfProfiler enabled={wysiwygPerfTraceActive} id={`right-rail-${rightRailMode}`}>
               {rightRailMode === "page" ? (
                 <div data-testid="editor-right-rail-page" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
                   <PagePanel
@@ -4353,6 +4650,7 @@ export default function EditorShell() {
                   )}
                 </div>
               ) : null}
+              </EditorSubtreePerfProfiler>
             </div>
           )}
         </div>

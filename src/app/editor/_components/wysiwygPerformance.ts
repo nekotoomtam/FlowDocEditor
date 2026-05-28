@@ -1,4 +1,4 @@
-import type { PaginatedDocument } from "@/pagination"
+import type { PaginatedDocument, PaginationProfile } from "@/pagination"
 
 export type WysiwygPerfEventKind =
   | "inline-edit-draft-update"
@@ -10,6 +10,7 @@ export type WysiwygPerfEventKind =
   | "text-engine-pointer-selection-apply"
   | "text-engine-selection-overlay"
   | "editor-canvas-react-commit"
+  | "editor-action-dispatch"
   | "inline-edit-finalize"
   | "inline-edit-exit-pagination"
   | "active-paragraph-measure"
@@ -31,6 +32,9 @@ export interface WysiwygPerfEvent {
   scheduledDelayMs?: number
   source?: string
   commandType?: string
+  uiImpact?: string
+  layoutScope?: string
+  priority?: string
   styleFields?: string
   layoutAffecting?: boolean
   localStylePreview?: boolean
@@ -43,18 +47,30 @@ export interface WysiwygPerfEvent {
   commitTime?: number
   pageCount?: number
   fragmentCount?: number
+  paginationProfile?: PaginationProfile
+}
+
+export interface FlowDocPerfEvent {
+  name: string
+  startMs?: number
+  durationMs?: number
+  detail?: Record<string, unknown>
 }
 
 declare global {
   interface Window {
     __flowDocWysiwygPerfEvents?: WysiwygPerfEvent[]
     __flowDocWysiwygPerfTraceEnabled?: boolean
+    __flowDocPaginationProfileEnabled?: boolean
+    __FLOWDOC_PERF_EVENTS__?: FlowDocPerfEvent[]
   }
 }
 
-const MAX_WYSIWYG_PERF_EVENTS = 200
+const MAX_WYSIWYG_PERF_EVENTS = 600
 const WYSIWYG_PERF_TRACE_QUERY_PARAM = "flowdocWysiwygPerfTrace"
 const WYSIWYG_PERF_TRACE_STORAGE_KEY = "flowdoc.wysiwygPerfTrace"
+const PAGINATION_PROFILE_QUERY_PARAM = "flowdocProfilePagination"
+const PAGINATION_PROFILE_STORAGE_KEY = "flowdoc.profilePagination"
 const ENABLED_RUNTIME_VALUES = new Set(["", "1", "true", "on", "enabled"])
 
 function runtimeFlagEnabled(rawValue: string | null | undefined): boolean {
@@ -69,11 +85,11 @@ export function startWysiwygPerfSpan(): number {
   return Date.now()
 }
 
-export function appendWysiwygPerfEvent(
-  events: WysiwygPerfEvent[],
-  event: WysiwygPerfEvent,
+export function appendWysiwygPerfEvent<T>(
+  events: T[],
+  event: T,
   maxEvents: number = MAX_WYSIWYG_PERF_EVENTS,
-): WysiwygPerfEvent[] {
+): T[] {
   if (maxEvents <= 0) return []
   const next = events.length >= maxEvents
     ? events.slice(events.length - maxEvents + 1)
@@ -94,6 +110,40 @@ export function summarizePaginatedForWysiwygPerf(
     }
   }
   return { pageCount, fragmentCount }
+}
+
+function flowDocPerfEventName(kind: WysiwygPerfEventKind): string {
+  switch (kind) {
+    case "browser-preview-pagination":
+      return "pagination:browser"
+    case "inline-edit-start":
+      return "inline-edit:enter"
+    case "inline-edit-finalize":
+      return "inline-edit:finalize"
+    case "inline-edit-exit-pagination":
+      return "inline-edit:exit-pagination"
+    case "editor-canvas-react-commit":
+      return "react:commit"
+    case "editor-action-dispatch":
+      return "editor:action-dispatch"
+    default:
+      return kind
+  }
+}
+
+function toFlowDocPerfEvent(event: WysiwygPerfEvent): FlowDocPerfEvent {
+  const {
+    kind,
+    startedAt,
+    durationMs,
+    ...detail
+  } = event
+  return {
+    name: flowDocPerfEventName(kind),
+    startMs: startedAt,
+    durationMs,
+    detail,
+  }
 }
 
 export function isWysiwygPerfTraceRuntimeEnabled(
@@ -117,6 +167,24 @@ export function isWysiwygPerfTraceRuntimeEnabled(
   }
 }
 
+export function isPaginationProfileRuntimeEnabled(): boolean {
+  if (typeof window === "undefined") return false
+  if (typeof window.__flowDocPaginationProfileEnabled === "boolean") {
+    return window.__flowDocPaginationProfileEnabled
+  }
+
+  const search = window.location?.search ?? ""
+  if (runtimeFlagEnabled(new URLSearchParams(search).get(PAGINATION_PROFILE_QUERY_PARAM))) {
+    return true
+  }
+
+  try {
+    return runtimeFlagEnabled(window.localStorage?.getItem(PAGINATION_PROFILE_STORAGE_KEY))
+  } catch {
+    return false
+  }
+}
+
 export function finishWysiwygPerfSpan(
   enabled: boolean,
   kind: WysiwygPerfEventKind,
@@ -133,6 +201,22 @@ export function finishWysiwygPerfSpan(
   })
 }
 
+export function finishFlowDocPerfSpan(
+  enabled: boolean,
+  name: string,
+  startedAt: number,
+  detail: Record<string, unknown> = {},
+): void {
+  if (!isWysiwygPerfTraceRuntimeEnabled(enabled)) return
+  const endedAt = startWysiwygPerfSpan()
+  recordFlowDocPerfEvent(enabled, {
+    name,
+    startMs: startedAt,
+    durationMs: Math.max(0, endedAt - startedAt),
+    ...(Object.keys(detail).length > 0 ? { detail } : {}),
+  })
+}
+
 export function recordWysiwygPerfEvent(
   enabled: boolean,
   event: WysiwygPerfEvent,
@@ -141,6 +225,22 @@ export function recordWysiwygPerfEvent(
   if (typeof window === "undefined") return
   window.__flowDocWysiwygPerfEvents = appendWysiwygPerfEvent(
     window.__flowDocWysiwygPerfEvents ?? [],
+    event,
+  )
+  window.__FLOWDOC_PERF_EVENTS__ = appendWysiwygPerfEvent(
+    window.__FLOWDOC_PERF_EVENTS__ ?? [],
+    toFlowDocPerfEvent(event),
+  )
+}
+
+export function recordFlowDocPerfEvent(
+  enabled: boolean,
+  event: FlowDocPerfEvent,
+): void {
+  if (!isWysiwygPerfTraceRuntimeEnabled(enabled)) return
+  if (typeof window === "undefined") return
+  window.__FLOWDOC_PERF_EVENTS__ = appendWysiwygPerfEvent(
+    window.__FLOWDOC_PERF_EVENTS__ ?? [],
     event,
   )
 }
