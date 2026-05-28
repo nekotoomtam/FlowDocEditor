@@ -24,6 +24,41 @@ Each entry should include:
 
 ## 2026-05-28
 
+### Complete 0.6.22 Version Acceptance Slice
+
+Goal: Align the accepted project version marker with the already-bumped
+`0.6.22` package files without changing performance behavior.
+
+Completed:
+
+- Updated the project version marker test to assert the accepted `0.6.22`
+  baseline.
+- Updated `docs/VERSIONING.md` so the current baseline and version table include
+  `0.6.22`.
+- Recorded this as a version acceptance slice after the performance profiling
+  baseline work.
+
+Files changed:
+
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+
+Notes:
+
+- This slice intentionally does not change performance behavior, layout
+  behavior, pagination semantics, persisted document schema, or package storage
+  schema.
+
+---
+
 ### Profile Remaining Main-Thread Readiness And Interaction Costs
 
 Goal: Add profiling-only markers for the remaining post-font-scheduling
