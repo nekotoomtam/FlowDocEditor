@@ -16,7 +16,7 @@ Use this together with:
 |---|---:|---|---|
 | Legacy textarea editing | On | Stable fallback path for normal users. | Standard review gate and editor smoke. |
 | WYSIWYG inline edit helpers | Off | Experimental caret/visual helper path. | `NEXT_PUBLIC_FLOWDOC_WYSIWYG_INLINE_EDIT=1`. |
-| FlowDoc text engine | Off | Experimental SVG text/caret/selection editing lane. | `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`; production builds also require `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE_PRODUCTION_ACK=1`. |
+| FlowDoc text engine | Off | Experimental inline-edit lane. Current active typing baseline uses one visible native edit layer; FlowDoc-owned SVG/caret/selection parity remains deferred. | `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1`; production builds also require `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE_PRODUCTION_ACK=1`. |
 
 The text engine must not become the default user path until the release checklist
 below is fully PASS.
@@ -117,15 +117,19 @@ Expected result:
 - No page-boundary flicker that hides the active text.
 - Focus stays in the active edit bridge while typing.
 - Undo and redo each restore one intentional edit session.
-- No inline textarea appears in the text-engine lane.
+- The native edit layer may be visible during active typing. This is expected in
+  the current stability-first baseline.
+- No live echo, SVG draft replacement, measured draft-line swapping, or second
+  text layer appears over or under the native active edit layer.
 - No layout error badge appears.
 - Perf trace does not show full browser-preview pagination in the immediate
   input lane for normal typing.
 
 ## Known Closed Gates
 
-- Table-cell text-engine editing remains disabled until a separate table-cell
-  design gate is accepted.
+- Text-only table-cell editing may use the current native active edit layer, but
+  table-cell production validation remains a separate gate before default
+  enablement.
 - Row-stack paragraphs may use the text-engine lane, but independent row/column
   continuation remains deferred.
 - DOM accessibility status wiring exists, but full screen reader product

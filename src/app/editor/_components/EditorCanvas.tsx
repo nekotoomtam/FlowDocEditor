@@ -40,17 +40,39 @@ import {
   splitWysiwygDraftVisualFragments,
   type WysiwygDraftVisualPreview,
 } from "./wysiwygDraftVisualPreview"
-import { isParagraphInsideFlowStack, isParagraphInsideRowStack } from "./wysiwygTextEligibility"
+import { isParagraphInsideFlowStack, isParagraphInsideRowStack, isParagraphInsideTableCell } from "./wysiwygTextEligibility"
 import { resolveActiveInlineEditPageIndex } from "./editorPageFollow"
 import { buildSelectionContext, type SelectionContextItem } from "./selectionContext"
 import type { WysiwygTextInputKey } from "./useWysiwygTextSession"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
+import { recordWysiwygPerfEvent, startWysiwygPerfSpan } from "./wysiwygPerformance"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const INLINE_EDIT_CHROME_FILL = "#dbeafe"
 const WYSIWYG_TABLE_CELL_DRAFT_CHROME_FILL = "#dbeafe"
+const EMPTY_PAGE_FRAGMENTS: PageFragment[] = []
 type HeaderFooterZone = "header" | "footer"
+
+function useStableEvent<TArgs extends unknown[], TResult>(
+  callback: (...args: TArgs) => TResult,
+): (...args: TArgs) => TResult {
+  const callbackRef = useRef(callback)
+  callbackRef.current = callback
+  return useCallback((...args: TArgs) => callbackRef.current(...args), [])
+}
+
+function useStableOptionalEvent<TArgs extends unknown[], TResult>(
+  callback: ((...args: TArgs) => TResult) | undefined,
+): ((...args: TArgs) => TResult) | undefined {
+  const callbackRef = useRef(callback)
+  callbackRef.current = callback
+  const stableCallback = useCallback((...args: TArgs): TResult => {
+    const current = callbackRef.current
+    return current?.(...args) as TResult
+  }, [])
+  return callback ? stableCallback : undefined
+}
 
 interface HeaderFooterZoneScrollState {
   sectionIndex: number
@@ -294,6 +316,52 @@ export function buildWysiwygTableCellDraftVisualChromeFragments(input: {
   }
 
   return byPageIndex
+}
+
+type WysiwygTableCellLifecycleTraceState = {
+  signature: string
+  nodeId: string
+}
+
+function formatPageIndexList(indexes: Iterable<number>): string {
+  return Array.from(indexes)
+    .sort((a, b) => a - b)
+    .join(",")
+}
+
+function summarizeWysiwygDraftVisualPreview(preview: WysiwygDraftVisualPreview | null): {
+  previewFragmentCount: number
+  previewPageCount: number
+  pageIndexes: string
+} {
+  if (!preview) {
+    return {
+      previewFragmentCount: 0,
+      previewPageCount: 0,
+      pageIndexes: "",
+    }
+  }
+  return {
+    previewFragmentCount: preview.fragments.length,
+    previewPageCount: preview.fragmentsByPageIndex.size,
+    pageIndexes: formatPageIndexList(preview.fragmentsByPageIndex.keys()),
+  }
+}
+
+function summarizeWysiwygTableCellDraftVisualChrome(chromeByPageIndex: ReadonlyMap<number, PageFragment[]>): {
+  visualChromeCount: number
+  visualChromePageCount: number
+  pageIndexes: string
+} {
+  let visualChromeCount = 0
+  for (const fragments of chromeByPageIndex.values()) {
+    visualChromeCount += fragments.length
+  }
+  return {
+    visualChromeCount,
+    visualChromePageCount: chromeByPageIndex.size,
+    pageIndexes: formatPageIndexList(chromeByPageIndex.keys()),
+  }
 }
 
 type PendingClickAction = {
@@ -1238,6 +1306,39 @@ function renderFlowTableCellSelectionOutline(
   )
 }
 
+function renderBodyFragmentSelectionOutline(input: {
+  fragment: PageFragment
+  page: PaginatedPage
+  scale: number
+  isFlowStackParagraph: boolean
+}) {
+  const { fragment, page, scale, isFlowStackParagraph } = input
+  const fragHeight = fragmentVisibleInteractionHeight(fragment, page)
+  const paragraphChromeY = isFlowStackParagraph ? FLOW_STACK_PARAGRAPH_CHROME_Y : PARAGRAPH_CHROME_Y
+  const chromeTop = fragment.nodeType === "paragraph" ? paragraphChromeY : 0
+  const chromeBottom = fragment.nodeType === "paragraph" ? paragraphChromeY : 0
+  const chromeY = fragment.y * scale - chromeTop
+  const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
+  const selectionPad = isFlowStackParagraph ? 0 : 1
+
+  if (isFlowTableCellContinuationFragment(fragment)) {
+    return renderFlowTableCellSelectionOutline(fragment, scale, chromeY, chromeHeight, selectionPad)
+  }
+
+  return (
+    <rect
+      x={fragment.x * scale - selectionPad}
+      y={chromeY - selectionPad}
+      width={fragment.width * scale + selectionPad * 2}
+      height={chromeHeight + selectionPad * 2}
+      fill="none"
+      stroke="#2563eb"
+      strokeWidth={1.5}
+      style={{ pointerEvents: "none" }}
+    />
+  )
+}
+
 function caretIndexFromPointer(
   fragment: PageFragment,
   event: React.PointerEvent | React.MouseEvent,
@@ -2159,35 +2260,35 @@ function PageView({
   const editFragmentRef = useRef<ActiveEditFragmentRef | null>(null)
   const sectionPageSettings = doc.document.sections[sectionIndex]?.page ?? null
 
-  function clearHoverPathTimer() {
+  const clearHoverPathTimer = useCallback(() => {
     if (hoverPathTimerRef.current == null) return
     clearTimeout(hoverPathTimerRef.current)
     hoverPathTimerRef.current = null
-  }
+  }, [])
 
-  function queueHoverPath(nodeId: string) {
+  const queueHoverPath = useCallback((nodeId: string) => {
     if (drag || resizeDrag || minHeightDrag || marginDrag || marginEditMode || headerFooterEditMode) return
     clearHoverPathTimer()
     hoverPathTimerRef.current = setTimeout(() => {
       setHoverPathTarget({ nodeId, pageKey })
       hoverPathTimerRef.current = null
     }, CANVAS_PATH_HOVER_DELAY_MS)
-  }
+  }, [clearHoverPathTimer, drag, headerFooterEditMode, marginDrag, marginEditMode, minHeightDrag, pageKey, resizeDrag])
 
-  function clearHoverPath(nodeId?: string) {
+  const clearHoverPath = useCallback((nodeId?: string) => {
     clearHoverPathTimer()
     setHoverPathTarget((current) => {
       if (!current) return null
       if (nodeId && current.nodeId !== nodeId) return current
       return null
     })
-  }
+  }, [clearHoverPathTimer])
 
-  useEffect(() => () => clearHoverPathTimer(), [])
+  useEffect(() => () => clearHoverPathTimer(), [clearHoverPathTimer])
   useEffect(() => {
     if (!drag && !resizeDrag && !minHeightDrag && !marginDrag && !marginEditMode && !headerFooterEditMode) return
     clearHoverPath()
-  }, [drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode])
+  }, [clearHoverPath, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode])
 
   useEffect(() => {
     if (inlineEditNodeId == null) editFragmentRef.current = null
@@ -2196,10 +2297,16 @@ function PageView({
   const visualDraftFragmentForPage = wysiwygDraftVisualPreview?.fragmentsByPageIndex.get(page.index) ?? null
   const tableCellDraftVisualChromeFragments = visualDraftFragmentForPage
     ? wysiwygTableCellDraftVisualChromeByPageIndex.get(page.index) ?? []
-    : []
-  const tableCellDraftVisualChromeSet = new Set(tableCellDraftVisualChromeFragments)
-  const allTableCellDraftVisualChromeByKey = new Map(
-    tableCellDraftVisualChromeFragments.map((fragment) => [tableCellDraftVisualChromeKey(fragment), fragment] as const),
+    : EMPTY_PAGE_FRAGMENTS
+  const tableCellDraftVisualChromeSet = useMemo(
+    () => new Set(tableCellDraftVisualChromeFragments),
+    [tableCellDraftVisualChromeFragments],
+  )
+  const allTableCellDraftVisualChromeByKey = useMemo(
+    () => new Map(
+      tableCellDraftVisualChromeFragments.map((fragment) => [tableCellDraftVisualChromeKey(fragment), fragment] as const),
+    ),
+    [tableCellDraftVisualChromeFragments],
   )
   const hasRealVisualDraftFragment = visualDraftFragmentForPage
     ? page.fragments.some((fragment) =>
@@ -2213,9 +2320,12 @@ function PageView({
       fragment.nodeType === "paragraph"
     ) ?? null
     : null
-  const sourceTableCellDraftVisualChromeByKey = hasRealVisualDraftFragment
-    ? allTableCellDraftVisualChromeByKey
-    : new Map<string, PageFragment>()
+  const sourceTableCellDraftVisualChromeByKey = useMemo(
+    () => hasRealVisualDraftFragment
+      ? allTableCellDraftVisualChromeByKey
+      : new Map<string, PageFragment>(),
+    [allTableCellDraftVisualChromeByKey, hasRealVisualDraftFragment],
+  )
   const tableCellDraftVisualRowChrome = tableCellDraftVisualChromeFragments.find(isTableRowFragment)
   const realTableCellDraftVisualRow = tableCellDraftVisualRowChrome
     ? page.fragments.find((fragment) =>
@@ -2290,6 +2400,22 @@ function PageView({
     )
     return (caretCandidate ?? candidates[0]).index
   })()
+  const activeInlineEditSourceFragment = activeInlineEditRenderIndex >= 0
+    ? renderFragments[activeInlineEditRenderIndex] ?? null
+    : null
+  const activeInlineEditDisplayFragment = activeInlineEditSourceFragment
+    ? resolveDisplayFragment(activeInlineEditSourceFragment)
+    : null
+  const activeInlineEditIsPlainNativeParagraph = Boolean(
+    wysiwygTextEngineEnabled &&
+    activeInlineEditSourceFragment?.nodeType === "paragraph" &&
+    !tableCellIds.has(activeInlineEditSourceFragment.parentNodeId ?? "") &&
+    !flowStackParagraphIds.has(activeInlineEditSourceFragment.nodeId) &&
+    (
+      !activeInlineEditSourceFragment.parentNodeId ||
+      nodeById.get(activeInlineEditSourceFragment.parentNodeId)?.type !== "flow-stack"
+    ),
+  )
   const tableColumnResizeHandles = resolveTableColumnResizeHandles({
     doc,
     selectedNodeId,
@@ -2486,6 +2612,366 @@ function PageView({
   const selectedActionCanDelete = selectedActionIsHeaderFooterZone
     ? Boolean(selectedActionNode && selectedActionNode.type !== "body")
     : selectedActionCanDuplicate
+  const bodyFragmentElements = useMemo(() => renderFragments.map((f, i) => {
+    const isWysiwygTableCellDraftVisualChrome = tableCellDraftVisualChromeSet.has(f) ||
+      sourceTableCellDraftVisualChromeByKey.has(tableCellDraftVisualChromeKey(f))
+    const isWysiwygTableCellDraftStructureChrome = isWysiwygTableCellDraftVisualChrome && !isTableCellFragment(f)
+    const isTableStructureChrome = isTableStructureFragment(f, renderFragments)
+    const isHovered = f.nodeId === dragHoverNodeId || f.nodeId === normalHoverNodeId
+    const isFlowTableRowVisualOnly = f.nodeType === "flow-table-row"
+    const isLayoutNode = nodeById.has(f.nodeId)
+    const isDraggable = DRAGGABLE_TYPES.has(f.nodeType) && isLayoutNode
+    const isSelectable = SELECTABLE_NODE_TYPES.has(f.nodeType)
+    const selectNodeId = f.nodeId
+    const isTableCellParagraph = f.nodeType === "paragraph" && tableCellIds.has(f.parentNodeId ?? "")
+    const editableParagraphIds = wysiwygTextEngineEnabled ? textRunParagraphIds : plainTextParagraphIds
+    const canInlineEditThisParagraph = f.nodeType === "paragraph" && editableParagraphIds.has(f.nodeId)
+    const visualDisplayFragment = resolveDisplayFragment(f)
+    const isInlineEditing = i === activeInlineEditRenderIndex
+    if (isInlineEditing) {
+      if (
+        editFragmentRef.current?.nodeId !== f.nodeId ||
+        editFragmentRef.current?.pageKey !== pageKey
+      ) {
+        editFragmentRef.current = {
+          nodeId: f.nodeId,
+          pageKey,
+          fragment: { ...visualDisplayFragment },
+          visualOffsetY: 0,
+        }
+      } else {
+        editFragmentRef.current = {
+          ...editFragmentRef.current,
+          fragment: { ...visualDisplayFragment },
+          visualOffsetY: 0,
+        }
+      }
+    }
+    const displayFragment = isInlineEditing
+      ? editFragmentRef.current?.fragment ?? visualDisplayFragment
+      : visualDisplayFragment
+    const isFlowStackParagraph = f.nodeType === "paragraph" && (
+      flowStackParagraphIds.has(f.nodeId) ||
+      (f.parentNodeId ? nodeById.get(f.parentNodeId)?.type === "flow-stack" : false)
+    )
+    const isContinuationParagraphFragment = f.nodeType === "paragraph" &&
+      (displayFragment.continuesFrom === true || displayFragment.isContinued === true)
+    const isContinuationFlowTableCellFragment = isFlowTableCellContinuationFragment(displayFragment)
+    const shouldSuppressNativeInlineEditFragmentChrome = isInlineEditing && activeInlineEditIsPlainNativeParagraph
+    const shouldSuppressStalePageBreakForNativeEdit = activeInlineEditIsPlainNativeParagraph &&
+      activeInlineEditDisplayFragment != null &&
+      f.nodeType === "page-break" &&
+      f.pageIndex === activeInlineEditDisplayFragment.pageIndex &&
+      f.y >= activeInlineEditDisplayFragment.y
+    const shouldShowFragmentTypeLabel = !isFlowTableRowVisualOnly &&
+      !isTableStructureChrome &&
+      !isWysiwygTableCellDraftVisualChrome &&
+      !isContinuationParagraphFragment &&
+      !isContinuationFlowTableCellFragment
+    const docNode = nodeById.get(f.nodeId)
+    const isEmpty = (f.nodeType === "stack" || f.nodeType === "flow-stack") && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
+    let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = fragmentVisibleInteractionHeight(displayFragment, page)
+    if (resizeDrag?.type === "stack" && (f.nodeType === "stack" || f.nodeType === "flow-stack")) {
+      if (f.nodeId === resizeDrag.leftStackId) {
+        fragWidth = resizeDrag.currentDocX - f.x
+      } else if (f.nodeId === resizeDrag.rightStackId) {
+        fragX = resizeDrag.currentDocX + resizeDrag.gapWidthPt
+        fragWidth = (f.x + f.width) - fragX
+      }
+    }
+    if (minHeightDrag && !minHeightDrag.committed) {
+      if (f.nodeId === minHeightDrag.rowId || f.parentNodeId === minHeightDrag.rowId) {
+        fragHeight = Math.max(fragHeight, minHeightDrag.currentMinHeight)
+      }
+    }
+    const resizedDisplayFragment = fragX !== displayFragment.x || fragWidth !== displayFragment.width || fragHeight !== displayFragment.height
+      ? { ...displayFragment, x: fragX, width: fragWidth, height: fragHeight }
+      : displayFragment
+    const paragraphChromeY = isFlowStackParagraph ? FLOW_STACK_PARAGRAPH_CHROME_Y : PARAGRAPH_CHROME_Y
+    const chromeTop = f.nodeType === "paragraph" ? paragraphChromeY : 0
+    const chromeBottom = f.nodeType === "paragraph" ? paragraphChromeY : 0
+    const chromeY = displayFragment.y * scale - chromeTop
+    const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
+    const hasAuthoredFragmentBox = (f.nodeType === "paragraph" && Boolean(displayFragment.renderProps?.box)) ||
+      ((f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && Boolean(displayFragment.boxRenderProps))
+    const chromeFill = isFlowTableRowVisualOnly
+      ? "transparent"
+      : isTableStructureChrome ? "transparent"
+      : isWysiwygTableCellDraftStructureChrome ? "transparent"
+      : isWysiwygTableCellDraftVisualChrome ? WYSIWYG_TABLE_CELL_DRAFT_CHROME_FILL
+      : shouldSuppressNativeInlineEditFragmentChrome ? "transparent"
+      : hasAuthoredFragmentBox && !isInlineEditing ? "transparent" : isInlineEditing ? INLINE_EDIT_CHROME_FILL : "transparent"
+    const chromeStroke = isFlowTableRowVisualOnly || (hasAuthoredFragmentBox && !isInlineEditing && !isHovered)
+      ? "transparent"
+      : isTableStructureChrome ? "transparent"
+      : isWysiwygTableCellDraftStructureChrome ? "transparent"
+      : isWysiwygTableCellDraftVisualChrome ? "#60a5fa"
+      : shouldSuppressNativeInlineEditFragmentChrome ? "transparent"
+      : isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"
+    const chromeOpacity = isFlowTableRowVisualOnly
+      ? 0
+      : isTableStructureChrome ? 0
+      : isWysiwygTableCellDraftStructureChrome ? 0
+      : isWysiwygTableCellDraftVisualChrome ? 0.34
+      : shouldSuppressNativeInlineEditFragmentChrome ? 0
+      : hasAuthoredFragmentBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
+    const fragmentKey = buildEditorFragmentRenderKey(displayFragment, i, isInlineEditing)
+    const clipPathId = buildEditorFragmentClipPathId(pageKey, displayFragment, i)
+
+    return (
+      <g
+        key={fragmentKey}
+        data-testid="editor-fragment"
+        data-node-id={f.nodeId}
+        data-node-type={f.nodeType}
+        data-inline-editable={canInlineEditThisParagraph ? "true" : undefined}
+        data-page-index={displayFragment.pageIndex}
+        data-fragment-index={displayFragment.fragmentIndex ?? undefined}
+        data-line-start={displayFragment.lineStart ?? undefined}
+        data-line-end={displayFragment.lineEnd ?? undefined}
+        data-parent-node-id={displayFragment.parentNodeId ?? undefined}
+        data-table-structure-chrome={isTableStructureChrome ? "true" : undefined}
+        data-wysiwyg-table-cell-visual-chrome={isWysiwygTableCellDraftVisualChrome ? "true" : undefined}
+        data-wysiwyg-table-cell-structure-chrome={isWysiwygTableCellDraftStructureChrome ? "true" : undefined}
+        onPointerEnter={!isFlowTableRowVisualOnly && !drag && !resizeDrag && !minHeightDrag && !marginDrag && !marginEditMode && !headerFooterEditMode && !isInlineEditing
+          ? () => queueHoverPath(f.nodeId)
+          : undefined}
+        onPointerLeave={!isFlowTableRowVisualOnly
+          ? () => clearHoverPath(f.nodeId)
+          : undefined}
+        onPointerDown={!isFlowTableRowVisualOnly && (isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !marginEditMode && !headerFooterEditMode && !isInlineEditing
+          ? (e) => {
+            e.stopPropagation()
+            const clickAction = shouldStartInlineEditOnSingleClick({
+              canInlineEditParagraph: canInlineEditThisParagraph,
+              isTableCellParagraph,
+            })
+              ? {
+                  type: "inline-edit" as const,
+                  nodeId: f.nodeId,
+                  selectNodeId: isTableCellParagraph && f.parentNodeId ? f.parentNodeId : f.nodeId,
+                  caretIndex: wysiwygCaretMappingEnabled
+                    ? caretIndexFromPointer(displayFragment, e, scale, textMeasurer, true)
+                    : null,
+                  pageIndex: displayFragment.pageIndex,
+                }
+              : undefined
+            const nodeId = isTableCellParagraph && f.parentNodeId ? f.parentNodeId : selectNodeId
+            onNodePointerDown({ source: "document", nodeId }, e, clickAction)
+          }
+          : undefined}
+        onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "flow-table-cell") && !drag && !marginEditMode && !headerFooterEditMode
+          ? (e) => {
+            e.stopPropagation()
+            const paragraphId = f.nodeType === "flow-table-cell"
+              ? findFirstParagraphInCell(doc, f.nodeId, wysiwygTextEngineEnabled)
+              : f.nodeId
+            if (!paragraphId || !canInlineEditParagraph(doc, paragraphId, wysiwygTextEngineEnabled)) return
+            onInlineEditStart(
+              paragraphId,
+              f.nodeType === "paragraph" && wysiwygCaretMappingEnabled
+                ? caretIndexFromPointer(displayFragment, e, scale, textMeasurer, true)
+                : null,
+              displayFragment.pageIndex,
+            )
+          }
+          : undefined}
+        style={{
+          pointerEvents: isFlowTableRowVisualOnly || isWysiwygTableCellDraftVisualChrome ? "none" : undefined,
+          cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default",
+        }}
+      >
+        <rect
+          data-wysiwyg-native-edit-fragment-chrome-suppressed={shouldSuppressNativeInlineEditFragmentChrome ? "true" : undefined}
+          x={fragX * scale} y={chromeY}
+          width={Math.max(fragWidth * scale, 2)} height={chromeHeight}
+          fill={chromeFill}
+          stroke={chromeStroke}
+          strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
+          opacity={chromeOpacity}
+        />
+        {(f.nodeType === "paragraph" || f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && renderFragmentBox(resizedDisplayFragment, scale)}
+        {f.nodeType === "divider" && renderDividerFragment(displayFragment, scale)}
+        {f.nodeType === "page-break" && !shouldSuppressStalePageBreakForNativeEdit && renderPageBreakMarker(displayFragment, scale)}
+        {showDrift && f.nodeType === "paragraph" && (() => {
+          const drift = driftMap?.get(f.nodeId)
+          if (!drift) return null
+          const driftColor = drift.lineDelta !== 0
+            ? (drift.lineDelta > 0 ? "#f97316" : "#3b82f6")
+            : "#a855f7"
+          const label = drift.lineDelta !== 0
+            ? `${drift.lineDelta > 0 ? "+" : ""}${drift.lineDelta}L`
+            : "PG"
+          return (
+            <g style={{ pointerEvents: "none" }}>
+              <rect
+                x={f.x * scale} y={f.y * scale}
+                width={f.width * scale} height={Math.max(fragHeight * scale, 2)}
+                fill={driftColor} opacity={0.18}
+              />
+              <rect
+                x={f.x * scale} y={f.y * scale}
+                width={f.width * scale} height={Math.max(fragHeight * scale, 2)}
+                fill="none" stroke={driftColor} strokeWidth={1} opacity={0.6}
+              />
+              <text
+                x={(f.x + f.width) * scale - 3} y={(f.y + 7) * scale}
+                textAnchor="end" fontSize={6} fill={driftColor} fontWeight="bold"
+                style={{ userSelect: "none" }}
+              >
+                {label}
+              </text>
+            </g>
+          )
+        })()}
+        {shouldShowFragmentTypeLabel && (
+          <text x={displayFragment.x * scale + 3} y={displayFragment.y * scale + 8} fontSize={6} fill="#374151"
+            style={{ pointerEvents: "none", userSelect: "none" }}>
+            {displayFragmentNodeType(f.nodeType)}
+          </text>
+        )}
+        {isEmpty && (
+          <text
+            x={(resizedDisplayFragment.x + resizedDisplayFragment.width / 2) * scale} y={(resizedDisplayFragment.y + fragHeight / 2 + 3) * scale}
+            textAnchor="middle" fontSize={8 * scale} fill="#9ca3af"
+            style={{ pointerEvents: "none", userSelect: "none" }}>
+            วางที่นี่
+          </text>
+        )}
+        {(f.nodeType === "paragraph" || f.nodeType === "toc") && (
+          <ParagraphTextSurface
+            fragment={displayFragment}
+            doc={doc}
+            pageKey={pageKey}
+            clipPathId={clipPathId}
+            scale={scale}
+            pageContentBottom={page.contentBox.y + page.contentBox.height}
+            textMeasurer={textMeasurer}
+            isEditing={isInlineEditing}
+            isVisualFresh={isInlineEditing && inlineEditVisualFresh}
+            wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
+            wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
+            wysiwygTextDraftText={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextDraftText : null}
+            wysiwygTextCaretOffset={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextCaretOffset : null}
+            wysiwygTextSelection={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextSelection : null}
+            wysiwygTextVisualDraftLines={wysiwygTextDraftNodeId === f.nodeId ? visualDraftFragmentForPage?.lines ?? null : null}
+            wysiwygTextPointerFragments={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextPointerFragments : undefined}
+            wysiwygTextDraftPaginationActive={wysiwygTextDraftNodeId === f.nodeId && (wysiwygTextDraftPaginationActive || visualDraftFragmentForPage !== null)}
+            showTextSegments={showTextSegments}
+            initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
+            onChange={onInlineEditChange}
+            onCaretChange={onInlineEditCaretChange}
+            onUserEditInteraction={onInlineEditUserInteraction}
+            onHeightChange={onInlineEditHeightChange}
+            onEndEdit={onInlineEditEnd}
+            onSplitParagraph={onSplitParagraph}
+            onMergeParagraph={onMergeParagraph}
+            onExitListItem={onExitListItem}
+            onChangeListItemLevel={onChangeListItemLevel}
+            onBackspaceListItemAtStart={onBackspaceListItemAtStart}
+            onWysiwygTextDraftChange={onWysiwygTextDraftChange}
+            onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
+            onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
+          />
+        )}
+      </g>
+    )
+  }), [
+    activeInlineEditDisplayFragment,
+    activeInlineEditIsPlainNativeParagraph,
+    activeInlineEditRenderIndex,
+    clearHoverPath,
+    doc,
+    drag,
+    dragHoverNodeId,
+    driftMap,
+    flowStackParagraphIds,
+    headerFooterEditMode,
+    inlineEditCaretIndex,
+    inlineEditVisualFresh,
+    marginDrag,
+    marginEditMode,
+    minHeightDrag,
+    nodeById,
+    normalHoverNodeId,
+    onBackspaceListItemAtStart,
+    onChangeListItemLevel,
+    onExitListItem,
+    onInlineEditCaretChange,
+    onInlineEditChange,
+    onInlineEditEnd,
+    onInlineEditHeightChange,
+    onInlineEditStart,
+    onInlineEditUserInteraction,
+    onMergeParagraph,
+    onNodePointerDown,
+    onSplitParagraph,
+    onWysiwygRichTextShortcut,
+    onWysiwygTextDraftChange,
+    onWysiwygTextReflowDecision,
+    page,
+    pageKey,
+    plainTextParagraphIds,
+    queueHoverPath,
+    renderFragments,
+    resizeDrag,
+    scale,
+    showDrift,
+    showTextSegments,
+    sourceTableCellDraftVisualChromeByKey,
+    tableCellDraftVisualChromeSet,
+    tableCellIds,
+    textMeasurer,
+    textRunParagraphIds,
+    visualDraftFragmentForPage,
+    wysiwygCaretMappingEnabled,
+    wysiwygInlineEditEnabled,
+    wysiwygTextCaretOffset,
+    wysiwygTextDraftNodeId,
+    wysiwygTextDraftPaginationActive,
+    wysiwygTextDraftText,
+    wysiwygTextEngineEnabled,
+    wysiwygTextPointerFragments,
+    wysiwygTextSelection,
+  ])
+  const selectedBodyFragmentOutline = useMemo(() => {
+    if (!selectedNodeId || isHeaderFooterEditSection) return null
+    const selectedIndex = renderFragments.findIndex((fragment) => fragment.nodeId === selectedNodeId)
+    if (selectedIndex < 0 || selectedIndex === activeInlineEditRenderIndex) return null
+    const selectedFragment = renderFragments[selectedIndex]
+    if (!selectedFragment || selectedFragment.nodeType === "flow-table-row") return null
+    const displayFragment = visualDraftFragmentForPage &&
+      selectedFragment.nodeId === visualDraftFragmentForPage.nodeId &&
+      selectedFragment.nodeType === "paragraph"
+      ? visualDraftFragmentForPage
+      : sourceTableCellDraftVisualChromeByKey.get(tableCellDraftVisualChromeKey(selectedFragment)) ?? selectedFragment
+    const isFlowStackParagraph = selectedFragment.nodeType === "paragraph" && (
+      flowStackParagraphIds.has(selectedFragment.nodeId) ||
+      (selectedFragment.parentNodeId ? nodeById.get(selectedFragment.parentNodeId)?.type === "flow-stack" : false)
+    )
+
+    return (
+      <g data-testid="editor-fragment-selection-overlay" style={{ pointerEvents: "none" }}>
+        {renderBodyFragmentSelectionOutline({
+          fragment: displayFragment,
+          page,
+          scale,
+          isFlowStackParagraph,
+        })}
+      </g>
+    )
+  }, [
+    activeInlineEditRenderIndex,
+    flowStackParagraphIds,
+    isHeaderFooterEditSection,
+    nodeById,
+    page,
+    renderFragments,
+    scale,
+    selectedNodeId,
+    sourceTableCellDraftVisualChromeByKey,
+    visualDraftFragmentForPage,
+  ])
 
   return (
     // overflow: visible — ให้ inline editor ขยายเกิน SVG boundary ได้
@@ -2571,281 +3057,8 @@ function PageView({
       })()}
 
       {/* fragments */}
-      {renderFragments.map((f, i) => {
-        const isWysiwygTableCellDraftVisualChrome = tableCellDraftVisualChromeSet.has(f) ||
-          sourceTableCellDraftVisualChromeByKey.has(tableCellDraftVisualChromeKey(f))
-        const isWysiwygTableCellDraftStructureChrome = isWysiwygTableCellDraftVisualChrome && !isTableCellFragment(f)
-        const isTableStructureChrome = isTableStructureFragment(f, renderFragments)
-        const isHovered = f.nodeId === dragHoverNodeId || f.nodeId === normalHoverNodeId
-        const isFlowTableRowVisualOnly = f.nodeType === "flow-table-row"
-        const isLayoutNode = nodeById.has(f.nodeId)
-        const isDraggable = DRAGGABLE_TYPES.has(f.nodeType) && isLayoutNode
-        const isSelectable = SELECTABLE_NODE_TYPES.has(f.nodeType)
-        const selectNodeId = f.nodeId
-        const isSelected = f.nodeId === selectedNodeId
-        const isTableCellParagraph = f.nodeType === "paragraph" && tableCellIds.has(f.parentNodeId ?? "")
-        const editableParagraphIds = wysiwygTextEngineEnabled ? textRunParagraphIds : plainTextParagraphIds
-        const canInlineEditThisParagraph = f.nodeType === "paragraph" && editableParagraphIds.has(f.nodeId)
-        const visualDisplayFragment = resolveDisplayFragment(f)
-        // For split paragraphs: only the active fragment slice enters edit mode.
-        // Otherwise same-node continuation fragments can render duplicate editors.
-        const isInlineEditing = i === activeInlineEditRenderIndex
-        if (isInlineEditing) {
-          if (
-            editFragmentRef.current?.nodeId !== f.nodeId ||
-            editFragmentRef.current?.pageKey !== pageKey
-          ) {
-            editFragmentRef.current = {
-              nodeId: f.nodeId,
-              pageKey,
-              fragment: { ...visualDisplayFragment },
-              visualOffsetY: 0,
-            }
-          } else {
-            editFragmentRef.current = {
-              ...editFragmentRef.current,
-              fragment: { ...visualDisplayFragment },
-              visualOffsetY: 0,
-            }
-          }
-        }
-        const displayFragment = isInlineEditing
-          ? editFragmentRef.current?.fragment ?? visualDisplayFragment
-          : visualDisplayFragment
-        const isFlowStackParagraph = f.nodeType === "paragraph" && (
-          flowStackParagraphIds.has(f.nodeId) ||
-          (f.parentNodeId ? nodeById.get(f.parentNodeId)?.type === "flow-stack" : false)
-        )
-        const isContinuationParagraphFragment = f.nodeType === "paragraph" &&
-          (displayFragment.continuesFrom === true || displayFragment.isContinued === true)
-        const isContinuationFlowTableCellFragment = isFlowTableCellContinuationFragment(displayFragment)
-        const shouldShowFragmentTypeLabel = !isFlowTableRowVisualOnly &&
-          !isTableStructureChrome &&
-          !isWysiwygTableCellDraftVisualChrome &&
-          !isContinuationParagraphFragment &&
-          !isContinuationFlowTableCellFragment
-        const docNode = nodeById.get(f.nodeId)
-        const isEmpty = (f.nodeType === "stack" || f.nodeType === "flow-stack") && docNode && "childIds" in docNode && (docNode as { childIds: string[] }).childIds.length === 0
-        // visual override ระหว่าง resize
-        let fragX = displayFragment.x, fragWidth = displayFragment.width, fragHeight = fragmentVisibleInteractionHeight(displayFragment, page)
-        if (resizeDrag?.type === "stack" && (f.nodeType === "stack" || f.nodeType === "flow-stack")) {
-          if (f.nodeId === resizeDrag.leftStackId) {
-            fragWidth = resizeDrag.currentDocX - f.x
-          } else if (f.nodeId === resizeDrag.rightStackId) {
-            fragX = resizeDrag.currentDocX + resizeDrag.gapWidthPt
-            fragWidth = (f.x + f.width) - fragX
-          }
-        }
-        if (minHeightDrag && !minHeightDrag.committed) {
-          if (f.nodeId === minHeightDrag.rowId || f.parentNodeId === minHeightDrag.rowId) {
-            fragHeight = Math.max(fragHeight, minHeightDrag.currentMinHeight)
-          }
-        }
-        const resizedDisplayFragment = fragX !== displayFragment.x || fragWidth !== displayFragment.width || fragHeight !== displayFragment.height
-          ? { ...displayFragment, x: fragX, width: fragWidth, height: fragHeight }
-          : displayFragment
-        const paragraphChromeY = isFlowStackParagraph ? FLOW_STACK_PARAGRAPH_CHROME_Y : PARAGRAPH_CHROME_Y
-        const chromeTop = f.nodeType === "paragraph" ? paragraphChromeY : 0
-        const chromeBottom = f.nodeType === "paragraph" ? paragraphChromeY : 0
-        const chromeY = displayFragment.y * scale - chromeTop
-        const chromeHeight = Math.max(fragHeight * scale + chromeTop + chromeBottom, 2)
-        const hasAuthoredFragmentBox = (f.nodeType === "paragraph" && Boolean(displayFragment.renderProps?.box)) ||
-          ((f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && Boolean(displayFragment.boxRenderProps))
-        const chromeFill = isFlowTableRowVisualOnly
-          ? "transparent"
-          : isTableStructureChrome ? "transparent"
-          : isWysiwygTableCellDraftStructureChrome ? "transparent"
-          : isWysiwygTableCellDraftVisualChrome ? WYSIWYG_TABLE_CELL_DRAFT_CHROME_FILL
-          : hasAuthoredFragmentBox && !isInlineEditing ? "transparent" : isInlineEditing ? INLINE_EDIT_CHROME_FILL : "transparent"
-        const chromeStroke = isFlowTableRowVisualOnly || (hasAuthoredFragmentBox && !isInlineEditing && !isHovered)
-          ? "transparent"
-          : isTableStructureChrome ? "transparent"
-          : isWysiwygTableCellDraftStructureChrome ? "transparent"
-          : isWysiwygTableCellDraftVisualChrome ? "#60a5fa"
-          : isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"
-        const chromeOpacity = isFlowTableRowVisualOnly
-          ? 0
-          : isTableStructureChrome ? 0
-          : isWysiwygTableCellDraftStructureChrome ? 0
-          : isWysiwygTableCellDraftVisualChrome ? 0.34
-          : hasAuthoredFragmentBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
-        const selectionPad = isFlowStackParagraph ? 0 : 1
-        const fragmentKey = buildEditorFragmentRenderKey(displayFragment, i, isInlineEditing)
-        const clipPathId = buildEditorFragmentClipPathId(pageKey, displayFragment, i)
-
-        return (
-          <g
-            key={fragmentKey}
-            data-testid="editor-fragment"
-            data-node-id={f.nodeId}
-            data-node-type={f.nodeType}
-            data-inline-editable={canInlineEditThisParagraph ? "true" : undefined}
-            data-page-index={displayFragment.pageIndex}
-            data-fragment-index={displayFragment.fragmentIndex ?? undefined}
-            data-line-start={displayFragment.lineStart ?? undefined}
-            data-line-end={displayFragment.lineEnd ?? undefined}
-            data-parent-node-id={displayFragment.parentNodeId ?? undefined}
-            data-table-structure-chrome={isTableStructureChrome ? "true" : undefined}
-            data-wysiwyg-table-cell-visual-chrome={isWysiwygTableCellDraftVisualChrome ? "true" : undefined}
-            data-wysiwyg-table-cell-structure-chrome={isWysiwygTableCellDraftStructureChrome ? "true" : undefined}
-            onPointerEnter={!isFlowTableRowVisualOnly && !drag && !resizeDrag && !minHeightDrag && !marginDrag && !marginEditMode && !headerFooterEditMode && !isInlineEditing
-              ? () => queueHoverPath(f.nodeId)
-              : undefined}
-            onPointerLeave={!isFlowTableRowVisualOnly
-              ? () => clearHoverPath(f.nodeId)
-              : undefined}
-            onPointerDown={!isFlowTableRowVisualOnly && (isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !marginEditMode && !headerFooterEditMode && !isInlineEditing
-              ? (e) => {
-                e.stopPropagation()
-                const clickAction = shouldStartInlineEditOnSingleClick({
-                  canInlineEditParagraph: canInlineEditThisParagraph,
-                  isTableCellParagraph,
-                })
-                  ? {
-                      type: "inline-edit" as const,
-                      nodeId: f.nodeId,
-                      selectNodeId: isTableCellParagraph && f.parentNodeId ? f.parentNodeId : f.nodeId,
-                      caretIndex: wysiwygCaretMappingEnabled
-                        ? caretIndexFromPointer(displayFragment, e, scale, textMeasurer, true)
-                        : null,
-                      pageIndex: displayFragment.pageIndex,
-                    }
-                  : undefined
-                const nodeId = isTableCellParagraph && f.parentNodeId ? f.parentNodeId : selectNodeId
-                onNodePointerDown({ source: "document", nodeId }, e, clickAction)
-              }
-              : undefined}
-            onDoubleClick={(f.nodeType === "paragraph" || f.nodeType === "flow-table-cell") && !drag && !marginEditMode && !headerFooterEditMode
-              ? (e) => {
-                e.stopPropagation()
-                const paragraphId = f.nodeType === "flow-table-cell"
-                  ? findFirstParagraphInCell(doc, f.nodeId, wysiwygTextEngineEnabled)
-                  : f.nodeId
-                if (!paragraphId || !canInlineEditParagraph(doc, paragraphId, wysiwygTextEngineEnabled)) return
-                onInlineEditStart(
-                  paragraphId,
-                  f.nodeType === "paragraph" && wysiwygCaretMappingEnabled
-                    ? caretIndexFromPointer(displayFragment, e, scale, textMeasurer, true)
-                    : null,
-                  displayFragment.pageIndex,
-                )
-              }
-              : undefined}
-            style={{
-              pointerEvents: isFlowTableRowVisualOnly || isWysiwygTableCellDraftVisualChrome ? "none" : undefined,
-              cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default",
-            }}
-          >
-            <rect
-              x={fragX * scale} y={chromeY}
-              width={Math.max(fragWidth * scale, 2)} height={chromeHeight}
-              fill={chromeFill}
-              stroke={chromeStroke}
-              strokeWidth={isInlineEditing ? 1.5 : isHovered ? 1 : 0.5}
-              opacity={chromeOpacity}
-            />
-            {(f.nodeType === "paragraph" || f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && renderFragmentBox(resizedDisplayFragment, scale)}
-            {f.nodeType === "divider" && renderDividerFragment(displayFragment, scale)}
-            {f.nodeType === "page-break" && renderPageBreakMarker(displayFragment, scale)}
-            {isSelected && !isInlineEditing && !isFlowTableRowVisualOnly && (
-              isContinuationFlowTableCellFragment
-                ? renderFlowTableCellSelectionOutline(displayFragment, scale, chromeY, chromeHeight, selectionPad)
-                : (
-                  <rect
-                    x={resizedDisplayFragment.x * scale - selectionPad} y={chromeY - selectionPad}
-                    width={resizedDisplayFragment.width * scale + selectionPad * 2} height={chromeHeight + selectionPad * 2}
-                    fill="none" stroke="#2563eb" strokeWidth={1.5}
-                    style={{ pointerEvents: "none" }}
-                  />
-                )
-            )}
-            {showDrift && f.nodeType === "paragraph" && (() => {
-              const drift = driftMap?.get(f.nodeId)
-              if (!drift) return null
-              // page-break-only drift: purple; line-count drift: orange (+) or blue (-)
-              const driftColor = drift.lineDelta !== 0
-                ? (drift.lineDelta > 0 ? "#f97316" : "#3b82f6")
-                : "#a855f7"
-              const label = drift.lineDelta !== 0
-                ? `${drift.lineDelta > 0 ? "+" : ""}${drift.lineDelta}L`
-                : "PG"
-              return (
-                <g style={{ pointerEvents: "none" }}>
-                  <rect
-                    x={f.x * scale} y={f.y * scale}
-                    width={f.width * scale} height={Math.max(fragHeight * scale, 2)}
-                    fill={driftColor} opacity={0.18}
-                  />
-                  <rect
-                    x={f.x * scale} y={f.y * scale}
-                    width={f.width * scale} height={Math.max(fragHeight * scale, 2)}
-                    fill="none" stroke={driftColor} strokeWidth={1} opacity={0.6}
-                  />
-                  <text
-                    x={(f.x + f.width) * scale - 3} y={(f.y + 7) * scale}
-                    textAnchor="end" fontSize={6} fill={driftColor} fontWeight="bold"
-                    style={{ userSelect: "none" }}
-                  >
-                    {label}
-                  </text>
-                </g>
-              )
-            })()}
-            {shouldShowFragmentTypeLabel && (
-              <text x={displayFragment.x * scale + 3} y={displayFragment.y * scale + 8} fontSize={6} fill="#374151"
-                style={{ pointerEvents: "none", userSelect: "none" }}>
-                {displayFragmentNodeType(f.nodeType)}
-              </text>
-            )}
-            {isEmpty && (
-              <text
-                x={(resizedDisplayFragment.x + resizedDisplayFragment.width / 2) * scale} y={(resizedDisplayFragment.y + fragHeight / 2 + 3) * scale}
-                textAnchor="middle" fontSize={8 * scale} fill="#9ca3af"
-                style={{ pointerEvents: "none", userSelect: "none" }}>
-                วางที่นี่
-              </text>
-            )}
-
-            {/* ── text lines หรือ inline editor ── */}
-            {(f.nodeType === "paragraph" || f.nodeType === "toc") && (
-              <ParagraphTextSurface
-                fragment={displayFragment}
-                doc={doc}
-                pageKey={pageKey}
-                clipPathId={clipPathId}
-                scale={scale}
-                pageContentBottom={page.contentBox.y + page.contentBox.height}
-                textMeasurer={textMeasurer}
-                isEditing={isInlineEditing}
-                isVisualFresh={isInlineEditing && inlineEditVisualFresh}
-                wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
-                wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
-                wysiwygTextDraftText={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextDraftText : null}
-                wysiwygTextCaretOffset={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextCaretOffset : null}
-                wysiwygTextSelection={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextSelection : null}
-                wysiwygTextVisualDraftLines={wysiwygTextDraftNodeId === f.nodeId ? visualDraftFragmentForPage?.lines ?? null : null}
-                wysiwygTextPointerFragments={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextPointerFragments : undefined}
-                wysiwygTextDraftPaginationActive={wysiwygTextDraftNodeId === f.nodeId && (wysiwygTextDraftPaginationActive || visualDraftFragmentForPage !== null)}
-                showTextSegments={showTextSegments}
-                initialCaretIndex={isInlineEditing ? inlineEditCaretIndex : null}
-                onChange={onInlineEditChange}
-                onCaretChange={onInlineEditCaretChange}
-                onUserEditInteraction={onInlineEditUserInteraction}
-                onHeightChange={onInlineEditHeightChange}
-                onEndEdit={onInlineEditEnd}
-                onSplitParagraph={onSplitParagraph}
-                onMergeParagraph={onMergeParagraph}
-                onExitListItem={onExitListItem}
-                onChangeListItemLevel={onChangeListItemLevel}
-                onBackspaceListItemAtStart={onBackspaceListItemAtStart}
-                onWysiwygTextDraftChange={onWysiwygTextDraftChange}
-                onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
-                onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
-              />
-            )}
-          </g>
-        )
-      })}
+      {bodyFragmentElements}
+      {selectedBodyFragmentOutline}
 
       <HeaderFooterZoneLayer
         zone="header"
@@ -3615,6 +3828,49 @@ function LazyPageFrame({
   )
 }
 
+type EditorCanvasPageSlotProps = PageViewProps & {
+  rendered: boolean
+  setPageFrameRef: (key: string, el: HTMLDivElement | null) => void
+}
+
+function EditorCanvasPageSlot({
+  rendered,
+  setPageFrameRef,
+  ...pageViewProps
+}: EditorCanvasPageSlotProps) {
+  const { page, pageKey, scale } = pageViewProps
+
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>Page {page.index + 1}</div>
+      <LazyPageFrame
+        page={page}
+        pageKey={pageKey}
+        scale={scale}
+        rendered={rendered}
+        setPageFrameRef={setPageFrameRef}
+      >
+        <MemoizedPageView {...pageViewProps} />
+      </LazyPageFrame>
+    </div>
+  )
+}
+
+function areEditorCanvasPageSlotPropsEqual(
+  prev: Readonly<EditorCanvasPageSlotProps>,
+  next: Readonly<EditorCanvasPageSlotProps>,
+): boolean {
+  if (prev.rendered !== next.rendered) return false
+  if (prev.page !== next.page) return false
+  if (prev.pageKey !== next.pageKey) return false
+  if (prev.scale !== next.scale) return false
+  if (prev.setPageFrameRef !== next.setPageFrameRef) return false
+  if (!prev.rendered && !next.rendered) return true
+  return arePageViewPropsEqual(prev, next)
+}
+
+const MemoizedEditorCanvasPageSlot = memo(EditorCanvasPageSlot, areEditorCanvasPageSlotPropsEqual)
+
 interface Props {
   paginated: PaginatedDocument
   doc: DocumentNode
@@ -3793,6 +4049,38 @@ export function EditorCanvas({
   const pageVisibilityObserverRef = useRef<IntersectionObserver | null>(null)
   const [headerFooterZoneScroll, setHeaderFooterZoneScroll] = useState<HeaderFooterZoneScrollState | null>(null)
   const [lazyVisiblePageKeys, setLazyVisiblePageKeys] = useState<Set<string>>(() => new Set())
+  const tableCellVisualPreviewTraceRef = useRef<WysiwygTableCellLifecycleTraceState | null>(null)
+  const tableCellVisualChromeTraceRef = useRef<WysiwygTableCellLifecycleTraceState | null>(null)
+  const stableOnInlineEditStart = useStableEvent(onInlineEditStart)
+  const stableOnInlineEditChange = useStableEvent(onInlineEditChange)
+  const stableOnInlineEditCaretChange = useStableEvent(onInlineEditCaretChange)
+  const stableOnInlineEditUserInteraction = useStableEvent(onInlineEditUserInteraction)
+  const stableOnInlineEditHeightChange = useStableEvent(onInlineEditHeightChange)
+  const stableOnInlineEditEnd = useStableEvent(onInlineEditEnd)
+  const stableOnSplitParagraph = useStableEvent(onSplitParagraph)
+  const stableOnMergeParagraph = useStableEvent(onMergeParagraph)
+  const stableOnExitListItem = useStableOptionalEvent(onExitListItem)
+  const stableOnChangeListItemLevel = useStableOptionalEvent(onChangeListItemLevel)
+  const stableOnBackspaceListItemAtStart = useStableOptionalEvent(onBackspaceListItemAtStart)
+  const stableOnNodePointerDown = useStableEvent(onNodePointerDown)
+  const stableOnBackgroundPointerDown = useStableEvent(onBackgroundPointerDown)
+  const stableOnSelectContextNode = useStableEvent(onSelectContextNode)
+  const stableOnStartCloneDrag = useStableEvent(onStartCloneDrag)
+  const stableOnDeleteNode = useStableEvent(onDeleteNode)
+  const stableOnTableAction = useStableEvent(onTableAction)
+  const stableOnResizeStart = useStableEvent(onResizeStart)
+  const stableOnTableColumnResizeStart = useStableEvent(onTableColumnResizeStart)
+  const stableOnMinHeightResizeStart = useStableEvent(onMinHeightResizeStart)
+  const stableOnMarginEditModeEnter = useStableEvent(onMarginEditModeEnter)
+  const stableOnMarginEditModeExit = useStableEvent(onMarginEditModeExit)
+  const stableOnHeaderFooterEditModeEnter = useStableEvent(onHeaderFooterEditModeEnter)
+  const stableOnHeaderFooterEditModeExit = useStableEvent(onHeaderFooterEditModeExit)
+  const stableOnHeaderFooterZonePointerDown = useStableEvent(onHeaderFooterZonePointerDown)
+  const stableOnHeaderFooterReservedResizeStart = useStableEvent(onHeaderFooterReservedResizeStart)
+  const stableOnMarginResizeStart = useStableEvent(onMarginResizeStart)
+  const stableOnWysiwygTextDraftChange = useStableEvent(onWysiwygTextDraftChange)
+  const stableOnWysiwygRichTextShortcut = useStableOptionalEvent(onWysiwygRichTextShortcut)
+  const stableOnWysiwygTextReflowDecision = useStableEvent(onWysiwygTextReflowDecision)
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
   const pageKeyEntries = useMemo(() =>
     sections.flatMap((section, sectionIndex) =>
@@ -3849,6 +4137,13 @@ export function EditorCanvas({
     inlineEditNodeId === wysiwygTextDraftNodeId &&
     (wysiwygTextPointerFragmentIndex.bodyParagraphFragmentCountByNodeId.get(wysiwygTextDraftNodeId) ?? 0) > 1,
   )
+  const wysiwygTextDraftIsTableCellParagraph = useMemo(() =>
+    Boolean(
+      wysiwygTextEngineEnabled &&
+      wysiwygTextDraftNodeId &&
+      isParagraphInsideTableCell(doc, wysiwygTextDraftNodeId),
+    ),
+  [doc, wysiwygTextDraftNodeId, wysiwygTextEngineEnabled])
   const wysiwygDraftVisualPreview = useMemo(() => {
     if (!wysiwygTextEngineEnabled) return null
     if (!wysiwygTextDraftNodeId || wysiwygTextDraftText == null) return null
@@ -3906,6 +4201,136 @@ export function EditorCanvas({
       preview: wysiwygDraftVisualPreview,
     }),
   [paginated, wysiwygDraftVisualPreview])
+  useEffect(() => {
+    const previous = tableCellVisualPreviewTraceRef.current
+    const currentNodeId = wysiwygTextDraftNodeId
+    const shouldTraceActiveTableCellDraft = Boolean(
+      currentNodeId &&
+      wysiwygTextDraftIsTableCellParagraph,
+    )
+    if (!shouldTraceActiveTableCellDraft || !currentNodeId || !wysiwygDraftVisualPreview) {
+      if (previous) {
+        recordWysiwygPerfEvent(false, {
+          kind: "table-cell-visual-preview",
+          startedAt: startWysiwygPerfSpan(),
+          durationMs: 0,
+          nodeId: previous.nodeId,
+          draftVersion: wysiwygTextDraftDirtyVersion,
+          textLength: wysiwygTextDraftText?.length ?? undefined,
+          source: "cleared",
+          previewFragmentCount: 0,
+          previewPageCount: 0,
+          pageIndexes: "",
+          draftPaginationActive: wysiwygTextDraftPaginationActive,
+          existingSplitActive: wysiwygTextExistingSplitActive,
+          responsiveDraftPaginationRequested: false,
+        })
+        tableCellVisualPreviewTraceRef.current = null
+      }
+      return
+    }
+
+    const summary = summarizeWysiwygDraftVisualPreview(wysiwygDraftVisualPreview)
+    const signature = [
+      currentNodeId,
+      wysiwygTextDraftDirtyVersion,
+      summary.previewFragmentCount,
+      summary.pageIndexes,
+      wysiwygDraftVisualPreview.caretPageIndex ?? "none",
+    ].join(":")
+    if (previous?.signature === signature) return
+
+    recordWysiwygPerfEvent(false, {
+      kind: "table-cell-visual-preview",
+      startedAt: startWysiwygPerfSpan(),
+      durationMs: 0,
+      nodeId: currentNodeId,
+      pageIndex: wysiwygDraftVisualPreview.caretPageIndex,
+      draftVersion: wysiwygTextDraftDirtyVersion,
+      textLength: wysiwygTextDraftText?.length ?? undefined,
+      source: previous ? "updated" : "created",
+      ...summary,
+      draftPaginationActive: wysiwygTextDraftPaginationActive,
+      existingSplitActive: wysiwygTextExistingSplitActive,
+      responsiveDraftPaginationRequested: shouldQueueSettledTableCellDraftPagination,
+    })
+    tableCellVisualPreviewTraceRef.current = {
+      signature,
+      nodeId: currentNodeId,
+    }
+  }, [
+    shouldQueueSettledTableCellDraftPagination,
+    wysiwygDraftVisualPreview,
+    wysiwygTextDraftDirtyVersion,
+    wysiwygTextDraftIsTableCellParagraph,
+    wysiwygTextDraftNodeId,
+    wysiwygTextDraftPaginationActive,
+    wysiwygTextDraftText,
+    wysiwygTextExistingSplitActive,
+  ])
+  useEffect(() => {
+    const previous = tableCellVisualChromeTraceRef.current
+    const currentNodeId = wysiwygTextDraftNodeId
+    const summary = summarizeWysiwygTableCellDraftVisualChrome(wysiwygTableCellDraftVisualChromeByPageIndex)
+    const shouldTraceActiveTableCellDraft = Boolean(
+      currentNodeId &&
+      wysiwygTextDraftIsTableCellParagraph &&
+      summary.visualChromeCount > 0,
+    )
+    if (!shouldTraceActiveTableCellDraft || !currentNodeId) {
+      if (previous) {
+        recordWysiwygPerfEvent(false, {
+          kind: "table-cell-visual-chrome",
+          startedAt: startWysiwygPerfSpan(),
+          durationMs: 0,
+          nodeId: previous.nodeId,
+          draftVersion: wysiwygTextDraftDirtyVersion,
+          textLength: wysiwygTextDraftText?.length ?? undefined,
+          source: "cleared",
+          visualChromeCount: 0,
+          visualChromePageCount: 0,
+          pageIndexes: "",
+          draftPaginationActive: wysiwygTextDraftPaginationActive,
+          existingSplitActive: wysiwygTextExistingSplitActive,
+        })
+        tableCellVisualChromeTraceRef.current = null
+      }
+      return
+    }
+
+    const signature = [
+      currentNodeId,
+      wysiwygTextDraftDirtyVersion,
+      summary.visualChromeCount,
+      summary.pageIndexes,
+    ].join(":")
+    if (previous?.signature === signature) return
+
+    recordWysiwygPerfEvent(false, {
+      kind: "table-cell-visual-chrome",
+      startedAt: startWysiwygPerfSpan(),
+      durationMs: 0,
+      nodeId: currentNodeId,
+      draftVersion: wysiwygTextDraftDirtyVersion,
+      textLength: wysiwygTextDraftText?.length ?? undefined,
+      source: previous ? "updated" : "created",
+      ...summary,
+      draftPaginationActive: wysiwygTextDraftPaginationActive,
+      existingSplitActive: wysiwygTextExistingSplitActive,
+    })
+    tableCellVisualChromeTraceRef.current = {
+      signature,
+      nodeId: currentNodeId,
+    }
+  }, [
+    wysiwygTableCellDraftVisualChromeByPageIndex,
+    wysiwygTextDraftDirtyVersion,
+    wysiwygTextDraftIsTableCellParagraph,
+    wysiwygTextDraftNodeId,
+    wysiwygTextDraftPaginationActive,
+    wysiwygTextDraftText,
+    wysiwygTextExistingSplitActive,
+  ])
   const wysiwygTextPointerFragments = useMemo<WysiwygTextPointerFragmentTarget[]>(() => {
     if (!wysiwygTextEngineEnabled || !wysiwygTextDraftNodeId) return []
     const sourceFragments = wysiwygDraftVisualPreview?.fragments ?? null
@@ -4117,81 +4542,73 @@ export function EditorCanvas({
               })
 
               return (
-                <div key={`${section.sectionId}-${page.index}-${pi}`}>
-                  <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>Page {page.index + 1}</div>
-                  <LazyPageFrame
-                    page={page}
-                    pageKey={pageKey}
-                    scale={scale}
-                    rendered={rendered}
-                    setPageFrameRef={setPageFrameRef}
-                  >
-                    <MemoizedPageView
-                      page={page} doc={doc} drag={drag} scale={scale}
-                      selectedNodeId={selectedNodeId} selectionAnchorNodeId={selectionAnchorNodeId} isLayoutLoading={isLayoutLoading}
-                      textMeasurer={textMeasurer}
-                      inlineEditVisualFresh={inlineEditVisualFresh}
-                      inlineEditNodeId={inlineEditNodeId}
-                      inlineEditCaretIndex={inlineEditCaretIndex}
-                      inlineEditPageIndex={inlineEditPageIndex}
-                      inlineEditVisualLocked={inlineEditVisualLocked}
-                      onInlineEditStart={onInlineEditStart}
-                      onInlineEditChange={onInlineEditChange}
-                      onInlineEditCaretChange={onInlineEditCaretChange}
-                      onInlineEditUserInteraction={onInlineEditUserInteraction}
-                      onInlineEditHeightChange={onInlineEditHeightChange}
-                      onInlineEditEnd={onInlineEditEnd}
-                      onSplitParagraph={onSplitParagraph}
-                      onMergeParagraph={onMergeParagraph}
-                      onExitListItem={onExitListItem}
-                      onChangeListItemLevel={onChangeListItemLevel}
-                      onBackspaceListItemAtStart={onBackspaceListItemAtStart}
-                      pageKey={pageKey}
-                      onNodePointerDown={onNodePointerDown}
-                      onBackgroundPointerDown={onBackgroundPointerDown}
-                      onSelectContextNode={onSelectContextNode}
-                      onStartCloneDrag={onStartCloneDrag}
-                      onDeleteNode={onDeleteNode}
-                      onTableAction={onTableAction}
-                      resizeDrag={resizeDrag}
-                      onResizeStart={onResizeStart}
-                      onTableColumnResizeStart={onTableColumnResizeStart}
-                      minHeightDrag={minHeightDrag}
-                      onMinHeightResizeStart={onMinHeightResizeStart}
-                      sectionIndex={si}
-                      marginDrag={marginDrag}
-                      marginEditMode={marginEditMode}
-                      headerFooterEditMode={headerFooterEditMode}
-                      headerFooterReservedDrag={headerFooterReservedDrag}
-                      headerFooterZoneScroll={headerFooterZoneScroll}
-                      onMarginEditModeEnter={onMarginEditModeEnter}
-                      onMarginEditModeExit={onMarginEditModeExit}
-                      onHeaderFooterEditModeEnter={onHeaderFooterEditModeEnter}
-                      onHeaderFooterEditModeExit={onHeaderFooterEditModeExit}
-                      onHeaderFooterZonePointerDown={onHeaderFooterZonePointerDown}
-                      onHeaderFooterReservedResizeStart={onHeaderFooterReservedResizeStart}
-                      onHeaderFooterZoneScroll={handleHeaderFooterZoneScroll}
-                      onHeaderFooterZoneScrollTo={handleHeaderFooterZoneScrollTo}
-                      onMarginResizeStart={onMarginResizeStart}
-                      showTextSegments={showTextSegments}
-                      showDrift={showDrift}
-                      driftMap={driftMap}
-                      wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
-                      wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
-                      wysiwygTextDraftNodeId={wysiwygTextDraftNodeId}
-                      wysiwygTextDraftText={wysiwygTextDraftText}
-                      wysiwygTextCaretOffset={wysiwygTextCaretOffset}
-                      wysiwygTextSelection={wysiwygTextSelection}
-                      wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive}
-                      wysiwygDraftVisualPreview={wysiwygDraftVisualPreview}
-                      wysiwygTableCellDraftVisualChromeByPageIndex={wysiwygTableCellDraftVisualChromeByPageIndex}
-                      wysiwygTextPointerFragments={wysiwygTextPointerFragments}
-                      onWysiwygTextDraftChange={onWysiwygTextDraftChange}
-                      onWysiwygRichTextShortcut={onWysiwygRichTextShortcut}
-                      onWysiwygTextReflowDecision={onWysiwygTextReflowDecision}
-                    />
-                  </LazyPageFrame>
-                </div>
+                <MemoizedEditorCanvasPageSlot
+                  key={`${section.sectionId}-${page.index}-${pi}`}
+                  page={page} doc={doc} drag={drag} scale={scale}
+                  selectedNodeId={selectedNodeId} selectionAnchorNodeId={selectionAnchorNodeId} isLayoutLoading={isLayoutLoading}
+                  textMeasurer={textMeasurer}
+                  inlineEditVisualFresh={inlineEditVisualFresh}
+                  inlineEditNodeId={inlineEditNodeId}
+                  inlineEditCaretIndex={inlineEditCaretIndex}
+                  inlineEditPageIndex={inlineEditPageIndex}
+                  inlineEditVisualLocked={inlineEditVisualLocked}
+                  onInlineEditStart={stableOnInlineEditStart}
+                  onInlineEditChange={stableOnInlineEditChange}
+                  onInlineEditCaretChange={stableOnInlineEditCaretChange}
+                  onInlineEditUserInteraction={stableOnInlineEditUserInteraction}
+                  onInlineEditHeightChange={stableOnInlineEditHeightChange}
+                  onInlineEditEnd={stableOnInlineEditEnd}
+                  onSplitParagraph={stableOnSplitParagraph}
+                  onMergeParagraph={stableOnMergeParagraph}
+                  onExitListItem={stableOnExitListItem}
+                  onChangeListItemLevel={stableOnChangeListItemLevel}
+                  onBackspaceListItemAtStart={stableOnBackspaceListItemAtStart}
+                  pageKey={pageKey}
+                  onNodePointerDown={stableOnNodePointerDown}
+                  onBackgroundPointerDown={stableOnBackgroundPointerDown}
+                  onSelectContextNode={stableOnSelectContextNode}
+                  onStartCloneDrag={stableOnStartCloneDrag}
+                  onDeleteNode={stableOnDeleteNode}
+                  onTableAction={stableOnTableAction}
+                  resizeDrag={resizeDrag}
+                  onResizeStart={stableOnResizeStart}
+                  onTableColumnResizeStart={stableOnTableColumnResizeStart}
+                  minHeightDrag={minHeightDrag}
+                  onMinHeightResizeStart={stableOnMinHeightResizeStart}
+                  sectionIndex={si}
+                  marginDrag={marginDrag}
+                  marginEditMode={marginEditMode}
+                  headerFooterEditMode={headerFooterEditMode}
+                  headerFooterReservedDrag={headerFooterReservedDrag}
+                  headerFooterZoneScroll={headerFooterZoneScroll}
+                  onMarginEditModeEnter={stableOnMarginEditModeEnter}
+                  onMarginEditModeExit={stableOnMarginEditModeExit}
+                  onHeaderFooterEditModeEnter={stableOnHeaderFooterEditModeEnter}
+                  onHeaderFooterEditModeExit={stableOnHeaderFooterEditModeExit}
+                  onHeaderFooterZonePointerDown={stableOnHeaderFooterZonePointerDown}
+                  onHeaderFooterReservedResizeStart={stableOnHeaderFooterReservedResizeStart}
+                  onHeaderFooterZoneScroll={handleHeaderFooterZoneScroll}
+                  onHeaderFooterZoneScrollTo={handleHeaderFooterZoneScrollTo}
+                  onMarginResizeStart={stableOnMarginResizeStart}
+                  showTextSegments={showTextSegments}
+                  showDrift={showDrift}
+                  driftMap={driftMap}
+                  wysiwygInlineEditEnabled={wysiwygInlineEditEnabled}
+                  wysiwygTextEngineEnabled={wysiwygTextEngineEnabled}
+                  wysiwygTextDraftNodeId={wysiwygTextDraftNodeId}
+                  wysiwygTextDraftText={wysiwygTextDraftText}
+                  wysiwygTextCaretOffset={wysiwygTextCaretOffset}
+                  wysiwygTextSelection={wysiwygTextSelection}
+                  wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive}
+                  wysiwygDraftVisualPreview={wysiwygDraftVisualPreview}
+                  wysiwygTableCellDraftVisualChromeByPageIndex={wysiwygTableCellDraftVisualChromeByPageIndex}
+                  wysiwygTextPointerFragments={wysiwygTextPointerFragments}
+                  onWysiwygTextDraftChange={stableOnWysiwygTextDraftChange}
+                  onWysiwygRichTextShortcut={stableOnWysiwygRichTextShortcut}
+                  onWysiwygTextReflowDecision={stableOnWysiwygTextReflowDecision}
+                  rendered={rendered}
+                  setPageFrameRef={setPageFrameRef}
+                />
               )
             })}
           </div>

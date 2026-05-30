@@ -62,7 +62,7 @@ const SMOKE_TARGETS = {
     cellId: "stage3-table-cell-target-cell",
     marker: "STAGE3_TABLE_CELL_MARKER",
     appendText: TABLE_CELL_APPEND_TEXT,
-    expectedCellNodeType: "table-cell",
+    expectedCellNodeType: "flow-table-cell",
   },
   "flow-table-colspan": {
     id: "flow-table-colspan",
@@ -151,7 +151,10 @@ const smokeBrowser = getSmokeBrowserConfig({ headless })
 
 const targetFragmentSelector = `[data-testid="editor-fragment"][data-node-id="${smokeTarget.nodeId}"]`
 const bridgeSelector = `[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${smokeTarget.nodeId}"]`
-const textareaSelector = "textarea[data-inline-edit-node-id]"
+const textEngineLayerSelector = `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${smokeTarget.nodeId}"]`
+const nativeEditLayerSelector = `[data-wysiwyg-native-edit-layer="true"][data-inline-edit-node-id="${smokeTarget.nodeId}"]`
+const nativeTextareaSelector = `textarea[data-wysiwyg-native-edit-textarea="true"][data-inline-edit-node-id="${smokeTarget.nodeId}"]`
+const legacyTextareaSelector = `textarea[data-inline-edit-node-id]:not([data-wysiwyg-native-edit-textarea="true"])`
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -287,9 +290,26 @@ async function expectNoLayoutError(page) {
   assert(await page.getByTestId("layout-error-badge").count() === 0, "layout error badge is visible")
 }
 
-async function expectNoTextarea(page) {
-  const textareaCount = await page.locator(textareaSelector).count()
-  assert(textareaCount === 0, `expected no inline textarea, found ${textareaCount}`)
+async function expectNativeEditLayerOnly(page) {
+  const layer = page.locator(textEngineLayerSelector)
+  const nativeLayerCount = await page.locator(nativeEditLayerSelector).count()
+  const nativeTextareaCount = await page.locator(nativeTextareaSelector).count()
+  const legacyTextareaCount = await page.locator(legacyTextareaSelector).count()
+  const liveEchoCount = await layer.locator('[data-wysiwyg-live-echo="true"]').count()
+  const liveCaretCount = await layer.locator('[data-wysiwyg-live-caret="true"]').count()
+  const draftReplacementCount = await layer.locator('[data-wysiwyg-draft-text-replacement="true"]').count()
+
+  assert(await layer.count() === 1, `expected one active text-engine layer, found ${await layer.count()}`)
+  assert(nativeLayerCount === 1, `expected one native edit layer, found ${nativeLayerCount}`)
+  assert(nativeTextareaCount === 1, `expected one native edit textarea, found ${nativeTextareaCount}`)
+  assert(legacyTextareaCount === 0, `legacy inline textarea leaked into active edit path: ${legacyTextareaCount}`)
+  assert(liveEchoCount === 0, `live echo leaked into active native edit path: ${liveEchoCount}`)
+  assert(liveCaretCount === 0, `live caret leaked into active native edit path: ${liveCaretCount}`)
+  assert(draftReplacementCount === 0, `draft replacement leaked into active native edit path: ${draftReplacementCount}`)
+  assert(
+    await layer.first().getAttribute("data-wysiwyg-active-visual-mode") === "native-edit-layer",
+    "expected native edit layer to own the active visual mode",
+  )
 }
 
 async function resetWysiwygPerfEvents(page) {
@@ -301,29 +321,139 @@ async function resetWysiwygPerfEvents(page) {
 async function readTableCellPerf(page) {
   return page.evaluate((targetNodeId) => {
     const events = window.__flowDocWysiwygPerfEvents ?? []
+    const round = (value) => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null)
+    const summarizeEvent = (event) => event
+      ? {
+          kind: event.kind,
+          startedAt: round(event.startedAt),
+          durationMs: round(event.durationMs ?? 0),
+          requestedDelayMs: event.requestedDelayMs ?? null,
+          scheduledDelayMs: event.scheduledDelayMs ?? null,
+          source: event.source ?? null,
+          pageCount: event.pageCount ?? null,
+          fragmentCount: event.fragmentCount ?? null,
+          pageIndex: event.pageIndex ?? null,
+          pageIndexes: event.pageIndexes ?? null,
+          textLength: event.textLength ?? null,
+          draftVersion: event.draftVersion ?? null,
+          previousNodeId: event.previousNodeId ?? null,
+          active: event.active ?? null,
+          firstRequestedAtMs: round(event.firstRequestedAtMs ?? null),
+          reflowKind: event.reflowKind ?? null,
+          reflowReason: event.reflowReason ?? null,
+          responsiveDraftPaginationRequested: event.responsiveDraftPaginationRequested ?? null,
+          isTableCellParagraph: event.isTableCellParagraph ?? null,
+          isFlowStackParagraph: event.isFlowStackParagraph ?? null,
+          draftPaginationActive: event.draftPaginationActive ?? null,
+          existingSplitActive: event.existingSplitActive ?? null,
+          currentFragmentCount: event.currentFragmentCount ?? null,
+          previewFragmentCount: event.previewFragmentCount ?? null,
+          previewPageCount: event.previewPageCount ?? null,
+          previewCandidateCount: event.previewCandidateCount ?? null,
+          visualChromeCount: event.visualChromeCount ?? null,
+          visualChromePageCount: event.visualChromePageCount ?? null,
+          remainingVisualChromeCount: event.remainingVisualChromeCount ?? null,
+        }
+      : null
     const draftUpdates = events.filter((event) =>
       event.kind === "inline-edit-draft-update" && event.nodeId === targetNodeId
     )
     const paginations = events.filter((event) =>
       event.kind === "browser-preview-pagination" && event.nodeId === targetNodeId
     )
+    const reflowDecisions = events.filter((event) =>
+      event.kind === "table-cell-reflow-decision" && event.nodeId === targetNodeId
+    )
+    const draftPaginationSchedules = events.filter((event) =>
+      event.kind === "draft-pagination-schedule" && event.nodeId === targetNodeId
+    )
+    const draftPaginationStates = events.filter((event) =>
+      event.kind === "draft-pagination-state" && (event.nodeId === targetNodeId || event.previousNodeId === targetNodeId)
+    )
+    const visualPreviewEvents = events.filter((event) =>
+      event.kind === "table-cell-visual-preview" && event.nodeId === targetNodeId
+    )
+    const visualChromeEvents = events.filter((event) =>
+      event.kind === "table-cell-visual-chrome" && event.nodeId === targetNodeId
+    )
+    const firstDraftUpdate = draftUpdates[0] ?? null
     const lastDraftUpdate = draftUpdates[draftUpdates.length - 1] ?? null
+    const firstPagination = paginations[0] ?? null
     const firstPaginationAfterDraft = lastDraftUpdate
       ? paginations.find((event) => event.startedAt >= lastDraftUpdate.startedAt) ?? null
       : paginations[0] ?? null
     const maxDuration = (items) => items.reduce((max, event) => Math.max(max, event.durationMs ?? 0), 0)
     const lastPagination = paginations[paginations.length - 1] ?? null
+    const fromStart = (from, to) => from && to ? round(to.startedAt - from.startedAt) : null
+    const fromEnd = (from, to) => from && to ? round(to.startedAt - (from.startedAt + (from.durationMs ?? 0))) : null
+    const eventsBefore = (items, beforeEvent) => beforeEvent
+      ? items.filter((event) => event.startedAt <= beforeEvent.startedAt)
+      : []
+    const maxField = (items, field) => items.reduce((max, event) => Math.max(max, Number(event[field] ?? 0)), 0)
+    const firstVisualPreviewCreated = visualPreviewEvents.find((event) => event.source === "created") ?? null
+    const firstVisualPreviewCleared = visualPreviewEvents.find((event) => event.source === "cleared") ?? null
+    const firstVisualChromeCreated = visualChromeEvents.find((event) => event.source === "created") ?? null
+    const firstVisualChromeCleared = visualChromeEvents.find((event) => event.source === "cleared") ?? null
+    const visualPreviewBeforePagination = eventsBefore(visualPreviewEvents, firstPaginationAfterDraft)
+    const visualChromeBeforePagination = eventsBefore(visualChromeEvents, firstPaginationAfterDraft)
+    const firstPaginationUsedLatestDraftVersion =
+      Boolean(firstPaginationAfterDraft && lastDraftUpdate) &&
+      firstPaginationAfterDraft.draftVersion === lastDraftUpdate.draftVersion
 
     return {
       draftUpdates: draftUpdates.length,
       browserPreviewPaginations: paginations.length,
+      reflowDecisions: reflowDecisions.length,
+      draftPaginationSchedules: draftPaginationSchedules.length,
+      draftPaginationStates: draftPaginationStates.length,
+      visualPreviewEvents: visualPreviewEvents.length,
+      visualChromeEvents: visualChromeEvents.length,
       firstPaginationDelayMs: lastDraftUpdate && firstPaginationAfterDraft
-        ? firstPaginationAfterDraft.startedAt - lastDraftUpdate.startedAt
+        ? round(firstPaginationAfterDraft.startedAt - lastDraftUpdate.startedAt)
         : null,
+      firstDraftToFirstPaginationStartMs: fromStart(firstDraftUpdate, firstPagination),
+      lastDraftEndToFirstPaginationStartMs: fromEnd(lastDraftUpdate, firstPaginationAfterDraft),
+      firstPaginationRequestedDelayMs: firstPaginationAfterDraft?.requestedDelayMs ?? null,
+      firstPaginationScheduledDelayMs: firstPaginationAfterDraft?.scheduledDelayMs ?? null,
+      firstPaginationSource: firstPaginationAfterDraft?.source ?? null,
+      firstPaginationRevision: firstPaginationAfterDraft?.draftVersion ?? null,
+      firstPaginationUsedLatestDraftVersion,
+      firstPaginationDurationMs: round(firstPaginationAfterDraft?.durationMs ?? null),
       maxDraftUpdateDurationMs: maxDuration(draftUpdates),
       maxPaginationDurationMs: maxDuration(paginations),
       lastPaginationPageCount: lastPagination?.pageCount ?? null,
       lastPaginationFragmentCount: lastPagination?.fragmentCount ?? null,
+      firstDraftUpdate: summarizeEvent(firstDraftUpdate),
+      lastDraftUpdate: summarizeEvent(lastDraftUpdate),
+      firstPagination: summarizeEvent(firstPaginationAfterDraft),
+      firstReflowDecision: summarizeEvent(reflowDecisions[0] ?? null),
+      firstDraftPaginationSchedule: summarizeEvent(draftPaginationSchedules[0] ?? null),
+      lastDraftPaginationSchedule: summarizeEvent(draftPaginationSchedules[draftPaginationSchedules.length - 1] ?? null),
+      firstDraftPaginationState: summarizeEvent(draftPaginationStates[0] ?? null),
+      lastDraftPaginationState: summarizeEvent(draftPaginationStates[draftPaginationStates.length - 1] ?? null),
+      firstVisualPreviewCreated: summarizeEvent(firstVisualPreviewCreated),
+      firstVisualPreviewCleared: summarizeEvent(firstVisualPreviewCleared),
+      lastVisualPreviewEvent: summarizeEvent(visualPreviewEvents[visualPreviewEvents.length - 1] ?? null),
+      firstVisualChromeCreated: summarizeEvent(firstVisualChromeCreated),
+      firstVisualChromeCleared: summarizeEvent(firstVisualChromeCleared),
+      lastVisualChromeEvent: summarizeEvent(visualChromeEvents[visualChromeEvents.length - 1] ?? null),
+      maxPreviewFragmentCountBeforePagination: maxField(visualPreviewBeforePagination, "previewFragmentCount"),
+      maxVisualChromeCountBeforePagination: maxField(visualChromeBeforePagination, "visualChromeCount"),
+      traceEvents: events
+        .filter((event) =>
+          event.kind === "editor-canvas-react-commit" ||
+          event.kind === "text-engine-draft-measure" ||
+          event.kind === "draft-pagination-schedule" ||
+          event.kind === "draft-pagination-state" ||
+          (event.nodeId === targetNodeId && (
+            event.kind === "inline-edit-draft-update" ||
+            event.kind === "browser-preview-pagination" ||
+            event.kind === "table-cell-reflow-decision" ||
+            event.kind === "table-cell-visual-preview" ||
+            event.kind === "table-cell-visual-chrome"
+          ))
+        )
+        .map(summarizeEvent),
     }
   }, smokeTarget.nodeId)
 }
@@ -345,7 +475,7 @@ async function openTableTarget(page) {
   await target.scrollIntoViewIfNeeded()
   await target.dblclick()
   await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
-  await expectNoTextarea(page)
+  await expectNativeEditLayerOnly(page)
 }
 
 async function assertContinuationSingleClickReentry(page, pages) {
@@ -365,7 +495,7 @@ async function assertContinuationSingleClickReentry(page, pages) {
   await continuation.scrollIntoViewIfNeeded()
   await continuation.click()
   await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
-  await expectNoTextarea(page)
+  await expectNativeEditLayerOnly(page)
 
   const bridge = page.locator(bridgeSelector)
   await bridge.focus()
@@ -377,7 +507,7 @@ async function assertContinuationSingleClickReentry(page, pages) {
     { marker: reentryMarker },
     { timeout: 10000 },
   )
-  await expectNoTextarea(page)
+  await expectNativeEditLayerOnly(page)
   await expectNoLayoutError(page)
 
   return {
@@ -419,7 +549,7 @@ async function assertTableCellBoundaryFlow(page) {
       cause: error,
     })
   }
-  await expectNoTextarea(page)
+  await expectNativeEditLayerOnly(page)
   await expectNoLayoutError(page)
 
   const state = await page.evaluate((input) => {
@@ -463,6 +593,7 @@ async function assertTableCellBoundaryFlow(page) {
     const layer = document.querySelector(`[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${targetNodeId}"]`)
     const inputBridge = document.querySelector(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${targetNodeId}"]`)
     const caret = layer?.querySelector('[data-wysiwyg-caret="true"], [data-wysiwyg-live-caret="true"]') ?? null
+    const nativeTextarea = layer?.querySelector('[data-wysiwyg-native-edit-textarea="true"]') ?? null
     const cellBoxes = readFragmentBoxes(targetCellId)
     const rowIds = cellBoxes
       .map((box) => box.parentNodeId)
@@ -476,8 +607,16 @@ async function assertTableCellBoundaryFlow(page) {
       previewCandidateCount: document.querySelectorAll('[data-wysiwyg-table-cell-preview-candidate="true"]').length,
       visualChromeCount: document.querySelectorAll('[data-wysiwyg-table-cell-visual-chrome="true"]').length,
       layerCount: document.querySelectorAll(`[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${targetNodeId}"]`).length,
+      activeVisualMode: layer?.getAttribute("data-wysiwyg-active-visual-mode") ?? null,
+      activeVisualDetail: layer?.getAttribute("data-wysiwyg-active-visual-detail") ?? null,
+      nativeTextareaCount: layer?.querySelectorAll('[data-wysiwyg-native-edit-textarea="true"]').length ?? 0,
+      legacyTextareaCount: document.querySelectorAll(`textarea[data-inline-edit-node-id="${targetNodeId}"]:not([data-wysiwyg-native-edit-textarea="true"])`).length,
+      liveEchoCount: layer?.querySelectorAll('[data-wysiwyg-live-echo="true"]').length ?? 0,
+      liveCaretCount: layer?.querySelectorAll('[data-wysiwyg-live-caret="true"]').length ?? 0,
+      draftReplacementCount: layer?.querySelectorAll('[data-wysiwyg-draft-text-replacement="true"]').length ?? 0,
       inputBridgeCaretColor: inputBridge ? getComputedStyle(inputBridge).caretColor : null,
       inputBridgeBox: readDomBox(inputBridge),
+      nativeTextareaBox: readDomBox(nativeTextarea),
       caretBox: readDomBox(caret),
       targetBoxes: readFragmentBoxes(targetNodeId),
       cellBoxes,
@@ -506,16 +645,49 @@ async function assertTableCellBoundaryFlow(page) {
   assert(state.fragmentCount >= expectedMinPages, `expected table-cell target to split into at least ${expectedMinPages} fragments, got ${state.fragmentCount}`)
   assert(state.pages.length >= expectedMinPages, `expected table-cell target on at least ${expectedMinPages} pages, got ${JSON.stringify(state.pages)}`)
   assert(state.layerCount === 1, `expected one active text-engine layer, found ${state.layerCount}`)
+  assert(state.activeVisualMode === "native-edit-layer", `expected native-edit-layer visual mode, got ${state.activeVisualMode}`)
+  assert(state.activeVisualDetail === "native-textarea", `expected native-textarea visual detail, got ${state.activeVisualDetail}`)
+  assert(state.nativeTextareaCount === 1, `expected one native edit textarea, got ${state.nativeTextareaCount}`)
+  assert(state.legacyTextareaCount === 0, `legacy inline textarea leaked into table-cell edit path: ${state.legacyTextareaCount}`)
+  assert(state.liveEchoCount === 0, `live echo leaked into active table-cell edit path: ${state.liveEchoCount}`)
+  assert(state.liveCaretCount === 0, `live caret leaked into active table-cell edit path: ${state.liveCaretCount}`)
+  assert(state.draftReplacementCount === 0, `draft replacement leaked into active table-cell edit path: ${state.draftReplacementCount}`)
   assert(state.pointerFragmentCount >= 2, `expected pointer fragments for split table-cell edit, got ${state.pointerFragmentCount}`)
   assert(state.previewCandidateCount === 0, `temporary preview candidate remained after settled pagination: ${state.previewCandidateCount}`)
   assert(state.visualChromeCount === 0, `visual-only table-cell chrome remained after settled pagination: ${state.visualChromeCount}`)
-  assert(state.inputBridgeCaretColor === "rgba(0, 0, 0, 0)", `expected hidden input bridge caret, got ${state.inputBridgeCaretColor}`)
   assert(perf.draftUpdates >= 1, "expected table-cell draft update perf event")
   assert(perf.browserPreviewPaginations >= 1, "expected responsive table-cell browser preview pagination")
   const maxFirstPaginationDelayMs = smokeTarget.maxFirstPaginationDelayMs ?? RESPONSIVE_PAGINATION_MAX_DELAY_MS
   assert(
     perf.firstPaginationDelayMs !== null && perf.firstPaginationDelayMs <= maxFirstPaginationDelayMs,
-    `table-cell draft pagination was not responsive enough: ${perf.firstPaginationDelayMs}ms`,
+    `table-cell draft pagination was not responsive enough: ${perf.firstPaginationDelayMs}ms; breakdown: ${JSON.stringify({
+      firstDraftToFirstPaginationStartMs: perf.firstDraftToFirstPaginationStartMs,
+      lastDraftEndToFirstPaginationStartMs: perf.lastDraftEndToFirstPaginationStartMs,
+      firstPaginationRequestedDelayMs: perf.firstPaginationRequestedDelayMs,
+      firstPaginationScheduledDelayMs: perf.firstPaginationScheduledDelayMs,
+      firstPaginationDurationMs: perf.firstPaginationDurationMs,
+      firstPaginationRevision: perf.firstPaginationRevision,
+      firstPaginationUsedLatestDraftVersion: perf.firstPaginationUsedLatestDraftVersion,
+      reflowDecisions: perf.reflowDecisions,
+      draftPaginationSchedules: perf.draftPaginationSchedules,
+      visualPreviewEvents: perf.visualPreviewEvents,
+      visualChromeEvents: perf.visualChromeEvents,
+      firstDraftUpdate: perf.firstDraftUpdate,
+      lastDraftUpdate: perf.lastDraftUpdate,
+      firstPagination: perf.firstPagination,
+      firstReflowDecision: perf.firstReflowDecision,
+      firstDraftPaginationSchedule: perf.firstDraftPaginationSchedule,
+      lastDraftPaginationSchedule: perf.lastDraftPaginationSchedule,
+      firstVisualPreviewCreated: perf.firstVisualPreviewCreated,
+      firstVisualPreviewCleared: perf.firstVisualPreviewCleared,
+      lastVisualPreviewEvent: perf.lastVisualPreviewEvent,
+      firstVisualChromeCreated: perf.firstVisualChromeCreated,
+      firstVisualChromeCleared: perf.firstVisualChromeCleared,
+      lastVisualChromeEvent: perf.lastVisualChromeEvent,
+      maxPreviewFragmentCountBeforePagination: perf.maxPreviewFragmentCountBeforePagination,
+      maxVisualChromeCountBeforePagination: perf.maxVisualChromeCountBeforePagination,
+      traceEvents: perf.traceEvents,
+    })}`,
   )
   if (smokeTarget.maxDraftUpdateDurationMs != null) {
     assert(
@@ -604,10 +776,43 @@ async function assertTableCellBoundaryFlow(page) {
       draftUpdates: perf.draftUpdates,
       browserPreviewPaginations: perf.browserPreviewPaginations,
       firstPaginationDelayMs: Math.round(perf.firstPaginationDelayMs),
+      firstDraftToFirstPaginationStartMs: Math.round(perf.firstDraftToFirstPaginationStartMs),
+      lastDraftEndToFirstPaginationStartMs: Math.round(perf.lastDraftEndToFirstPaginationStartMs),
+      firstPaginationRequestedDelayMs: perf.firstPaginationRequestedDelayMs,
+      firstPaginationScheduledDelayMs: perf.firstPaginationScheduledDelayMs,
+      firstPaginationSource: perf.firstPaginationSource,
+      firstPaginationRevision: perf.firstPaginationRevision,
+      firstPaginationUsedLatestDraftVersion: perf.firstPaginationUsedLatestDraftVersion,
       maxDraftUpdateDurationMs: Math.round(perf.maxDraftUpdateDurationMs),
       maxPaginationDurationMs: Math.round(perf.maxPaginationDurationMs),
       lastPaginationPageCount: perf.lastPaginationPageCount,
       lastPaginationFragmentCount: perf.lastPaginationFragmentCount,
+    },
+    visualLifecycle: {
+      reflowDecisions: perf.reflowDecisions,
+      draftPaginationSchedules: perf.draftPaginationSchedules,
+      draftPaginationStates: perf.draftPaginationStates,
+      visualPreviewEvents: perf.visualPreviewEvents,
+      visualChromeEvents: perf.visualChromeEvents,
+      firstReflowDecision: perf.firstReflowDecision,
+      firstDraftPaginationSchedule: perf.firstDraftPaginationSchedule,
+      lastDraftPaginationSchedule: perf.lastDraftPaginationSchedule,
+      firstDraftPaginationState: perf.firstDraftPaginationState,
+      lastDraftPaginationState: perf.lastDraftPaginationState,
+      firstVisualPreviewCreated: perf.firstVisualPreviewCreated,
+      firstVisualPreviewCleared: perf.firstVisualPreviewCleared,
+      lastVisualPreviewEvent: perf.lastVisualPreviewEvent,
+      firstVisualChromeCreated: perf.firstVisualChromeCreated,
+      firstVisualChromeCleared: perf.firstVisualChromeCleared,
+      lastVisualChromeEvent: perf.lastVisualChromeEvent,
+      maxPreviewFragmentCountBeforePagination: perf.maxPreviewFragmentCountBeforePagination,
+      maxVisualChromeCountBeforePagination: perf.maxVisualChromeCountBeforePagination,
+      afterSettledPagination: {
+        previewCandidateCount: state.previewCandidateCount,
+        visualChromeCount: state.visualChromeCount,
+        activeVisualMode: state.activeVisualMode,
+        activeVisualDetail: state.activeVisualDetail,
+      },
     },
   }
 }
@@ -642,6 +847,18 @@ async function main() {
       tableCell: result,
       ignoredResourceErrors: resourceErrors.filter((error) => !unexpectedResourceErrors([error]).length),
     }, null, 2))
+  } catch (error) {
+    console.error(JSON.stringify({
+      ok: false,
+      console: {
+        errors: consoleErrors,
+        pageErrors,
+      },
+      resourceErrors,
+      ignoredResourceErrors: resourceErrors.filter((resourceError) => !unexpectedResourceErrors([resourceError]).length),
+      failure: error instanceof Error ? error.message : String(error),
+    }, null, 2))
+    throw error
   } finally {
     if (browser) await browser.close()
     await stopNextDevServer(server)

@@ -9,6 +9,14 @@ parity in FlowDocEditor's WYSIWYG path. It is intentionally scoped larger than
 one run; expect it to be implemented across multiple sessions and possibly
 multiple agents/teams.
 
+Status note: this plan describes the future edit/show parity target. The
+current active typing baseline is intentionally stability-first: a native edit
+layer owns visible text, caret, and selection during active text-only editing,
+then measured FlowDoc layout remains the settled source of truth after
+commit/settle. Do not use this future parity plan by itself to reject the
+current native edit layer or to re-enable SVG/live-echo/custom-caret-only
+visual paths during active typing bug fixes.
+
 Read together with:
 
 - `docs/WYSIWYG_TEXT_ENGINE_PLAN.md` (active text engine plan)

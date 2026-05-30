@@ -70,6 +70,34 @@ function textFragment(id: string, text: string, y: number, overrides: Partial<Pa
   }
 }
 
+function expectNativeEditLayerMarkup(markup: string, text?: string): void {
+  expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+  expect(markup).toContain("data-wysiwyg-active-visual-mode=\"native-edit-layer\"")
+  expect(markup).toContain("data-wysiwyg-native-edit-layer=\"true\"")
+  expect(markup).toContain("data-wysiwyg-native-edit-textarea=\"true\"")
+  expect(markup).toContain("data-inline-edit-visual-mode=\"native-edit-layer\"")
+  expect(markup).toContain("<textarea")
+  if (text != null) expect(markup).toContain(text)
+  expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+}
+
+function expectFlowdocDraftLinesMarkup(markup: string, text?: string): void {
+  expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+  expect(markup).toContain("data-wysiwyg-draft-editor-island=\"true\"")
+  expect(markup).toContain("data-wysiwyg-active-visual-mode=\"flowdoc-draft-editor-island\"")
+  expect(markup).toContain("data-wysiwyg-flowdoc-draft-lines=\"true\"")
+  expect(markup).toContain("data-wysiwyg-native-visible-text=\"false\"")
+  expect(markup).toContain("data-wysiwyg-hidden-input-bridge=\"true\"")
+  expect(markup).toContain("data-wysiwyg-input-bridge-mode=\"hidden-flowdoc-draft-editor-island\"")
+  expect(markup).toContain("data-inline-edit-visual-mode=\"flowdoc-draft-editor-island\"")
+  expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
+  expect(markup).not.toContain("<textarea")
+  if (text != null) expect(markup).toContain("data-wysiwyg-flowdoc-draft-text-length=")
+  expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+}
+
 function pageWithFragments(index: number, fragments: PageFragment[]): PaginatedPage {
   return {
     index,
@@ -865,11 +893,12 @@ describe("EditorCanvas TOC rendering", () => {
     const markup = renderCanvas(makeTocPaginated({ height: 500 }), makeTocDoc(), "toc")
     const tocClipPath = markup.match(/<clipPath id="[^"]*toc[^"]*"><rect[^>]*><\/rect><\/clipPath>/)?.[0] ?? ""
     const tocGroup = markup.match(/<g[^>]*data-testid="editor-fragment"[^>]*data-node-id="toc"[\s\S]*?<\/g>/)?.[0] ?? ""
+    const tocSelectionOverlay = markup.match(/<g[^>]*data-testid="editor-fragment-selection-overlay"[\s\S]*?<\/g>/)?.[0] ?? ""
 
     expect(tocClipPath).toContain("y=\"72\"")
     expect(tocClipPath).toContain("height=\"256\"")
     expect(tocGroup).toContain("height=\"256\"")
-    expect(tocGroup).toContain("height=\"258\"")
+    expect(tocSelectionOverlay).toContain("height=\"258\"")
     expect(tocGroup).not.toContain("height=\"500\"")
     expect(tocGroup).not.toContain("height=\"502\"")
   })
@@ -1039,7 +1068,7 @@ describe("EditorCanvas rich draft visual preview", () => {
     )).toBe(true)
   })
 
-  it("renders a style-only rich draft through the local visual preview", () => {
+  it("keeps a style-only rich draft on the FlowDoc draft-lines active edit layer", () => {
     const draftParagraph = {
       ...paragraphNode("body-p", "Body text"),
       children: [
@@ -1059,8 +1088,54 @@ describe("EditorCanvas rich draft visual preview", () => {
       wysiwygTextCaretOffset: 4,
     })
 
-    expect(markup).toContain("fill=\"#DC2626\"")
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expectFlowdocDraftLinesMarkup(markup, "Body text")
+    expect(markup).not.toContain("fill=\"#DC2626\"")
+  })
+
+  it("lets the plain FlowDoc draft-lines layer own active chrome while fragment chrome is stale", () => {
+    const markup = renderCanvas(makePaginated(), makeDoc(), null, {
+      inlineEditNodeId: "body-p",
+      inlineEditVisualFresh: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftNodeId: "body-p",
+      wysiwygTextDraftText: "Body text with local native height",
+      wysiwygTextDraftDirtyVersion: 1,
+      wysiwygTextCaretOffset: 8,
+    })
+
+    expectFlowdocDraftLinesMarkup(markup, "Body text with local native height")
+    expect(markup).toContain("data-wysiwyg-native-edit-fragment-chrome-suppressed=\"true\"")
+  })
+
+  it("suppresses stale same-page page-break chrome while a plain FlowDoc draft-lines paragraph is active", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      textFragment("body-p", "Body text", 72),
+      {
+        nodeId: "page-break-1",
+        nodeType: "page-break",
+        pageIndex: 0,
+        x: 36,
+        y: 90,
+        width: 228,
+        height: 0,
+      },
+    ]
+
+    expect(renderCanvas(paginated, makeDoc())).toContain("data-testid=\"editor-page-break-marker\"")
+
+    const editingMarkup = renderCanvas(paginated, makeDoc(), null, {
+      inlineEditNodeId: "body-p",
+      inlineEditVisualFresh: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftNodeId: "body-p",
+      wysiwygTextDraftText: "Body text with local native height",
+      wysiwygTextDraftDirtyVersion: 1,
+      wysiwygTextCaretOffset: 8,
+    })
+
+    expectFlowdocDraftLinesMarkup(editingMarkup, "Body text with local native height")
+    expect(editingMarkup).not.toContain("data-testid=\"editor-page-break-marker\"")
   })
 })
 
@@ -1883,7 +1958,7 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     })).toBeNull()
   })
 
-  it("renders the table-cell continuation preview through the editor canvas", () => {
+  it("renders table-cell draft text through the native editor layer", () => {
     const markup = renderCanvas(makeTableCellPaginated(), makeTableCellDoc(), null, {
       inlineEditNodeId: "cell-p",
       inlineEditVisualFresh: true,
@@ -1897,10 +1972,9 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     expect(markup).toContain("data-page-index=\"1\"")
     expect(markup.match(/data-wysiwyg-table-cell-visual-chrome="true"/g)).toHaveLength(6)
     expect(markup.match(/data-wysiwyg-table-cell-structure-chrome="true"/g)).toHaveLength(4)
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"soft\"")
-    expect(markup).toContain(">C</text>")
-    expect(markup).not.toContain("<textarea")
+    expectNativeEditLayerMarkup(markup, "A\nB\nC")
+    expect(markup).toContain("data-wysiwyg-native-height-handoff=\"false\"")
+    expect(markup).not.toContain(">C</text>")
   })
 
   it("keeps the active editor on the committed page while preview pagination is visually locked", () => {
@@ -1916,11 +1990,10 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
       wysiwygTextCaretOffset: 5,
     })
 
-    expect(markup.match(/data-inline-edit-node-id="cell-p"/g)).toHaveLength(1)
-    expect(markup).toContain("data-inline-edit-visual-mode=\"textarea\"")
-    expect(markup).toContain("data-inline-edit-slice-start=\"0\"")
-    expect(markup).not.toContain("data-inline-edit-slice-start=\"4\"")
-    expect(markup).toContain(">C</text>")
+    expectNativeEditLayerMarkup(markup, "A\nB\nC")
+    expect(markup).toContain("data-wysiwyg-native-height-handoff=\"false\"")
+    expect(markup).not.toContain("data-inline-edit-visual-mode=\"textarea\"")
+    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
   })
 
   it("stops rendering the table-cell continuation preview once draft pagination is active", () => {
@@ -1935,11 +2008,10 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
       wysiwygTextDraftPaginationActive: true,
     })
 
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+    expectNativeEditLayerMarkup(markup, "A\nB\nC")
     expect(markup).not.toContain("data-wysiwyg-table-cell-visual-chrome")
     expect(markup).not.toContain("data-wysiwyg-table-cell-preview-candidate")
     expect(markup).not.toContain(">C</text>")
-    expect(markup).not.toContain("<textarea")
   })
 
   it("uses settled split table-cell fragments when editing a continuation page", () => {
@@ -1959,9 +2031,9 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     expect(markup).toContain("data-wysiwyg-pointer-fragment-count=\"2\"")
     expect(markup).toContain("data-page-index=\"1\"")
     expect(markup).toContain("data-line-start=\"2\"")
-    expect(markup).toContain(">C</text>")
+    expectNativeEditLayerMarkup(markup, "A\nB\nC")
+    expect(markup).not.toContain(">C</text>")
     expect(markup).not.toContain("data-wysiwyg-table-cell-preview-candidate")
-    expect(markup).not.toContain("<textarea")
   })
 })
 

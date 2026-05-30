@@ -13,15 +13,29 @@ export type WysiwygPerfEventKind =
   | "editor-action-dispatch"
   | "inline-edit-finalize"
   | "inline-edit-exit-pagination"
+  | "inline-edit-height-preview"
+  | "native-edit-geometry-sync"
   | "active-paragraph-measure"
   | "text-engine-draft-measure"
+  | "table-cell-reflow-decision"
+  | "table-cell-visual-preview"
+  | "table-cell-visual-chrome"
+  | "draft-pagination-state"
+  | "draft-pagination-schedule"
   | "browser-preview-pagination"
+  | "flowdoc-island-input"
+  | "flowdoc-island-draft-measure"
+  | "flowdoc-island-visible-lines"
+  | "flowdoc-island-react-commit"
+  | "flowdoc-island-parent-sync"
+  | "flowdoc-island-pointer-hit-test"
 
 export interface WysiwygPerfEvent {
   kind: WysiwygPerfEventKind
   startedAt: number
   durationMs: number
   nodeId?: string
+  previousNodeId?: string | null
   pageIndex?: number | null
   draftVersion?: number | null
   textLength?: number
@@ -30,7 +44,24 @@ export interface WysiwygPerfEvent {
   paragraphHeight?: number
   requestedDelayMs?: number
   scheduledDelayMs?: number
+  firstRequestedAtMs?: number
   source?: string
+  active?: boolean
+  reflowKind?: string
+  reflowReason?: string
+  responsiveDraftPaginationRequested?: boolean
+  isTableCellParagraph?: boolean
+  isFlowStackParagraph?: boolean
+  draftPaginationActive?: boolean
+  existingSplitActive?: boolean
+  currentFragmentCount?: number
+  previewFragmentCount?: number
+  previewPageCount?: number
+  previewCandidateCount?: number
+  visualChromeCount?: number
+  visualChromePageCount?: number
+  remainingVisualChromeCount?: number
+  pageIndexes?: string
   commandType?: string
   uiImpact?: string
   layoutScope?: string

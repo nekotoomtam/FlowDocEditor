@@ -181,6 +181,41 @@ describe("WYSIWYG caret mapping contract", () => {
     })
   })
 
+  it("uses segment edge geometry without measuring full-prefix caret positions", () => {
+    let measureCalls = 0
+    const countingMeasurer: TextMeasurer = {
+      measureText(text) {
+        measureCalls += 1
+        return { width: text.length * 10 }
+      },
+      measureLineHeight(_fontFamilyKey, fontSize, lineHeightRatio) {
+        return fontSize * lineHeightRatio
+      },
+    }
+    const fragment = makeFragment({
+      lines: [makeLine({
+        text: "abcd",
+        width: 40,
+        segments: [{
+          kind: "word",
+          text: "abcd",
+          start: 10,
+          end: 14,
+          x: 2,
+          width: 40,
+          breakableAfter: false,
+        }],
+      })],
+    })
+
+    const start = resolveCaretPositionInFragment(fragment, 10, { textMeasurer: countingMeasurer })
+    const end = resolveCaretPositionInFragment(fragment, 14, { textMeasurer: countingMeasurer })
+
+    expect(start).toMatchObject({ offset: 10, x: 12 })
+    expect(end).toMatchObject({ offset: 14, x: 52 })
+    expect(measureCalls).toBe(0)
+  })
+
   it("snaps point-to-offset mapping to the nearest grapheme-safe caret candidate", () => {
     const line = makeLine({
       text: "Aก้B",

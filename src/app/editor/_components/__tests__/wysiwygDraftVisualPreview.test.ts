@@ -125,6 +125,33 @@ describe("wysiwygDraftVisualPreview", () => {
     expect(fragments[1].lines?.map((candidate) => candidate.text)).toEqual(["four"])
   })
 
+  it("keeps overflow draft lines in the final visual preview fragment when page slots run out", () => {
+    const draftLines = [
+      line("one", 70, 0, 3),
+      line("two", 80, 4, 7),
+      line("three", 90, 8, 13),
+      line("four", 100, 14, 18),
+    ]
+
+    const fragments = splitWysiwygDraftVisualFragments({
+      sourceFragment: fragment(),
+      draftLines,
+      draftHeight: 40,
+      pages: [page(0)],
+    })
+
+    expect(fragments).toHaveLength(1)
+    expect(fragments[0]).toMatchObject({
+      pageIndex: 0,
+      lineStart: 0,
+      lineEnd: 4,
+      continuesFrom: false,
+      isContinued: false,
+    })
+    expect(fragments[0].lines?.map((candidate) => candidate.text)).toEqual(["one", "two", "three", "four"])
+    expect(fragments[0].height).toBeGreaterThan(30)
+  })
+
   it("keeps a same-page draft as one fragment with the measured draft height", () => {
     const fragments = splitWysiwygDraftVisualFragments({
       sourceFragment: fragment(),

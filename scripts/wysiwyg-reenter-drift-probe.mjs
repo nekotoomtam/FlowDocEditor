@@ -22,6 +22,8 @@ const GRADUAL_MARKER = "REENTERGRADUALMARKER"
 const GRADUAL_INSERT_MARKER = "REENTERGRADUALINSERT"
 const REPEATED_KEY_MARKER = "REENTERREPEATMARKER"
 const REPEATED_KEY_INSERT_MARKER = "REENTERREPEATINSERT"
+const PLAIN_REENTER_MARKER = "REENTERPLAINMARKER"
+const PLAIN_REENTER_INSERT_MARKER = "REENTERPLAININSERT"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, "..")
@@ -31,6 +33,7 @@ const shouldStartServer = process.env.SMOKE_BASE_URL == null
 const headless = process.env.HEADED !== "1"
 const smokeBrowser = getSmokeBrowserConfig({ headless })
 const verboseSnapshots = process.env.REENTER_VERBOSE === "1"
+const variantFilter = process.env.REENTER_VARIANT_FILTER?.trim() || null
 
 const shellSelector = '[data-testid="editor-shell"]'
 const fragmentSelector = `[data-testid="editor-fragment"][data-node-id="${TARGET_NODE_ID}"]`
@@ -207,9 +210,15 @@ async function captureSnapshot(page, label) {
     }
     const lineElementsFor = (fragment) => Array.from(fragment.querySelectorAll("text"))
       .filter((element) => {
-        const fill = element.getAttribute("fill")
-        const computedFill = window.getComputedStyle(element).fill
-        return fill === "#1e40af" || computedFill === "rgb(30, 64, 175)"
+        const style = window.getComputedStyle(element)
+        const fill = element.getAttribute("fill") ?? style.fill
+        const opacity = Number(element.getAttribute("opacity") ?? style.opacity ?? "1")
+        return style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          opacity > 0 &&
+          fill !== "none" &&
+          fill !== "transparent" &&
+          fill !== "rgba(0, 0, 0, 0)"
       })
       .map((element) => ({
         text: element.textContent ?? "",
@@ -226,6 +235,7 @@ async function captureSnapshot(page, label) {
         const rect = fragment.getBoundingClientRect()
         const layer = fragment.querySelector('[data-wysiwyg-text-engine-layer="true"]')
         const visualModeElement = fragment.querySelector("[data-inline-edit-visual-mode]")
+        const layerNumberAttr = (name) => layer ? numberAttr(layer, name) : null
         return {
           pageIndex: Number(fragment.getAttribute("data-page-index") ?? 0),
           fragmentIndex: fragment.getAttribute("data-fragment-index") ?? null,
@@ -233,7 +243,14 @@ async function captureSnapshot(page, label) {
           lineEnd: fragment.getAttribute("data-line-end") ?? null,
           isEditing: layer !== null || fragment.querySelector("textarea[data-inline-edit-node-id]") !== null,
           visualMode: visualModeElement?.getAttribute("data-inline-edit-visual-mode") ?? null,
+          activeVisualMode: layer?.getAttribute("data-wysiwyg-active-visual-mode") ?? null,
+          activeVisualDetail: layer?.getAttribute("data-wysiwyg-active-visual-detail") ?? null,
           reflowKind: layer?.getAttribute("data-wysiwyg-reflow-kind") ?? null,
+          flowdocDraftCaretOffset: layerNumberAttr("data-wysiwyg-flowdoc-draft-caret-offset"),
+          flowdocDraftSelectionStart: layerNumberAttr("data-wysiwyg-flowdoc-draft-selection-start"),
+          flowdocDraftSelectionEnd: layerNumberAttr("data-wysiwyg-flowdoc-draft-selection-end"),
+          flowdocDraftTextLength: layerNumberAttr("data-wysiwyg-flowdoc-draft-text-length"),
+          nativeVisibleText: layer?.getAttribute("data-wysiwyg-native-visible-text") ?? null,
           rect: {
             x: round(rect.x),
             y: round(rect.y),
@@ -349,7 +366,14 @@ function summarizeSnapshots(snapshots) {
         lineEnd: fragment.lineEnd,
         isEditing: fragment.isEditing,
         visualMode: fragment.visualMode,
+        activeVisualMode: fragment.activeVisualMode,
+        activeVisualDetail: fragment.activeVisualDetail,
         reflowKind: fragment.reflowKind,
+        flowdocDraftCaretOffset: fragment.flowdocDraftCaretOffset,
+        flowdocDraftSelectionStart: fragment.flowdocDraftSelectionStart,
+        flowdocDraftSelectionEnd: fragment.flowdocDraftSelectionEnd,
+        flowdocDraftTextLength: fragment.flowdocDraftTextLength,
+        nativeVisibleText: fragment.nativeVisibleText,
         lineTexts: fragment.lines.map((line) => line.text),
         lineGeometry: fragment.lines.map((line) => ({
           x: line.x,
@@ -376,7 +400,14 @@ function summarizeSnapshotCounts(snapshots) {
         lineEnd: fragment.lineEnd,
         isEditing: fragment.isEditing,
         visualMode: fragment.visualMode,
+        activeVisualMode: fragment.activeVisualMode,
+        activeVisualDetail: fragment.activeVisualDetail,
         reflowKind: fragment.reflowKind,
+        flowdocDraftCaretOffset: fragment.flowdocDraftCaretOffset,
+        flowdocDraftSelectionStart: fragment.flowdocDraftSelectionStart,
+        flowdocDraftSelectionEnd: fragment.flowdocDraftSelectionEnd,
+        flowdocDraftTextLength: fragment.flowdocDraftTextLength,
+        nativeVisibleText: fragment.nativeVisibleText,
         lineCount: fragment.lines.length,
         firstLine: fragment.lines[0]?.text ?? "",
         lastLine: fragment.lines.at(-1)?.text ?? "",
@@ -388,6 +419,58 @@ function summarizeSnapshotCounts(snapshots) {
 function withoutSnapshot(result) {
   const { snapshot: _snapshot, ...rest } = result
   return rest
+}
+
+function editingFragment(snapshot) {
+  return snapshot.fragments.find((fragment) => fragment.isEditing) ?? null
+}
+
+function caretSnapshot(label, snapshot) {
+  const fragment = editingFragment(snapshot)
+  return {
+    label,
+    found: fragment != null,
+    pageIndex: fragment?.pageIndex ?? null,
+    lineStart: fragment?.lineStart ?? null,
+    lineEnd: fragment?.lineEnd ?? null,
+    visualMode: fragment?.visualMode ?? null,
+    activeVisualMode: fragment?.activeVisualMode ?? null,
+    activeVisualDetail: fragment?.activeVisualDetail ?? null,
+    caretOffset: fragment?.flowdocDraftCaretOffset ?? null,
+    selectionStart: fragment?.flowdocDraftSelectionStart ?? null,
+    selectionEnd: fragment?.flowdocDraftSelectionEnd ?? null,
+    textLength: fragment?.flowdocDraftTextLength ?? null,
+    nativeVisibleText: fragment?.nativeVisibleText ?? null,
+  }
+}
+
+function buildCaretDiagnostics(snapshots) {
+  const firstEntry = caretSnapshot("firstEditEntry", snapshots.firstEditEntry)
+  const firstAfterType = caretSnapshot("firstEditAfterType", snapshots.firstEditAfterType)
+  const secondEntry = caretSnapshot("secondEditEntry", snapshots.secondEditEntry)
+  const secondAfterType = caretSnapshot("secondEditAfterType", snapshots.secondEditAfterType)
+  const bothEntriesHaveCaret = firstEntry.caretOffset != null && secondEntry.caretOffset != null
+  return {
+    firstEntry,
+    firstAfterType,
+    secondEntry,
+    secondAfterType,
+    firstEntryToSecondEntryCaretDelta: bothEntriesHaveCaret
+      ? secondEntry.caretOffset - firstEntry.caretOffset
+      : null,
+    activeVisualModes: [...new Set([
+      firstEntry.activeVisualMode,
+      firstAfterType.activeVisualMode,
+      secondEntry.activeVisualMode,
+      secondAfterType.activeVisualMode,
+    ].filter(Boolean))],
+    nativeTextVisibleDuringEdit: [
+      firstEntry,
+      firstAfterType,
+      secondEntry,
+      secondAfterType,
+    ].some((snapshot) => snapshot.nativeVisibleText !== "false"),
+  }
 }
 
 async function typeTextWithKeyboard(page, text, delayMs = 8) {
@@ -489,6 +572,25 @@ async function insertNewLineAtCurrentCaret(page, { marker, text }) {
   }
 }
 
+async function insertTextAtCurrentCaret(page, { marker, text }) {
+  const before = await waitForStableSnapshot(page, `${marker}:before-text-insert`, { expectEditing: true })
+  const beforeCaret = editingFragment(before)?.flowdocDraftCaretOffset ?? null
+  await focusTargetBridge(page)
+  await typeTextWithKeyboard(page, ` ${marker} ${text}`, 8)
+  await expectBodyContains(page, marker)
+  const after = await waitForStableSnapshot(page, `${marker}:after-text-insert`, { expectEditing: true })
+  const afterCaret = editingFragment(after)?.flowdocDraftCaretOffset ?? null
+  return {
+    snapshot: after,
+    beforeCaret,
+    afterCaret,
+    beforeLineCount: totalLineCount(before),
+    afterLineCount: totalLineCount(after),
+    beforeFragmentCount: before.fragments.length,
+    afterFragmentCount: after.fragments.length,
+  }
+}
+
 async function openScenario(page) {
   await page.goto(scenarioUrl(), { waitUntil: "domcontentloaded" })
   const shell = page.locator(shellSelector)
@@ -542,6 +644,7 @@ async function runLifecycleVariant(page, variant) {
       second: withoutSnapshot(typing.second),
     },
     comparisons,
+    caretDiagnostics: buildCaretDiagnostics(snapshots),
     snapshots: verboseSnapshots ? summarizeSnapshots(snapshots) : summarizeSnapshotCounts(snapshots),
   }
 }
@@ -579,6 +682,25 @@ const variants = [
         fragmentCount: snapshot.fragments.length,
         lineCount: totalLineCount(snapshot),
       }
+    },
+  },
+  {
+    name: "plain-flowdoc-reenter-text-insert",
+    description: "Focused flowdoc-draft-lines check: type until a plain paragraph wraps, exit, re-enter, then insert text at the current caret without splitting.",
+    async typeFirstDraft(page) {
+      await focusTargetBridge(page)
+      await page.keyboard.press("End")
+      return typeWordsUntilLineCountIncreases(page, {
+        marker: PLAIN_REENTER_MARKER,
+        prefix: "plainwrap",
+        maxWords: GRADUAL_MAX_WORDS,
+      })
+    },
+    async typeSecondDraft(page) {
+      return insertTextAtCurrentCaret(page, {
+        marker: PLAIN_REENTER_INSERT_MARKER,
+        text: "text inserted after flowdoc draft-line reenter",
+      })
     },
   },
   {
@@ -648,8 +770,16 @@ async function runProbe() {
       }
     })
 
+    const selectedVariants = variantFilter
+      ? variants.filter((variant) => variant.name.includes(variantFilter))
+      : variants
+    assert(
+      selectedVariants.length > 0,
+      `No WYSIWYG re-enter variants matched REENTER_VARIANT_FILTER="${variantFilter}"`,
+    )
+
     const variantReports = []
-    for (const variant of variants) {
+    for (const variant of selectedVariants) {
       variantReports.push(await runLifecycleVariant(page, variant))
     }
     const failedComparisons = variantReports.flatMap((variant) =>
@@ -676,6 +806,7 @@ async function runProbe() {
       scenario: SCENARIO_ID,
       targetNodeId: TARGET_NODE_ID,
       verboseSnapshots,
+      variantFilter,
       variants: variantReports,
       failedComparisons,
       console: {

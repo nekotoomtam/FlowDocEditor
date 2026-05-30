@@ -10,6 +10,13 @@ For the FlowDoc-owned text editing restart, read
 roadmap remains useful for existing hybrid behavior, caret mapping history, and
 textarea-assisted guardrails.
 
+Current status note: the active text-only typing baseline now uses one visible
+native edit layer / textarea as the single active visual truth. This is a
+stability-first bridge for immediate typing feedback. The SVG text/caret/
+selection model described below is the future FlowDoc-owned visual parity
+target, not a requirement to re-enable live echo, SVG draft replacement, or
+custom-caret-only visuals during current active typing.
+
 The goal is to move from the current textarea-assisted hybrid editor toward an
 editor where text, caret, and selection are drawn from the same paginated visual
 model as normal document rendering.
@@ -18,7 +25,9 @@ model as normal document rendering.
 
 - `PaginatedLine` and `fragment.lines` are visual truth.
 - `draftText` is input truth while an inline edit session is active.
-- The textarea is an input device and fallback surface, not the layout source.
+- Future parity target: the textarea becomes an input device and fallback
+  surface, not the active visual layout source. Current active text-only typing
+  intentionally uses the native edit layer as the visible stability baseline.
 - Server pagination remains authoritative for settled/export layout.
 - Any WYSIWYG behavior enabled in the default editor must remain treated as
   guarded/experimental until its stability gates pass.
@@ -51,7 +60,9 @@ IME/accessibility behavior is complete.
 ## Guardrails
 
 - Do not change `DocumentNode` schema for WYSIWYG geometry.
-- Do not make textarea layout authoritative.
+- Do not make the native edit layer document, pagination, export, or stored
+  layout truth. In the current baseline it may own only the active editing
+  visual surface; measured FlowDoc layout remains settled truth after commit.
 - Do not change paginator, export, PDF, DOCX, or server behavior as part of the
   first WYSIWYG milestones.
 - Keep fallback-to-textarea available for composition, IME, or unstable states.
@@ -205,7 +216,7 @@ Initial internal helper:
 Only after the earlier stages are stable, reduce textarea to a mostly invisible
 input layer.
 
-- SVG is visual truth for text, caret, and selection.
+- Future target: SVG is visual truth for text, caret, and selection.
 - Textarea remains available for input, IME, clipboard, and accessibility where
   needed.
 - Visible textarea fallback remains allowed during composition or unstable

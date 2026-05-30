@@ -1,18 +1,26 @@
 # WYSIWYG Text Engine Plan
 
-This is the active plan for the FlowDoc-owned text editing lane. It supersedes
-additional textarea-hybrid polishing for the goal of edit/show visual parity,
-but it does not remove the current hybrid path until the new lane passes its
-gates.
+This document records the FlowDoc-owned text editing direction and transition
+notes. The current active-edit baseline for text-only paragraphs is
+stability-first: one native edit layer / textarea owns visible text, caret, and
+selection during active typing, then measured FlowDoc layout resumes after
+commit/settle.
 
-## Decision
+The FlowDoc-owned SVG/caret/selection parity lane remains a possible long-term
+target. Older language below that says the native bridge must be hidden or must
+not own visible text should be read as that future/deferred parity target unless
+the section is explicitly marked as current implementation.
+
+## Long-Term Parity Decision
 
 - `PaginatedLine` and `LineSegment` are the only visual geometry truth for
-  paragraph text in show and edit modes.
+  paragraph text in show mode and in the future FlowDoc-owned active edit
+  parity target.
 - `draftText` is the input truth while an edit session is active.
-- A native input bridge may exist only as an input adapter. It must not own
-  visible text, line wrapping, caret geometry, selection geometry, or fallback
-  visual rendering.
+- Future/deferred target: a native input bridge may exist only as an input
+  adapter. In the current stability-first active-edit baseline, the native edit
+  layer intentionally owns visible text, line wrapping, caret, and selection
+  during active typing.
 - Full-document pagination must not be on the critical keypress-to-paint path.
 - Server/API pagination remains authoritative for settled layout and export.
 - The first implementation runs behind `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE`
@@ -30,6 +38,11 @@ gates.
 - Do not make a big-bang replacement of all inline editing behavior.
 
 ## Required Performance Contract
+
+This contract describes the future FlowDoc-owned visual parity lane. The
+current stability-first baseline satisfies the input responsiveness goal by
+using the native edit layer as the only active visual truth and by avoiding
+paragraph measurement on every keypress.
 
 Each keypress must be split into two lanes:
 
@@ -90,7 +103,8 @@ Gate:
 Gate:
 
 - edit-enter adds caret/selection chrome only.
-- no `<textarea>` text rendering is used by the new lane.
+- Future parity gate: no `<textarea>` text rendering is used by the FlowDoc-owned
+  visual lane. This is not the current stability-first active typing baseline.
 - undo/redo and commit behavior stay on the existing transaction model.
 
 ### Stage 2: Local Paragraph Draft Layout
@@ -123,6 +137,11 @@ Gate:
 
 Current implementation note:
 
+- Current text-only active editing is in the stability-first baseline: the
+  native edit layer owns visible text, caret, and selection during active
+  typing. SVG live echo, SVG draft replacement, custom-caret-only visuals, and
+  measured draft-line swapping are legacy/deferred paths for this state and
+  should not leak into the active typing surface.
 - The first Stage 3 slice classifies soft, hard-local, and hard-page-boundary
   edits for the flagged text-engine lane.
 - Hard-local edits render active draft lines and active paragraph chrome from
@@ -133,13 +152,24 @@ Current implementation note:
   lines move to the next page during typing. Debounced draft pagination still
   settles the broader document preview, and server/API pagination remains the
   export truth.
-- The active SVG layer now owns a hidden `contentEditable` input bridge for
-  keypress input. The bridge adapts browser key/input events into FlowDoc draft
-  operations; it does not own visible text, wrapping, caret geometry, or layout.
+- The active text-only paragraph edit layer now owns one native textarea inside
+  the SVG `foreignObject` for keypress input and visible feedback. That native
+  layer owns text, wrapping, caret, and selection during the edit session.
 - The text-engine bridge uses one native event pipeline for keydown,
   beforeinput, input, clipboard, and composition events. React bridge handlers
   are not duplicated on top of the native adapter, keeping normal and shifted
   typing in the same deterministic path.
+- The critical input lane no longer builds immediate paragraph layouts with
+  `measureParagraph(...)` on every keypress. While editing, the native layer is
+  the only visible text surface, so inserted characters are not drawn as
+  live-echo text on top of stale `fragment.lines` and the editor does not swap
+  between draft SVG lines and another active visual truth. The settling lane
+  still owns responsive pagination and committed measured layout output after
+  edit exit.
+- The native edit layer is positioned from the measured first line box when
+  FlowDoc line geometry is available. Its geometry sync is delayed until after
+  visible native input feedback and throttled, so the hot keypress path does
+  not synchronously read textarea `scrollHeight`.
 - A deterministic Stage 3 stress scenario is available in dev/test mode at
   `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`. It seeds a target
   paragraph near a page boundary with dense downstream content so browser
@@ -163,26 +193,35 @@ Stage 3 closure evidence:
   preview, shrink-back, active input bridge behavior, and pagination invariants.
 - Browser smoke on the dev/test stress scenario confirmed real keypress input
   can push the active paragraph from one fragment to two across a page boundary,
-  then Backspace can shrink it back to one fragment, without mounting an inline
-  textarea or showing a layout error.
+  then Backspace can shrink it back to one fragment, without showing a layout
+  error. Older "no inline textarea" evidence is historical and is superseded by
+  the current native active edit layer baseline.
 - Browser smoke also confirmed commit, undo, and redo preserve the typed marker
-  and return layout without an inline textarea.
+  and return to measured layout after commit without stale active-edit visuals.
 
 ### Stage 4: Selection, Clipboard, IME, Accessibility
 
 - Draw selection from FlowDoc overlay rectangles.
 - Convert keyboard, paste, and composition events into draft operations.
-- If a native input bridge is needed, keep it hidden and adapter-only.
+- Future parity target: if a native input bridge is needed, keep it hidden and
+  adapter-only.
 
 Gate:
 
-- composition never makes textarea/browser layout the visual truth.
+- Future parity gate: composition must not introduce an unclassified second
+  visual truth. In the current baseline, native text remains the single active
+  visual truth during active typing and composition.
 - clipboard operations preserve paragraph offsets and undo boundaries.
 - unsupported states fail closed to the old flagged path, not to a new visual
   mismatch inside the text-engine lane.
 
 Current implementation note:
 
+- The Stage 4 notes below include historical/deferred SVG-owned-path details.
+  For current active text-only typing, the native edit layer remains the single
+  visible editing truth and older hidden-bridge/custom-caret-only paths should
+  be treated as legacy parked code unless a task explicitly resumes the parity
+  lane.
 - The first Stage 4B slice keeps selection as transient editor/session state in
   `useWysiwygTextSession`; it does not write selection, caret, or page geometry
   into `DocumentNode`.
@@ -270,8 +309,9 @@ Current implementation note:
   includes a deterministic table-cell boundary smoke that opens the Stage 3 stress
   scenario, edits `stage3-table-cell-target`, confirms real draft pagination
   splits the cell paragraph across pages, verifies the active text-engine layer
-  keeps two pointer fragments with no textarea fallback, and checks the first
-  table-cell browser-preview pagination starts within the responsive threshold.
+  keeps two pointer fragments with no legacy fallback or second visual layer,
+  and checks the first table-cell browser-preview pagination starts within the
+  responsive threshold.
   The same smoke runner also has a Flow Table colspan-only target gate for
   `stage3-flow-table-colspan-target`; it verifies `colspan>1,rowspan=1` keeps
   its wide cell chrome, splits through responsive draft pagination, and does not
@@ -279,11 +319,23 @@ Current implementation note:
   may also scroll the editor canvas to keep the custom caret visible after
   wrapping or page-boundary reflow; that caret-follow behavior is viewport-only
   and does not change table pagination, document history, or export semantics.
-  Table-cell text-engine layers also suppress the unwrapped live-echo visual so
-  the active caret comes from mapped paginated line geometry while responsive
-  table pagination owns the wrapping. The WYSIWYG caret now has separate visual
-  modes: `typing` is steady and non-blinking during active text input, then
-  returns to the blinking `idle` mode shortly after input stops.
+  Table-cell text-engine layers also suppress the unwrapped live-echo visual.
+  For active text-only paragraph editing, a native edit layer owns visible text,
+  caret, and selection as one visual truth while responsive table pagination
+  catches up; SVG draft replacement and measured draft-line swapping stay
+  disabled during the edit session. Measured FlowDoc layout remains the final
+  source of truth after commit/settle.
+- Table-cell visual-preview/chrome instrumentation currently shows this healthy
+  lifecycle for active native editing near a page boundary: reflow decision ->
+  visual preview/chrome created or updated -> draft pagination scheduled ->
+  browser-preview pagination -> draft pagination state clears -> visual
+  preview/chrome clears. In healthy final-state runs, the native edit layer
+  remains stable, old visual paths do not leak, visual chrome may reach `6`
+  before pagination settles, and visual chrome must be `0` after settled
+  pagination. A previous current-turn scheduling attempt was reverted because it
+  left table-cell visual chrome at the pre-clear count after settle; future
+  scheduling optimization must preserve or explicitly await this preview/chrome
+  clear lifecycle.
 - Row-stack paragraphs remain eligible for the text-engine lane, but they are
   guarded out of the body-paragraph live split preview. Heavy stack edits must
   preserve the current atomic row contract: the edited paragraph stays one

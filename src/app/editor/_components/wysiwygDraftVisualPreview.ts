@@ -179,6 +179,29 @@ export function splitWysiwygDraftVisualFragments(input: {
     })
   }
 
+  if (lineIndex < draftLines.length && fragments.length > 0) {
+    const lastFragmentIndex = fragments.length - 1
+    const lastFragment = fragments[lastFragmentIndex]
+    const existingLines = lastFragment.lines ?? []
+    let cursorY = existingLines.length > 0
+      ? existingLines[existingLines.length - 1].y + existingLines[existingLines.length - 1].height
+      : lastFragment.y
+    const overflowLines = draftLines.slice(lineIndex).map((sourceLine) => {
+      const positionedLine = lineWithY(sourceLine, cursorY)
+      cursorY += sourceLine.height
+      return positionedLine
+    })
+    const mergedLines = [...existingLines, ...overflowLines]
+
+    fragments[lastFragmentIndex] = {
+      ...lastFragment,
+      height: Math.max(1, cursorY - lastFragment.y + spacingAfter),
+      lines: mergedLines,
+      lineEnd: sourceLineStart + draftLines.length,
+      isContinued: false,
+    }
+  }
+
   return fragments
 }
 

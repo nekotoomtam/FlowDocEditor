@@ -3,7 +3,7 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.22`: suitable for self-use with accepted
+The current baseline is `0.6.23`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -37,6 +37,10 @@ first conservative visual-only browser preview fast lane with smoke coverage,
 plus the measurement-only FlowDoc performance baseline harness, pagination
 profiling, font-readiness scheduling guard, and main-thread readiness/interaction
 profiling breakdowns,
+plus the FlowDoc Draft Editor Island V2 typing baseline for plain text-only
+paragraph editing, held-input/no-wait burst probes, FlowDoc-owned active draft
+line rendering, hidden input-bridge pointer isolation, caret-mapping fast paths,
+and active paragraph local height-preview handoff for same-page reflow,
 but not yet a general-user `v1`.
 
 ## Version Meaning
@@ -71,6 +75,7 @@ but not yet a general-user `v1`.
 | `0.6.18` | Patch baseline for paragraph-based list numbering metadata, resolver, preset helpers, TOR fixtures, generated marker preview/PDF/DOCX rendering, list toolbar/keyboard interactions, and WYSIWYG list-item draft geometry hardening. |
 | `0.6.21` | Patch baseline for editor layout interaction guards, WYSIWYG responsive finalize and stress typing/release hardening, shared editor action classification, and the conservative visual-only browser preview fast lane without changing persisted document or package schema versions. |
 | `0.6.22` | Patch baseline for the measurement-only FlowDoc performance baseline harness, pagination stage profiling, font-readiness pagination scheduling guard, and main-thread readiness/interaction profiling breakdowns without changing persisted document or package schema versions. |
+| `0.6.23` | Patch baseline for the plain-paragraph FlowDoc Draft Editor Island V2 typing path, held-input probes, pointer isolation, caret mapping fast paths, and local same-page height-preview handoff without changing persisted document or package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

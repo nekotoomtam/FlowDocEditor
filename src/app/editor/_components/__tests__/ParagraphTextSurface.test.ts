@@ -31,6 +31,7 @@ import {
   resolveSelectionOverlayRectsInFragmentWithPerf,
   resolveTrailingWhitespaceCaretOverlayInFragment,
   resolveWysiwygDraftSyncDelayMs,
+  shouldApplyWysiwygNativeHeightPreview,
   resolveWysiwygTextPointerOffsetFromFragmentTargets,
   resolveWysiwygPointerSelectionState,
   resolveWysiwygWordSelectionRange,
@@ -44,6 +45,10 @@ import {
   shouldUseWysiwygTextEngineLayer,
   WysiwygTextLayer,
 } from "../ParagraphTextSurface"
+import {
+  FlowdocDraftEditorIslandRoot,
+  shouldReportDraftIslandHeightPreview,
+} from "../FlowdocDraftEditorIslandRoot"
 import type { PageFragment } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import type { TextMeasurer } from "@/layout"
@@ -274,6 +279,128 @@ const fixedMeasurer: TextMeasurer = {
   measureText: (text) => ({ width: text.length * 10 }),
   measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => fontSize * lineHeightRatio,
 }
+
+function expectNativeEditLayerMarkup(markup: string, text?: string): void {
+  expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+  expect(markup).toContain("data-wysiwyg-active-visual-mode=\"native-edit-layer\"")
+  expect(markup).toContain("data-wysiwyg-native-edit-layer=\"true\"")
+  expect(markup).toContain("data-wysiwyg-native-edit-textarea=\"true\"")
+  expect(markup).toContain("data-inline-edit-visual-mode=\"native-edit-layer\"")
+  expect(markup).toContain("<textarea")
+  if (text != null) {
+    for (const token of text.split(/\s+/).filter(Boolean)) {
+      expect(markup).toContain(token)
+    }
+  }
+  expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+  expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
+  expect(markup).not.toContain("data-wysiwyg-caret=\"true\"")
+}
+
+function expectFlowdocDraftLinesMarkup(markup: string, text?: string): void {
+  expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
+  expect(markup).toContain("data-wysiwyg-draft-editor-island=\"true\"")
+  expect(markup).toContain("data-wysiwyg-active-visual-mode=\"flowdoc-draft-editor-island\"")
+  expect(markup).toContain("data-wysiwyg-active-visual-detail=\"flowdoc-owned-draft-lines\"")
+  expect(markup).toContain("data-wysiwyg-flowdoc-draft-lines=\"true\"")
+  expect(markup).toContain("data-wysiwyg-native-visible-text=\"false\"")
+  expect(markup).toContain("data-wysiwyg-custom-caret-visible=\"true\"")
+  expect(markup).toContain("data-wysiwyg-hidden-input-bridge=\"true\"")
+  expect(markup).toContain("data-wysiwyg-input-bridge-mode=\"hidden-flowdoc-draft-editor-island\"")
+  expect(markup).toContain("data-wysiwyg-visible-pointer-owner=\"flowdoc-draft-surface\"")
+  expect(markup).toContain("data-inline-edit-visual-mode=\"flowdoc-draft-editor-island\"")
+  expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
+  expect(markup).not.toContain("<textarea")
+  expect(markup).toContain("color:transparent")
+  expect(markup).toContain("caret-color:transparent")
+  if (text != null) expect(markup).toContain("data-wysiwyg-flowdoc-draft-text-length=")
+  expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+  expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
+}
+
+describe("FlowdocDraftEditorIslandRoot", () => {
+  it("reports active island height only when the draft visual height changes meaningfully", () => {
+    expect(shouldReportDraftIslandHeightPreview({
+      previous: null,
+      key: "p1:0",
+      nextHeight: 24.25,
+      fragmentHeight: 24,
+    })).toBe(false)
+
+    expect(shouldReportDraftIslandHeightPreview({
+      previous: null,
+      key: "p1:0",
+      nextHeight: 36,
+      fragmentHeight: 24,
+    })).toBe(true)
+
+    expect(shouldReportDraftIslandHeightPreview({
+      previous: { key: "p1:0", height: 36 },
+      key: "p1:0",
+      nextHeight: 36.25,
+      fragmentHeight: 36,
+    })).toBe(false)
+
+    expect(shouldReportDraftIslandHeightPreview({
+      previous: { key: "p1:0", height: 36 },
+      key: "p1:0",
+      nextHeight: 48,
+      fragmentHeight: 36,
+    })).toBe(true)
+  })
+
+  it("renders the V2 out-of-canvas island with a hidden input bridge outside the visible pointer target", () => {
+    const doc = makeDoc("FlowDoc island text")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({
+      x: 36,
+      y: 48,
+      width: 120,
+      height: 24,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 1,
+        textColor: "111827",
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const markup = renderToStaticMarkup(createElement(FlowdocDraftEditorIslandRoot, {
+      active: true,
+      nodeId: "p1",
+      paragraph,
+      fragment,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      draftText: "FlowDoc island text wraps locally",
+      caretOffset: 12,
+      selection: { anchorOffset: 12, focusOffset: 12 },
+      getPageElement: () => null,
+      onDraftChange: () => undefined,
+      onEndEdit: () => undefined,
+    }))
+
+    expect(markup).toContain("data-wysiwyg-draft-editor-island=\"true\"")
+    expect(markup).toContain("data-wysiwyg-out-of-canvas-island=\"true\"")
+    expect(markup).toContain("data-wysiwyg-active-visual-detail=\"out-of-canvas-v2\"")
+    expect(markup).toContain("data-wysiwyg-flowdoc-draft-lines=\"true\"")
+    expect(markup).toContain("data-wysiwyg-native-visible-text=\"false\"")
+    expect(markup).toContain("data-wysiwyg-input-bridge-mode=\"hidden-flowdoc-draft-editor-island-v2\"")
+    expect(markup).toContain("data-wysiwyg-visible-area-pointer-target=\"false\"")
+    expect(markup).toContain("data-wysiwyg-visible-pointer-owner=\"flowdoc-draft-island-v2\"")
+    expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  })
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -892,7 +1019,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(inlineEditTextareaOutline(true)).toBe("none")
   })
 
-  it("enables the text-engine edit layer only when the flagged visual snapshot is fresh", () => {
+  it("keeps the text-engine native edit layer independent from measured visual freshness", () => {
     expect(shouldUseWysiwygTextEngineLayer({
       enabled: true,
       isEditing: true,
@@ -910,7 +1037,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       isEditing: true,
       canPlainTextEdit: true,
       isVisualFresh: false,
-    })).toBe(false)
+    })).toBe(true)
     expect(shouldUseWysiwygTextEngineLayer({
       enabled: true,
       isEditing: true,
@@ -1017,16 +1144,16 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     })).toBe(0)
   })
 
-  it("clips text-engine live echo to the active fragment", () => {
+  it("renders the native edit layer instead of live echo or draft replacement while editing", () => {
     const fragment = makeFragment({
       width: 40,
       lines: [{
-        text: "Hello",
+        text: "Hello world",
         x: 10,
         y: 20,
-        width: 50,
+        width: 80,
         height: 14,
-        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+        segments: [{ kind: "word", text: "Hello world", start: 0, end: 11, x: 0, width: 80, breakableAfter: false }],
       }],
       renderProps: {
         align: "left",
@@ -1054,9 +1181,9 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
         clipPathId: "cell-clip",
         scale: 1,
         textMeasurer: fixedMeasurer,
-        caretIndex: 5,
-        draftText: "Hello overwide immediate text",
-        liveTextEcho: { anchorOffset: 5, text: " overwide immediate text" },
+        caretIndex: 16,
+        draftText: "Hello wide world",
+        liveTextEcho: { anchorOffset: 7, text: "ide w" },
         showTextSegments: false,
         reflowKind: "hard-page-boundary",
         onDraftChange: () => undefined,
@@ -1064,13 +1191,77 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       }),
     ))
 
-    expect(markup).toContain("data-wysiwyg-live-echo=\"true\"")
-    expect(markup).toContain("data-wysiwyg-live-caret=\"true\"")
-    expect(markup).toMatch(/data-wysiwyg-live-echo="true"[^>]*clip-path="url\(#cell-clip\)"/)
-    expect(markup).toMatch(/data-wysiwyg-live-caret="true"[^>]*clip-path="url\(#cell-clip\)"/)
+    expectNativeEditLayerMarkup(markup, "Hello wide world")
+    expect(markup).toContain("data-wysiwyg-native-edit-y=\"20\"")
+    expect(markup).toContain("data-wysiwyg-native-edit-fragment-y=\"0\"")
+    expect(markup).toContain("data-wysiwyg-native-edit-first-line-y=\"20\"")
+    expect(markup).toContain("data-wysiwyg-native-edit-measured-text-block-height=\"14\"")
+    expect(markup).toContain("<foreignObject data-wysiwyg-native-edit-foreign-object=\"true\" x=\"0\" y=\"20\"")
+    expect(markup).not.toContain(">Hello world</text>")
+    expect(markup).toMatch(/data-wysiwyg-native-edit-layer="true"[^>]*clip-path="url\(#cell-clip\)"/)
   })
 
-  it("can suppress unwrapped live echo so table-cell edits use the mapped caret", () => {
+  it("renders long native edit text without measuring text during render", () => {
+    const throwingMeasurer: TextMeasurer = {
+      measureText: () => {
+        throw new Error("draft replacement should not measure text during render")
+      },
+      measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => fontSize * lineHeightRatio,
+    }
+    const fragment = makeFragment({
+      width: 52,
+      height: 42,
+      lines: [
+        {
+          text: "Wrapped old",
+          x: 10,
+          y: 20,
+          width: 44,
+          height: 14,
+          segments: [{ kind: "word", text: "Wrapped old", start: 0, end: 11, x: 0, width: 44, breakableAfter: false }],
+        },
+        {
+          text: "visual lines",
+          x: 10,
+          y: 34,
+          width: 48,
+          height: 14,
+          segments: [{ kind: "word", text: "visual lines", start: 11, end: 23, x: 0, width: 48, breakableAfter: false }],
+        },
+      ],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(WysiwygTextLayer, {
+      fragment,
+      renderProps: fragment.renderProps,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: throwingMeasurer,
+      caretIndex: 35,
+      draftText: "Wrapped old visual lines plus immediate typed feedback",
+      liveTextEcho: { anchorOffset: 23, text: " plus immediate typed feedback" },
+      showTextSegments: false,
+      reflowKind: "soft",
+      onDraftChange: () => undefined,
+      onEndEdit: () => undefined,
+    })))
+
+    expectNativeEditLayerMarkup(markup, "Wrapped old visual lines plus immediate typed feedback")
+    expect(markup).toContain("white-space:pre-wrap")
+  })
+
+  it("keeps live echo suppressed while the native layer owns immediate table-cell feedback", () => {
     const fragment = makeFragment({
       width: 40,
       lines: [{
@@ -1110,13 +1301,10 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onEndEdit: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-live-echo-suppressed=\"true\"")
-    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
-    expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
-    expect(markup).toContain("data-wysiwyg-caret=\"true\"")
+    expectNativeEditLayerMarkup(markup, "Hello overwide immediate text")
   })
 
-  it("renders a steady mapped caret while text input is active", () => {
+  it("lets the native edit layer own the caret while text input is active", () => {
     const fragment = makeFragment({
       lines: [{
         text: "Hello",
@@ -1154,12 +1342,11 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onEndEdit: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-caret-mode=\"typing\"")
-    expect(markup).toContain("data-wysiwyg-caret=\"true\"")
+    expectNativeEditLayerMarkup(markup, "Hello")
     expect(markup).not.toContain("data-wysiwyg-caret-blink=\"true\"")
   })
 
-  it("renders a steady live caret while text input is active", () => {
+  it("does not render a draft replacement caret while native text input is active", () => {
     const fragment = makeFragment({
       lines: [{
         text: "Hello",
@@ -1198,8 +1385,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onEndEdit: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-live-caret=\"true\"")
-    expect(markup).toContain("data-wysiwyg-caret-mode=\"typing\"")
+    expectNativeEditLayerMarkup(markup, "Hello!")
     expect(markup).not.toContain("data-wysiwyg-caret-blink=\"true\"")
   })
 
@@ -1254,7 +1440,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     })
   })
 
-  it("renders the flagged text-engine edit lane from document lines without textarea markup", () => {
+  it("renders the flagged text-engine edit lane as a native edit layer", () => {
     const fragment = makeFragment({
       lines: [{
         text: "Hello",
@@ -1297,16 +1483,128 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onMergeParagraph: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
-    expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
     expect(markup).toContain("data-wysiwyg-hit-area=\"true\"")
-    expect(markup).toContain("data-wysiwyg-caret=\"true\"")
-    expect(markup).toContain("data-wysiwyg-caret-blink=\"true\"")
-    expect(markup).toContain("Hello")
-    expect(markup).not.toContain("<textarea")
+    expectNativeEditLayerMarkup(markup, "Hello")
+    expect(markup).toContain("data-wysiwyg-native-height-handoff=\"true\"")
+    expect(markup).toContain("data-wysiwyg-native-edit-clip-mode=\"relaxed\"")
+    expect(markup).not.toContain("data-wysiwyg-caret-blink=\"true\"")
   })
 
-  it("preserves repeated spaces in SVG paragraph text", () => {
+  it("uses a threshold before handing native height changes to local preview", () => {
+    expect(shouldApplyWysiwygNativeHeightPreview(null, 100)).toBe(true)
+    expect(shouldApplyWysiwygNativeHeightPreview(100, 100.4)).toBe(false)
+    expect(shouldApplyWysiwygNativeHeightPreview(100, 101)).toBe(true)
+  })
+
+  it("keeps stale measured visuals on the native edit layer when FlowDoc draft measurement is unavailable", () => {
+    const fragment = makeFragment({
+      width: 56,
+      height: 28,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("Hello"),
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: undefined,
+      isEditing: true,
+      isVisualFresh: false,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Hello changed while stale",
+      wysiwygTextCaretOffset: 24,
+      showTextSegments: false,
+      initialCaretIndex: 5,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expectNativeEditLayerMarkup(markup, "Hello changed while stale")
+    expect(markup).not.toContain("data-inline-edit-visual-mode=\"textarea\"")
+    expect(markup).not.toContain("data-inline-edit-visual-mode=\"document\"")
+  })
+
+  it("uses FlowDoc draft lines for stale plain paragraph active editing when measurement is available", () => {
+    const fragment = makeFragment({
+      width: 56,
+      height: 28,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: false }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("Hello"),
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: false,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Hello changed while stale",
+      wysiwygTextCaretOffset: 24,
+      showTextSegments: false,
+      initialCaretIndex: 5,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expectFlowdocDraftLinesMarkup(markup, "Hello changed while stale")
+    expect(markup).not.toContain("data-inline-edit-visual-mode=\"textarea\"")
+    expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  })
+
+  it("preserves repeated spaces in native paragraph edit text", () => {
     const fragment = makeFragment({
       lines: [{
         text: "A  B",
@@ -1357,13 +1655,12 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
+    expectFlowdocDraftLinesMarkup(markup, "A  B")
     expect(markup).toContain("xml:space=\"preserve\"")
     expect(markup).toContain("white-space:pre")
-    expect(markup).toContain("A  B")
-    expect(markup).not.toContain("<textarea")
   })
 
-  it("renders text-engine selection overlays from FlowDoc line geometry", () => {
+  it("lets the native edit layer own active text selection", () => {
     const fragment = makeFragment({
       lines: [{
         text: "Hello",
@@ -1408,10 +1705,8 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onMergeParagraph: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
-    expect(markup).toContain("data-wysiwyg-selection=\"true\"")
-    expect(markup).toContain("width=\"30\"")
-    expect(markup).not.toContain("<textarea")
+    expectNativeEditLayerMarkup(markup, "Hello")
+    expect(markup).not.toContain("data-wysiwyg-selection=\"true\"")
   })
 
   it("records scalar selection overlay perf metadata without paragraph content", () => {
@@ -1767,7 +2062,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("width=\"70\"")
   })
 
-  it("uses the text-engine lane for table-cell paragraphs while keeping cell boundary rules separate", () => {
+  it("uses the native text-engine edit layer for table-cell paragraphs while keeping cell boundary rules separate", () => {
     const fragment = makeFragment({
       parentNodeId: "c1",
       lines: [{
@@ -1814,14 +2109,12 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
-    expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
-    expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
-    expect(markup).toContain("caret-color:transparent")
-    expect(markup).not.toContain("<textarea")
+    expectNativeEditLayerMarkup(markup, "Cell text draft")
+    expect(markup).toContain("data-wysiwyg-native-height-handoff=\"false\"")
+    expect(markup).toContain("data-wysiwyg-native-edit-clip-mode=\"fragment\"")
   })
 
-  it("uses the text-engine lane for flow-table-cell paragraphs", () => {
+  it("uses the native text-engine edit layer for flow-table-cell paragraphs", () => {
     const fragment = makeFragment({
       parentNodeId: "c1",
       lines: [{
@@ -1868,13 +2161,10 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
-    expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
-    expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
-    expect(markup).not.toContain("<textarea")
+    expectNativeEditLayerMarkup(markup, "Flow cell text draft")
   })
 
-  it("renders table-cell local draft lines for same-page line-count changes", () => {
+  it("keeps table-cell same-page draft text in the native edit layer", () => {
     const fragment = makeFragment({
       parentNodeId: "c1",
       width: 120,
@@ -1927,14 +2217,12 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-local\"")
-    expect(markup).toContain("Cell")
+    expectNativeEditLayerMarkup(markup, "Cell")
     expect(markup).toContain("next")
     expect(markup).not.toContain("data-wysiwyg-table-cell-preview-candidate")
-    expect(markup).not.toContain("<textarea")
   })
 
-  it("renders flow-table-cell local draft lines for same-page line-count changes", () => {
+  it("keeps flow-table-cell same-page draft text in the native edit layer", () => {
     const fragment = makeFragment({
       parentNodeId: "c1",
       width: 120,
@@ -1987,13 +2275,11 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-local\"")
-    expect(markup).toContain("Flow")
+    expectNativeEditLayerMarkup(markup, "Flow")
     expect(markup).toContain("next")
-    expect(markup).not.toContain("<textarea")
   })
 
-  it("keeps table-cell page-boundary draft text on the settled pagination visual path", () => {
+  it("keeps table-cell page-boundary draft text in the native edit layer", () => {
     const fragment = makeFragment({
       parentNodeId: "c1",
       y: 20,
@@ -2047,12 +2333,10 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
-    expect(markup).toContain("data-wysiwyg-table-cell-preview-candidate=\"true\"")
-    expect(markup).toContain("A")
-    expect(markup).not.toContain(">B<")
+    expectNativeEditLayerMarkup(markup, "A")
+    expect(markup).toContain("B")
+    expect(markup).not.toContain("data-wysiwyg-table-cell-preview-candidate=\"true\"")
     expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
-    expect(markup).not.toContain("<textarea")
   })
 
   it("clears the table-cell preview candidate once draft pagination is already active", () => {
@@ -2110,12 +2394,12 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
+    expectNativeEditLayerMarkup(markup, "A")
+    expect(markup).toContain("B")
     expect(markup).not.toContain("data-wysiwyg-table-cell-preview-candidate")
-    expect(markup).not.toContain("<textarea")
   })
 
-  it("keeps row-stack paragraphs on the text-engine path without textarea fallback", () => {
+  it("keeps row-stack paragraphs on the native text-engine edit layer", () => {
     const fragment = makeFragment({
       parentNodeId: "st1",
       lines: [{
@@ -2162,13 +2446,10 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
-    expect(markup).toContain("data-inline-edit-visual-mode=\"text-engine\"")
-    expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
-    expect(markup).not.toContain("<textarea")
+    expectNativeEditLayerMarkup(markup, "Stack text draft")
   })
 
-  it("uses the text-engine lane for continuation fragments after draft pagination", () => {
+  it("uses the FlowDoc draft editor island for continuation fragments after draft pagination", () => {
     const fragment = makeFragment({
       continuesFrom: true,
       lineStart: 1,
@@ -2199,11 +2480,13 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       doc: makeDoc("Hello world"),
       pageKey: "0-0",
       scale: 1,
+      textMeasurer: fixedMeasurer,
       isEditing: true,
       isVisualFresh: true,
       wysiwygInlineEditEnabled: false,
       wysiwygTextEngineEnabled: true,
       wysiwygTextDraftText: "Hello world",
+      wysiwygTextVisualDraftLines: fragment.lines,
       wysiwygTextCaretOffset: 8,
       wysiwygTextDraftPaginationActive: true,
       showTextSegments: false,
@@ -2218,12 +2501,68 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"soft\"")
-    expect(markup).not.toContain("<textarea")
+    expectFlowdocDraftLinesMarkup(markup, "Hello world")
+    expect(markup).toContain("world")
   })
 
-  it("renders draft lines while deferring downstream layout past the page boundary", () => {
+  it("keeps the FlowDoc draft editor island on the first split fragment after re-enter", () => {
+    const fragment = makeFragment({
+      isContinued: true,
+      lineStart: 0,
+      lineEnd: 1,
+      width: 50,
+      lines: [{
+        text: "Hello",
+        x: 10,
+        y: 20,
+        width: 50,
+        height: 14,
+        segments: [{ kind: "word", text: "Hello", start: 0, end: 5, x: 0, width: 50, breakableAfter: true }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+
+    const markup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("Hello world again"),
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      wysiwygTextDraftText: "Hello world again",
+      wysiwygTextCaretOffset: 8,
+      wysiwygTextDraftPaginationActive: true,
+      showTextSegments: false,
+      initialCaretIndex: 8,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+      onWysiwygTextDraftChange: () => undefined,
+    })))
+
+    expectFlowdocDraftLinesMarkup(markup, "Hello")
+    expect(markup).not.toContain(">world<")
+    expect(markup).not.toContain("data-inline-edit-visual-mode=\"flowdoc-draft-lines-input-bridge\"")
+  })
+
+  it("keeps FlowDoc draft lines active while downstream layout is deferred past the page boundary", () => {
     const fragment = makeFragment({
       y: 20,
       width: 200,
@@ -2274,14 +2613,11 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
-    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
-    expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
-    expect(markup).toContain("A")
+    expectFlowdocDraftLinesMarkup(markup, "A")
     expect(markup).toContain("B")
   })
 
-  it("can render a parent-split draft slice while still classifying the full draft as page-boundary reflow", () => {
+  it("does not show a parent-split measured draft slice while FlowDoc draft lines are active", () => {
     const fragment = makeFragment({
       y: 20,
       width: 200,
@@ -2333,12 +2669,11 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-page-boundary\"")
-    expect(markup).toContain("A")
-    expect(markup).not.toContain(">B<")
+    expectFlowdocDraftLinesMarkup(markup, "A")
+    expect(markup).toContain("B")
   })
 
-  it("renders draft lines while deferring downstream layout when line count changes", () => {
+  it("keeps FlowDoc draft lines active while downstream layout is deferred for line-count changes", () => {
     const doc = makeDoc("Hello")
     const fragment = makeFragment({
       width: 50,
@@ -2391,13 +2726,10 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-local\"")
-    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
-    expect(markup).toContain("Hello")
-    expect(markup).toContain("world")
+    expectFlowdocDraftLinesMarkup(markup, "Hello world")
   })
 
-  it("moves the draft caret to the next line for deferred Enter input", () => {
+  it("renders a FlowDoc caret after deferred Enter input", () => {
     const doc = makeDoc("Hello")
     const fragment = makeFragment({
       width: 50,
@@ -2450,10 +2782,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
       onWysiwygTextDraftChange: () => undefined,
     })))
 
-    expect(markup).toContain("data-wysiwyg-reflow-kind=\"hard-local\"")
-    expect(markup).toContain("data-wysiwyg-caret=\"true\"")
-    expect(markup).not.toContain("data-wysiwyg-live-caret=\"true\"")
-    expect(markup).toContain("y1=\"12\"")
+    expectFlowdocDraftLinesMarkup(markup, "Hello")
   })
 
   it("keeps a visible caret at flow-table-cell line ends around an Enter-created line", () => {
@@ -2521,7 +2850,7 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(emptyLineMarkup).toContain("y1=\"32\"")
   })
 
-  it("can render text-engine draft text from local paragraph measurement", () => {
+  it("renders plain paragraph active text through FlowDoc draft lines while the native textarea is an input bridge", () => {
     const doc = makeDoc("Hello")
     const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
     const fragment = makeFragment({
@@ -2574,10 +2903,9 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     })))
 
     expect(draftLines?.[0].text).toBe("Hello!")
-    expect(markup).toContain("Hello!")
+    expectFlowdocDraftLinesMarkup(markup, "Hello!")
     expect(markup).toContain("data-wysiwyg-input-bridge=\"true\"")
     expect(markup).toContain("aria-describedby=\"flowdoc-wysiwyg-text-status\"")
-    expect(markup).not.toContain("<textarea")
   })
 
   it("builds draft layout with paginator line positioning and measured height", () => {

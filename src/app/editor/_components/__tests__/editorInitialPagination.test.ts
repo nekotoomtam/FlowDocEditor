@@ -45,4 +45,27 @@ describe("editor initial pagination placeholder", () => {
 
     expect(next.paginated).toBe(fullPaginated)
   })
+
+  it("keeps reducer identity for no-op inline edit height previews", () => {
+    const doc = makeDocumentWithParagraphs(1)
+    const section = doc.document.sections[0]
+    const body = section.nodes[section.bodyRootId] as BodyNode
+    const nodeId = body.childIds[0]
+    const fullPaginated = paginateDocument(doc, defaultTextMeasurer)
+    const fragment = fullPaginated.sections[0].pages[0].fragments.find((item) => item.nodeId === nodeId)
+    expect(fragment).toBeTruthy()
+
+    const state = {
+      ...createInitialEditorState(doc),
+      paginated: fullPaginated,
+    }
+    const next = reducer(state, {
+      type: "SET_INLINE_EDIT_HEIGHT",
+      nodeId,
+      pageIndex: fragment?.pageIndex ?? 0,
+      height: (fragment?.height ?? 0) + 0.25,
+    })
+
+    expect(next).toBe(state)
+  })
 })

@@ -18,7 +18,173 @@ Each entry should include:
 
 ---
 
+## 2026-05-31
+
+### Release 0.6.23 FlowDoc Draft Editor Island V2 Baseline
+
+Goal: Accept the current plain-paragraph WYSIWYG stabilization work as the
+`0.6.23` project marker before review, without changing persisted document,
+package, pagination, table, export, or data-binding schemas.
+
+Completed:
+
+- Added the out-of-canvas FlowDoc Draft Editor Island V2 path for eligible
+  plain, text-only paragraph editing so active draft text, caret, hit testing,
+  and pointer ownership stay outside the main `EditorCanvas` per-key render
+  path.
+- Kept the hidden input bridge as keyboard/input plumbing only; visible text
+  and click hit testing are FlowDoc-owned draft-line geometry.
+- Added held-input/no-wait burst probe coverage and island-vs-canvas timing
+  metrics so smoke checks better reflect manual held-key pressure.
+- Added caret-mapping fast paths for segment-edge caret positions to reduce
+  draft-line/caret render cost during long typing bursts.
+- Reconnected same-page active paragraph height preview from the island through
+  the existing inline-edit height preview path, scheduled after paint and
+  guarded so it fires only when draft height changes meaningfully.
+- Updated project version markers and versioning docs from `0.6.22` to
+  `0.6.23`.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- WYSIWYG/editor docs and probes touched by the accepted stabilization slices.
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- WYSIWYG support helpers/tests for caret mapping, draft visual preview,
+  performance instrumentation, and smoothness/re-enter/table-cell probes.
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app`
+- `npm.cmd run review:build`
+- `npm.cmd run review:archive -- --check`
+- Focused WYSIWYG smoothness probes for `long-unbroken`, `held-repeat`, and
+  `mixed-pagination` were run during the stabilization slice.
+
+Notes:
+
+- This baseline is not a general-user `v1` claim.
+- Remaining known risks: range selection/clipboard, structural Enter/merge
+  semantics, page-boundary/continuation handoff, re-enter after complex wraps,
+  and table-cell behavior are separate follow-up slices.
+- Manual QA remains authoritative for product acceptance.
+
+## 2026-05-29
+
+### Document Table-Cell WYSIWYG Visual Lifecycle
+
+Goal: Record the table-cell native-edit visual preview/chrome lifecycle found
+by instrumentation so future scheduling work does not repeat the reverted
+current-turn scheduling failure.
+
+Completed:
+
+- Documented that active table-cell native editing may create editor-only visual
+  preview/chrome before responsive draft pagination settles.
+- Recorded the healthy lifecycle observed by the smoke instrumentation:
+  reflow decision -> visual preview/chrome created or updated -> draft
+  pagination scheduled -> browser-preview pagination -> draft pagination state
+  clears -> visual preview/chrome clears.
+- Noted that healthy final-state runs keep the native edit layer stable, keep
+  old visual paths from leaking, allow visual chrome to reach `6` before settle,
+  and require visual chrome to clear to `0` after settled pagination.
+- Recorded that the previous current-turn scheduling attempt was reverted
+  because it left table-cell visual chrome at the pre-clear count after settle.
+- Added guidance that future scheduling optimization must preserve or explicitly
+  await the preview/chrome clear lifecycle.
+
+Files changed:
+
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- Documentation-only slice; no runtime tests run.
+
+Notes:
+
+- This does not change runtime behavior, smoke thresholds, pagination,
+  scheduling, schema, table layout, or export behavior.
+
 ## 2026-05-28
+
+### Fix WYSIWYG Typing Immediate Visual Feedback
+
+Goal: Address user feedback that typing briefly freezes and newly typed text
+can visually overlap old text, without changing pagination behavior, adding
+layout caches, or refactoring editor architecture.
+
+Completed:
+
+- Removed the immediate `measureParagraph(...)` draft-layout call from the
+  text-engine keypress path.
+- Replaced unmeasured live-echo overlay rendering with a native text-only edit
+  layer as the single active visual truth for text-only paragraph editing.
+- Kept old `fragment.lines`, SVG draft replacement, live echo, and measured
+  draft-line swapping hidden while the native layer is active so typed text
+  cannot draw over stale visual text or fight another layout.
+- Kept local native draft state on the immediate input path while parent/session
+  draft sync remains coalesced behind it.
+- Aligned the native edit layer to the measured first line `y` instead of the
+  broader fragment top, and moved textarea geometry/height sync to a throttled
+  after-paint path so keypress feedback does not wait on `scrollHeight`.
+- Kept measured FlowDoc layout, responsive pagination, and commit output on the
+  existing final source-of-truth paths after edit settle.
+- Updated WYSIWYG contracts to record that the native edit layer owns active
+  text, caret, and selection until measured FlowDoc layout is ready to swap back.
+
+Files changed:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/EDITOR_UX_CONTRACT.md`
+- `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts src/app/editor/_components/__tests__/wysiwygDraftPreview.test.ts src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run test:app`
+- `SMOKE_BASE_URL=http://localhost:4000/editor npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed smoke result:
+
+- `ok=true`
+- `paintLatencyMs.p50=16`, `p95=33.9`, `p99=76.1`, `max=397.6`
+- `text-engine-draft-measure=12` during a 400 character burst, confirming the
+  input path is no longer measuring the paragraph on every keypress.
+- Console errors: `0`; page errors: `0`
+
+Notes:
+
+- The first direct smoke attempt could not start its own Next dev server
+  because a local server was already running. A retry against that server
+  passed once, then the existing server stopped responding while compiling
+  `/editor`; after stopping stale PID `36000`, the smoke script started its own
+  server and passed.
+- The smoke still reports editor-canvas React commits as the longest event.
+  This slice only removes paragraph measurement and live-echo overlap from the
+  immediate typing visual path; it does not optimize React rendering.
+- This slice intentionally does not change pagination behavior, page-count or
+  fragment-count semantics, export behavior, document schema, or layout caches.
+
+---
 
 ### Complete 0.6.22 Version Acceptance Slice
 

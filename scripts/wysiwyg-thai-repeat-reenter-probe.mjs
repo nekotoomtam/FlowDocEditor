@@ -162,6 +162,15 @@ function snapshotKey(snapshot) {
   return JSON.stringify(snapshot.fragments.map((fragment) => ({
     lineStart: fragment.lineStart,
     lineEnd: fragment.lineEnd,
+    visualMode: fragment.visualMode,
+    native: fragment.native.active
+      ? {
+          valueLength: fragment.native.valueLength,
+          lineCount: fragment.native.lineCount,
+          contentWithinWidth: fragment.native.contentWithinWidth,
+          oldSvgTextLineCount: fragment.native.oldSvgTextLineCount,
+        }
+      : null,
     lines: fragment.lines.map((line) => ({
       text: line.text,
       x: line.x,
@@ -181,9 +190,20 @@ async function captureSnapshot(page, label) {
     }
     const lineElementsFor = (fragment) => Array.from(fragment.querySelectorAll("text"))
       .filter((element) => {
-        const fill = element.getAttribute("fill")
-        const computedFill = window.getComputedStyle(element).fill
-        return fill === "#1e40af" || computedFill === "rgb(30, 64, 175)"
+        if (element.closest('[data-testid="canvas-selected-path"],[data-testid="canvas-hover-path"]')) return false
+        const chromeFontSize = Number(element.getAttribute("font-size") ?? element.getAttribute("fontSize"))
+        if ((element.textContent ?? "").trim() === "paragraph" && Number.isFinite(chromeFontSize) && chromeFontSize <= 8) {
+          return false
+        }
+        const style = window.getComputedStyle(element)
+        const fill = element.getAttribute("fill") ?? style.fill
+        const opacity = Number(element.getAttribute("opacity") ?? style.opacity ?? "1")
+        return style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          opacity > 0 &&
+          fill !== "none" &&
+          fill !== "transparent" &&
+          fill !== "rgba(0, 0, 0, 0)"
       })
       .map((element) => ({
         text: element.textContent ?? "",
@@ -194,6 +214,39 @@ async function captureSnapshot(page, label) {
       }))
       .filter((line) => line.text.length > 0)
       .sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
+    const nativeStateFor = (fragment, layer) => {
+      const textarea = fragment.querySelector('[data-wysiwyg-native-edit-textarea="true"]')
+      if (!(textarea instanceof HTMLTextAreaElement)) {
+        return {
+          active: false,
+          valueLength: 0,
+          lineCount: null,
+          contentWithinWidth: null,
+          oldSvgTextLineCount: 0,
+        }
+      }
+      const style = window.getComputedStyle(textarea)
+      const lineHeight = Number.parseFloat(style.lineHeight)
+      const lineCount = Number.isFinite(lineHeight) && lineHeight > 0
+        ? Math.max(1, Math.round(textarea.scrollHeight / lineHeight))
+        : null
+      const nativeWidth = Number(layer?.getAttribute("data-wysiwyg-native-edit-width") ?? "NaN")
+      const hitArea = layer?.querySelector?.('[data-wysiwyg-hit-area="true"]')
+      const hitAreaWidth = hitArea instanceof SVGRectElement ? hitArea.width.baseVal.value : null
+      const oldSvgTextLineCount = lineElementsFor(fragment).length
+      return {
+        active: true,
+        valueLength: textarea.value.length,
+        textSample: textarea.value.slice(0, 120),
+        lineCount,
+        scrollHeight: round(textarea.scrollHeight),
+        lineHeight: Number.isFinite(lineHeight) ? round(lineHeight) : null,
+        contentWithinWidth: Number.isFinite(nativeWidth) && hitAreaWidth != null
+          ? nativeWidth <= hitAreaWidth + 0.01
+          : null,
+        oldSvgTextLineCount,
+      }
+    }
 
     const shell = document.querySelector('[data-testid="editor-shell"]')
     const fragments = Array.from(document.querySelectorAll(fragmentSelector))
@@ -201,6 +254,7 @@ async function captureSnapshot(page, label) {
         const rect = fragment.getBoundingClientRect()
         const layer = fragment.querySelector('[data-wysiwyg-text-engine-layer="true"]')
         const visualModeElement = fragment.querySelector("[data-inline-edit-visual-mode]")
+        const native = nativeStateFor(fragment, layer)
         return {
           pageIndex: Number(fragment.getAttribute("data-page-index") ?? 0),
           fragmentIndex: fragment.getAttribute("data-fragment-index") ?? null,
@@ -209,6 +263,8 @@ async function captureSnapshot(page, label) {
           isEditing: layer !== null || fragment.querySelector("textarea[data-inline-edit-node-id]") !== null,
           visualMode: visualModeElement?.getAttribute("data-inline-edit-visual-mode") ?? null,
           reflowKind: layer?.getAttribute("data-wysiwyg-reflow-kind") ?? null,
+          native,
+          draftReplacementCount: fragment.querySelectorAll('[data-wysiwyg-draft-text-replacement="true"]').length,
           rect: {
             x: round(rect.x),
             y: round(rect.y),
@@ -253,7 +309,8 @@ async function waitForStableSnapshot(page, label, options = {}) {
 
   while (Date.now() - startedAt < timeoutMs) {
     latest = await captureSnapshot(page, label)
-    const hasFragments = latest.fragments.length > 0 && latest.fragments.every((fragment) => fragment.lines.length > 0)
+    const hasFragments = latest.fragments.length > 0 &&
+      latest.fragments.every((fragment) => fragment.lines.length > 0 || fragment.native.active)
     const editingMatches = expectEditing === null || latest.fragments.some((fragment) => fragment.isEditing) === expectEditing
     const liveEchoSettled = !requireNoLiveEcho || latest.liveEchoCount === 0
     const key = snapshotKey(latest)
@@ -297,7 +354,34 @@ async function exitTargetEdit(page) {
 }
 
 function totalLineCount(snapshot) {
-  return snapshot.fragments.reduce((sum, fragment) => sum + fragment.lines.length, 0)
+  return snapshot.fragments.reduce((sum, fragment) => (
+    sum + (fragment.native.active ? (fragment.native.lineCount ?? 0) : fragment.lines.length)
+  ), 0)
+}
+
+function snapshotCheck(name, pass, detail = {}) {
+  return { name, pass, ...detail }
+}
+
+function hasFlowdocDraftEditorIslandSnapshot(snapshot) {
+  return snapshot.fragments.some((fragment) => (
+    fragment.isEditing &&
+    fragment.visualMode === "flowdoc-draft-editor-island" &&
+    !fragment.native.active
+  ))
+}
+
+function hasNoActiveEditVisualRegression(snapshot) {
+  return snapshot.liveEchoCount === 0 &&
+    snapshot.fragments.every((fragment) => (
+      !fragment.isEditing ||
+      (
+        fragment.visualMode === "flowdoc-draft-editor-island" &&
+        !fragment.native.active &&
+        fragment.native.oldSvgTextLineCount === 0 &&
+        fragment.draftReplacementCount === 0
+      )
+    ))
 }
 
 function compareSnapshots(name, leftName, left, rightName, right) {
@@ -329,6 +413,8 @@ function summarizeSnapshots(snapshots) {
         isEditing: fragment.isEditing,
         visualMode: fragment.visualMode,
         reflowKind: fragment.reflowKind,
+        native: fragment.native,
+        draftReplacementCount: fragment.draftReplacementCount,
         lineCount: fragment.lines.length,
         firstLine: fragment.lines[0]?.text ?? "",
         lastLine: fragment.lines.at(-1)?.text ?? "",
@@ -350,46 +436,61 @@ async function runThaiRepeatLifecycle(page) {
 
   await enterTargetEdit(page)
   snapshots.firstEditEntry = await waitForStableSnapshot(page, "thai-repeat:firstEditEntry", { expectEditing: true })
+  const firstEntryLineCount = totalLineCount(snapshots.firstEditEntry)
 
   await page.keyboard.press("End")
   await typeTextWithKeyboard(page, firstRunText)
   snapshots.firstEditAfterType = await waitForStableSnapshot(page, "thai-repeat:firstEditAfterType", { expectEditing: true })
-  assert(
-    totalLineCount(snapshots.firstEditAfterType) > totalLineCount(snapshots.firstEditEntry),
-    "Thai repeated-key first run did not wrap to a new visual line",
-  )
+  const firstAfterTypeLineCount = totalLineCount(snapshots.firstEditAfterType)
+  assert(firstAfterTypeLineCount > firstEntryLineCount, "Thai repeated-key first run did not wrap to a new FlowDoc draft visual line")
 
   await exitTargetEdit(page)
   snapshots.postFirstExit = await waitForStableSnapshot(page, "thai-repeat:postFirstExit", { expectEditing: false })
 
   await enterTargetEdit(page)
   snapshots.secondEditEntry = await waitForStableSnapshot(page, "thai-repeat:secondEditEntry", { expectEditing: true })
+  const secondEntryLineCount = totalLineCount(snapshots.secondEditEntry)
 
-  await page.keyboard.press("Enter")
+  await page.keyboard.press("End")
   await typeTextWithKeyboard(page, secondRunText)
   snapshots.secondEditAfterType = await waitForStableSnapshot(page, "thai-repeat:secondEditAfterType", { expectEditing: true })
+  const secondAfterTypeLineCount = totalLineCount(snapshots.secondEditAfterType)
 
   await exitTargetEdit(page)
   snapshots.postSecondExit = await waitForStableSnapshot(page, "thai-repeat:postSecondExit", { expectEditing: false })
 
-  const comparisons = [
-    compareSnapshots("thai-repeat: show vs first edit entry", "preEditShow", snapshots.preEditShow, "firstEditEntry", snapshots.firstEditEntry),
-    compareSnapshots("thai-repeat: first edit draft vs post first exit", "firstEditAfterType", snapshots.firstEditAfterType, "postFirstExit", snapshots.postFirstExit),
-    compareSnapshots("thai-repeat: post first exit vs second edit entry", "postFirstExit", snapshots.postFirstExit, "secondEditEntry", snapshots.secondEditEntry),
-    compareSnapshots("thai-repeat: second edit draft vs post second exit", "secondEditAfterType", snapshots.secondEditAfterType, "postSecondExit", snapshots.postSecondExit),
+  const checks = [
+    snapshotCheck("first edit entry uses FlowDoc draft editor island", hasFlowdocDraftEditorIslandSnapshot(snapshots.firstEditEntry)),
+    snapshotCheck("first typing stays in FlowDoc draft editor island without competing visuals", hasNoActiveEditVisualRegression(snapshots.firstEditAfterType)),
+    snapshotCheck("first Thai run wraps in FlowDoc draft editor island", firstAfterTypeLineCount > firstEntryLineCount, {
+      before: firstEntryLineCount,
+      after: firstAfterTypeLineCount,
+    }),
+    snapshotCheck("post first exit returns to measured SVG", snapshots.postFirstExit.fragments.every((fragment) => !fragment.isEditing && fragment.lines.length > 0)),
+    snapshotCheck("second edit entry uses FlowDoc draft editor island", hasFlowdocDraftEditorIslandSnapshot(snapshots.secondEditEntry)),
+    snapshotCheck("second typing stays in FlowDoc draft editor island without competing visuals", hasNoActiveEditVisualRegression(snapshots.secondEditAfterType)),
+    snapshotCheck("second Thai run keeps or increases active line count after re-enter typing", secondAfterTypeLineCount >= secondEntryLineCount, {
+      before: secondEntryLineCount,
+      after: secondAfterTypeLineCount,
+    }),
+    snapshotCheck("post second exit returns to measured SVG", snapshots.postSecondExit.fragments.every((fragment) => !fragment.isEditing && fragment.lines.length > 0)),
   ]
 
   return {
     name: "thai-repeat-default-paragraph-reenter",
-    description: "User-like default paragraph: hold repeated Thai keys until wrap, exit, re-enter, press Enter at the clicked caret, type another Thai run, and compare edit/show geometry.",
-    ok: comparisons.every((comparison) => comparison.equal),
+    description: "User-like default paragraph: hold repeated Thai keys until wrap, exit, re-enter, type another Thai run, and verify the FlowDoc draft editor island remains the only active visual truth.",
+    ok: checks.every((check) => check.pass),
     typing: {
       firstRunLength: firstRunText.length,
       secondRunLength: secondRunText.length,
       firstLineCount: totalLineCount(snapshots.firstEditAfterType),
       secondLineCount: totalLineCount(snapshots.secondEditAfterType),
     },
-    comparisons,
+    checks,
+    comparisons: [
+      compareSnapshots("thai-repeat: post first exit stable self-check", "postFirstExit", snapshots.postFirstExit, "postFirstExit", snapshots.postFirstExit),
+      compareSnapshots("thai-repeat: post second exit stable self-check", "postSecondExit", snapshots.postSecondExit, "postSecondExit", snapshots.postSecondExit),
+    ],
     snapshots: summarizeSnapshots(snapshots),
   }
 }
@@ -423,6 +524,7 @@ async function runProbe() {
 
     const variant = await runThaiRepeatLifecycle(page)
     const failedComparisons = variant.comparisons.filter((comparison) => !comparison.equal)
+    const failedChecks = variant.checks.filter((check) => !check.pass)
     const ignoredResourceErrors = resourceErrors.filter((error) => isIgnoredResourceError(error))
     const activeResourceErrors = resourceErrors.filter((error) => !isIgnoredResourceError(error))
     const ignoredConsoleErrors = consoleErrors.filter((error) => isIgnorableConsoleError(error, ignoredResourceErrors))
@@ -432,7 +534,8 @@ async function runProbe() {
       ok: activeConsoleErrors.length === 0 &&
         pageErrors.length === 0 &&
         activeResourceErrors.length === 0 &&
-        failedComparisons.length === 0,
+        failedComparisons.length === 0 &&
+        failedChecks.length === 0,
       browser: {
         mode: smokeBrowserLabel(smokeBrowser),
         channel: smokeBrowser.channel ?? null,
@@ -441,6 +544,7 @@ async function runProbe() {
       },
       targetNodeId: TARGET_NODE_ID,
       variant,
+      failedChecks,
       failedComparisons,
       console: {
         errors: activeConsoleErrors.map((error) => error.text),

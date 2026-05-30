@@ -474,11 +474,14 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
     }
     case "SET_PAGINATED":
       return { ...state, paginated: action.paginated }
-    case "SET_INLINE_EDIT_HEIGHT":
+    case "SET_INLINE_EDIT_HEIGHT": {
+      const nextPaginated = resizeFragmentHeightAndShift(state.paginated, state.doc, action.nodeId, action.height, action.pageIndex)
+      if (nextPaginated === state.paginated) return state
       return {
         ...state,
-        paginated: resizeFragmentHeightAndShift(state.paginated, state.doc, action.nodeId, action.height, action.pageIndex),
+        paginated: nextPaginated,
       }
+    }
     case "UNDO": {
       if (state.past.length === 0) return state
       const prev = state.past[state.past.length - 1]

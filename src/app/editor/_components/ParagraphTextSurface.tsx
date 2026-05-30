@@ -49,7 +49,7 @@ import {
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
-import { finishWysiwygPerfSpan, isWysiwygPerfTraceRuntimeEnabled, startWysiwygPerfSpan } from "./wysiwygPerformance"
+import { finishWysiwygPerfSpan, isWysiwygPerfTraceRuntimeEnabled, recordWysiwygPerfEvent, startWysiwygPerfSpan } from "./wysiwygPerformance"
 import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
 
 interface Props {
@@ -130,6 +130,10 @@ const WYSIWYG_TYPING_CARET_HOLD_MS = 650
 const WYSIWYG_TEXT_BLUR_SETTLE_MS = 32
 const WYSIWYG_TEXT_DRAFT_SYNC_QUIET_MS = 120
 const WYSIWYG_TEXT_DRAFT_SYNC_MAX_LAG_MS = 5000
+const WYSIWYG_FLOWDOC_DRAFT_SYNC_QUIET_MS = 300
+const WYSIWYG_TEXT_DRAFT_REPLACEMENT_SETTLE_MS = 180
+const WYSIWYG_NATIVE_GEOMETRY_SYNC_THROTTLE_MS = 160
+const WYSIWYG_NATIVE_HEIGHT_PREVIEW_THRESHOLD_PX = 0.5
 const POINTER_SELECTION_DRAG_THRESHOLD_PX = 3
 const SVG_TEXT_PRESERVE_WHITESPACE_STYLE: React.CSSProperties = {
   pointerEvents: "none",
@@ -282,10 +286,10 @@ export function shouldUseWysiwygTextEngineLayer(input: {
   isVisualFresh: boolean
   supportsLocalDraftLayout?: boolean
 }): boolean {
+  void input.isVisualFresh
   return input.enabled &&
     input.isEditing &&
     input.canPlainTextEdit &&
-    input.isVisualFresh &&
     (input.supportsLocalDraftLayout ?? true)
 }
 
@@ -294,6 +298,10 @@ export function hasWysiwygTextDraftChange(
   draftText: string | null | undefined,
 ): boolean {
   return fullText != null && draftText != null && draftText !== fullText
+}
+
+function isCollapsedWysiwygTextSelection(selection: WysiwygTextSelection | null | undefined): boolean {
+  return !selection || selection.anchorOffset === selection.focusOffset
 }
 
 function findParagraphNode(doc: DocumentNode, nodeId: string): ParagraphNode | null {
@@ -540,11 +548,13 @@ function renderRichLineRuns(
   pageKey: string,
   scale: number,
   opacity?: number,
-  clipPathId?: string,
+  clipPathId?: string | null,
 ) {
   if (!line.runs?.length) return null
   const baseY = lineBaselineY(line) * scale
-  const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
+  const clip = clipPathId === null
+    ? undefined
+    : `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
 
   return (
     <g key={index} clipPath={clip} opacity={opacity} style={{ pointerEvents: "none", userSelect: "none" }}>
@@ -579,7 +589,7 @@ function renderLine(
   pageKey: string,
   scale: number,
   opacity?: number,
-  clipPathId?: string,
+  clipPathId?: string | null,
 ) {
   const align = renderProps?.align
   const fontSize = (line.fontSize ?? renderProps?.fontSize ?? 8) * scale
@@ -651,7 +661,9 @@ function renderListMarker(
   const fontWeight = fontWeightForRenderProps(renderProps)
   const fontStyle = fontStyleForRenderProps(renderProps)
   const textColor = textColorForRenderProps(renderProps)
-  const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
+  const clip = clipPathId === null
+    ? undefined
+    : `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
 
   return (
     <text
@@ -735,7 +747,7 @@ function renderCollapsedCaretOverlay(
   pageKey: string,
   scale: number,
   overlay: WysiwygCollapsedCaretOverlay | null,
-  clipPathId?: string,
+  clipPathId?: string | null,
   caretVisualMode: WysiwygCaretVisualMode = "idle",
 ) {
   if (!overlay) return null
@@ -752,7 +764,7 @@ function renderCollapsedCaretOverlay(
       stroke={INLINE_EDIT_TEXT_COLOR}
       strokeWidth={Math.max(1, 1.1 * scale)}
       strokeLinecap="round"
-      clipPath={`url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`}
+      clipPath={clipPathId === null ? undefined : `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`}
       style={{ pointerEvents: "none" }}
     >
       {renderCaretBlinkAnimation(caretVisualMode)}
@@ -766,7 +778,7 @@ function renderCollapsedCaret(
   scale: number,
   caretIndex: number | null,
   textMeasurer: TextMeasurer | undefined,
-  clipPathId?: string,
+  clipPathId?: string | null,
   caretVisualMode: WysiwygCaretVisualMode = "idle",
 ) {
   if (caretIndex == null) return null
@@ -907,6 +919,18 @@ interface WysiwygImmediateTextEcho {
   draftText: string
 }
 
+interface WysiwygDraftTextReplacementState {
+  baseText: string
+  draftText: string
+  allowDraftOverflow?: boolean
+}
+
+interface WysiwygDraftTextReplacementLine {
+  line: PaginatedLine
+  draftStart: number
+  draftEnd: number
+}
+
 export interface WysiwygImmediateDraftLayoutState {
   baseText: string
   draftText: string
@@ -917,6 +941,10 @@ export interface WysiwygDraftSyncPayload {
   text: string
   caretOffset: number | null
   selection: WysiwygTextSelection | null
+}
+
+interface WysiwygLocalDraftVisualState extends WysiwygDraftSyncPayload {
+  revision: number
 }
 
 export function areWysiwygImmediateTextEchoStatesEqual(
@@ -972,6 +1000,14 @@ export function resolveWysiwygDraftSyncDelayMs(input: {
   const elapsedMs = Math.max(0, input.nowMs - input.firstRequestedAtMs)
   if (elapsedMs >= maxLagMs) return 0
   return Math.min(quietWindowMs, maxLagMs - elapsedMs)
+}
+
+export function shouldApplyWysiwygNativeHeightPreview(
+  previousHeightPx: number | null,
+  nextHeightPx: number,
+  thresholdPx = WYSIWYG_NATIVE_HEIGHT_PREVIEW_THRESHOLD_PX,
+): boolean {
+  return previousHeightPx == null || Math.abs(nextHeightPx - previousHeightPx) > thresholdPx
 }
 
 export function shouldKeepWysiwygImmediateDraftLayout(
@@ -1476,6 +1512,10 @@ interface WysiwygTextLayerProps {
   fragment: PageFragment
   lines?: PaginatedLine[]
   renderProps: ParagraphRenderProps | undefined
+  draftParagraphNode?: ParagraphNode | null
+  useFlowdocDraftLines?: boolean
+  draftPaginationActive?: boolean
+  pageContentBottom?: number | null
   pageKey: string
   clipPathId?: string
   scale: number
@@ -1483,8 +1523,10 @@ interface WysiwygTextLayerProps {
   caretIndex: number | null
   selection?: WysiwygTextSelection | null
   draftText?: string | null
+  hasDraftChange?: boolean
   isListItem?: boolean
   onDraftChange?: (nodeId: string, text: string, caretIndex: number | null, selection?: WysiwygTextSelection | null) => void
+  onNativeHeightChange?: (nodeId: string, height: number, pageIndex: number | null) => void
   onRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onEndEdit?: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph?: (nodeId: string, splitIndex: number, text?: string) => void
@@ -1492,15 +1534,16 @@ interface WysiwygTextLayerProps {
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
+  onReflowDecision?: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
   showTextSegments: boolean
   selectionOverlayRects?: ReturnType<typeof resolveSelectionOverlayRectsInFragment>
   pointerFragments?: WysiwygTextPointerFragmentTarget[]
   reflowKind?: WysiwygTextReflowDecision["kind"]
   liveTextEcho?: WysiwygLiveTextEcho | null
-  resolveImmediateDraftLayout?: (draftText: string) => WysiwygDraftParagraphLayout | null
   tableCellDraftVisualPreviewCandidate?: boolean
   followCaretIntoView?: boolean
   suppressLiveTextEcho?: boolean
+  relaxNativeEditClip?: boolean
   caretVisualMode?: WysiwygCaretVisualMode
 }
 
@@ -1612,10 +1655,267 @@ function renderLiveTextEcho(
   }
 }
 
+function resolveWysiwygDraftTextDiff(baseText: string, draftText: string) {
+  let prefixLength = 0
+  const maxPrefixLength = Math.min(baseText.length, draftText.length)
+  while (prefixLength < maxPrefixLength && baseText[prefixLength] === draftText[prefixLength]) {
+    prefixLength += 1
+  }
+
+  let baseSuffixStart = baseText.length
+  let draftSuffixStart = draftText.length
+  while (
+    baseSuffixStart > prefixLength &&
+    draftSuffixStart > prefixLength &&
+    baseText[baseSuffixStart - 1] === draftText[draftSuffixStart - 1]
+  ) {
+    baseSuffixStart -= 1
+    draftSuffixStart -= 1
+  }
+
+  return {
+    prefixLength,
+    baseSuffixStart,
+    draftSuffixStart,
+    delta: draftText.length - baseText.length,
+  }
+}
+
+function mapWysiwygBaseOffsetToDraft(
+  offset: number,
+  diff: ReturnType<typeof resolveWysiwygDraftTextDiff>,
+): number {
+  if (offset <= diff.prefixLength) return offset
+  if (offset >= diff.baseSuffixStart) return offset + diff.delta
+  return diff.draftSuffixStart
+}
+
+function resolveWysiwygLineSourceRange(line: PaginatedLine, fallbackStart: number): { start: number; end: number } {
+  const positionedParts = line.runs?.length ? line.runs : line.segments
+  if (positionedParts?.length) {
+    return {
+      start: Math.min(...positionedParts.map((part) => part.start)),
+      end: Math.max(...positionedParts.map((part) => part.end)),
+    }
+  }
+  return {
+    start: fallbackStart,
+    end: fallbackStart + line.text.length,
+  }
+}
+
+function splitWysiwygDraftLineText(text: string, capacity: number): string[] {
+  if (!text) return [""]
+  const safeCapacity = Math.max(1, Math.floor(capacity))
+  if (text.length <= safeCapacity) return [text]
+
+  const chunks: string[] = []
+  let start = 0
+  while (start < text.length) {
+    let end = Math.min(text.length, start + safeCapacity)
+    if (end < text.length) {
+      const minBreak = start + Math.max(1, Math.floor(safeCapacity * 0.45))
+      let breakAt = -1
+      for (let index = end; index > minBreak; index -= 1) {
+        if (/\s/.test(text[index - 1] ?? "")) {
+          breakAt = index
+          break
+        }
+      }
+      if (breakAt > start) end = breakAt
+    }
+    chunks.push(text.slice(start, end))
+    start = end
+  }
+  return chunks
+}
+
+function buildWysiwygDraftTextReplacementLines(
+  fragment: PageFragment,
+  baseText: string,
+  draftText: string,
+  allowDraftOverflow = true,
+): WysiwygDraftTextReplacementLine[] | null {
+  const sourceLines = fragment.lines
+  if (!sourceLines?.length) return null
+
+  const diff = resolveWysiwygDraftTextDiff(baseText, draftText)
+  let fallbackStart = 0
+  let extraLineOffset = 0
+  const replacementLines: WysiwygDraftTextReplacementLine[] = []
+  sourceLines.forEach((line, lineIndex) => {
+    const sourceRange = resolveWysiwygLineSourceRange(line, fallbackStart)
+    fallbackStart = Math.max(sourceRange.end, fallbackStart + line.text.length)
+    const draftStart = Math.max(0, Math.min(draftText.length, mapWysiwygBaseOffsetToDraft(sourceRange.start, diff)))
+    const mappedEnd = Math.max(0, Math.min(draftText.length, mapWysiwygBaseOffsetToDraft(sourceRange.end, diff)))
+    const draftEnd = allowDraftOverflow && lineIndex === sourceLines.length - 1
+      ? Math.max(mappedEnd, draftText.length)
+      : mappedEnd
+    const safeDraftEnd = Math.max(draftStart, Math.min(draftText.length, draftEnd))
+    const lineDraftText = draftText.slice(draftStart, safeDraftEnd)
+    const estimatedCharWidth = Math.max(4, (line.fontSize ?? 12) * 0.52)
+    const geometryCapacity = Math.max(1, Math.floor(fragment.width / estimatedCharWidth))
+    const sourceCapacity = Math.max(1, sourceRange.end - sourceRange.start, line.text.length, geometryCapacity)
+    const chunks = splitWysiwygDraftLineText(lineDraftText, sourceCapacity)
+    let chunkStart = draftStart
+    const baseY = line.y + (line.height * extraLineOffset)
+    chunks.forEach((chunk, chunkIndex) => {
+      const chunkEnd = Math.min(safeDraftEnd, chunkStart + chunk.length)
+      replacementLines.push({
+        draftStart: chunkStart,
+        draftEnd: chunkEnd,
+        line: {
+          ...line,
+          y: baseY + (line.height * chunkIndex),
+          text: chunk,
+          segments: undefined,
+          runs: undefined,
+        },
+      })
+      chunkStart = chunkEnd
+    })
+    extraLineOffset += Math.max(0, chunks.length - 1)
+  })
+  return replacementLines
+}
+
+function cloneWysiwygDraftReplacementSourceFragment(fragment: PageFragment): PageFragment {
+  return {
+    ...fragment,
+    lines: fragment.lines?.map((line) => ({
+      ...line,
+      segments: line.segments?.map((segment) => ({ ...segment })),
+      runs: line.runs?.map((run) => ({ ...run, style: { ...run.style } })),
+    })),
+  }
+}
+
+function renderDraftTextReplacementCaret(
+  lines: WysiwygDraftTextReplacementLine[],
+  caretIndex: number | null,
+  pageKey: string,
+  fragment: PageFragment,
+  scale: number,
+  clipPathId: string | undefined,
+  caretVisualMode: WysiwygCaretVisualMode,
+): React.ReactNode {
+  const draftCaret = caretIndex == null ? null : Math.max(0, caretIndex)
+  const target = draftCaret == null
+    ? lines.at(-1)
+    : lines.find((line) => draftCaret <= line.draftEnd) ?? lines.at(-1)
+  if (!target) return null
+
+  const line = target.line
+  const span = Math.max(1, target.draftEnd - target.draftStart)
+  const rawRatio = draftCaret == null
+    ? 1
+    : (draftCaret - target.draftStart) / span
+  const ratio = Math.max(0, Math.min(1, Number.isFinite(rawRatio) ? rawRatio : 1))
+  const caretX = line.x + Math.max(line.width, fragment.width * 0.2) * ratio
+  const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
+
+  return (
+    <line
+      data-wysiwyg-draft-text-replacement-caret="true"
+      data-wysiwyg-caret-mode={caretVisualMode}
+      x1={caretX * scale}
+      y1={line.y * scale}
+      x2={caretX * scale}
+      y2={(line.y + line.height) * scale}
+      stroke={INLINE_EDIT_TEXT_COLOR}
+      strokeWidth={Math.max(1, 1.1 * scale)}
+      strokeLinecap="round"
+      clipPath={clip}
+      style={{ pointerEvents: "none" }}
+    >
+      {renderCaretBlinkAnimation(caretVisualMode)}
+    </line>
+  )
+}
+
+function renderDraftTextReplacement(
+  fragment: PageFragment,
+  replacement: WysiwygDraftTextReplacementState | null | undefined,
+  caretIndex: number | null,
+  renderProps: ParagraphRenderProps | undefined,
+  pageKey: string,
+  scale: number,
+  clipPathId?: string,
+  caretVisualMode: WysiwygCaretVisualMode = "idle",
+): { content: React.ReactNode; caret: React.ReactNode } | null {
+  if (!replacement) return null
+  const replacementLines = buildWysiwygDraftTextReplacementLines(
+    fragment,
+    replacement.baseText,
+    replacement.draftText,
+    replacement.allowDraftOverflow ?? true,
+  )
+  if (!replacementLines) return null
+
+  const align = renderProps?.align
+  const fontFamily = resolveFontCssFamily(renderProps?.fontFamilyKey)
+  const fontWeight = fontWeightForRenderProps(renderProps)
+  const fontStyle = fontStyleForRenderProps(renderProps)
+  const textDecoration = textDecorationForRenderProps(renderProps)
+  const textColor = textColorForRenderProps(renderProps)
+  const clip = `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`
+  const firstLine = replacementLines[0]?.line
+  const lastLine = replacementLines.at(-1)?.line
+  const replacementHeight = firstLine && lastLine
+    ? (lastLine.y + lastLine.height) - firstLine.y
+    : fragment.height
+
+  return {
+    content: (
+      <g
+        data-wysiwyg-draft-text-replacement="true"
+        data-wysiwyg-draft-text-replacement-mode="flowdoc-line-box"
+        data-wysiwyg-draft-text-length={replacement.draftText.length}
+        data-wysiwyg-draft-text-replacement-source-line-count={fragment.lines?.length ?? 0}
+        data-wysiwyg-draft-text-replacement-line-count={replacementLines.length}
+        data-wysiwyg-draft-text-replacement-x={fragment.x}
+        data-wysiwyg-draft-text-replacement-y={firstLine?.y ?? fragment.y}
+        data-wysiwyg-draft-text-replacement-width={fragment.width}
+        data-wysiwyg-draft-text-replacement-height={replacementHeight}
+        clipPath={clip}
+        style={{ pointerEvents: "none" }}
+      >
+        {replacementLines.map(({ line, draftStart, draftEnd }, index) => (
+          <text
+            key={`draft-line-${index}`}
+            data-wysiwyg-draft-text-replacement-line="true"
+            data-wysiwyg-draft-line-index={index}
+            data-wysiwyg-draft-line-start={draftStart}
+            data-wysiwyg-draft-line-end={draftEnd}
+            x={lineX(line, align) * scale}
+            y={lineBaselineY(line) * scale}
+            fontSize={(line.fontSize ?? renderProps?.fontSize ?? 8) * scale}
+            fontFamily={fontFamily}
+            fontWeight={fontWeight}
+            fontStyle={fontStyle}
+            textDecoration={textDecoration}
+            textAnchor={textAnchorForAlign(align)}
+            fill={textColor}
+            xmlSpace="preserve"
+            style={SVG_TEXT_PRESERVE_WHITESPACE_STYLE}
+          >
+            {line.text}
+          </text>
+        ))}
+      </g>
+    ),
+    caret: renderDraftTextReplacementCaret(replacementLines, caretIndex, pageKey, fragment, scale, clipPathId, caretVisualMode),
+  }
+}
+
 export function WysiwygTextLayer({
   fragment,
   lines,
   renderProps,
+  draftParagraphNode,
+  useFlowdocDraftLines = false,
+  draftPaginationActive = false,
+  pageContentBottom,
   pageKey,
   clipPathId,
   scale,
@@ -1623,8 +1923,10 @@ export function WysiwygTextLayer({
   caretIndex,
   selection,
   draftText,
+  hasDraftChange = false,
   isListItem = false,
   onDraftChange,
+  onNativeHeightChange,
   onRichTextShortcut,
   onEndEdit,
   onSplitParagraph,
@@ -1632,19 +1934,32 @@ export function WysiwygTextLayer({
   onExitListItem,
   onChangeListItemLevel,
   onBackspaceListItemAtStart,
+  onReflowDecision,
   showTextSegments,
   selectionOverlayRects = [],
   pointerFragments = [],
   reflowKind,
   liveTextEcho,
-  resolveImmediateDraftLayout,
   tableCellDraftVisualPreviewCandidate = false,
   followCaretIntoView = false,
   suppressLiveTextEcho = false,
+  relaxNativeEditClip = false,
   caretVisualMode,
 }: WysiwygTextLayerProps) {
   const layerRef = useRef<SVGGElement | null>(null)
   const inputBridgeRef = useRef<HTMLDivElement | null>(null)
+  const nativeTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const nativeForeignObjectRef = useRef<SVGForeignObjectElement | null>(null)
+  const nativeHitAreaRef = useRef<SVGRectElement | null>(null)
+  const nativeOutlineRef = useRef<SVGRectElement | null>(null)
+  const nativeGeometrySyncFrameRef = useRef<number | null>(null)
+  const nativeGeometrySyncAfterPaintFrameRef = useRef<number | null>(null)
+  const nativeGeometrySyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const nativeGeometrySyncSourceRef = useRef<string>("unknown")
+  const nativeGeometryHeightRef = useRef<number | null>(null)
+  const nativeHeightPreviewLastReportedRef = useRef<{ key: string; height: number } | null>(null)
+  const nativeGeometryLastSyncAtRef = useRef<number>(0)
+  const flowdocDraftReflowRequestRef = useRef<string | null>(null)
   const pointerSelectionAnchorRef = useRef<number | null>(null)
   const activePointerIdRef = useRef<number | null>(null)
   const pointerDragStartPointRef = useRef<{ x: number; y: number } | null>(null)
@@ -1665,11 +1980,14 @@ export function WysiwygTextLayer({
   const immediateTextEchoRef = useRef<WysiwygImmediateTextEcho | null>(null)
   const [immediateDraftLayout, setImmediateDraftLayout] = useState<WysiwygImmediateDraftLayoutState | null>(null)
   const immediateDraftLayoutRef = useRef<WysiwygImmediateDraftLayoutState | null>(null)
+  const draftReplacementSourceFragmentRef = useRef<PageFragment | null>(null)
+  const draftReplacementSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isApplyingImmediateVisualStateRef = useRef(false)
   const pendingDraftSyncRef = useRef<WysiwygDraftSyncPayload | null>(null)
   const scheduledDraftSyncFrameRef = useRef<number | null>(null)
   const scheduledDraftSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingDraftSyncFirstRequestedAtRef = useRef<number | null>(null)
+  const continuationDraftSyncFlushKeyRef = useRef<string | null>(null)
   const onDraftChangeRef = useRef(onDraftChange)
   const nodeIdRef = useRef(fragment.nodeId)
   const traceHotPathPerf = useMemo(() => (
@@ -1684,6 +2002,22 @@ export function WysiwygTextLayer({
     caretOffset: caretIndex,
     selection,
   })
+  const flowdocDraftLayoutCacheRef = useRef<WysiwygDraftParagraphLayoutCache>(createWysiwygDraftParagraphLayoutCache())
+  const [flowdocDraftState, setFlowdocDraftState] = useState<WysiwygLocalDraftVisualState>({
+    text: draftText ?? "",
+    caretOffset: caretIndex,
+    selection: selection ?? null,
+    revision: 0,
+  })
+  const setFlowdocDraftSnapshot = useCallback((next: WysiwygDraftSyncPayload) => {
+    setFlowdocDraftState((current) => (
+      current.text === next.text &&
+      current.caretOffset === next.caretOffset &&
+      areWysiwygTextSelectionsEqual(current.selection, next.selection)
+        ? current
+        : { ...next, revision: current.revision + 1 }
+    ))
+  }, [])
   const activeImmediateDraftLayout = shouldKeepWysiwygImmediateDraftLayout(
     immediateDraftLayout,
     draftText ?? "",
@@ -1718,11 +2052,162 @@ export function WysiwygTextLayer({
     return targets
   }, [pageKey, pointerFragments, visualFragment])
   const activeCaretVisualMode = caretVisualMode ?? localCaretVisualMode
+  const useNativeEditLayer = true
+  const draftTextReplacement = useMemo<WysiwygDraftTextReplacementState | null>(() => {
+    if (useNativeEditLayer) return null
+    if (activeImmediateDraftLayout) return null
+    if (immediateTextEcho) {
+      return {
+        baseText: immediateTextEcho.baseText,
+        draftText: immediateTextEcho.draftText,
+        allowDraftOverflow: true,
+      }
+    }
+    if (lines != null) return null
+    if (liveTextEcho && draftText != null) {
+      const visualBaseText = draftText.slice(0, liveTextEcho.anchorOffset) +
+        draftText.slice(liveTextEcho.anchorOffset + liveTextEcho.text.length)
+      return {
+        baseText: visualBaseText,
+        draftText,
+        allowDraftOverflow: true,
+      }
+    }
+    if (hasDraftChange && draftText != null && lines == null) {
+      return {
+        baseText: draftText,
+        draftText,
+        allowDraftOverflow: false,
+      }
+    }
+    return null
+  }, [activeImmediateDraftLayout, draftText, hasDraftChange, immediateTextEcho, lines, liveTextEcho])
+  if (draftTextReplacement && !draftReplacementSourceFragmentRef.current) {
+    draftReplacementSourceFragmentRef.current = cloneWysiwygDraftReplacementSourceFragment(visualFragment)
+  } else if (!draftTextReplacement) {
+    draftReplacementSourceFragmentRef.current = null
+  }
+  const draftReplacementSourceFragment = draftReplacementSourceFragmentRef.current
+  const activeVisualFragment = draftReplacementSourceFragment ?? visualFragment
+  const flowdocDraftLinesSessionRef = useRef<{ nodeId: string | null; enabled: boolean }>({
+    nodeId: null,
+    enabled: false,
+  })
+  if (flowdocDraftLinesSessionRef.current.nodeId !== fragment.nodeId) {
+    flowdocDraftLinesSessionRef.current = { nodeId: fragment.nodeId, enabled: false }
+  }
+  const canStartFlowdocDraftLines = Boolean(
+    useNativeEditLayer &&
+    useFlowdocDraftLines &&
+    draftParagraphNode &&
+    textMeasurer,
+  )
+  if (canStartFlowdocDraftLines) {
+    flowdocDraftLinesSessionRef.current.enabled = true
+  }
+  const flowdocDraftSelectionCollapsed = isCollapsedWysiwygTextSelection(flowdocDraftState.selection)
+  const shouldUseFlowdocDraftLines = Boolean(
+    useNativeEditLayer &&
+    flowdocDraftLinesSessionRef.current.enabled &&
+    draftParagraphNode &&
+    textMeasurer,
+  )
+  const flowdocDraftLayout = useMemo(() => {
+    if (!shouldUseFlowdocDraftLines || !draftParagraphNode || !textMeasurer) return null
+    const measuredLayout = buildCachedWysiwygDraftParagraphLayout(
+      flowdocDraftLayoutCacheRef.current,
+      activeVisualFragment,
+      draftParagraphNode,
+      flowdocDraftState.text,
+      textMeasurer,
+      {
+        allowContinuedFirstFragment: !activeVisualFragment.continuesFrom,
+        traceMeasure: traceHotPathPerf,
+      },
+    )
+    if (measuredLayout) {
+      if (activeVisualFragment.isContinued && !activeVisualFragment.continuesFrom) {
+        const sliceStart = Math.max(0, activeVisualFragment.lineStart ?? 0)
+        const sliceEnd = Math.min(
+          measuredLayout.lines.length,
+          activeVisualFragment.lineEnd ?? measuredLayout.lines.length,
+        )
+        const sliceLines = measuredLayout.lines.slice(sliceStart, sliceEnd)
+        if (sliceLines.length > 0) {
+          return {
+            lines: sliceLines,
+            height: activeVisualFragment.height,
+          }
+        }
+      }
+      return measuredLayout
+    }
+    if (activeVisualFragment.lines?.length) {
+      return {
+        lines: activeVisualFragment.lines,
+        height: activeVisualFragment.height,
+      }
+    }
+    return null
+  }, [
+    activeVisualFragment,
+    draftParagraphNode,
+    flowdocDraftState.text,
+    lines,
+    shouldUseFlowdocDraftLines,
+    textMeasurer,
+    traceHotPathPerf,
+  ])
+  const flowdocDraftVisualFragment = useMemo(() => (
+    flowdocDraftLayout
+      ? { ...activeVisualFragment, lines: flowdocDraftLayout.lines, height: flowdocDraftLayout.height }
+      : null
+  ), [activeVisualFragment, flowdocDraftLayout])
+  const flowdocDraftReflowDecision = useMemo(() => {
+    if (!shouldUseFlowdocDraftLines || !flowdocDraftLayout) return null
+    return classifyWysiwygTextReflow({
+      fragment: activeVisualFragment,
+      draftLines: flowdocDraftLayout.lines,
+      draftHeight: flowdocDraftLayout.height,
+      pageContentBottom,
+      supportsLocalDraftLayout: !activeVisualFragment.continuesFrom,
+      supportsSamePageHeightPatch: onNativeHeightChange != null,
+    })
+  }, [
+    activeVisualFragment,
+    flowdocDraftLayout,
+    onNativeHeightChange,
+    pageContentBottom,
+    shouldUseFlowdocDraftLines,
+  ])
+  const activePointerFragmentTargets = useMemo(() => {
+    if (!flowdocDraftVisualFragment) return pointerFragmentTargets
+    return pointerFragmentTargets.map((target) => (
+      target.pageKey === pageKey &&
+      target.fragment.nodeId === fragment.nodeId &&
+      target.fragment.pageIndex === fragment.pageIndex
+        ? { ...target, fragment: flowdocDraftVisualFragment }
+        : target
+    ))
+  }, [
+    flowdocDraftVisualFragment,
+    fragment.nodeId,
+    fragment.pageIndex,
+    pageKey,
+    pointerFragmentTargets,
+  ])
+  const hasContinuationPointerFragmentTarget = useMemo(() => (
+    pointerFragmentTargets.some((target) =>
+      target.fragment.nodeId === fragment.nodeId &&
+      target.fragment.pageIndex !== fragment.pageIndex
+    )
+  ), [fragment.nodeId, fragment.pageIndex, pointerFragmentTargets])
+  const nativeVisualFragment = flowdocDraftVisualFragment ?? activeVisualFragment
   const liveEchoVisual = useMemo(() => (
-    suppressLiveTextEcho
+    useNativeEditLayer || draftTextReplacement || suppressLiveTextEcho
       ? null
       : renderLiveTextEcho(
-        visualFragment,
+        activeVisualFragment,
         liveTextEcho,
         renderProps,
         pageKey,
@@ -1730,28 +2215,40 @@ export function WysiwygTextLayer({
         textMeasurer,
         clipPathId,
         activeCaretVisualMode,
+    )
+  ), [activeCaretVisualMode, activeVisualFragment, clipPathId, draftTextReplacement, liveTextEcho, pageKey, renderProps, scale, suppressLiveTextEcho, textMeasurer])
+  const draftTextReplacementVisual = useMemo(() => (
+    useNativeEditLayer
+      ? null
+      : renderDraftTextReplacement(
+        activeVisualFragment,
+        draftTextReplacement,
+        draftStateRef.current.caretOffset,
+        renderProps,
+        pageKey,
+        scale,
+        clipPathId,
+        activeCaretVisualMode,
       )
-  ), [activeCaretVisualMode, clipPathId, liveTextEcho, pageKey, renderProps, scale, suppressLiveTextEcho, textMeasurer, visualFragment])
-  const immediateLiveTextEcho = useMemo(() => {
-    if (suppressLiveTextEcho) return null
-    if (activeImmediateDraftLayout) return null
-    if (!immediateTextEcho) return null
-    if (immediateTextEcho.draftText === (draftText ?? "") && (lines != null || liveTextEcho != null)) return null
-    return resolveWysiwygLiveTextEcho(immediateTextEcho.baseText, immediateTextEcho.draftText)
-  }, [activeImmediateDraftLayout, draftText, immediateTextEcho, lines, liveTextEcho, suppressLiveTextEcho])
-  const immediateLiveEchoVisual = useMemo(() => renderLiveTextEcho(
-    visualFragment,
-    immediateLiveTextEcho,
-    renderProps,
-    pageKey,
-    scale,
-    textMeasurer,
-    clipPathId,
-    activeCaretVisualMode,
-  ), [activeCaretVisualMode, clipPathId, immediateLiveTextEcho, pageKey, renderProps, scale, textMeasurer, visualFragment])
+  ), [activeCaretVisualMode, activeVisualFragment, clipPathId, draftTextReplacement, pageKey, renderProps, scale])
   const activeLiveEchoVisual = activeImmediateDraftLayout
     ? null
-    : liveEchoVisual ?? immediateLiveEchoVisual
+    : draftTextReplacementVisual
+      ? null
+      : liveEchoVisual
+  const visualLines = draftTextReplacementVisual ? null : activeVisualFragment.lines
+  const activeVisualMode = (draftTextReplacementVisual || activeImmediateDraftLayout || hasDraftChange)
+    ? "flowdoc-draft"
+    : activeLiveEchoVisual
+      ? "live-echo"
+      : "measured-svg"
+  const activeVisualDetail = draftTextReplacementVisual
+    ? "line-box-draft"
+    : activeImmediateDraftLayout
+      ? "immediate-measured-draft"
+      : hasDraftChange
+        ? "measured-draft"
+        : "measured"
 
   onDraftChangeRef.current = onDraftChange
   nodeIdRef.current = fragment.nodeId
@@ -1793,7 +2290,11 @@ export function WysiwygTextLayer({
     return flushed
   }, [flushPendingDraftSync])
 
-  const scheduleDraftSync = useCallback((payload: WysiwygDraftSyncPayload, options: { defer?: boolean } = {}) => {
+  const scheduleDraftSync = useCallback((payload: WysiwygDraftSyncPayload, options: {
+    defer?: boolean
+    quietWindowMs?: number
+    maxLagMs?: number
+  } = {}) => {
     const currentOnDraftChange = onDraftChangeRef.current
     if (!currentOnDraftChange) return false
     if (areWysiwygDraftSyncPayloadsEqual(pendingDraftSyncRef.current, payload)) return true
@@ -1808,7 +2309,12 @@ export function WysiwygTextLayer({
       : Date.now()
     const firstRequestedAtMs = pendingDraftSyncFirstRequestedAtRef.current ?? nowMs
     pendingDraftSyncFirstRequestedAtRef.current = firstRequestedAtMs
-    const delayMs = resolveWysiwygDraftSyncDelayMs({ firstRequestedAtMs, nowMs })
+    const delayMs = resolveWysiwygDraftSyncDelayMs({
+      firstRequestedAtMs,
+      nowMs,
+      quietWindowMs: options.quietWindowMs,
+      maxLagMs: options.maxLagMs,
+    })
     if (scheduledDraftSyncTimeoutRef.current !== null) {
       clearTimeout(scheduledDraftSyncTimeoutRef.current)
       scheduledDraftSyncTimeoutRef.current = null
@@ -1850,12 +2356,35 @@ export function WysiwygTextLayer({
       caretOffset: caretIndex,
       selection,
     }
+    setFlowdocDraftSnapshot({
+      text: nextText,
+      caretOffset: caretIndex,
+      selection: selection ?? null,
+    })
+    const shouldSettleDraftReplacement = Boolean(
+      immediateTextEchoRef.current?.draftText === nextText &&
+      lines != null &&
+      !pendingDraftSync,
+    )
+    if (shouldSettleDraftReplacement) {
+      if (draftReplacementSettleTimerRef.current === null) {
+        draftReplacementSettleTimerRef.current = setTimeout(() => {
+          draftReplacementSettleTimerRef.current = null
+          setImmediateTextEcho((current) => {
+            if (!current || current.draftText !== draftStateRef.current.text) return current
+            immediateTextEchoRef.current = null
+            draftReplacementSourceFragmentRef.current = null
+            return null
+          })
+        }, WYSIWYG_TEXT_DRAFT_REPLACEMENT_SETTLE_MS)
+      }
+    } else if (draftReplacementSettleTimerRef.current) {
+      clearTimeout(draftReplacementSettleTimerRef.current)
+      draftReplacementSettleTimerRef.current = null
+    }
     setImmediateTextEcho((current) => {
-      const next = current?.draftText === nextText && (lines != null || liveTextEcho != null)
-        ? null
-        : current
-      immediateTextEchoRef.current = next
-      return next
+      immediateTextEchoRef.current = current
+      return current
     })
     setImmediateDraftLayout((current) => {
       const next = shouldKeepWysiwygImmediateDraftLayout(current, nextText, lines != null)
@@ -1864,14 +2393,14 @@ export function WysiwygTextLayer({
       immediateDraftLayoutRef.current = next
       return next
     })
-  }, [caretIndex, draftText, lines, liveTextEcho, selection])
+  }, [caretIndex, draftText, lines, liveTextEcho, selection, setFlowdocDraftSnapshot])
 
   useEffect(() => {
     setLocalPointerSelectionPreview(null)
   }, [draftText, fragment.nodeId, setLocalPointerSelectionPreview])
 
   useEffect(() => {
-    focusElementWithoutScroll(inputBridgeRef.current)
+    focusElementWithoutScroll(nativeTextareaRef.current ?? inputBridgeRef.current)
   }, [fragment.nodeId])
 
   useEffect(() => () => {
@@ -1882,6 +2411,22 @@ export function WysiwygTextLayer({
     if (typingCaretIdleTimerRef.current) {
       clearTimeout(typingCaretIdleTimerRef.current)
       typingCaretIdleTimerRef.current = null
+    }
+    if (draftReplacementSettleTimerRef.current) {
+      clearTimeout(draftReplacementSettleTimerRef.current)
+      draftReplacementSettleTimerRef.current = null
+    }
+    if (nativeGeometrySyncFrameRef.current != null) {
+      cancelAnimationFrame(nativeGeometrySyncFrameRef.current)
+      nativeGeometrySyncFrameRef.current = null
+    }
+    if (nativeGeometrySyncAfterPaintFrameRef.current != null) {
+      cancelAnimationFrame(nativeGeometrySyncAfterPaintFrameRef.current)
+      nativeGeometrySyncAfterPaintFrameRef.current = null
+    }
+    if (nativeGeometrySyncTimeoutRef.current) {
+      clearTimeout(nativeGeometrySyncTimeoutRef.current)
+      nativeGeometrySyncTimeoutRef.current = null
     }
   }, [])
 
@@ -1925,6 +2470,281 @@ export function WysiwygTextLayer({
     }, WYSIWYG_TYPING_CARET_HOLD_MS)
   }, [])
 
+  const nativeLines = nativeVisualFragment.lines ?? []
+  const nativeFirstLine = nativeLines[0]
+  const nativeLastLine = nativeLines.length > 0 ? nativeLines[nativeLines.length - 1] : null
+  const nativeContentX = nativeVisualFragment.listMarker?.bodyX ?? nativeVisualFragment.x
+  const nativeContentY = nativeFirstLine?.y ?? nativeVisualFragment.y
+  const nativeContentWidth = Math.max(1, (nativeVisualFragment.x + nativeVisualFragment.width) - nativeContentX)
+  const nativeMeasuredTextBlockHeight = nativeFirstLine && nativeLastLine
+    ? Math.max(1, (nativeLastLine.y + nativeLastLine.height) - nativeFirstLine.y)
+    : Math.max(nativeVisualFragment.height, 1)
+  const nativeSpacingBefore = nativeVisualFragment.continuesFrom ? 0 : (renderProps?.spacingBefore ?? 0)
+  const nativeSpacingAfter = nativeVisualFragment.isContinued ? 0 : (renderProps?.spacingAfter ?? 0)
+  const nativeFontSize = (renderProps?.fontSize ?? 12) * scale
+  const nativeLineHeight = (renderProps?.lineHeight ?? (renderProps?.fontSize ?? 12) * 1.5) * scale
+  const nativeEditHeight = Math.max((flowdocDraftLayout?.height ?? nativeMeasuredTextBlockHeight) * scale, nativeLineHeight, 1)
+  const nativeRenderedEditHeight = shouldUseFlowdocDraftLines
+    ? nativeEditHeight
+    : Math.max(nativeEditHeight, nativeGeometryHeightRef.current ?? 0)
+  const nativeTextColor = textColorForRenderProps(renderProps)
+  const reportNativeHeightPreview = useCallback((height: number, source: string) => {
+    if (!onNativeHeightChange) return false
+    const nextHeight = Math.max(1, height)
+    const key = `${fragment.nodeId}:${fragment.pageIndex ?? "null"}:${shouldUseFlowdocDraftLines ? "flowdoc-draft-lines" : "native-edit-layer"}`
+    const previous = nativeHeightPreviewLastReportedRef.current
+    if (
+      previous?.key === key &&
+      !shouldApplyWysiwygNativeHeightPreview(previous.height, nextHeight)
+    ) {
+      return false
+    }
+    const startedAt = startWysiwygPerfSpan()
+    nativeHeightPreviewLastReportedRef.current = { key, height: nextHeight }
+    onNativeHeightChange(fragment.nodeId, nextHeight, fragment.pageIndex)
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "inline-edit-height-preview",
+      startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
+      nodeId: fragment.nodeId,
+      pageIndex: fragment.pageIndex,
+      paragraphHeight: nextHeight,
+      source,
+      active: true,
+    })
+    return true
+  }, [
+    fragment.nodeId,
+    fragment.pageIndex,
+    onNativeHeightChange,
+    shouldUseFlowdocDraftLines,
+  ])
+
+  const syncNativeTextareaGeometry = useCallback((
+    textarea: HTMLTextAreaElement | null = nativeTextareaRef.current,
+    source = nativeGeometrySyncSourceRef.current,
+  ) => {
+    if (!textarea) return
+    nativeGeometrySyncSourceRef.current = source
+    const startedAt = startWysiwygPerfSpan()
+    const scrollHeight = shouldUseFlowdocDraftLines ? nativeEditHeight : textarea.scrollHeight
+    const nextHeight = shouldUseFlowdocDraftLines
+      ? Math.max(nativeEditHeight, 1)
+      : Math.max(nativeEditHeight, scrollHeight, 1)
+    const previousHeight = nativeGeometryHeightRef.current
+    nativeGeometryHeightRef.current = nextHeight
+    const heightChanged = shouldApplyWysiwygNativeHeightPreview(previousHeight, nextHeight)
+    if (heightChanged) {
+      textarea.style.height = `${nextHeight}px`
+      textarea.style.minHeight = `${nativeEditHeight}px`
+      nativeForeignObjectRef.current?.setAttribute("height", String(nextHeight))
+      nativeHitAreaRef.current?.setAttribute("height", String(nextHeight))
+      nativeOutlineRef.current?.setAttribute("height", String(nextHeight))
+      layerRef.current?.setAttribute("data-wysiwyg-native-edit-height", String(nextHeight / scale))
+      reportNativeHeightPreview(
+        Math.max(1, nextHeight / scale + nativeSpacingBefore + nativeSpacingAfter),
+        `native-geometry-sync:${source}`,
+      )
+    }
+    nativeGeometryLastSyncAtRef.current = startWysiwygPerfSpan()
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "native-edit-geometry-sync",
+      startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
+      nodeId: fragment.nodeId,
+      pageIndex: fragment.pageIndex,
+      textLength: textarea.value.length,
+      lineCount: nativeLines.length,
+      paragraphHeight: nextHeight / scale,
+      source: `${nativeGeometrySyncSourceRef.current}${shouldUseFlowdocDraftLines ? ":flowdoc-draft-height" : ""}${heightChanged ? ":height-changed" : ":height-stable"}`,
+      requestedDelayMs: shouldUseFlowdocDraftLines ? undefined : scrollHeight,
+      scheduledDelayMs: previousHeight == null ? undefined : Math.abs(nextHeight - previousHeight),
+    })
+  }, [
+    fragment.nodeId,
+    fragment.pageIndex,
+    nativeEditHeight,
+    nativeLines.length,
+    nativeSpacingAfter,
+    nativeSpacingBefore,
+    reportNativeHeightPreview,
+    scale,
+    shouldUseFlowdocDraftLines,
+  ])
+
+  useEffect(() => {
+    if (!shouldUseFlowdocDraftLines || !flowdocDraftLayout || !onNativeHeightChange) return
+    if (flowdocDraftReflowDecision && !flowdocDraftReflowDecision.shouldPatchSamePageHeight) return
+    const nextHeight = Math.max(1, flowdocDraftLayout.height + nativeSpacingBefore + nativeSpacingAfter)
+    reportNativeHeightPreview(nextHeight, "flowdoc-draft-layout")
+    layerRef.current?.setAttribute("data-wysiwyg-native-edit-height", String(nativeEditHeight / scale))
+  }, [
+    flowdocDraftReflowDecision,
+    flowdocDraftLayout,
+    fragment.nodeId,
+    fragment.pageIndex,
+    nativeEditHeight,
+    nativeSpacingAfter,
+    nativeSpacingBefore,
+    onNativeHeightChange,
+    reportNativeHeightPreview,
+    scale,
+    shouldUseFlowdocDraftLines,
+  ])
+
+  useEffect(() => {
+    if (!shouldUseFlowdocDraftLines || !flowdocDraftLayout || !flowdocDraftReflowDecision) return
+    if (flowdocDraftReflowDecision.kind === "soft") return
+    flushPendingDraftSync()
+  }, [
+    flowdocDraftLayout,
+    flowdocDraftReflowDecision,
+    flushPendingDraftSync,
+    shouldUseFlowdocDraftLines,
+  ])
+
+  useEffect(() => {
+    if (!shouldUseFlowdocDraftLines) return
+    if (!draftPaginationActive && !hasContinuationPointerFragmentTarget) return
+    if (draftText === flowdocDraftState.text) return
+    const pendingDraftSync = pendingDraftSyncRef.current
+    if (!pendingDraftSync || pendingDraftSync.text !== flowdocDraftState.text) return
+    const flushKey = [
+      fragment.nodeId,
+      fragment.pageIndex,
+      flowdocDraftState.revision,
+      flowdocDraftState.text.length,
+    ].join(":")
+    if (continuationDraftSyncFlushKeyRef.current === flushKey) return
+    continuationDraftSyncFlushKeyRef.current = flushKey
+    const timeoutId = setTimeout(() => {
+      const latestPendingDraftSync = pendingDraftSyncRef.current
+      if (!latestPendingDraftSync || latestPendingDraftSync.text !== flowdocDraftState.text) return
+      flushPendingDraftSync()
+    }, 0)
+    return () => {
+      clearTimeout(timeoutId)
+      if (continuationDraftSyncFlushKeyRef.current === flushKey) {
+        continuationDraftSyncFlushKeyRef.current = null
+      }
+    }
+  }, [
+    draftPaginationActive,
+    draftText,
+    fragment.nodeId,
+    fragment.pageIndex,
+    flowdocDraftState.revision,
+    flowdocDraftState.text,
+    flushPendingDraftSync,
+    hasContinuationPointerFragmentTarget,
+    shouldUseFlowdocDraftLines,
+  ])
+
+  useEffect(() => {
+    if (
+      !shouldUseFlowdocDraftLines ||
+      !flowdocDraftLayout ||
+      !flowdocDraftReflowDecision ||
+      flowdocDraftReflowDecision.kind !== "hard-page-boundary" ||
+      !flowdocDraftReflowDecision.shouldQueueSettledPagination ||
+      !onReflowDecision
+    ) {
+      return
+    }
+    const key = [
+      fragment.nodeId,
+      fragment.pageIndex ?? "null",
+      "hard-page-boundary",
+      pageContentBottom ?? "x",
+    ].join(":")
+    if (flowdocDraftReflowRequestRef.current === key) return
+    flowdocDraftReflowRequestRef.current = key
+    onReflowDecision(fragment.nodeId, flowdocDraftReflowDecision)
+  }, [
+    flowdocDraftLayout,
+    flowdocDraftReflowDecision,
+    fragment.nodeId,
+    fragment.pageIndex,
+    onReflowDecision,
+    pageContentBottom,
+    shouldUseFlowdocDraftLines,
+  ])
+
+  const scheduleNativeTextareaGeometrySync = useCallback((
+    textarea: HTMLTextAreaElement | null = nativeTextareaRef.current,
+    source = "input",
+  ) => {
+    nativeGeometrySyncSourceRef.current = source
+    const isInputSync = source.includes("input")
+    const shouldThrottleInputSync = isInputSync && !source.includes("after-paint")
+    if (shouldThrottleInputSync && typeof performance !== "undefined" && typeof performance.now === "function") {
+      const now = performance.now()
+      const elapsed = now - nativeGeometryLastSyncAtRef.current
+      if (elapsed < WYSIWYG_NATIVE_GEOMETRY_SYNC_THROTTLE_MS) {
+        if (!nativeGeometrySyncTimeoutRef.current) {
+          nativeGeometrySyncTimeoutRef.current = setTimeout(() => {
+            nativeGeometrySyncTimeoutRef.current = null
+            scheduleNativeTextareaGeometrySync(nativeTextareaRef.current, source)
+          }, WYSIWYG_NATIVE_GEOMETRY_SYNC_THROTTLE_MS - elapsed)
+        }
+        return
+      }
+    }
+    if (!textarea || typeof requestAnimationFrame !== "function") {
+      syncNativeTextareaGeometry(textarea)
+      return
+    }
+    if (nativeGeometrySyncFrameRef.current != null || nativeGeometrySyncAfterPaintFrameRef.current != null) {
+      return
+    }
+    nativeGeometrySyncFrameRef.current = requestAnimationFrame(() => {
+      nativeGeometrySyncFrameRef.current = null
+      nativeGeometrySyncAfterPaintFrameRef.current = requestAnimationFrame(() => {
+        nativeGeometrySyncAfterPaintFrameRef.current = null
+        syncNativeTextareaGeometry(textarea)
+      })
+    })
+  }, [syncNativeTextareaGeometry])
+
+  const applyNativeTextareaDraft = useCallback((textarea: HTMLTextAreaElement, options: { defer?: boolean } = {}) => {
+    const selectionStart = textarea.selectionStart ?? textarea.value.length
+    const selectionEnd = textarea.selectionEnd ?? selectionStart
+    const nextSelection = selectionStart === selectionEnd
+      ? null
+      : { anchorOffset: selectionStart, focusOffset: selectionEnd }
+    draftStateRef.current = {
+      text: textarea.value,
+      caretOffset: selectionEnd,
+      selection: nextSelection,
+    }
+    if (shouldUseFlowdocDraftLines) {
+      setFlowdocDraftSnapshot({
+        text: textarea.value,
+        caretOffset: selectionEnd,
+        selection: nextSelection,
+      })
+    }
+    scheduleDraftSync({
+      text: textarea.value,
+      caretOffset: selectionEnd,
+      selection: nextSelection,
+    }, {
+      defer: options.defer ?? true,
+      quietWindowMs: shouldUseFlowdocDraftLines ? WYSIWYG_FLOWDOC_DRAFT_SYNC_QUIET_MS : undefined,
+    })
+  }, [scheduleDraftSync, setFlowdocDraftSnapshot, shouldUseFlowdocDraftLines])
+
+  useEffect(() => {
+    const textarea = nativeTextareaRef.current
+    if (!textarea) return
+    const caret = Math.max(0, Math.min(caretIndex ?? textarea.value.length, textarea.value.length))
+    requestAnimationFrame(() => {
+      focusElementWithoutScroll(textarea)
+      textarea.setSelectionRange(caret, caret)
+      scheduleNativeTextareaGeometrySync(textarea, "mount")
+    })
+  }, [caretIndex, fragment.nodeId, scheduleNativeTextareaGeometrySync])
+
   const isCompositionBridgeInput = useCallback((event: InputEvent) => (
     event.isComposing ||
     isComposingTextEngineRef.current ||
@@ -1959,21 +2779,27 @@ export function WysiwygTextLayer({
       previousCaretOffset === nextCaretOffset &&
       areWysiwygTextSelectionsEqual(previousSelection, nextSelection)
     ) return false
+    if (draftReplacementSettleTimerRef.current) {
+      clearTimeout(draftReplacementSettleTimerRef.current)
+      draftReplacementSettleTimerRef.current = null
+    }
     draftStateRef.current = {
       text: change.text,
       caretOffset: nextCaretOffset,
       selection: nextSelection,
     }
+    if (shouldUseFlowdocDraftLines) {
+      setFlowdocDraftSnapshot({
+        text: change.text,
+        caretOffset: nextCaretOffset,
+        selection: nextSelection,
+      })
+    }
     const immediateEchoBaseText = immediateTextEchoRef.current?.baseText ?? draftText ?? ""
     const nextImmediateTextEcho = change.text === immediateEchoBaseText
       ? null
       : { baseText: immediateEchoBaseText, draftText: change.text }
-    const nextImmediateDraftLayout = textChanged
-      ? resolveImmediateDraftLayout?.(change.text) ?? null
-      : null
-    const nextImmediateDraftLayoutState = nextImmediateDraftLayout
-      ? { baseText: previousText, draftText: change.text, layout: nextImmediateDraftLayout }
-      : null
+    const nextImmediateDraftLayoutState = null
     const previousImmediateTextEcho = immediateTextEchoRef.current
     const previousImmediateDraftLayout = immediateDraftLayoutRef.current
     const immediateVisualChanged = !areWysiwygImmediateTextEchoStatesEqual(
@@ -2019,10 +2845,13 @@ export function WysiwygTextLayer({
       text: change.text,
       caretOffset: nextCaretOffset,
       selection: nextSelection,
-    }, { defer: textChanged })
+    }, {
+      defer: textChanged,
+      quietWindowMs: shouldUseFlowdocDraftLines ? WYSIWYG_FLOWDOC_DRAFT_SYNC_QUIET_MS : undefined,
+    })
     if (textChanged) markTypingCaretActive()
     return true
-  }, [draftText, markTypingCaretActive, onDraftChange, resolveImmediateDraftLayout, scheduleDraftSync])
+  }, [draftText, markTypingCaretActive, onDraftChange, scheduleDraftSync, setFlowdocDraftSnapshot, shouldUseFlowdocDraftLines])
 
   const applyTextInput = useCallback((insertedText: string) => {
     if (!insertedText || !onDraftChange) return false
@@ -2143,7 +2972,7 @@ export function WysiwygTextLayer({
     const current = draftStateRef.current
     const caretOffset = clampWysiwygTextOffset(current.text, current.caretOffset) ?? current.text.length
     const navigation = resolveVerticalCaretNavigationInFragments(
-      pointerFragmentTargets.map((target) => target.fragment),
+      activePointerFragmentTargets.map((target) => target.fragment),
       caretOffset,
       input.key === "ArrowUp" ? "up" : "down",
       {
@@ -2167,7 +2996,7 @@ export function WysiwygTextLayer({
         focusOffset: navigation.offset,
       },
     }, { preserveVerticalCaretX: true })
-  }, [applyDraftChange, onDraftChange, pointerFragmentTargets, textMeasurer])
+  }, [activePointerFragmentTargets, applyDraftChange, onDraftChange, textMeasurer])
 
   const resolveTextEnginePointerOffsetFromClientPoint = useCallback((clientX: number, clientY: number): number | null => {
     const startedAt = traceHotPathPerf ? startWysiwygPerfSpan() : null
@@ -2179,10 +3008,10 @@ export function WysiwygTextLayer({
       clientX,
       clientY,
       scale,
-      targets: pointerFragmentTargets,
+      targets: activePointerFragmentTargets,
       textMeasurer,
       getPageRect: (targetPageKey) => {
-        const target = pointerFragmentTargets.find((candidate) => candidate.pageKey === targetPageKey)
+        const target = activePointerFragmentTargets.find((candidate) => candidate.pageKey === targetPageKey)
         return pageElements
           .find((pageElement) => pageElement.getAttribute("data-page-key") === targetPageKey)
           ?.getBoundingClientRect() ??
@@ -2195,12 +3024,12 @@ export function WysiwygTextLayer({
       finishWysiwygPerfSpan(true, "text-engine-pointer-hit-test", startedAt, {
         nodeId: fragment.nodeId,
         pageIndex: fragment.pageIndex,
-        pointerTargetCount: pointerFragmentTargets.length,
+        pointerTargetCount: activePointerFragmentTargets.length,
         source: offset === null ? "miss" : "hit",
       })
     }
     return offset
-  }, [fragment.nodeId, fragment.pageIndex, pointerFragmentTargets, scale, textMeasurer, traceHotPathPerf])
+  }, [activePointerFragmentTargets, fragment.nodeId, fragment.pageIndex, scale, textMeasurer, traceHotPathPerf])
 
   const resolveTextEnginePointerOffset = useCallback((event: React.PointerEvent<SVGGElement> | React.MouseEvent<SVGGElement>): number | null => (
     resolveTextEnginePointerOffsetFromClientPoint(event.clientX, event.clientY)
@@ -2258,6 +3087,20 @@ export function WysiwygTextLayer({
       caretOffset: resolved.caretOffset,
       selection: resolved.selection,
     }
+    if (shouldUseFlowdocDraftLines) {
+      setFlowdocDraftSnapshot({
+        text,
+        caretOffset: resolved.caretOffset,
+        selection: resolved.selection,
+      })
+    }
+    const textarea = nativeTextareaRef.current
+    if (textarea) {
+      const start = Math.max(0, Math.min(resolved.selection.anchorOffset, text.length))
+      const end = Math.max(0, Math.min(resolved.selection.focusOffset, text.length))
+      focusElementWithoutScroll(textarea)
+      textarea.setSelectionRange(Math.min(start, end), Math.max(start, end), start === end ? "none" : start < end ? "forward" : "backward")
+    }
     onDraftChange(fragment.nodeId, text, resolved.caretOffset, resolved.selection)
     if (startedAt !== null) {
       finishWysiwygPerfSpan(true, "text-engine-pointer-selection-apply", startedAt, {
@@ -2270,7 +3113,15 @@ export function WysiwygTextLayer({
       })
     }
     return true
-  }, [fragment.nodeId, fragment.pageIndex, onDraftChange, setLocalPointerSelectionPreview, traceHotPathPerf])
+  }, [
+    fragment.nodeId,
+    fragment.pageIndex,
+    onDraftChange,
+    setFlowdocDraftSnapshot,
+    setLocalPointerSelectionPreview,
+    shouldUseFlowdocDraftLines,
+    traceHotPathPerf,
+  ])
 
   const applyPointerSelectionFromClientPoint = useCallback((clientX: number, clientY: number, options: { syncToSession?: boolean } = {}) => {
     if (pointerSelectionAnchorRef.current === null) return false
@@ -2309,13 +3160,13 @@ export function WysiwygTextLayer({
         finishWysiwygPerfSpan(true, "text-engine-pointer-frame", startedAt, {
           nodeId: fragment.nodeId,
           pageIndex: fragment.pageIndex,
-          pointerTargetCount: pointerFragmentTargets.length,
+          pointerTargetCount: activePointerFragmentTargets.length,
           source: applied ? "applied" : "skipped",
         })
       }
     })
     return true
-  }, [applyPointerSelectionFromClientPoint, fragment.nodeId, fragment.pageIndex, pointerFragmentTargets.length, traceHotPathPerf])
+  }, [activePointerFragmentTargets.length, applyPointerSelectionFromClientPoint, fragment.nodeId, fragment.pageIndex, traceHotPathPerf])
 
   const maybeStartPointerSelectionDrag = useCallback((clientX: number, clientY: number) => {
     const startPoint = pointerDragStartPointRef.current
@@ -2697,25 +3548,56 @@ export function WysiwygTextLayer({
   }, [])
 
   const localPointerSelectionOverlayRects = useMemo(() => {
+    if (useNativeEditLayer && !shouldUseFlowdocDraftLines) return []
     if (!localPointerSelectionPreview) return []
     if (localPointerSelectionPreview.anchorOffset === localPointerSelectionPreview.focusOffset) return []
+    const selectionFragment = shouldUseFlowdocDraftLines
+      ? flowdocDraftVisualFragment ?? activeVisualFragment
+      : activeVisualFragment
     return resolveSelectionOverlayRectsInFragmentWithPerf({
-      fragment: visualFragment,
+      fragment: selectionFragment,
       anchorOffset: localPointerSelectionPreview.anchorOffset,
       focusOffset: localPointerSelectionPreview.focusOffset,
       textMeasurer,
       tracePerf: traceHotPathPerf,
       source: "local-pointer",
     })
-  }, [localPointerSelectionPreview, textMeasurer, traceHotPathPerf, visualFragment])
+  }, [
+    activeVisualFragment,
+    flowdocDraftVisualFragment,
+    localPointerSelectionPreview,
+    shouldUseFlowdocDraftLines,
+    textMeasurer,
+    traceHotPathPerf,
+  ])
+  const flowdocDraftSelectionOverlayRects = useMemo(() => {
+    if (!shouldUseFlowdocDraftLines || !flowdocDraftVisualFragment) return []
+    const activeSelection = localPointerSelectionPreview ?? flowdocDraftState.selection
+    if (!activeSelection || activeSelection.anchorOffset === activeSelection.focusOffset) return []
+    return resolveSelectionOverlayRectsInFragmentWithPerf({
+      fragment: flowdocDraftVisualFragment,
+      anchorOffset: activeSelection.anchorOffset,
+      focusOffset: activeSelection.focusOffset,
+      textMeasurer,
+      tracePerf: traceHotPathPerf,
+      source: localPointerSelectionPreview ? "local-pointer" : "flowdoc-draft",
+    })
+  }, [
+    flowdocDraftState.selection,
+    flowdocDraftVisualFragment,
+    localPointerSelectionPreview,
+    shouldUseFlowdocDraftLines,
+    textMeasurer,
+    traceHotPathPerf,
+  ])
   const activeSelectionOverlayRects = localPointerSelectionPreview
     ? localPointerSelectionOverlayRects
     : selectionOverlayRects
   const activeCaretIndex = localPointerSelectionPreview?.focusOffset ?? caretIndex
-  const trailingWhitespaceCaretOverlay = activeLiveEchoVisual?.caret
+  const trailingWhitespaceCaretOverlay = useNativeEditLayer || activeLiveEchoVisual?.caret
     ? null
     : resolveTrailingWhitespaceCaretOverlayInFragment({
-      fragment: visualFragment,
+      fragment: activeVisualFragment,
       caretIndex: activeCaretIndex,
       draftText: draftStateRef.current.text,
       textMeasurer,
@@ -2726,12 +3608,12 @@ export function WysiwygTextLayer({
     draftText?.length ?? 0,
     immediateTextEcho?.draftText.length ?? 0,
     immediateDraftLayout?.draftText.length ?? 0,
-    visualFragment.pageIndex,
-    visualFragment.fragmentIndex ?? "x",
-    visualFragment.lineStart ?? "x",
-    visualFragment.lineEnd ?? "x",
-    visualFragment.height,
-    visualFragment.lines?.length ?? 0,
+    activeVisualFragment.pageIndex,
+    activeVisualFragment.fragmentIndex ?? "x",
+    activeVisualFragment.lineStart ?? "x",
+    activeVisualFragment.lineEnd ?? "x",
+    activeVisualFragment.height,
+    activeVisualFragment.lines?.length ?? 0,
     reflowKind ?? "x",
     activeImmediateDraftLayout ? "immediate" : "settled",
     activeLiveEchoVisual?.caret ? "live" : "mapped",
@@ -2744,12 +3626,12 @@ export function WysiwygTextLayer({
     immediateDraftLayout?.draftText.length,
     immediateTextEcho?.draftText.length,
     reflowKind,
-    visualFragment.fragmentIndex,
-    visualFragment.height,
-    visualFragment.lineEnd,
-    visualFragment.lineStart,
-    visualFragment.lines?.length,
-    visualFragment.pageIndex,
+    activeVisualFragment.fragmentIndex,
+    activeVisualFragment.height,
+    activeVisualFragment.lineEnd,
+    activeVisualFragment.lineStart,
+    activeVisualFragment.lines?.length,
+    activeVisualFragment.pageIndex,
   ])
 
   useEffect(() => {
@@ -2763,6 +3645,288 @@ export function WysiwygTextLayer({
     })
     return () => cancelAnimationFrame(frame)
   }, [caretFollowKey, followCaretIntoView])
+
+  const flowdocDraftLineVisual = flowdocDraftVisualFragment?.lines?.length
+    ? (() => {
+      let fallbackStart = 0
+      return (
+        <g
+          data-wysiwyg-flowdoc-draft-lines="true"
+          data-wysiwyg-flowdoc-draft-line-count={flowdocDraftVisualFragment.lines?.length ?? 0}
+          data-wysiwyg-flowdoc-draft-text-length={flowdocDraftState.text.length}
+          style={{ pointerEvents: "none", userSelect: "none" }}
+        >
+          {flowdocDraftVisualFragment.lines?.map((line, index) => {
+            const range = resolveWysiwygLineSourceRange(line, fallbackStart)
+            fallbackStart = Math.max(range.end, fallbackStart + line.text.length)
+            return (
+              <g
+                key={`flowdoc-draft-line-${index}`}
+                data-wysiwyg-flowdoc-draft-line="true"
+                data-wysiwyg-draft-line-index={index}
+                data-wysiwyg-draft-line-start={range.start}
+                data-wysiwyg-draft-line-end={range.end}
+              >
+                {renderLine(
+                  line,
+                  index,
+                  flowdocDraftVisualFragment,
+                  renderProps,
+                  pageKey,
+                  scale,
+                  undefined,
+                  relaxNativeEditClip ? null : clipPathId,
+                )}
+              </g>
+            )
+          })}
+        </g>
+      )
+    })()
+    : null
+  const flowdocDraftCaret = flowdocDraftVisualFragment
+    ? renderCollapsedCaret(
+      flowdocDraftVisualFragment,
+      pageKey,
+      scale,
+      flowdocDraftState.caretOffset,
+      textMeasurer,
+      relaxNativeEditClip ? null : clipPathId,
+      activeCaretVisualMode,
+    )
+    : null
+
+  const nativeEditLayer = (
+    <g
+      ref={layerRef}
+      data-wysiwyg-text-engine-layer="true"
+      data-wysiwyg-pointer-fragment-count={activePointerFragmentTargets.length}
+      data-wysiwyg-reflow-kind={reflowKind ?? flowdocDraftReflowDecision?.kind}
+      data-wysiwyg-active-visual-mode={shouldUseFlowdocDraftLines ? "flowdoc-draft-lines" : "native-edit-layer"}
+      data-wysiwyg-active-visual-detail={shouldUseFlowdocDraftLines ? "flowdoc-measured-draft" : "native-textarea"}
+      data-wysiwyg-line-count={nativeVisualFragment.lines?.length ?? 0}
+      data-wysiwyg-flowdoc-draft-line-count={flowdocDraftVisualFragment?.lines?.length ?? 0}
+      data-wysiwyg-flowdoc-draft-text-length={shouldUseFlowdocDraftLines ? flowdocDraftState.text.length : undefined}
+      data-wysiwyg-flowdoc-draft-caret-offset={shouldUseFlowdocDraftLines ? flowdocDraftState.caretOffset ?? undefined : undefined}
+      data-wysiwyg-flowdoc-draft-selection-start={shouldUseFlowdocDraftLines
+        ? flowdocDraftState.selection?.anchorOffset ?? flowdocDraftState.caretOffset ?? undefined
+        : undefined}
+      data-wysiwyg-flowdoc-draft-selection-end={shouldUseFlowdocDraftLines
+        ? flowdocDraftState.selection?.focusOffset ?? flowdocDraftState.caretOffset ?? undefined
+        : undefined}
+      data-wysiwyg-flowdoc-draft-selection-collapsed={shouldUseFlowdocDraftLines ? String(flowdocDraftSelectionCollapsed) : undefined}
+      data-wysiwyg-native-visible-text={shouldUseFlowdocDraftLines ? "false" : "true"}
+      data-wysiwyg-custom-caret-visible={flowdocDraftCaret ? "true" : undefined}
+      data-wysiwyg-native-edit-layer="true"
+      data-wysiwyg-native-edit-x={nativeContentX}
+      data-wysiwyg-native-edit-y={nativeContentY}
+      data-wysiwyg-native-edit-fragment-y={nativeVisualFragment.y}
+      data-wysiwyg-native-edit-first-line-y={nativeFirstLine?.y}
+      data-wysiwyg-native-edit-measured-text-block-height={nativeMeasuredTextBlockHeight}
+      data-wysiwyg-native-edit-width={nativeContentWidth}
+      data-wysiwyg-native-edit-height={nativeRenderedEditHeight / scale}
+      data-wysiwyg-native-height-handoff={onNativeHeightChange ? "true" : "false"}
+      data-wysiwyg-native-edit-clip-mode={relaxNativeEditClip ? "relaxed" : "fragment"}
+      data-inline-edit-node-id={fragment.nodeId}
+      data-inline-edit-visual-mode={shouldUseFlowdocDraftLines ? "flowdoc-draft-lines" : "native-edit-layer"}
+      clipPath={relaxNativeEditClip ? undefined : `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`}
+      role="presentation"
+    >
+      {renderListMarker(nativeVisualFragment, renderProps, pageKey, scale, clipPathId)}
+      {flowdocDraftLineVisual}
+      {flowdocDraftCaret}
+      <rect
+        ref={nativeHitAreaRef}
+        data-wysiwyg-hit-area="true"
+        x={nativeContentX * scale}
+        y={nativeContentY * scale}
+        width={nativeContentWidth * scale}
+        height={nativeRenderedEditHeight}
+        fill="transparent"
+        pointerEvents="none"
+      />
+      <rect
+        ref={nativeOutlineRef}
+        data-wysiwyg-native-edit-outline="true"
+        x={nativeContentX * scale}
+        y={nativeContentY * scale}
+        width={nativeContentWidth * scale}
+        height={nativeRenderedEditHeight}
+        fill="none"
+        stroke="#2563eb"
+        strokeWidth={1}
+        opacity={0.35}
+        pointerEvents="none"
+      />
+      <foreignObject
+        ref={nativeForeignObjectRef}
+        data-wysiwyg-native-edit-foreign-object="true"
+        x={nativeContentX * scale}
+        y={nativeContentY * scale}
+        width={nativeContentWidth * scale}
+        height={nativeRenderedEditHeight}
+        style={{ overflow: "visible" }}
+      >
+        <textarea
+          ref={nativeTextareaRef}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          {...{ xmlns: "http://www.w3.org/1999/xhtml" } as any}
+          data-wysiwyg-input-bridge="true"
+          data-wysiwyg-native-edit-textarea="true"
+          data-wysiwyg-native-visible-text={shouldUseFlowdocDraftLines ? "false" : "true"}
+          data-inline-edit-node-id={fragment.nodeId}
+          data-inline-edit-visual-mode={shouldUseFlowdocDraftLines ? "flowdoc-draft-lines-input-bridge" : "native-edit-layer"}
+          aria-label="WYSIWYG text input"
+          aria-describedby={WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID}
+          role="textbox"
+          defaultValue={draftStateRef.current.text}
+          spellCheck={false}
+          rows={1}
+          style={{
+            width: "100%",
+            height: nativeRenderedEditHeight,
+            minHeight: nativeEditHeight,
+            display: "block",
+            boxSizing: "border-box",
+            padding: 0,
+            margin: 0,
+            border: "none",
+            outline: "1px solid rgba(37, 99, 235, 0.35)",
+            outlineOffset: 0,
+            resize: "none",
+            overflow: "hidden",
+            background: "transparent",
+            color: shouldUseFlowdocDraftLines ? "transparent" : nativeTextColor,
+            caretColor: shouldUseFlowdocDraftLines ? "transparent" : INLINE_EDIT_TEXT_COLOR,
+            ...({ fieldSizing: "content" } as React.CSSProperties),
+            fontFamily: resolveFontCssFamily(renderProps?.fontFamilyKey),
+            fontWeight: fontWeightForRenderProps(renderProps),
+            fontStyle: fontStyleForRenderProps(renderProps),
+            textDecoration: textDecorationForRenderProps(renderProps),
+            fontSize: nativeFontSize,
+            lineHeight: `${nativeLineHeight}px`,
+            textAlign: textAlignForParagraph(renderProps?.align),
+            textIndent: `${(renderProps?.textIndent ?? 0) * scale}px`,
+            letterSpacing: 0,
+            whiteSpace: "pre-wrap",
+            overflowWrap: "break-word",
+            wordBreak: "normal",
+          }}
+          onInput={(event) => {
+            const textarea = event.currentTarget
+            syncNativeTextareaGeometry(textarea, "input-sync")
+            applyNativeTextareaDraft(textarea, { defer: true })
+            scheduleNativeTextareaGeometrySync(textarea, "input-after-paint")
+          }}
+          onSelect={(event) => {
+            const textarea = event.currentTarget
+            const selectionStart = textarea.selectionStart ?? textarea.value.length
+            const selectionEnd = textarea.selectionEnd ?? selectionStart
+            draftStateRef.current = {
+              text: textarea.value,
+              caretOffset: selectionEnd,
+              selection: selectionStart === selectionEnd
+                ? null
+                : { anchorOffset: selectionStart, focusOffset: selectionEnd },
+            }
+            if (shouldUseFlowdocDraftLines) {
+              setFlowdocDraftSnapshot({
+                text: textarea.value,
+                caretOffset: selectionEnd,
+                selection: selectionStart === selectionEnd
+                  ? null
+                  : { anchorOffset: selectionStart, focusOffset: selectionEnd },
+              })
+            }
+          }}
+          onBlur={() => {
+            scheduleBlurEndEdit()
+          }}
+          onKeyDown={(event) => {
+            event.stopPropagation()
+            const textarea = event.currentTarget
+            const keyInput = {
+              key: normalizeWysiwygTextInputKey(event.key),
+              shiftKey: event.shiftKey,
+              altKey: event.altKey,
+              ctrlKey: event.ctrlKey,
+              metaKey: event.metaKey,
+              isComposing: event.nativeEvent.isComposing,
+            }
+            if (onRichTextShortcut?.(fragment.nodeId, keyInput)) {
+              event.preventDefault()
+              return
+            }
+            if (event.key === "Escape") {
+              event.preventDefault()
+              applyNativeTextareaDraft(textarea, { defer: false })
+              flushPendingDraftSyncImmediately()
+              onEndEdit?.(fragment.nodeId, "keyboard")
+              return
+            }
+            if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.nativeEvent.isComposing) {
+              event.preventDefault()
+              const selectionStart = textarea.selectionStart ?? textarea.value.length
+              const selectionEnd = textarea.selectionEnd ?? selectionStart
+              const input = buildSplitEditInput("", textarea.value, selectionStart, selectionEnd)
+              draftStateRef.current = { text: input.text, caretOffset: input.splitIndex, selection: null }
+              scheduleDraftSync({ text: input.text, caretOffset: input.splitIndex, selection: null }, { defer: false })
+              if (isListItem && input.text.length === 0) {
+                onExitListItem?.(fragment.nodeId, input.text)
+                return
+              }
+              onSplitParagraph?.(fragment.nodeId, input.splitIndex, input.text)
+              return
+            }
+            if (event.key === "Tab" && isListItem && !event.ctrlKey && !event.metaKey && !event.altKey) {
+              event.preventDefault()
+              applyNativeTextareaDraft(textarea, { defer: false })
+              onChangeListItemLevel?.(
+                fragment.nodeId,
+                event.shiftKey ? "outdent" : "indent",
+                textarea.value,
+                textarea.selectionEnd ?? textarea.value.length,
+              )
+              return
+            }
+            if (
+              event.key === "Backspace" &&
+              !event.shiftKey &&
+              !event.altKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.nativeEvent.isComposing &&
+              (textarea.selectionStart ?? 0) === 0 &&
+              (textarea.selectionEnd ?? 0) === 0
+            ) {
+              if (isListItem) {
+                event.preventDefault()
+                applyNativeTextareaDraft(textarea, { defer: false })
+                onBackspaceListItemAtStart?.(fragment.nodeId, textarea.value, 0)
+                return
+              }
+              event.preventDefault()
+              applyNativeTextareaDraft(textarea, { defer: false })
+              onMergeParagraph?.(fragment.nodeId, textarea.value)
+            }
+          }}
+          onCompositionStart={() => {
+            isComposingTextEngineRef.current = true
+          }}
+          onCompositionEnd={(event) => {
+            isComposingTextEngineRef.current = false
+            syncNativeTextareaGeometry(event.currentTarget, "composition-sync")
+            applyNativeTextareaDraft(event.currentTarget, { defer: true })
+            scheduleNativeTextareaGeometrySync(event.currentTarget, "composition-after-paint")
+          }}
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        />
+      </foreignObject>
+    </g>
+  )
+
+  if (!shouldUseFlowdocDraftLines || !flowdocDraftVisualFragment) return nativeEditLayer
 
   const pointerSelectionOverlay = isPointerSelecting && typeof document !== "undefined"
     ? createPortal(
@@ -2810,17 +3974,32 @@ export function WysiwygTextLayer({
       {pointerSelectionOverlay}
       <g
         ref={layerRef}
+        data-wysiwyg-draft-editor-island="true"
         data-wysiwyg-text-engine-layer="true"
-        data-wysiwyg-pointer-fragment-count={pointerFragmentTargets.length}
-        data-wysiwyg-reflow-kind={reflowKind}
+        data-wysiwyg-pointer-fragment-count={activePointerFragmentTargets.length}
+        data-wysiwyg-reflow-kind={reflowKind ?? flowdocDraftReflowDecision?.kind}
         data-wysiwyg-caret-mode={activeCaretVisualMode}
-        data-wysiwyg-line-count={visualFragment.lines?.length ?? 0}
-        data-wysiwyg-immediate-draft-layout={activeImmediateDraftLayout ? "true" : undefined}
+        data-wysiwyg-active-visual-mode="flowdoc-draft-editor-island"
+        data-wysiwyg-active-visual-detail="flowdoc-owned-draft-lines"
+        data-wysiwyg-line-count={flowdocDraftVisualFragment.lines?.length ?? 0}
+        data-wysiwyg-flowdoc-draft-line-count={flowdocDraftVisualFragment.lines?.length ?? 0}
+        data-wysiwyg-flowdoc-draft-text-length={flowdocDraftState.text.length}
+        data-wysiwyg-flowdoc-draft-caret-offset={flowdocDraftState.caretOffset ?? undefined}
+        data-wysiwyg-flowdoc-draft-selection-start={flowdocDraftState.selection?.anchorOffset ?? flowdocDraftState.caretOffset ?? undefined}
+        data-wysiwyg-flowdoc-draft-selection-end={flowdocDraftState.selection?.focusOffset ?? flowdocDraftState.caretOffset ?? undefined}
+        data-wysiwyg-flowdoc-draft-selection-collapsed={String(flowdocDraftSelectionCollapsed)}
+        data-wysiwyg-native-visible-text="false"
+        data-wysiwyg-custom-caret-visible={flowdocDraftCaret ? "true" : undefined}
+        data-wysiwyg-hidden-input-bridge="true"
+        data-wysiwyg-visible-pointer-owner="flowdoc-draft-surface"
+        data-wysiwyg-immediate-draft-layout={undefined}
         data-wysiwyg-local-selection-preview={localPointerSelectionPreview ? "true" : undefined}
-        data-wysiwyg-table-cell-preview-candidate={tableCellDraftVisualPreviewCandidate ? "true" : undefined}
-        data-wysiwyg-live-echo-suppressed={suppressLiveTextEcho ? "true" : undefined}
+        data-wysiwyg-table-cell-preview-candidate={undefined}
+        data-wysiwyg-live-echo-suppressed="true"
+        data-wysiwyg-draft-text-replacement-active={undefined}
         data-inline-edit-node-id={fragment.nodeId}
-        data-inline-edit-visual-mode="text-engine"
+        data-inline-edit-visual-mode="flowdoc-draft-editor-island"
+        clipPath={relaxNativeEditClip ? undefined : `url(#${clipPathId ?? `cp-${pageKey}-${fragment.nodeId}`})`}
         tabIndex={0}
         focusable="true"
         role="textbox"
@@ -2835,15 +4014,18 @@ export function WysiwygTextLayer({
         onBlur={handleLayerBlur}
       >
       <foreignObject
-        x={fragment.x * scale}
-        y={fragment.y * scale}
+        data-wysiwyg-hidden-input-bridge-host="true"
+        x={nativeContentX * scale}
+        y={nativeContentY * scale}
         width={1}
         height={1}
-        style={{ overflow: "hidden" }}
+        style={{ overflow: "hidden", pointerEvents: "none" }}
       >
         <div
           ref={inputBridgeRef}
           data-wysiwyg-input-bridge="true"
+          data-wysiwyg-input-bridge-mode="hidden-flowdoc-draft-editor-island"
+          data-wysiwyg-visible-area-pointer-target="false"
           data-inline-edit-node-id={fragment.nodeId}
           contentEditable="plaintext-only"
           suppressContentEditableWarning
@@ -2862,28 +4044,39 @@ export function WysiwygTextLayer({
             background: "transparent",
             color: "transparent",
             caretColor: "transparent",
+            pointerEvents: "none",
+            overflow: "hidden",
+            whiteSpace: "pre",
           }}
         />
       </foreignObject>
       <rect
         data-wysiwyg-hit-area="true"
-        x={visualFragment.x * scale}
-        y={visualFragment.y * scale}
-        width={visualFragment.width * scale}
-        height={Math.max(visualFragment.height * scale, 1)}
+        data-wysiwyg-draft-editor-island-hit-area="true"
+        x={flowdocDraftVisualFragment.x * scale}
+        y={flowdocDraftVisualFragment.y * scale}
+        width={flowdocDraftVisualFragment.width * scale}
+        height={Math.max(flowdocDraftVisualFragment.height * scale, 1)}
         fill="transparent"
         pointerEvents="all"
       />
-      {renderSelectionOverlay(visualFragment, pageKey, scale, activeSelectionOverlayRects, clipPathId)}
-      {renderListMarker(visualFragment, renderProps, pageKey, scale, clipPathId)}
-      {visualFragment.lines?.map((line, index) =>
-        renderLine(line, index, visualFragment, renderProps, pageKey, scale, undefined, clipPathId),
-      )}
-      {activeLiveEchoVisual?.content}
-      {showTextSegments && renderSegmentDebug(visualFragment.lines, visualFragment, renderProps, scale)}
-      {activeLiveEchoVisual?.caret ??
-        renderCollapsedCaretOverlay(visualFragment, pageKey, scale, trailingWhitespaceCaretOverlay, clipPathId, activeCaretVisualMode) ??
-        renderCollapsedCaret(visualFragment, pageKey, scale, activeCaretIndex, textMeasurer, clipPathId, activeCaretVisualMode)}
+      <rect
+        data-wysiwyg-draft-editor-island-outline="true"
+        x={nativeContentX * scale}
+        y={nativeContentY * scale}
+        width={nativeContentWidth * scale}
+        height={nativeRenderedEditHeight}
+        fill="none"
+        stroke="#2563eb"
+        strokeWidth={1}
+        opacity={0.35}
+        pointerEvents="none"
+      />
+      {renderSelectionOverlay(flowdocDraftVisualFragment, pageKey, scale, flowdocDraftSelectionOverlayRects, relaxNativeEditClip ? undefined : clipPathId)}
+      {renderListMarker(flowdocDraftVisualFragment, renderProps, pageKey, scale, clipPathId)}
+      {flowdocDraftLineVisual}
+      {showTextSegments && renderSegmentDebug(flowdocDraftVisualFragment.lines, flowdocDraftVisualFragment, renderProps, scale)}
+      {flowdocDraftCaret}
       </g>
     </>
   )
@@ -3016,6 +4209,12 @@ function ParagraphTextSurfaceImpl({
   } = sliceContextRef.current
   const isTableCellParagraph = isParagraphInsideTableCell(doc, fragment.nodeId, fragment.parentNodeId)
   const isFlowStackParagraph = isParagraphInsideFlowStack(doc, fragment.nodeId, fragment.parentNodeId)
+  const shouldUsePlainParagraphNativeGeometryHandoff = !isTableCellParagraph && !isFlowStackParagraph
+  const shouldUsePlainParagraphFlowdocDraftLines =
+    shouldUsePlainParagraphNativeGeometryHandoff &&
+    paragraphNode != null &&
+    textMeasurer != null &&
+    isCollapsedWysiwygTextSelection(wysiwygTextSelection)
   const isCurrentEditSlice = useCallback((el: HTMLTextAreaElement) => (
     el.dataset.inlineEditSliceKey === editSliceKey
   ), [editSliceKey])
@@ -3115,21 +4314,19 @@ function ParagraphTextSurfaceImpl({
     isVisualFresh,
     supportsLocalDraftLayout: supportsLocalDraftLayout || supportsPaginatedDraftLayout,
   })
+  // Current active-edit baseline: native textarea owns the visible draft.
+  // Measured draft lines/live echo are legacy/deferred visual paths and must
+  // not be built on the keypress render path.
+  const shouldBuildMeasuredTextEngineDraftVisual = false
   const textEngineDraftText = wysiwygTextDraftText ?? fullText
   const textEngineDraftChanged = hasWysiwygTextDraftChange(fullText, textEngineDraftText)
   const textEngineCaretOffset = wysiwygTextCaretOffset ?? initialCaretIndex
-  const resolveTextEngineImmediateDraftLayout = useCallback((draftText: string) => {
-    if (!supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || !textMeasurer) return null
-    return buildCachedWysiwygDraftParagraphLayout(textEngineDraftLayoutCacheRef.current, fragment, paragraphNode, draftText, textMeasurer, {
-      traceMeasure: true,
-    })
-  }, [fragment, paragraphNode, supportsLocalDraftLayout, textMeasurer, useWysiwygTextEngineLayer])
   const textEngineDraftLayout = useMemo(() => {
-    if (!textEngineDraftChanged || !supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null
+    if (!shouldBuildMeasuredTextEngineDraftVisual || !textEngineDraftChanged || !supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null
     return buildCachedWysiwygDraftParagraphLayout(textEngineDraftLayoutCacheRef.current, fragment, paragraphNode, textEngineDraftText, textMeasurer, {
       traceMeasure: true,
     })
-  }, [fragment, paragraphNode, supportsLocalDraftLayout, textEngineDraftChanged, textEngineDraftText, textMeasurer, useWysiwygTextEngineLayer])
+  }, [fragment, paragraphNode, shouldBuildMeasuredTextEngineDraftVisual, supportsLocalDraftLayout, textEngineDraftChanged, textEngineDraftText, textMeasurer, useWysiwygTextEngineLayer])
   const textEngineDraftLines = textEngineDraftLayout?.lines ?? null
   const textEngineReflowDecision = useMemo(() => (
     classifyWysiwygTextReflow({
@@ -3165,10 +4362,10 @@ function ParagraphTextSurfaceImpl({
   const textEngineLiveTextEcho = !textEngineReflowDecision.shouldPatchActiveLines &&
     fullText != null &&
     textEngineDraftText != null
-    ? resolveWysiwygLiveTextEcho(fullText, textEngineDraftText)
+    ? null
     : null
   const textEngineSelectionOverlayRects = useMemo(() => {
-    if (!useWysiwygTextEngineLayer || !wysiwygTextSelection) return []
+    if (!useWysiwygTextEngineLayer || !shouldBuildMeasuredTextEngineDraftVisual || !wysiwygTextSelection) return []
     if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
     const visualFragment = textEngineVisualDraftLines ? { ...displayFragment, lines: textEngineVisualDraftLines } : displayFragment
     return resolveSelectionOverlayRectsInFragmentWithPerf({
@@ -3179,7 +4376,7 @@ function ParagraphTextSurfaceImpl({
       tracePerf: traceHotPathPerf,
       source: "active",
     })
-  }, [displayFragment, textEngineVisualDraftLines, textMeasurer, traceHotPathPerf, useWysiwygTextEngineLayer, wysiwygTextSelection])
+  }, [displayFragment, shouldBuildMeasuredTextEngineDraftVisual, textEngineVisualDraftLines, textMeasurer, traceHotPathPerf, useWysiwygTextEngineLayer, wysiwygTextSelection])
   const passiveTextEngineSelectionOverlayRects = useMemo(() => {
     if (isEditing || !wysiwygTextEngineEnabled || !wysiwygTextSelection) return []
     if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
@@ -3247,7 +4444,7 @@ function ParagraphTextSurfaceImpl({
   ])
 
   useEffect(() => {
-    if (!useWysiwygTextEngineLayer) {
+    if (!useWysiwygTextEngineLayer || !shouldBuildMeasuredTextEngineDraftVisual) {
       textEngineReflowRequestRef.current = null
       return
     }
@@ -3267,6 +4464,7 @@ function ParagraphTextSurfaceImpl({
     fragment.nodeId,
     fragment.pageIndex,
     onWysiwygTextReflowDecision,
+    shouldBuildMeasuredTextEngineDraftVisual,
     textEngineDraftLayout?.height,
     textEngineDraftLines?.length,
     textEngineDraftText,
@@ -3282,6 +4480,10 @@ function ParagraphTextSurfaceImpl({
           fragment={displayFragment}
           lines={textEngineVisualDraftLines ?? undefined}
           renderProps={renderProps}
+          draftParagraphNode={paragraphNode}
+          useFlowdocDraftLines={shouldUsePlainParagraphFlowdocDraftLines}
+          draftPaginationActive={wysiwygTextDraftPaginationActive}
+          pageContentBottom={pageContentBottom}
           pageKey={pageKey}
           clipPathId={clipPathId}
           scale={scale}
@@ -3289,8 +4491,11 @@ function ParagraphTextSurfaceImpl({
           caretIndex={textEngineCaretOffset}
           selection={wysiwygTextSelection}
           draftText={textEngineDraftText}
+          hasDraftChange={shouldBuildMeasuredTextEngineDraftVisual && textEngineDraftChanged}
           isListItem={isListItem}
           onDraftChange={onWysiwygTextDraftChange}
+          onNativeHeightChange={shouldUsePlainParagraphNativeGeometryHandoff ? onHeightChange : undefined}
+          relaxNativeEditClip={shouldUsePlainParagraphNativeGeometryHandoff}
           onRichTextShortcut={onWysiwygRichTextShortcut}
           onEndEdit={onEndEdit}
           onSplitParagraph={onSplitParagraph}
@@ -3298,13 +4503,13 @@ function ParagraphTextSurfaceImpl({
           onExitListItem={onExitListItem}
           onChangeListItemLevel={onChangeListItemLevel}
           onBackspaceListItemAtStart={onBackspaceListItemAtStart}
+          onReflowDecision={onWysiwygTextReflowDecision}
           showTextSegments={showTextSegments}
-          selectionOverlayRects={textEngineSelectionOverlayRects}
+          selectionOverlayRects={shouldBuildMeasuredTextEngineDraftVisual ? textEngineSelectionOverlayRects : []}
           pointerFragments={wysiwygTextPointerFragments}
-          reflowKind={textEngineReflowDecision.kind}
-          liveTextEcho={textEngineLiveTextEcho}
-          resolveImmediateDraftLayout={resolveTextEngineImmediateDraftLayout}
-          tableCellDraftVisualPreviewCandidate={tableCellDraftVisualPreviewCandidate}
+          reflowKind={shouldBuildMeasuredTextEngineDraftVisual ? textEngineReflowDecision.kind : undefined}
+          liveTextEcho={shouldBuildMeasuredTextEngineDraftVisual ? textEngineLiveTextEcho : null}
+          tableCellDraftVisualPreviewCandidate={shouldBuildMeasuredTextEngineDraftVisual && tableCellDraftVisualPreviewCandidate}
           followCaretIntoView={isTableCellParagraph}
           suppressLiveTextEcho={isTableCellParagraph}
         />

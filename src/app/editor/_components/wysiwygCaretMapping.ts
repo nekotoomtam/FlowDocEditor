@@ -101,6 +101,9 @@ function segmentPrefixWidth(
   options: WysiwygCaretMappingOptions,
 ): number {
   const safeOffset = clamp(localOffset, 0, segment.text.length)
+  if (safeOffset <= 0) return 0
+  if (safeOffset >= segment.text.length) return segment.width
+
   const fallbackWidth = segment.text.length > 0
     ? segment.width * (safeOffset / segment.text.length)
     : 0
@@ -155,6 +158,20 @@ function getLineRange(line: PaginatedLine, lineIndex: number, fallbackStart?: nu
     end = Math.max(end, segment.end)
   }
   return { line, lineIndex, start, end }
+}
+
+function candidateAtOffsetInLine(
+  fragment: PageFragment,
+  line: PaginatedLine,
+  lineIndex: number,
+  offset: number,
+  options: WysiwygCaretMappingOptions,
+): WysiwygCaretCandidate | null {
+  for (const segment of line.segments ?? []) {
+    if (offset < segment.start || offset > segment.end) continue
+    return candidateFromSegment(fragment, line, lineIndex, segment, offset - segment.start, options)
+  }
+  return null
 }
 
 function getLineRanges(fragment: PageFragment): LineRange[] {
@@ -452,6 +469,9 @@ export function resolveCaretPositionInFragment(
 ): WysiwygCaretCandidate | null {
   const range = findLineRangeForOffset(fragment, offset)
   if (!range) return null
+
+  const directCandidate = candidateAtOffsetInLine(fragment, range.line, range.lineIndex, offset, options)
+  if (directCandidate) return directCandidate
 
   const candidates = getWysiwygCaretCandidatesForLine(fragment, range.line, range.lineIndex, options)
   return nearestCandidate(candidates, offset) ?? {

@@ -165,9 +165,15 @@ Paragraph box styling is defined in
 - Inline editing should preserve visible text.
 - Entering edit mode should not trigger unnecessary full re-pagination that
   causes visible collapse/flicker.
-- Active paragraph input/caret events are captured by the textarea during
-  editing, but visible text should come from the document renderer whenever the
-  active draft has a fresh paginated snapshot.
+- Current active-edit baseline: for text-only paragraphs, input, caret, and
+  selection are captured by the native edit layer during active typing. This is
+  a stability-first baseline to avoid delayed feedback, text overlap, and
+  visual jitter while the user is typing.
+- A future FlowDoc-owned parity target may move active text, caret, and
+  selection visuals back to measured FlowDoc geometry, but that target is not
+  the current active typing baseline. Do not re-enable SVG live echo, SVG draft
+  replacement, custom-caret-only rendering, or measured draft-line swapping for
+  active typing bugs unless a later task explicitly changes this contract.
 - The textarea inline editor is a plain-text bridge only. Paragraphs containing
   fields, page numbers, or other non-text inline nodes should not enter textarea
   editing or be rewritten through property-panel textareas.
@@ -178,36 +184,49 @@ Paragraph box styling is defined in
   preview must move downstream fragments by the active paragraph height delta so
   typing a new wrapped line does not visually overlap the next block while the
   edit is still active.
-- When entering inline edit and the active edit visual snapshot is fresh for
-  the current draft, the active fragment may render the same SVG
-  `fragment.lines` used by normal mode and make textarea text transparent. This
-  keeps edit entry visually close to normal mode.
-- When the active edit visual snapshot is stale, the textarea must keep visible
-  text as a fallback so fast typing never makes text disappear.
-- After text input, edit mode should hand back to the SVG/document visual layer
-  as soon as browser pagination catches up to the active draft. The textarea may
-  be visible only as a short stale-frame fallback, or for composition/IME states
-  that are not yet safe to render through the paginated layer.
-- The active typing lock should start from keyboard interaction before native
-  textarea input lands, not only after React observes the input event, so a
-  normal typing burst does not insert characters into a transparent textarea
-  before the fallback layer appears.
-- When the active draft has fresh SVG lines and the textarea selection is
-  collapsed, the editor should draw the collapsed caret from paginated line
-  geometry and hide the native textarea caret.
-- The active custom caret should blink while the editor focus remains in the
-  inline text session and the user is idle or only moving the caret. During
-  active text input, the caret may switch to a steady visible mode, then return
-  to the blinking idle mode shortly after input stops. A caret-only move must
-  keep the SVG caret visible and must not require document or pagination
-  changes.
+- During active text-only paragraph editing, the native edit layer is the single
+  visual truth. It owns visible text, caret, and selection until the edit
+  session exits; the measured SVG paragraph text, unmeasured live echo, local
+  SVG draft replacement, and measured draft lines must not be visible for that
+  active paragraph at the same time.
+- The native edit layer must be positioned over the paragraph content box and
+  inherit the paragraph typography closely enough to avoid edit-entry drift.
+  It must not collapse wrapped paragraph text into a single line, visually
+  overlap old text, or switch visual modes during a typing burst.
+- The native edit layer should start at the measured text block, using the
+  first visible FlowDoc line `y` when available instead of the broader fragment
+  rectangle top. Geometry/height sync that reads textarea layout must run after
+  visible native input feedback, be throttled, and update chrome only when the
+  native height changes.
+- Text input feedback must not wait for paragraph measurement. The native layer
+  keeps local draft state immediately while parent/session draft sync may be
+  coalesced behind it.
+- On blur, Escape, or commit, the native layer may remain visible in a
+  committing state until the measured FlowDoc layout for the committed draft is
+  ready. The editor should then swap back to measured SVG layout once, rather
+  than briefly showing stale responsive preview lines.
 - During active WYSIWYG table-cell edits, draft reflow or page-boundary
   continuation may scroll the editor canvas just enough to keep the SVG caret
   visible. This is viewport-only editor state and must not mutate document
   content, pagination semantics, history, PDF, or DOCX export.
+- WYSIWYG edits must not draw unmeasured live-echo text over old
+  `fragment.lines`. During active native editing, live echo, SVG draft
+  replacement, and measured draft-line swapping are disabled so there is no
+  second visual truth fighting the native layer.
 - Table-cell WYSIWYG edits should not draw the unwrapped live-echo caret over
-  responsive pagination results; once table geometry owns the active lines, the
-  visible caret should come from the mapped paginated line geometry.
+  responsive pagination results. For text-only table-cell paragraphs, the
+  native edit layer remains the active visual owner while table geometry catches
+  up, then measured FlowDoc layout resumes after commit/settle.
+- During active table-cell native editing, editor-only visual preview/chrome may
+  exist before responsive draft pagination settles. The healthy lifecycle is:
+  reflow decision -> visual preview/chrome created or updated -> draft
+  pagination scheduled -> browser-preview pagination -> draft pagination state
+  clears -> visual preview/chrome clears. Final settled state must keep the
+  native edit layer stable, keep legacy SVG/live-echo/draft-replacement paths
+  absent, and leave `data-wysiwyg-table-cell-visual-chrome` count at `0`.
+  Visual chrome may temporarily reach the pre-clear count, currently observed as
+  `6`, before pagination settles; future scheduling changes must preserve or
+  explicitly await the clear step.
 - In the FlowDoc-owned text-engine lane, printable Space input must insert a
   literal U+0020 space whether the browser reports the key as `" "`, `Space`,
   or `Spacebar`.
@@ -216,10 +235,13 @@ Paragraph box styling is defined in
   so the active WYSIWYG edit layer may draw an editor-only trailing-whitespace
   caret overlay to show the caret advancing over draft spaces without changing
   pagination, export, or stored document semantics.
-- Immediate text-engine visual state should dedupe equivalent echo/layout
-  states and avoid repeated synchronous flushes during key-repeat bursts. Key
-  repeat must not create document history, pagination, or nested-update loops
+- Immediate text-engine visual state should avoid repeated synchronous flushes
+  during key-repeat bursts. Key repeat must not create document history,
+  pagination, paragraph measurement on every keypress, or nested-update loops
   beyond the actual text changes.
+- Measured FlowDoc layout remains the final visual source of truth after the
+  edit settles. The native edit layer is only the active-session visual owner
+  for immediate typing feedback and commit handoff.
 - Text-changing WYSIWYG draft sync may coalesce parent/session updates to the
   latest payload across a short quiet window so typing, Space repeat, Backspace
   repeat, and line wrapping do not push every key through the whole editor tree.
@@ -310,6 +332,27 @@ Paragraph box styling is defined in
 - When the flagged WYSIWYG text engine is enabled, paragraphs inside
   `flow-table-cell` should use the same active paragraph text-engine path as
   body paragraphs. Table-cell boundary Backspace remains table-specific.
+
+### Active Typing Bug Triage
+
+Agents investigating active typing bugs should first classify the issue before
+changing code:
+
+- `native-layer-geometry`: the native edit layer does not align with the
+  measured paragraph content box, first line, typography, or active chrome.
+- `session-sync`: local native draft, parent draft, or edit-session state is
+  stale or overwritten.
+- `blur-commit-handoff`: the editor reveals stale measured layout before the
+  committed measured layout is ready.
+- `re-enter-edit-parity`: re-entering an already edited paragraph uses stale
+  slice, focus, caret, or line geometry.
+- `old-path-leakage`: live echo, SVG draft replacement, measured draft-line
+  swapping, or custom-caret-only visuals become visible during native active
+  editing.
+
+Do not jump directly to pagination, layout, schema, or export changes for an
+active typing bug unless the classification points there with file/function
+evidence.
 
 ## Undo/Redo Rules
 
@@ -493,14 +536,17 @@ Table-specific interaction rules are defined in
 ## WYSIWYG Track Guardrails
 
 The WYSIWYG editor track is documented in
-`docs/WYSIWYG_EDITOR_ROADMAP.md`. It is an opt-in/internal future path until its
-stability gates pass.
+`docs/WYSIWYG_EDITOR_ROADMAP.md`. It describes the long-term FlowDoc-owned
+visual parity target and historical textarea-assisted guardrails. The current
+active typing baseline is the native edit layer described above.
 
 - WYSIWYG work must not change the document model first.
-- `PaginatedLine` / `fragment.lines` are visual truth; textarea remains an input
-  device, not layout truth.
-- The editor may fall back to visible textarea text during composition or other
-  unstable states.
+- For the future FlowDoc-owned parity target, `PaginatedLine` /
+  `fragment.lines` should become the active edit visual truth. Until that
+  target is explicitly resumed, the native edit layer remains the current
+  active-session visual owner for text-only typing.
+- The editor may keep visible native text during composition, unstable states,
+  or the current stability-first active editing baseline.
 - Caret milestones must not include selection overlay work by default.
 - Cross-page selection is deferred until single-page paragraph selection is
   stable.
