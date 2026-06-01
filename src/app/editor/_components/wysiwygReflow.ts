@@ -78,6 +78,12 @@ export interface WysiwygSamePageHeightPatchInput {
   isTableCellParagraph: boolean
 }
 
+export interface WysiwygPlainBoundaryHeightPreviewInput {
+  isFlowStackParagraph: boolean
+  isTableCellParagraph: boolean
+  reflow?: WysiwygTextReflowDecision | null
+}
+
 export interface WysiwygDraftPaginationSessionSource {
   nodeId: string | null
   draftText: string
@@ -202,6 +208,16 @@ export function classifyWysiwygTextReflow(input: {
 
 export function shouldPatchWysiwygSamePageHeight(input: WysiwygSamePageHeightPatchInput): boolean {
   return !input.isTableCellParagraph
+}
+
+export function shouldPatchPlainParagraphBoundaryHeightPreview(
+  input: WysiwygPlainBoundaryHeightPreviewInput,
+): boolean {
+  return !input.isFlowStackParagraph &&
+    !input.isTableCellParagraph &&
+    input.reflow?.kind === "hard-page-boundary" &&
+    input.reflow.shouldPatchActiveLines &&
+    input.reflow.shouldQueueSettledPagination
 }
 
 export function resolveWysiwygDraftPaginationDelayMs(input: WysiwygDraftPaginationDelayInput): number {

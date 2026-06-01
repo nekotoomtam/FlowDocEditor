@@ -1950,6 +1950,30 @@ describe("paragraph text operations", () => {
     expect(paragraphText(second)).toBe("world")
   })
 
+  it("transfers outer paragraph spacing across a plain text split", () => {
+    const p = {
+      ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]),
+      props: {
+        ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]).props,
+        spacingBefore: pt(12),
+        spacingAfter: pt(18),
+      },
+    }
+
+    const result = splitParagraphAtIndex(makeDoc({ p1: p }, ["p1"]), "p1", 6)
+    const section = result.doc.document.sections[0]
+    const first = section.nodes.p1
+    const second = section.nodes[result.newNodeId]
+
+    expect(first.type).toBe("paragraph")
+    expect(second?.type).toBe("paragraph")
+    if (first.type !== "paragraph" || second?.type !== "paragraph") return
+    expect(first.props.spacingBefore).toEqual(pt(12))
+    expect(first.props.spacingAfter).toEqual(pt(0))
+    expect(second.props.spacingBefore).toEqual(pt(0))
+    expect(second.props.spacingAfter).toEqual(pt(18))
+  })
+
   it("splits plain text paragraphs with cloned paragraph style metadata", () => {
     const p = {
       ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]),
@@ -1981,6 +2005,40 @@ describe("paragraph text operations", () => {
     second.props.styleOverrides!.fontSize!.value = 99
     expect(first.props.styleOverrides).toEqual({ fontSize: pt(16) })
     expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("overrides style-backed spacing at the new split boundary", () => {
+    const p = {
+      ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]),
+      props: {
+        ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]).props,
+        paragraphStyleId: "custom.body",
+      },
+    }
+    let doc = makeDoc({ p1: p }, ["p1"])
+    doc = upsertParagraphStyleDefinition(doc, {
+      id: "custom.body",
+      props: {
+        fontSize: pt(12),
+        spacingBefore: pt(10),
+        spacingAfter: pt(14),
+      },
+    })
+
+    const result = splitParagraphAtIndex(doc, "p1", 6)
+    const section = result.doc.document.sections[0]
+    const first = section.nodes.p1
+    const second = section.nodes[result.newNodeId]
+
+    expect(first.type).toBe("paragraph")
+    expect(second?.type).toBe("paragraph")
+    if (first.type !== "paragraph" || second?.type !== "paragraph") return
+    expect(resolveStyledParagraphProps(result.doc.document.styles, first).spacingBefore).toEqual(pt(10))
+    expect(resolveStyledParagraphProps(result.doc.document.styles, first).spacingAfter).toEqual(pt(0))
+    expect(resolveStyledParagraphProps(result.doc.document.styles, second).spacingBefore).toEqual(pt(0))
+    expect(resolveStyledParagraphProps(result.doc.document.styles, second).spacingAfter).toEqual(pt(14))
+    expect(first.props.styleOverrides?.spacingAfter).toEqual(pt(0))
+    expect(second.props.styleOverrides?.spacingBefore).toEqual(pt(0))
   })
 
   it("does not split mixed inline paragraph", () => {

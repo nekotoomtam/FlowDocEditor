@@ -49,7 +49,7 @@ import {
   FlowdocDraftEditorIslandRoot,
   shouldReportDraftIslandHeightPreview,
 } from "../FlowdocDraftEditorIslandRoot"
-import type { PageFragment } from "@/pagination"
+import type { PageFragment, PaginatedPage } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import type { TextMeasurer } from "@/layout"
 
@@ -363,7 +363,7 @@ describe("FlowdocDraftEditorIslandRoot", () => {
         fontFamilyKey: "default",
         fontSize: 12,
         align: "left",
-        lineHeight: 1,
+        lineHeight: 12,
         textColor: "111827",
         spacingBefore: 0,
         spacingAfter: 0,
@@ -396,6 +396,108 @@ describe("FlowdocDraftEditorIslandRoot", () => {
     expect(markup).toContain("data-wysiwyg-input-bridge-mode=\"hidden-flowdoc-draft-editor-island-v2\"")
     expect(markup).toContain("data-wysiwyg-visible-area-pointer-target=\"false\"")
     expect(markup).toContain("data-wysiwyg-visible-pointer-owner=\"flowdoc-draft-island-v2\"")
+    expect(markup).toContain("data-wysiwyg-flowdoc-draft-pointer-selection=\"true\"")
+    expect(markup).toContain("data-wysiwyg-flowdoc-draft-clipboard=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  })
+
+  it("renders V2 island range selection as FlowDoc overlay geometry", () => {
+    const doc = makeDoc("FlowDoc island text wraps locally across lines")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({
+      x: 36,
+      y: 48,
+      width: 90,
+      height: 24,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 12,
+        textColor: "111827",
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const markup = renderToStaticMarkup(createElement(FlowdocDraftEditorIslandRoot, {
+      active: true,
+      nodeId: "p1",
+      paragraph,
+      fragment,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      draftText: "FlowDoc island text wraps locally across lines",
+      caretOffset: 22,
+      selection: { anchorOffset: 4, focusOffset: 22 },
+      getPageElement: () => null,
+      onDraftChange: () => undefined,
+      onEndEdit: () => undefined,
+    }))
+
+    expect(markup).toContain("data-wysiwyg-active-visual-mode=\"flowdoc-draft-editor-island\"")
+    expect(markup).toContain("data-wysiwyg-flowdoc-draft-selection-collapsed=\"false\"")
+    expect(markup).toContain("data-wysiwyg-selection-overlay=\"true\"")
+    expect(markup).toContain("data-wysiwyg-flowdoc-draft-pointer-selection=\"true\"")
+    expect(markup).toContain("data-wysiwyg-flowdoc-draft-clipboard=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
+    expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  })
+
+  it("renders V2 island draft continuation surfaces when the active plain paragraph crosses a page boundary", () => {
+    const doc = makeDoc("FlowDoc island text")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({
+      x: 36,
+      y: 72,
+      width: 70,
+      height: 24,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 12,
+        textColor: "111827",
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const pages: PaginatedPage[] = [
+      { index: 0, width: 300, height: 180, contentBox: { x: 36, y: 72, width: 220, height: 36 }, fragments: [fragment], headerFragments: [], footerFragments: [] },
+      { index: 1, width: 300, height: 180, contentBox: { x: 36, y: 72, width: 220, height: 72 }, fragments: [], headerFragments: [], footerFragments: [] },
+    ]
+    const markup = renderToStaticMarkup(createElement(FlowdocDraftEditorIslandRoot, {
+      active: true,
+      nodeId: "p1",
+      paragraph,
+      fragment,
+      pageKey: "0-0",
+      pages,
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      draftText: "FlowDoc island text wraps locally across page boundary surfaces",
+      caretOffset: 62,
+      selection: { anchorOffset: 62, focusOffset: 62 },
+      getPageElement: () => null,
+      getPageKeyByPageIndex: (pageIndex) => `0-${pageIndex}`,
+      onDraftChange: () => undefined,
+      onEndEdit: () => undefined,
+    }))
+
+    expect(markup).toContain("data-wysiwyg-island-fragment-count=\"2\"")
+    expect(markup).toContain("data-wysiwyg-island-page-boundary-preview=\"true\"")
+    expect(markup).toContain("data-wysiwyg-island-reflow-kind=\"hard-page-boundary\"")
+    expect(markup).toContain("data-wysiwyg-island-page-key=\"0-1\"")
+    expect(markup).toContain("data-wysiwyg-flowdoc-draft-total-line-count=")
     expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
     expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
     expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")

@@ -1,6 +1,6 @@
 "use client"
 
-import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
+import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
 import { DocumentPrepareOverlay } from "@/app/_components/DocumentPrepareOverlay"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
 import { assertDocument, canRemoveFlowTableColumn, canRemoveFlowTableRow, clampSectionReservedZones, createDefaultDocument, createUniqueListPresetInstanceId, getTextRunParagraphText, isTextRunOnlyParagraph, normalizeDocument, resolveParagraphListContext } from "@/document"
@@ -152,6 +152,7 @@ import {
   resolveWysiwygDraftPaginationDelayMs,
   resolveWysiwygLatestOnlyDraftPaginationDelayMs,
   shouldScheduleResponsiveContainerDraftPagination,
+  shouldPatchPlainParagraphBoundaryHeightPreview,
   shouldUseWysiwygDraftPaginationFrame,
   type WysiwygDraftPaginationLatestSnapshot,
   type WysiwygTextReflowDecision,
@@ -1315,10 +1316,10 @@ export default function EditorShell() {
   const wysiwygLatestDraftPaginationSnapshotRef = useRef<WysiwygDraftPaginationLatestSnapshot | null>(null)
   const wysiwygDraftPaginationRequestRef = useRef<WysiwygDraftPaginationRequest | null>(null)
 
-  useEffect(() => { docRef.current = state.doc }, [state.doc])
+  useLayoutEffect(() => { docRef.current = state.doc }, [state.doc])
   useEffect(() => { packageFieldRegistryRef.current = packageFieldRegistry }, [packageFieldRegistry])
   useEffect(() => { dataSnapshotRef.current = dataSnapshot }, [dataSnapshot])
-  useEffect(() => {
+  useLayoutEffect(() => {
     paginatedRef.current = state.paginated
     paginatedPerfSummaryRef.current = summarizePaginatedForWysiwygPerf(state.paginated)
   }, [state.paginated])
@@ -2175,7 +2176,14 @@ export default function EditorShell() {
     inlineEditHeightPreviewLastDispatchRef.current = { key, height }
     handleInlineEditHeightChange(nodeId, height, pageIndex)
     if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionState.nodeId !== nodeId) return
-    if (reflow && !reflow.shouldPatchSamePageHeight) return
+    const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
+    const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
+    const shouldPatchBoundaryHeight = shouldPatchPlainParagraphBoundaryHeightPreview({
+      isFlowStackParagraph,
+      isTableCellParagraph,
+      reflow,
+    })
+    if (reflow && !reflow.shouldPatchSamePageHeight && !shouldPatchBoundaryHeight) return
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "inline-edit-height-preview",
       startedAt: startWysiwygPerfSpan(),
@@ -2185,9 +2193,13 @@ export default function EditorShell() {
       draftVersion: wysiwygTextSessionState.dirtyVersion,
       textLength: wysiwygTextSessionState.draftText.length,
       paragraphHeight: height,
-      source: "set-inline-edit-height-dispatch",
+      source: shouldPatchBoundaryHeight
+        ? "set-inline-edit-height-dispatch-boundary-handoff"
+        : "set-inline-edit-height-dispatch",
       commandType: "SET_INLINE_EDIT_HEIGHT",
       active: true,
+      reflowKind: reflow?.kind,
+      reflowReason: reflow?.reason,
     })
     dispatch({ type: "SET_INLINE_EDIT_HEIGHT", nodeId, height, pageIndex, reflow })
   }, [
@@ -2534,7 +2546,7 @@ export default function EditorShell() {
   ])
 
   // Focus the new paragraph after a split
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!state.lastSplitNodeId) return
     const nodeId = state.lastSplitNodeId
     startInlineEditAfterModelStructuralChange(nodeId, 0)
@@ -2542,7 +2554,7 @@ export default function EditorShell() {
   }, [startInlineEditAfterModelStructuralChange, state.lastSplitNodeId])
 
   // Focus the previous paragraph after a merge, caret at join point
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!state.mergeResult) return
     const nodeId = state.mergeResult.prevNodeId
     startInlineEditAfterModelStructuralChange(nodeId, state.mergeResult.caretIndex)
@@ -2550,14 +2562,14 @@ export default function EditorShell() {
   }, [startInlineEditAfterModelStructuralChange, state.mergeResult])
 
   // Keep editing the same paragraph after empty Enter exits a list item.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!state.listExitNodeId) return
     startInlineEditAfterModelStructuralChange(state.listExitNodeId, 0)
     dispatch({ type: "CLEAR_LIST_EXIT_NODE_ID" })
   }, [startInlineEditAfterModelStructuralChange, state.listExitNodeId])
 
   // Keep editing the same paragraph after Tab/Shift+Tab changes list level.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!state.listLevelChangeResult) return
     startInlineEditAfterModelStructuralChange(
       state.listLevelChangeResult.nodeId,
@@ -3273,12 +3285,16 @@ export default function EditorShell() {
     if (isParagraphInsideRowStack(previewDoc, nodeId)) return null
     const paragraph = getParagraphFromDoc(previewDoc, nodeId)
     if (!paragraph || !isTextRunOnlyParagraph(paragraph)) return null
-    const fragment = findWysiwygTextEngineFragment(displayPaginated, nodeId, inlineEditPageIndex)
+    const activeFragment = findWysiwygTextEngineFragment(displayPaginated, nodeId, inlineEditPageIndex)
+    const fragment = activeFragment?.continuesFrom
+      ? findWysiwygTextEngineFragment(displayPaginated, nodeId, null)
+      : activeFragment
     if (!fragment || fragment.continuesFrom || fragment.nodeType !== "paragraph") return null
     if (fragment.listMarker) return null
     const pageKey = editorPageNavigation.pageKeyByPageIndex.get(fragment.pageIndex) ?? null
     if (!pageKey) return null
-    return { nodeId, paragraph, fragment, pageKey }
+    const pages = displayPaginated.sections.flatMap((section) => section.pages)
+    return { nodeId, paragraph, fragment, pageKey, pages }
   }, [
     displayPaginated,
     editorPageNavigation.pageKeyByPageIndex,
@@ -4568,15 +4584,20 @@ export default function EditorShell() {
               paragraph={flowdocDraftEditorIslandConfig.paragraph}
               fragment={flowdocDraftEditorIslandConfig.fragment}
               pageKey={flowdocDraftEditorIslandConfig.pageKey}
+              pages={flowdocDraftEditorIslandConfig.pages}
               scale={scale}
               textMeasurer={editorTextMeasurer}
               draftText={wysiwygTextSessionState.draftText}
               caretOffset={wysiwygTextSessionState.caretOffset}
               selection={wysiwygTextSessionState.selection}
               getPageElement={getPageElement}
+              getPageKeyByPageIndex={(pageIndex) => editorPageNavigation.pageKeyByPageIndex.get(pageIndex) ?? null}
               onDraftChange={handleWysiwygTextDraftChange}
               onHeightChange={handleInlineEditHeightPreviewChange}
+              onReflowDecision={handleWysiwygTextReflowDecision}
               onEndEdit={handleInlineEditEnd}
+              onSplitParagraph={handleSplitParagraph}
+              onMergeParagraph={handleMergeParagraph}
             />
           ) : null}
         </EditorCanvasColumn>

@@ -159,30 +159,33 @@ async function waitForServer(url, server, timeoutMs = 60000) {
 }
 
 function snapshotKey(snapshot) {
-  return JSON.stringify(snapshot.fragments.map((fragment) => ({
-    lineStart: fragment.lineStart,
-    lineEnd: fragment.lineEnd,
-    visualMode: fragment.visualMode,
-    native: fragment.native.active
-      ? {
-          valueLength: fragment.native.valueLength,
-          lineCount: fragment.native.lineCount,
-          contentWithinWidth: fragment.native.contentWithinWidth,
-          oldSvgTextLineCount: fragment.native.oldSvgTextLineCount,
-        }
-      : null,
-    lines: fragment.lines.map((line) => ({
-      text: line.text,
-      x: line.x,
-      y: line.y,
-      fontSize: line.fontSize,
-      textAnchor: line.textAnchor,
+  return JSON.stringify({
+    activeIsland: snapshot.activeIsland,
+    fragments: snapshot.fragments.map((fragment) => ({
+      lineStart: fragment.lineStart,
+      lineEnd: fragment.lineEnd,
+      visualMode: fragment.visualMode,
+      native: fragment.native.active
+        ? {
+            valueLength: fragment.native.valueLength,
+            lineCount: fragment.native.lineCount,
+            contentWithinWidth: fragment.native.contentWithinWidth,
+            oldSvgTextLineCount: fragment.native.oldSvgTextLineCount,
+          }
+        : null,
+      lines: fragment.lines.map((line) => ({
+        text: line.text,
+        x: line.x,
+        y: line.y,
+        fontSize: line.fontSize,
+        textAnchor: line.textAnchor,
+      })),
     })),
-  })))
+  })
 }
 
 async function captureSnapshot(page, label) {
-  return page.evaluate(({ label, fragmentSelector }) => {
+  return page.evaluate(({ label, fragmentSelector, targetNodeId }) => {
     const round = (value) => Math.round(value * 100) / 100
     const numberAttr = (element, name) => {
       const value = Number(element.getAttribute(name))
@@ -249,6 +252,13 @@ async function captureSnapshot(page, label) {
     }
 
     const shell = document.querySelector('[data-testid="editor-shell"]')
+    const activeIslandSurfaces = Array.from(document.querySelectorAll(`[data-wysiwyg-draft-editor-island="true"][data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]`))
+      .filter((node) => node instanceof SVGElement)
+      .sort((a, b) => (
+        Number(a.getAttribute("data-wysiwyg-island-surface-index") ?? 0) -
+        Number(b.getAttribute("data-wysiwyg-island-surface-index") ?? 0)
+      ))
+    const activeIsland = activeIslandSurfaces[0] ?? null
     const fragments = Array.from(document.querySelectorAll(fragmentSelector))
       .map((fragment) => {
         const rect = fragment.getBoundingClientRect()
@@ -289,9 +299,30 @@ async function captureSnapshot(page, label) {
       capturedAt: Math.round(performance.now()),
       bridgeCount: document.querySelectorAll('[data-wysiwyg-input-bridge="true"]').length,
       liveEchoCount: document.querySelectorAll('[data-wysiwyg-live-echo="true"]').length,
+      activeIsland: activeIsland instanceof SVGElement ? {
+        active: true,
+        visualMode: activeIsland.getAttribute("data-wysiwyg-active-visual-mode") ?? null,
+        nativeVisibleText: activeIsland.getAttribute("data-wysiwyg-native-visible-text") ?? null,
+        inputBridgeMode: activeIsland.getAttribute("data-wysiwyg-input-bridge-mode") ?? null,
+        lineCount: Number(activeIsland.getAttribute("data-wysiwyg-flowdoc-draft-total-line-count") ??
+          activeIsland.getAttribute("data-wysiwyg-flowdoc-draft-line-count") ??
+          "0"),
+        textLength: Number(activeIsland.getAttribute("data-wysiwyg-flowdoc-draft-text-length") ?? "0"),
+        surfaceCount: Number(activeIsland.getAttribute("data-wysiwyg-island-fragment-count") ?? String(activeIslandSurfaces.length)),
+        pageBoundaryPreview: activeIsland.getAttribute("data-wysiwyg-island-page-boundary-preview") ?? null,
+      } : {
+        active: false,
+        visualMode: null,
+        nativeVisibleText: null,
+        inputBridgeMode: null,
+        lineCount: 0,
+        textLength: 0,
+        surfaceCount: 0,
+        pageBoundaryPreview: null,
+      },
       fragments,
     }
-  }, { label, fragmentSelector })
+  }, { label, fragmentSelector, targetNodeId: TARGET_NODE_ID })
 }
 
 async function waitForStableSnapshot(page, label, options = {}) {
@@ -311,7 +342,8 @@ async function waitForStableSnapshot(page, label, options = {}) {
     latest = await captureSnapshot(page, label)
     const hasFragments = latest.fragments.length > 0 &&
       latest.fragments.every((fragment) => fragment.lines.length > 0 || fragment.native.active)
-    const editingMatches = expectEditing === null || latest.fragments.some((fragment) => fragment.isEditing) === expectEditing
+    const isEditing = latest.activeIsland?.active === true || latest.fragments.some((fragment) => fragment.isEditing)
+    const editingMatches = expectEditing === null || isEditing === expectEditing
     const liveEchoSettled = !requireNoLiveEcho || latest.liveEchoCount === 0
     const key = snapshotKey(latest)
     stableCount = key === previousKey ? stableCount + 1 : 1
@@ -354,6 +386,7 @@ async function exitTargetEdit(page) {
 }
 
 function totalLineCount(snapshot) {
+  if (snapshot.activeIsland?.active) return snapshot.activeIsland.lineCount
   return snapshot.fragments.reduce((sum, fragment) => (
     sum + (fragment.native.active ? (fragment.native.lineCount ?? 0) : fragment.lines.length)
   ), 0)
@@ -364,7 +397,8 @@ function snapshotCheck(name, pass, detail = {}) {
 }
 
 function hasFlowdocDraftEditorIslandSnapshot(snapshot) {
-  return snapshot.fragments.some((fragment) => (
+  return snapshot.activeIsland?.visualMode === "flowdoc-draft-editor-island" ||
+    snapshot.fragments.some((fragment) => (
     fragment.isEditing &&
     fragment.visualMode === "flowdoc-draft-editor-island" &&
     !fragment.native.active
@@ -373,6 +407,13 @@ function hasFlowdocDraftEditorIslandSnapshot(snapshot) {
 
 function hasNoActiveEditVisualRegression(snapshot) {
   return snapshot.liveEchoCount === 0 &&
+    (
+      !snapshot.activeIsland?.active ||
+      (
+        snapshot.activeIsland.visualMode === "flowdoc-draft-editor-island" &&
+        snapshot.activeIsland.nativeVisibleText === "false"
+      )
+    ) &&
     snapshot.fragments.every((fragment) => (
       !fragment.isEditing ||
       (
@@ -406,6 +447,7 @@ function summarizeSnapshots(snapshots) {
       lineCount: totalLineCount(snapshot),
       bridgeCount: snapshot.bridgeCount,
       liveEchoCount: snapshot.liveEchoCount,
+      activeIsland: snapshot.activeIsland,
       fragments: snapshot.fragments.map((fragment) => ({
         pageIndex: fragment.pageIndex,
         lineStart: fragment.lineStart,

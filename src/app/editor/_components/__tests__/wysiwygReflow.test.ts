@@ -11,6 +11,7 @@ import {
   shouldScheduleResponsiveTableCellDraftPagination,
   shouldPrepareWysiwygTableCellDraftVisualPreview,
   shouldQueueSettledTableCellDraftPaginationFromVisualPreview,
+  shouldPatchPlainParagraphBoundaryHeightPreview,
   shouldPatchWysiwygSamePageHeight,
   shouldUseWysiwygLocalDraftLines,
   shouldUseWysiwygDraftPaginationFrame,
@@ -151,6 +152,32 @@ describe("classifyWysiwygTextReflow", () => {
       shouldPatchSamePageHeight: false,
       shouldQueueSettledPagination: true,
     })
+  })
+
+  it("allows active plain paragraph height handoff at a page boundary", () => {
+    const reflow = classifyWysiwygTextReflow({
+      fragment: fragment({ y: 180 }),
+      draftLines: [line("Hello", 180), line("world", 192)],
+      draftHeight: 24,
+      pageContentBottom: 200,
+      supportsLocalDraftLayout: true,
+    })
+
+    expect(shouldPatchPlainParagraphBoundaryHeightPreview({
+      isFlowStackParagraph: false,
+      isTableCellParagraph: false,
+      reflow,
+    })).toBe(true)
+    expect(shouldPatchPlainParagraphBoundaryHeightPreview({
+      isFlowStackParagraph: true,
+      isTableCellParagraph: false,
+      reflow,
+    })).toBe(false)
+    expect(shouldPatchPlainParagraphBoundaryHeightPreview({
+      isFlowStackParagraph: false,
+      isTableCellParagraph: true,
+      reflow,
+    })).toBe(false)
   })
 
   it("fails closed for unsupported fragments", () => {

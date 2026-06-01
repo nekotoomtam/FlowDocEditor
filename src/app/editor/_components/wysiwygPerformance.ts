@@ -29,6 +29,7 @@ export type WysiwygPerfEventKind =
   | "flowdoc-island-react-commit"
   | "flowdoc-island-parent-sync"
   | "flowdoc-island-pointer-hit-test"
+  | "flowdoc-island-structural-edit"
 
 export interface WysiwygPerfEvent {
   kind: WysiwygPerfEventKind
@@ -46,6 +47,7 @@ export interface WysiwygPerfEvent {
   scheduledDelayMs?: number
   firstRequestedAtMs?: number
   source?: string
+  action?: string
   active?: boolean
   reflowKind?: string
   reflowReason?: string

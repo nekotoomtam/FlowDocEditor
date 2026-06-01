@@ -15,6 +15,7 @@ import type {
   ParagraphBoxStyle,
   ParagraphListProps,
   ParagraphNode,
+  ParagraphProps,
   ParagraphStyleDefinition,
   ParagraphStyleProperties,
   PageSettings,
@@ -766,6 +767,35 @@ function collectSubtreeIds(nodes: Nodes, rootId: string): string[] {
 function clonePlainData<T>(value: T): T {
   if (value == null) return value
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+function resolveSplitParagraphSpacingProps(
+  doc: DocumentNode,
+  paragraph: ParagraphNode,
+): { beforeProps: ParagraphProps; afterProps: ParagraphProps } {
+  const beforeProps = clonePlainData(paragraph.props)
+  const afterProps = clonePlainData(paragraph.props)
+  const styleProps = paragraph.props.paragraphStyleId
+    ? doc.document.styles?.paragraphStyles?.[paragraph.props.paragraphStyleId]?.props
+    : undefined
+
+  beforeProps.spacingAfter = pt(0)
+  afterProps.spacingBefore = pt(0)
+
+  if (styleProps?.spacingAfter || paragraph.props.styleOverrides?.spacingAfter) {
+    beforeProps.styleOverrides = {
+      ...(beforeProps.styleOverrides ? clonePlainData(beforeProps.styleOverrides) : {}),
+      spacingAfter: pt(0),
+    }
+  }
+  if (styleProps?.spacingBefore || paragraph.props.styleOverrides?.spacingBefore) {
+    afterProps.styleOverrides = {
+      ...(afterProps.styleOverrides ? clonePlainData(afterProps.styleOverrides) : {}),
+      spacingBefore: pt(0),
+    }
+  }
+
+  return { beforeProps, afterProps }
 }
 
 function hasOwnKey<T extends object, K extends PropertyKey>(
@@ -2659,12 +2689,14 @@ export function splitParagraphAtIndex(
 
     const textBefore = fullText.slice(0, splitIndex)
     const textAfter = fullText.slice(splitIndex)
+    const { beforeProps, afterProps } = resolveSplitParagraphSpacingProps(doc, node)
 
     const updatedNode: LayoutNode = {
       ...node,
+      props: beforeProps,
       children: [{ ...firstRun, text: textBefore }],
     }
-    const newPara = createParagraphNode(textAfter, clonePlainData(node.props))
+    const newPara = createParagraphNode(textAfter, afterProps)
 
     const parentInfo = findParentInfo(section.nodes, nodeId)
     if (!parentInfo) continue

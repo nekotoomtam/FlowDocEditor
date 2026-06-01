@@ -22,6 +22,65 @@ Each entry should include:
 
 ---
 
+## 2026-06-01
+
+### Release 0.6.24 FlowDoc Draft Editor Island Follow-Up Baseline
+
+Goal: Accept the current FlowDoc Draft Editor Island V2 follow-up work as the
+`0.6.24` project marker before the scroll-anchoring fix slice, without
+changing persisted document, package, pagination, table, export, or
+data-binding schemas.
+
+Completed:
+
+- Added island-owned selection/clipboard and wrapped-line pointer probes so the
+  V2 island remains the active visual and interaction owner during plain
+  paragraph editing.
+- Added page-boundary local height handoff diagnostics and the narrow plain
+  paragraph boundary height-preview handoff through the existing inline-edit
+  height path.
+- Updated split paragraph spacing semantics so an Enter split transfers outer
+  spacing: the first paragraph keeps `spacingBefore`, the new paragraph keeps
+  `spacingAfter`, and the new split boundary suppresses middle spacing.
+- Documented the current scroll-anchoring diagnosis: the out-of-canvas island
+  still routes fixed overlay position through React state, so scroll can make
+  the island appear to lag the canvas until the next follow-up slice.
+- Updated project version markers and versioning docs from `0.6.23` to
+  `0.6.24`.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- WYSIWYG smoke/probe scripts for re-enter, smoothness, and Thai repeat checks.
+- `packages/core/src/document/operations.ts`
+- `packages/core/src/document/operations.test.ts`
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- WYSIWYG support helpers/tests for reflow, performance instrumentation, and
+  paragraph text surface behavior.
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- src/document/operations.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run smoke:wysiwyg-reenter`
+- Focused WYSIWYG smoothness probes for `held-repeat` and `mixed-pagination`
+  were run during the follow-up slice.
+
+Notes:
+
+- This baseline is not a general-user `v1` claim.
+- Remaining known risks: out-of-canvas island scroll anchoring, structural
+  Enter split latency, click-out/blur handoff pause, broader page-boundary
+  continuation behavior, and table-cell parity are separate follow-up slices.
+- Manual QA remains authoritative for product acceptance.
+
 ## 2026-05-31
 
 ### Release 0.6.23 FlowDoc Draft Editor Island V2 Baseline

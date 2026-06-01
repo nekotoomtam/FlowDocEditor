@@ -480,11 +480,17 @@ function summarizePerfEvents(perfEvents) {
   const heightPreviewEvents = perfEvents.filter((event) => event.kind === "inline-edit-height-preview")
   const heightPreviewDispatchEvents = heightPreviewEvents.filter((event) => event.active !== false)
   const setInlineEditHeightEvents = heightPreviewEvents.filter((event) => event.commandType === "SET_INLINE_EDIT_HEIGHT")
+  const heightPreviewBySource = heightPreviewEvents.reduce((acc, event) => {
+    const source = event.source ?? "unknown"
+    acc[source] = (acc[source] ?? 0) + 1
+    return acc
+  }, {})
   const draftMeasureEvents = perfEvents.filter((event) => event.kind === "text-engine-draft-measure")
   const flowdocIslandMeasureEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-draft-measure")
   const flowdocIslandVisibleEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-visible-lines")
   const flowdocIslandCommitEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-react-commit")
   const flowdocIslandParentSyncEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-parent-sync")
+  const flowdocIslandStructuralEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-structural-edit")
   const browserPreviewPaginationEvents = perfEvents.filter((event) => event.kind === "browser-preview-pagination")
   const canvasCommitEvents = perfEvents.filter((event) => event.kind === "editor-canvas-react-commit")
   return {
@@ -512,11 +518,8 @@ function summarizePerfEvents(perfEvents) {
       dispatchCount: heightPreviewDispatchEvents.length,
       setInlineEditHeightCount: setInlineEditHeightEvents.length,
       sources: [...new Set(heightPreviewEvents.map((event) => event.source ?? "unknown"))],
-      bySource: heightPreviewEvents.reduce((acc, event) => {
-        const source = event.source ?? "unknown"
-        acc[source] = (acc[source] ?? 0) + 1
-        return acc
-      }, {}),
+      bySource: heightPreviewBySource,
+      boundaryHandoffCount: heightPreviewBySource["set-inline-edit-height-dispatch-boundary-handoff"] ?? 0,
     },
     draftMeasure: summarizeDurations(draftMeasureEvents),
     flowdocIsland: {
@@ -525,6 +528,12 @@ function summarizePerfEvents(perfEvents) {
       reactCommit: summarizeDurations(flowdocIslandCommitEvents),
       parentSyncCount: flowdocIslandParentSyncEvents.length,
       browserPreviewPaginationCount: browserPreviewPaginationEvents.length,
+      structuralEdit: {
+        count: flowdocIslandStructuralEvents.length,
+        splitParagraphCount: flowdocIslandStructuralEvents.filter((event) => event.action === "split-paragraph").length,
+        mergeParagraphCount: flowdocIslandStructuralEvents.filter((event) => event.action === "merge-paragraph").length,
+        sources: [...new Set(flowdocIslandStructuralEvents.map((event) => event.source ?? "unknown"))],
+      },
     },
     editorCanvasCommit: summarizeDurations(canvasCommitEvents),
   }
@@ -538,6 +547,13 @@ async function readTextEngineLayerState(page, layerSelector) {
       node.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island"
     )) ?? layers[0] ?? null
     if (!(layer instanceof SVGElement)) return null
+    const layerNodeId = layer.getAttribute("data-inline-edit-node-id")
+    const activeIslandLayers = layer.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island"
+      ? layers.filter((node) => (
+          node.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island" &&
+          node.getAttribute("data-inline-edit-node-id") === layerNodeId
+        ))
+      : [layer]
     const serializeRect = (rect) => rect
       ? {
           x: rect.x,
@@ -555,6 +571,14 @@ async function readTextEngineLayerState(page, layerSelector) {
         text: node.textContent ?? "",
         rect: serializeRect(node.getBoundingClientRect()),
       }))
+    const rectsOverlap = (a, b) => Boolean(
+      a &&
+      b &&
+      a.right > b.left &&
+      a.left < b.right &&
+      a.bottom > b.top &&
+      a.top < b.bottom
+    )
     const replacement = layer.querySelector('[data-wysiwyg-draft-text-replacement="true"]')
     const fragment = layer.closest('[data-testid="editor-fragment"]')
     const fragmentChrome = fragment
@@ -583,11 +607,18 @@ async function readTextEngineLayerState(page, layerSelector) {
     const sourceLineCount = replacement
       ? Number(replacement.getAttribute("data-wysiwyg-draft-text-replacement-source-line-count") ?? "0")
       : null
-    const flowdocDraftLineNodes = Array.from(layer.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
-    const flowdocDraftLinesGroup = layer.querySelector('[data-wysiwyg-flowdoc-draft-lines="true"]')
+    const flowdocDraftLineNodes = activeIslandLayers.flatMap((surface) =>
+      Array.from(surface.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
+    )
+    const flowdocDraftLinesGroups = activeIslandLayers.map((surface) =>
+      surface.querySelector('[data-wysiwyg-flowdoc-draft-lines="true"]')
+    ).filter(Boolean)
+    const flowdocDraftSelectionRects = activeIslandLayers.flatMap((surface) =>
+      Array.from(surface.querySelectorAll('[data-wysiwyg-selection-overlay="true"] rect'))
+    )
     const oldSvgTextLines = Array.from(layer.querySelectorAll("text")).filter((text) => (
       !replacement?.contains(text) &&
-      !flowdocDraftLinesGroup?.contains(text) &&
+      !flowdocDraftLinesGroups.some((group) => group?.contains(text)) &&
       text.getAttribute("data-list-marker") !== "true"
     ))
     const replacementLineNodes = replacement
@@ -611,7 +642,17 @@ async function readTextEngineLayerState(page, layerSelector) {
     const hitArea = layer.querySelector('[data-wysiwyg-hit-area="true"]')
     const hitAreaWidth = hitArea instanceof SVGRectElement ? hitArea.width.baseVal.value : null
     const hitAreaRect = hitArea instanceof Element ? hitArea.getBoundingClientRect() : null
-    const layerNodeId = layer.getAttribute("data-inline-edit-node-id")
+    const activeHitAreaRects = activeIslandLayers
+      .map((surface) => surface.querySelector('[data-wysiwyg-hit-area="true"]'))
+      .filter((node) => node instanceof Element)
+      .map((node) => node.getBoundingClientRect())
+    const pageBreakMarkerRects = Array.from(document.querySelectorAll('[data-testid="editor-page-break-marker"]'))
+      .filter((node) => node instanceof Element)
+      .map((node) => node.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && rect.height > 0)
+    const overlappingPageBreakMarkerRects = pageBreakMarkerRects.filter((markerRect) => (
+      activeHitAreaRects.some((activeRect) => rectsOverlap(activeRect, markerRect))
+    ))
     const inputBridge = layer.querySelector('[data-wysiwyg-input-bridge="true"]') ??
       (layerNodeId
         ? document.querySelector(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${CSS.escape(layerNodeId)}"]`)
@@ -667,7 +708,7 @@ async function readTextEngineLayerState(page, layerSelector) {
       ? Array.from(replacementBoxElement.getClientRects()).map(serializeRect)
       : []
     return {
-      lineCount: Number(layer.getAttribute("data-wysiwyg-line-count") ?? "0"),
+      lineCount: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-total-line-count") ?? layer.getAttribute("data-wysiwyg-line-count") ?? "0"),
       immediateDraftLayout: layer.getAttribute("data-wysiwyg-immediate-draft-layout") === "true",
       reflowKind: layer.getAttribute("data-wysiwyg-reflow-kind") || null,
       activeVisualMode: layer.getAttribute("data-wysiwyg-active-visual-mode") || null,
@@ -676,11 +717,17 @@ async function readTextEngineLayerState(page, layerSelector) {
         Boolean(layer.querySelector('[data-wysiwyg-caret="true"]')),
       flowdocDraft: flowdocDraftLineNodes.length > 0 ? {
         active: true,
-        lineCount: flowdocDraftLineNodes.length,
+        lineCount: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-total-line-count") ?? String(flowdocDraftLineNodes.length)),
         textLength: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-text-length") ?? "0"),
         caretOffset: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-caret-offset") ?? "0"),
         selectionStart: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-selection-start") ?? "0"),
         selectionEnd: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-selection-end") ?? "0"),
+        selectedTextLength: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-selected-text-length") ?? "0"),
+        selectionCollapsed: layer.getAttribute("data-wysiwyg-flowdoc-draft-selection-collapsed") !== "false",
+        selectionOverlayCount: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-selection-overlay-count") ?? String(flowdocDraftSelectionRects.length)),
+        surfaceCount: Number(layer.getAttribute("data-wysiwyg-island-fragment-count") ?? String(activeIslandLayers.length)),
+        pageBoundaryPreview: layer.getAttribute("data-wysiwyg-island-page-boundary-preview") === "true",
+        reflowKind: layer.getAttribute("data-wysiwyg-island-reflow-kind") ?? null,
         lineSignatures: flowdocDraftLineNodes.slice(0, 16).map((node) => node.textContent ?? ""),
         lineRanges: flowdocDraftLineNodes.slice(0, 16).map((node) => ({
           start: Number(node.getAttribute("data-wysiwyg-draft-line-start") ?? "0"),
@@ -693,7 +740,12 @@ async function readTextEngineLayerState(page, layerSelector) {
         inputBridgeMode: inputBridgeElement?.getAttribute("data-wysiwyg-input-bridge-mode") ?? null,
         inputBridgeRect: serializeRect(inputBridgeRect),
         hitAreaRect: serializeRect(hitAreaRect),
+        hitAreaRects: activeHitAreaRects.slice(0, 8).map(serializeRect),
+        pageBreakMarkerOverlapDetected: overlappingPageBreakMarkerRects.length > 0,
+        pageBreakMarkerOverlapCount: overlappingPageBreakMarkerRects.length,
+        pageBreakMarkerRects: overlappingPageBreakMarkerRects.slice(0, 8).map(serializeRect),
         visiblePointerOwner: layer.getAttribute("data-wysiwyg-visible-pointer-owner") ?? null,
+        clipboardOwned: layer.getAttribute("data-wysiwyg-flowdoc-draft-clipboard") === "true",
         inputBridgeOwnsVisiblePointer,
       } : {
         active: false,
@@ -702,6 +754,9 @@ async function readTextEngineLayerState(page, layerSelector) {
         caretOffset: null,
         selectionStart: null,
         selectionEnd: null,
+        selectedTextLength: 0,
+        selectionCollapsed: true,
+        selectionOverlayCount: 0,
         lineSignatures: [],
         lineRanges: [],
         lineRects: [],
@@ -710,7 +765,12 @@ async function readTextEngineLayerState(page, layerSelector) {
         inputBridgeMode: inputBridgeElement?.getAttribute("data-wysiwyg-input-bridge-mode") ?? null,
         inputBridgeRect: serializeRect(inputBridgeRect),
         hitAreaRect: serializeRect(hitAreaRect),
+        hitAreaRects: activeHitAreaRects.slice(0, 8).map(serializeRect),
+        pageBreakMarkerOverlapDetected: overlappingPageBreakMarkerRects.length > 0,
+        pageBreakMarkerOverlapCount: overlappingPageBreakMarkerRects.length,
+        pageBreakMarkerRects: overlappingPageBreakMarkerRects.slice(0, 8).map(serializeRect),
         visiblePointerOwner: layer.getAttribute("data-wysiwyg-visible-pointer-owner") ?? null,
+        clipboardOwned: layer.getAttribute("data-wysiwyg-flowdoc-draft-clipboard") === "true",
         inputBridgeOwnsVisiblePointer,
       },
       native: nativeTextareaElement ? {
@@ -1017,6 +1077,16 @@ function summarizeTypingLayerSamples(samples) {
   const flowdocInputBridgePointerTargetSamples = activeFlowdocDraftSamples.filter((sample) => (
     sample.inputBridgeOwnsVisiblePointer === true
   ))
+  const flowdocPageBoundaryPreviewSamples = activeFlowdocDraftSamples.filter((sample) => (
+    sample.pageBoundaryPreview === true
+  ))
+  const flowdocHardBoundarySamples = activeFlowdocDraftSamples.filter((sample) => (
+    sample.reflowKind === "hard-page-boundary"
+  ))
+  const flowdocPageBreakOverlapSamples = activeFlowdocDraftSamples.filter((sample) => (
+    sample.pageBreakMarkerOverlapDetected === true ||
+    (sample.pageBreakMarkerOverlapCount ?? 0) > 0
+  ))
   const liveEchoSamples = samples.flatMap((sample) => [
     sample.afterPress?.liveEchoActive ? { index: sample.index, phase: "afterPress" } : null,
     sample.afterPaint?.liveEchoActive ? { index: sample.index, phase: "afterPaint" } : null,
@@ -1069,6 +1139,13 @@ function summarizeTypingLayerSamples(samples) {
     flowdocInputBridgePointerTargetDetected: flowdocInputBridgePointerTargetSamples.length > 0,
     flowdocInputBridgePointerTargetCount: flowdocInputBridgePointerTargetSamples.length,
     firstFlowdocInputBridgePointerTargetSample: flowdocInputBridgePointerTargetSamples[0] ?? null,
+    flowdocPageBoundaryPreviewDetected: flowdocPageBoundaryPreviewSamples.length > 0,
+    flowdocPageBoundaryPreviewCount: flowdocPageBoundaryPreviewSamples.length,
+    flowdocHardBoundaryReflowDetected: flowdocHardBoundarySamples.length > 0,
+    flowdocHardBoundaryReflowCount: flowdocHardBoundarySamples.length,
+    flowdocPageBreakOverlapDetected: flowdocPageBreakOverlapSamples.length > 0,
+    flowdocPageBreakOverlapCount: flowdocPageBreakOverlapSamples.length,
+    firstFlowdocPageBreakOverlapSample: flowdocPageBreakOverlapSamples[0] ?? null,
     maxNativeLineCount: nativeLineCounts.length
       ? Math.max(...nativeLineCounts)
       : null,
@@ -1365,7 +1442,7 @@ function stopServer(server) {
 }
 
 async function runFlowdocDraftPointerHitProbe(page, layerSelector) {
-  const target = await page.evaluate((selector) => {
+  const targetPlan = await page.evaluate((selector) => {
     const layers = Array.from(document.querySelectorAll(selector))
       .filter((node) => node instanceof SVGElement)
     const layer = layers.find((node) => (
@@ -1388,7 +1465,7 @@ async function runFlowdocDraftPointerHitProbe(page, layerSelector) {
           wysiwygDraftIslandHitArea: element.getAttribute("data-wysiwyg-draft-editor-island-hit-area"),
         }
       : null
-    const candidateFor = (candidateGroup) => {
+    const candidateFor = (candidateGroup, fallbackLineIndex) => {
       const text = candidateGroup.querySelector("text")
       if (!(text instanceof Element)) return null
       let rect = text.getBoundingClientRect()
@@ -1410,30 +1487,47 @@ async function runFlowdocDraftPointerHitProbe(page, layerSelector) {
           elementAtPoint &&
           (bridge === elementAtPoint || bridge.contains(elementAtPoint)),
         )
-        if (elementAtPoint && layer.contains(elementAtPoint) && !bridgeOwnsPoint) {
+        const layerOwnsPoint = Boolean(elementAtPoint && layer.contains(elementAtPoint))
+        if (elementAtPoint) {
           return {
             x: point.x,
             y: point.y,
-            lineIndex: Number(candidateGroup.getAttribute("data-wysiwyg-draft-line-index") ?? draftLineGroups.length - 1),
+            lineIndex: Number(candidateGroup.getAttribute("data-wysiwyg-draft-line-index") ?? fallbackLineIndex),
             lineStart: start,
             lineEnd: end,
             lineText: text.textContent ?? "",
             beforeCaretOffset: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-caret-offset") ?? "0"),
             bridgeOwnsPoint,
+            layerOwnsPoint,
             elementAtPoint: serializeElement(elementAtPoint),
           }
         }
       }
       return null
     }
-    for (let index = draftLineGroups.length - 1; index >= 0; index -= 1) {
-      const candidate = candidateFor(draftLineGroups[index])
-      if (candidate) return candidate
+    const candidates = []
+    for (let index = 0; index < draftLineGroups.length; index += 1) {
+      const candidate = candidateFor(draftLineGroups[index], index)
+      if (candidate) candidates.push(candidate)
     }
-    return null
+    const islandOwnedCandidates = candidates.filter((candidate) => candidate.layerOwnsPoint && !candidate.bridgeOwnsPoint)
+    const usableCandidates = islandOwnedCandidates.length > 0 ? islandOwnedCandidates : candidates
+    const clickTarget = usableCandidates[usableCandidates.length - 1] ?? null
+    const dragStart = usableCandidates[0] ?? null
+    const dragEnd = dragStart
+      ? [...usableCandidates].reverse().find((candidate) => candidate.lineIndex !== dragStart.lineIndex) ?? null
+      : null
+    return clickTarget ? {
+      clickTarget,
+      dragStart,
+      dragEnd,
+      candidateCount: candidates.length,
+      islandOwnedCandidateCount: islandOwnedCandidates.length,
+    } : null
   }, layerSelector)
-  if (!target) return { attempted: false, ok: false, reason: "missing-flowdoc-draft-line-target" }
+  if (!targetPlan?.clickTarget) return { attempted: false, ok: false, reason: "missing-flowdoc-draft-line-target" }
 
+  const target = targetPlan.clickTarget
   await page.mouse.click(target.x, target.y)
   await waitForDoubleAnimationFrame(page)
   const afterState = await readTextEngineLayerState(page, layerSelector)
@@ -1441,14 +1535,234 @@ async function runFlowdocDraftPointerHitProbe(page, layerSelector) {
   const caretWithinClickedLine = typeof afterCaretOffset === "number" &&
     afterCaretOffset >= target.lineStart &&
     afterCaretOffset <= target.lineEnd
+  let dragSelection = {
+    attempted: false,
+    ok: false,
+    reason: targetPlan.dragStart && targetPlan.dragEnd ? null : "missing-wrapped-drag-targets",
+    candidateCount: targetPlan.candidateCount ?? null,
+    islandOwnedCandidateCount: targetPlan.islandOwnedCandidateCount ?? null,
+  }
+  if (targetPlan.dragStart && targetPlan.dragEnd) {
+    const start = targetPlan.dragStart
+    const end = targetPlan.dragEnd
+    await page.mouse.move(start.x, start.y)
+    await page.mouse.down()
+    await page.mouse.move(end.x, end.y, { steps: 8 })
+    await page.mouse.up()
+    await waitForDoubleAnimationFrame(page)
+    const afterDragState = await readTextEngineLayerState(page, layerSelector)
+    const selectionStart = afterDragState?.flowdocDraft?.selectionStart ?? null
+    const selectionEnd = afterDragState?.flowdocDraft?.selectionEnd ?? null
+    const selectionMin = typeof selectionStart === "number" && typeof selectionEnd === "number"
+      ? Math.min(selectionStart, selectionEnd)
+      : null
+    const selectionMax = typeof selectionStart === "number" && typeof selectionEnd === "number"
+      ? Math.max(selectionStart, selectionEnd)
+      : null
+    const spansTargetLines = selectionMin != null && selectionMax != null &&
+      selectionMin <= start.lineEnd &&
+      selectionMax >= end.lineStart
+    dragSelection = {
+      attempted: true,
+      ok: Boolean(
+        start.layerOwnsPoint &&
+        end.layerOwnsPoint &&
+        !start.bridgeOwnsPoint &&
+        !end.bridgeOwnsPoint &&
+        selectionMin != null &&
+        selectionMax != null &&
+        selectionMax > selectionMin &&
+        spansTargetLines &&
+        (afterDragState?.flowdocDraft?.selectionOverlayCount ?? 0) > 0,
+      ),
+      start,
+      end,
+      selectionStart,
+      selectionEnd,
+      selectionCollapsed: afterDragState?.flowdocDraft?.selectionCollapsed ?? null,
+      selectionOverlayCount: afterDragState?.flowdocDraft?.selectionOverlayCount ?? null,
+      spansTargetLines,
+      activeVisualMode: afterDragState?.activeVisualMode ?? null,
+      inputBridgeOwnsVisiblePointer: afterDragState?.flowdocDraft?.inputBridgeOwnsVisiblePointer ?? null,
+    }
+  }
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A")
+  await waitForDoubleAnimationFrame(page)
+  const afterSelectAllState = await readTextEngineLayerState(page, layerSelector)
+  const selectAll = {
+    attempted: true,
+    ok: Boolean(
+      afterSelectAllState?.flowdocDraft?.clipboardOwned &&
+      afterSelectAllState?.flowdocDraft?.selectionStart === 0 &&
+      afterSelectAllState?.flowdocDraft?.selectionEnd === afterSelectAllState?.flowdocDraft?.textLength &&
+      afterSelectAllState?.flowdocDraft?.selectionCollapsed === false &&
+      (afterSelectAllState?.flowdocDraft?.selectionOverlayCount ?? 0) > 0 &&
+      afterSelectAllState?.flowdocDraft?.inputBridgeOwnsVisiblePointer === false,
+    ),
+    selectionStart: afterSelectAllState?.flowdocDraft?.selectionStart ?? null,
+    selectionEnd: afterSelectAllState?.flowdocDraft?.selectionEnd ?? null,
+    textLength: afterSelectAllState?.flowdocDraft?.textLength ?? null,
+    selectedTextLength: afterSelectAllState?.flowdocDraft?.selectedTextLength ?? null,
+    selectionCollapsed: afterSelectAllState?.flowdocDraft?.selectionCollapsed ?? null,
+    selectionOverlayCount: afterSelectAllState?.flowdocDraft?.selectionOverlayCount ?? null,
+    clipboardOwned: afterSelectAllState?.flowdocDraft?.clipboardOwned ?? null,
+    inputBridgeOwnsVisiblePointer: afterSelectAllState?.flowdocDraft?.inputBridgeOwnsVisiblePointer ?? null,
+  }
+  const readClipboardText = async () => page.evaluate(async () => {
+    try {
+      if (!navigator.clipboard?.readText) return { ok: false, text: "", error: "clipboard-read-unavailable" }
+      return { ok: true, text: await navigator.clipboard.readText(), error: null }
+    } catch (error) {
+      return { ok: false, text: "", error: String(error?.message ?? error) }
+    }
+  })
+  const readBridgeValue = async () => page.evaluate(() => {
+    const bridge = document.querySelector('[data-wysiwyg-input-bridge="true"]')
+    return bridge instanceof HTMLTextAreaElement || bridge instanceof HTMLInputElement
+      ? bridge.value
+      : ""
+  })
+  const readClipboardDebugState = async () => page.evaluate(() => {
+    const bridge = document.querySelector('[data-wysiwyg-input-bridge="true"]')
+    const active = document.activeElement
+    return {
+      activeTagName: active instanceof Element ? active.tagName : null,
+      activeInputBridge: active instanceof Element ? active.getAttribute("data-wysiwyg-input-bridge") : null,
+      bridgeValueLength: bridge instanceof HTMLTextAreaElement || bridge instanceof HTMLInputElement
+        ? bridge.value.length
+        : null,
+      bridgeSelectionStart: bridge instanceof HTMLTextAreaElement || bridge instanceof HTMLInputElement
+        ? bridge.selectionStart
+        : null,
+      bridgeSelectionEnd: bridge instanceof HTMLTextAreaElement || bridge instanceof HTMLInputElement
+        ? bridge.selectionEnd
+        : null,
+      nativeSelectionLength: window.getSelection()?.toString().length ?? null,
+    }
+  })
+  const modifierKey = process.platform === "darwin" ? "Meta" : "Control"
+  const selectedAllText = selectAll.ok ? await readBridgeValue() : ""
+  const expectedSelectedTextLength = afterSelectAllState?.flowdocDraft?.selectedTextLength ?? afterSelectAllState?.flowdocDraft?.textLength ?? 0
+  const expectedRestoredTextLength = afterSelectAllState?.flowdocDraft?.textLength ?? 0
+  let clipboard = {
+    attempted: selectAll.ok,
+    ok: false,
+    copyOk: false,
+    cutOk: false,
+    pasteOk: false,
+    readAvailable: false,
+    copiedLength: null,
+    expectedLength: expectedSelectedTextLength,
+    expectedRestoredLength: expectedRestoredTextLength,
+    bridgeValueLength: selectedAllText.length,
+    afterCutLength: null,
+    afterPasteLength: null,
+    error: selectAll.ok ? null : "select-all-not-ready",
+  }
+  if (selectAll.ok) {
+    const beforeCopyDebug = await readClipboardDebugState()
+    await page.keyboard.press(`${modifierKey}+C`)
+    await waitForDoubleAnimationFrame(page)
+    await page.waitForTimeout(90)
+    const afterCopyDebug = await readClipboardDebugState()
+    const afterCopyClipboard = await readClipboardText()
+    const copiedCanonicalLength = afterCopyClipboard.ok
+      ? afterCopyClipboard.text.replace(/\r\n/g, "\n").length
+      : null
+    const copyMatches = afterCopyClipboard.ok && (
+      afterCopyClipboard.text.length === expectedSelectedTextLength ||
+      copiedCanonicalLength === expectedSelectedTextLength
+    )
+    await page.keyboard.press(`${modifierKey}+X`)
+    await waitForDoubleAnimationFrame(page)
+    const afterCutState = await readTextEngineLayerState(page, layerSelector)
+    const afterCutLength = afterCutState?.flowdocDraft?.textLength ?? null
+    const afterCutSelectionCollapsed = afterCutState?.flowdocDraft?.selectionCollapsed ?? null
+    await page.keyboard.press(`${modifierKey}+V`)
+    await waitForDoubleAnimationFrame(page)
+    const afterPasteState = await readTextEngineLayerState(page, layerSelector)
+    const afterPasteLength = afterPasteState?.flowdocDraft?.textLength ?? null
+    clipboard = {
+      attempted: true,
+      ok: Boolean(
+        copyMatches &&
+        afterCutLength === 0 &&
+        afterCutSelectionCollapsed !== false &&
+        afterPasteLength === expectedRestoredTextLength &&
+        afterPasteState?.flowdocDraft?.inputBridgeOwnsVisiblePointer === false,
+      ),
+      copyOk: copyMatches,
+      cutOk: afterCutLength === 0 && afterCutSelectionCollapsed !== false,
+      pasteOk: afterPasteLength === expectedRestoredTextLength,
+      readAvailable: afterCopyClipboard.ok,
+      copiedLength: afterCopyClipboard.ok ? afterCopyClipboard.text.length : null,
+      copiedCanonicalLength,
+      expectedLength: expectedSelectedTextLength,
+      expectedRestoredLength: expectedRestoredTextLength,
+      bridgeValueLength: selectedAllText.length,
+      afterCutLength,
+      afterPasteLength,
+      inputBridgeOwnsVisiblePointerAfterPaste: afterPasteState?.flowdocDraft?.inputBridgeOwnsVisiblePointer ?? null,
+      beforeCopyDebug,
+      afterCopyDebug,
+      error: afterCopyClipboard.ok ? null : afterCopyClipboard.error,
+    }
+  }
+  const lineIndexForOffset = (state, offset) => {
+    if (!state?.flowdocDraft?.lineRanges || typeof offset !== "number") return null
+    const ranges = state.flowdocDraft.lineRanges
+    const index = ranges.findIndex((range) => offset >= range.start && offset <= range.end)
+    return index >= 0 ? index : null
+  }
+  await page.keyboard.press("End")
+  await waitForDoubleAnimationFrame(page)
+  const beforeVerticalState = await readTextEngineLayerState(page, layerSelector)
+  const beforeVerticalOffset = beforeVerticalState?.flowdocDraft?.caretOffset ?? null
+  const beforeVerticalLineIndex = lineIndexForOffset(beforeVerticalState, beforeVerticalOffset)
+  await page.keyboard.press("ArrowUp")
+  await waitForDoubleAnimationFrame(page)
+  const afterArrowUpState = await readTextEngineLayerState(page, layerSelector)
+  const afterArrowUpOffset = afterArrowUpState?.flowdocDraft?.caretOffset ?? null
+  const afterArrowUpLineIndex = lineIndexForOffset(afterArrowUpState, afterArrowUpOffset)
+  await page.keyboard.press("ArrowDown")
+  await waitForDoubleAnimationFrame(page)
+  const afterArrowDownState = await readTextEngineLayerState(page, layerSelector)
+  const afterArrowDownOffset = afterArrowDownState?.flowdocDraft?.caretOffset ?? null
+  const afterArrowDownLineIndex = lineIndexForOffset(afterArrowDownState, afterArrowDownOffset)
+  const verticalNavigation = {
+    attempted: true,
+    ok: Boolean(
+      beforeVerticalLineIndex != null &&
+      afterArrowUpLineIndex != null &&
+      afterArrowDownLineIndex != null &&
+      afterArrowUpLineIndex < beforeVerticalLineIndex &&
+      afterArrowDownLineIndex >= afterArrowUpLineIndex &&
+      afterArrowDownLineIndex <= beforeVerticalLineIndex &&
+      afterArrowUpState?.activeVisualMode === "flowdoc-draft-editor-island" &&
+      afterArrowDownState?.activeVisualMode === "flowdoc-draft-editor-island",
+    ),
+    beforeOffset: beforeVerticalOffset,
+    beforeLineIndex: beforeVerticalLineIndex,
+    afterArrowUpOffset,
+    afterArrowUpLineIndex,
+    afterArrowDownOffset,
+    afterArrowDownLineIndex,
+    activeVisualModeAfterUp: afterArrowUpState?.activeVisualMode ?? null,
+    activeVisualModeAfterDown: afterArrowDownState?.activeVisualMode ?? null,
+  }
+
   return {
     attempted: true,
-    ok: !target.bridgeOwnsPoint && caretWithinClickedLine,
+    ok: !target.bridgeOwnsPoint && caretWithinClickedLine && (!dragSelection.attempted || dragSelection.ok) && selectAll.ok && clipboard.ok && verticalNavigation.ok,
     target,
     afterCaretOffset,
     caretWithinClickedLine,
     activeVisualMode: afterState?.activeVisualMode ?? null,
     inputBridgeOwnsVisiblePointer: afterState?.flowdocDraft?.inputBridgeOwnsVisiblePointer ?? null,
+    dragSelection,
+    selectAll,
+    clipboard,
+    verticalNavigation,
   }
 }
 
@@ -1703,6 +2017,19 @@ async function runTypingProbe(page) {
       ? (perfSummary.heightPreview.setInlineEditHeightCount / TYPE_BURST_LENGTH) * 100
       : null
   }
+  const typingLayerSummary = summarizeTypingLayerSamples(layerSamples)
+  const activeReflowHandoff = {
+    boundaryHeightHandoffDetected: (perfSummary.heightPreview?.boundaryHandoffCount ?? 0) > 0,
+    boundaryHeightHandoffCount: perfSummary.heightPreview?.boundaryHandoffCount ?? 0,
+    setInlineEditHeightCount: perfSummary.heightPreview?.setInlineEditHeightCount ?? 0,
+    setInlineEditHeightPer100Keys: perfSummary.heightPreview?.setInlineEditHeightPer100Keys ?? null,
+    editorCanvasCommitCount: perfSummary.editorCanvasCommit?.count ?? 0,
+    editorCanvasCommitMaxMs: perfSummary.editorCanvasCommit?.maxMs ?? null,
+    pageBoundaryPreviewDetected: typingLayerSummary?.flowdocPageBoundaryPreviewDetected ?? false,
+    hardBoundaryReflowDetected: typingLayerSummary?.flowdocHardBoundaryReflowDetected ?? false,
+    pageBreakOverlapDetected: typingLayerSummary?.flowdocPageBreakOverlapDetected ?? false,
+    pageBreakOverlapCount: typingLayerSummary?.flowdocPageBreakOverlapCount ?? 0,
+  }
 
   const paintLatencies = keystrokes.map((k) => k.paintLatencyMs).sort((a, b) => a - b)
   const totalLatencies = keystrokes.map((k) => k.totalMs).sort((a, b) => a - b)
@@ -1733,8 +2060,9 @@ async function runTypingProbe(page) {
     },
     typingInputPhases: summarizeTypingInputPhases(keystrokes),
     heldInput,
+    activeReflowHandoff,
     perfEvents: perfSummary,
-    typingLayer: summarizeTypingLayerSamples(layerSamples),
+    typingLayer: typingLayerSummary,
     pointerHitTest,
     screenshots,
     editExit,
@@ -1919,10 +2247,14 @@ async function runProbe() {
     : null
 
   const browser = await launchSmokeBrowser(smokeBrowser)
+  let context = null
   const consoleErrors = []
   const pageErrors = []
   try {
-    const page = await browser.newPage()
+    context = await browser.newContext({
+      permissions: ["clipboard-read", "clipboard-write"],
+    })
+    const page = await context.newPage()
     page.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()) })
     page.on("pageerror", (e) => pageErrors.push(e.message))
     if (probeDocument) {
@@ -1959,13 +2291,16 @@ async function runProbe() {
         !probeResult.typingLayer.flowdocNativeTextVisibleDetected &&
         !probeResult.typingLayer.flowdocCustomCaretMissingDetected &&
         !probeResult.typingLayer.flowdocInputBridgePointerTargetDetected &&
+        !probeResult.typingLayer.flowdocPageBreakOverlapDetected &&
         probeResult.typingLayer.activeVisualModeStable !== false &&
         probeResult.typingLayer.nativeVisualModeStable &&
         probeResult.typingLayer.duringBurstNativeGeometryOk !== false
       )
     const editExitOk = !probeResult.editExit ||
       (probeResult.editExit.settled && !probeResult.editExit.staleWrongLayoutDetected)
-    const pointerHitTestOk = !probeResult.pointerHitTest || probeResult.pointerHitTest.ok
+    const structuralEnterHandled = PROBE_MODE === "enter" &&
+      (probeResult.perfEvents?.flowdocIsland?.structuralEdit?.splitParagraphCount ?? 0) > 0
+    const pointerHitTestOk = !probeResult.pointerHitTest || probeResult.pointerHitTest.ok || structuralEnterHandled
     const report = {
       ok: consoleErrors.length === 0 && pageErrors.length === 0 && typingLayerOk && editExitOk && pointerHitTestOk,
       probe: {
@@ -1984,6 +2319,7 @@ async function runProbe() {
       ...(probeResult.pointerHitTest ? { pointerHitTest: probeResult.pointerHitTest } : {}),
       ...(probeResult.typingInputPhases ? { typingInputPhases: probeResult.typingInputPhases } : {}),
       ...(probeResult.heldInput ? { heldInput: probeResult.heldInput } : {}),
+      ...(probeResult.activeReflowHandoff ? { activeReflowHandoff: probeResult.activeReflowHandoff } : {}),
       ...(probeResult.pointerMoveDispatchMs ? { pointerMoveDispatchMs: probeResult.pointerMoveDispatchMs } : {}),
       ...(probeResult.pointerMoveTotalMs ? { pointerMoveTotalMs: probeResult.pointerMoveTotalMs } : {}),
       ...(probeResult.typingLayer ? { typingLayer: probeResult.typingLayer } : {}),
@@ -1999,6 +2335,7 @@ async function runProbe() {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n")
     if (!report.ok) process.exitCode = 1
   } finally {
+    if (context) await context.close().catch(() => {})
     await browser.close()
     if (server) await stopServer(server)
   }

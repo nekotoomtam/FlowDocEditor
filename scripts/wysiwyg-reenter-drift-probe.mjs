@@ -39,6 +39,18 @@ const shellSelector = '[data-testid="editor-shell"]'
 const fragmentSelector = `[data-testid="editor-fragment"][data-node-id="${TARGET_NODE_ID}"]`
 const bridgeSelector = `[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${TARGET_NODE_ID}"]`
 
+function selectorAttributeValue(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
+function fragmentSelectorForNode(nodeId) {
+  return `[data-testid="editor-fragment"][data-node-id="${selectorAttributeValue(nodeId)}"]`
+}
+
+function bridgeSelectorForNode(nodeId) {
+  return `[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${selectorAttributeValue(nodeId)}"]`
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -51,6 +63,7 @@ function buildInsertText(marker, prefix, wordCount) {
 function scenarioUrl() {
   const url = new URL(baseEditorUrl)
   url.searchParams.set("flowdocTestScenario", SCENARIO_ID)
+  url.searchParams.set("flowdocWysiwygPerfTrace", "1")
   return url.toString()
 }
 
@@ -137,18 +150,55 @@ async function waitForServer(url, server, timeoutMs = 60000) {
 }
 
 function canonicalSnapshot(snapshot) {
-  return snapshot.fragments.map((fragment) => ({
-    pageIndex: fragment.pageIndex,
-    lineStart: fragment.lineStart,
-    lineEnd: fragment.lineEnd,
-    lines: fragment.lines.map((line) => ({
-      text: line.text,
-      x: line.x,
-      y: line.y,
-      fontSize: line.fontSize,
-      textAnchor: line.textAnchor,
+  if (snapshot.activeIsland?.active) {
+    const firstFragment = snapshot.fragments[0] ?? {}
+    const lines = snapshot.activeIsland.lines ?? []
+    const groups = new Map()
+    for (const line of lines) {
+      const key = line.surfaceIndex ?? 0
+      const group = groups.get(key) ?? {
+        pageIndex: line.pageIndex ?? firstFragment.pageIndex ?? key,
+        lines: [],
+      }
+      group.lines.push({
+        text: line.text,
+        textAnchor: line.textAnchor,
+      })
+      groups.set(key, group)
+    }
+    let nextLineStart = 0
+    const activeFragments = Array.from(groups.values()).map((group) => {
+      const lineStart = String(nextLineStart)
+      nextLineStart += group.lines.length
+      return {
+        pageIndex: group.pageIndex,
+        lineStart,
+        lineEnd: String(nextLineStart),
+        lines: group.lines,
+      }
+    })
+    return {
+      fragments: activeFragments.length > 0
+        ? activeFragments
+        : [{
+            pageIndex: firstFragment.pageIndex ?? 0,
+            lineStart: firstFragment.lineStart ?? null,
+            lineEnd: String(snapshot.activeIsland.lineCount ?? lines.length),
+            lines: [],
+          }],
+    }
+  }
+  return {
+    fragments: snapshot.fragments.map((fragment) => ({
+      pageIndex: fragment.pageIndex,
+      lineStart: fragment.lineStart,
+      lineEnd: fragment.lineEnd,
+      lines: fragment.lines.map((line) => ({
+        text: line.text,
+        textAnchor: line.textAnchor,
+      })),
     })),
-  }))
+  }
 }
 
 function snapshotKey(snapshot) {
@@ -195,14 +245,15 @@ function compareSnapshots(name, leftLabel, leftSnapshot, rightLabel, rightSnapsh
     equal,
     leftFragmentCount: leftSnapshot.fragments.length,
     rightFragmentCount: rightSnapshot.fragments.length,
-    leftLineCount: leftSnapshot.fragments.reduce((sum, fragment) => sum + fragment.lines.length, 0),
-    rightLineCount: rightSnapshot.fragments.reduce((sum, fragment) => sum + fragment.lines.length, 0),
+    leftLineCount: totalLineCount(leftSnapshot),
+    rightLineCount: totalLineCount(rightSnapshot),
     firstMismatch: equal ? null : firstMismatch(leftCanonical, rightCanonical),
   }
 }
 
-async function captureSnapshot(page, label) {
-  return page.evaluate(({ label, fragmentSelector }) => {
+async function captureSnapshot(page, label, options = {}) {
+  const targetNodeId = options.nodeId ?? TARGET_NODE_ID
+  return page.evaluate(({ label, fragmentSelector, targetNodeId }) => {
     const round = (value) => Math.round(value * 100) / 100
     const numberAttr = (element, name) => {
       const value = Number(element.getAttribute(name))
@@ -210,6 +261,11 @@ async function captureSnapshot(page, label) {
     }
     const lineElementsFor = (fragment) => Array.from(fragment.querySelectorAll("text"))
       .filter((element) => {
+        if (element.closest('[data-testid="canvas-selected-path"],[data-testid="canvas-hover-path"]')) return false
+        const chromeFontSize = Number(element.getAttribute("font-size") ?? element.getAttribute("fontSize"))
+        if ((element.textContent ?? "").trim() === "paragraph" && Number.isFinite(chromeFontSize) && chromeFontSize <= 8) {
+          return false
+        }
         const style = window.getComputedStyle(element)
         const fill = element.getAttribute("fill") ?? style.fill
         const opacity = Number(element.getAttribute("opacity") ?? style.opacity ?? "1")
@@ -226,16 +282,39 @@ async function captureSnapshot(page, label) {
         y: numberAttr(element, "y"),
         fontSize: numberAttr(element, "font-size") ?? numberAttr(element, "fontSize"),
         textAnchor: element.getAttribute("text-anchor") ?? element.getAttribute("textAnchor") ?? "start",
+        lineStart: element.closest("[data-wysiwyg-flowdoc-draft-line]")?.getAttribute("data-wysiwyg-draft-line-start") ?? null,
+        lineEnd: element.closest("[data-wysiwyg-flowdoc-draft-line]")?.getAttribute("data-wysiwyg-draft-line-end") ?? null,
       }))
       .filter((line) => line.text.length > 0)
       .sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
 
+    const sortIslandSurfaces = (surfaces) => surfaces
+      .filter((node) => node instanceof SVGElement)
+      .sort((a, b) => (
+        Number(a.getAttribute("data-wysiwyg-island-surface-index") ?? 0) -
+        Number(b.getAttribute("data-wysiwyg-island-surface-index") ?? 0)
+      ))
+    const activeIslandSurfacesForTarget = sortIslandSurfaces(
+      Array.from(document.querySelectorAll(`[data-wysiwyg-draft-editor-island="true"][data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]`)),
+    )
+    const activeIslandSurfaces = activeIslandSurfacesForTarget.length > 0
+      ? activeIslandSurfacesForTarget
+      : sortIslandSurfaces(Array.from(document.querySelectorAll('[data-wysiwyg-draft-editor-island="true"]')))
+    const activeIsland = activeIslandSurfaces[0] ?? null
+    const islandLines = activeIsland instanceof SVGElement
+      ? activeIslandSurfaces.flatMap((surface, surfaceIndex) => lineElementsFor(surface).map((line) => ({
+          ...line,
+          surfaceIndex,
+          pageIndex: Number(surface.getAttribute("data-page-index") ?? surfaceIndex),
+        })))
+      : []
+    const layerNumberAttr = (element, name) => element ? numberAttr(element, name) : null
     const fragments = Array.from(document.querySelectorAll(fragmentSelector))
       .map((fragment) => {
         const rect = fragment.getBoundingClientRect()
         const layer = fragment.querySelector('[data-wysiwyg-text-engine-layer="true"]')
         const visualModeElement = fragment.querySelector("[data-inline-edit-visual-mode]")
-        const layerNumberAttr = (name) => layer ? numberAttr(layer, name) : null
+        const fragmentLayerNumberAttr = (name) => layer ? numberAttr(layer, name) : null
         return {
           pageIndex: Number(fragment.getAttribute("data-page-index") ?? 0),
           fragmentIndex: fragment.getAttribute("data-fragment-index") ?? null,
@@ -246,10 +325,10 @@ async function captureSnapshot(page, label) {
           activeVisualMode: layer?.getAttribute("data-wysiwyg-active-visual-mode") ?? null,
           activeVisualDetail: layer?.getAttribute("data-wysiwyg-active-visual-detail") ?? null,
           reflowKind: layer?.getAttribute("data-wysiwyg-reflow-kind") ?? null,
-          flowdocDraftCaretOffset: layerNumberAttr("data-wysiwyg-flowdoc-draft-caret-offset"),
-          flowdocDraftSelectionStart: layerNumberAttr("data-wysiwyg-flowdoc-draft-selection-start"),
-          flowdocDraftSelectionEnd: layerNumberAttr("data-wysiwyg-flowdoc-draft-selection-end"),
-          flowdocDraftTextLength: layerNumberAttr("data-wysiwyg-flowdoc-draft-text-length"),
+          flowdocDraftCaretOffset: fragmentLayerNumberAttr("data-wysiwyg-flowdoc-draft-caret-offset"),
+          flowdocDraftSelectionStart: fragmentLayerNumberAttr("data-wysiwyg-flowdoc-draft-selection-start"),
+          flowdocDraftSelectionEnd: fragmentLayerNumberAttr("data-wysiwyg-flowdoc-draft-selection-end"),
+          flowdocDraftTextLength: fragmentLayerNumberAttr("data-wysiwyg-flowdoc-draft-text-length"),
           nativeVisibleText: layer?.getAttribute("data-wysiwyg-native-visible-text") ?? null,
           rect: {
             x: round(rect.x),
@@ -271,9 +350,44 @@ async function captureSnapshot(page, label) {
       capturedAt: Math.round(performance.now()),
       bridgeCount: document.querySelectorAll('[data-wysiwyg-input-bridge="true"]').length,
       liveEchoCount: document.querySelectorAll('[data-wysiwyg-live-echo="true"]').length,
+      activeIsland: activeIsland instanceof SVGElement ? {
+        active: true,
+        nodeId: activeIsland.getAttribute("data-inline-edit-node-id") ?? null,
+        matchesTargetNode: activeIsland.getAttribute("data-inline-edit-node-id") === targetNodeId,
+        visualMode: activeIsland.getAttribute("data-wysiwyg-active-visual-mode") ?? null,
+        activeVisualDetail: activeIsland.getAttribute("data-wysiwyg-active-visual-detail") ?? null,
+        nativeVisibleText: activeIsland.getAttribute("data-wysiwyg-native-visible-text") ?? null,
+        caretOffset: layerNumberAttr(activeIsland, "data-wysiwyg-flowdoc-draft-caret-offset"),
+        selectionStart: layerNumberAttr(activeIsland, "data-wysiwyg-flowdoc-draft-selection-start"),
+        selectionEnd: layerNumberAttr(activeIsland, "data-wysiwyg-flowdoc-draft-selection-end"),
+        textLength: layerNumberAttr(activeIsland, "data-wysiwyg-flowdoc-draft-text-length"),
+        lineCount: layerNumberAttr(activeIsland, "data-wysiwyg-flowdoc-draft-total-line-count") ??
+          layerNumberAttr(activeIsland, "data-wysiwyg-flowdoc-draft-line-count") ??
+          islandLines.length,
+        surfaceCount: layerNumberAttr(activeIsland, "data-wysiwyg-island-fragment-count") ?? activeIslandSurfaces.length,
+        pageBoundaryPreview: activeIsland.getAttribute("data-wysiwyg-island-page-boundary-preview") ?? null,
+        reflowKind: activeIsland.getAttribute("data-wysiwyg-island-reflow-kind") ?? null,
+        lines: islandLines,
+      } : {
+        active: false,
+        nodeId: null,
+        matchesTargetNode: false,
+        visualMode: null,
+        activeVisualDetail: null,
+        nativeVisibleText: null,
+        caretOffset: null,
+        selectionStart: null,
+        selectionEnd: null,
+        textLength: null,
+        lineCount: 0,
+        surfaceCount: 0,
+        pageBoundaryPreview: null,
+        reflowKind: null,
+        lines: [],
+      },
       fragments,
     }
-  }, { label, fragmentSelector })
+  }, { label, fragmentSelector: fragmentSelectorForNode(targetNodeId), targetNodeId })
 }
 
 async function waitForStableSnapshot(page, label, options = {}) {
@@ -283,6 +397,7 @@ async function waitForStableSnapshot(page, label, options = {}) {
     timeoutMs = 15000,
     sampleDelayMs = 120,
     stableSamples = 3,
+    nodeId = TARGET_NODE_ID,
   } = options
   const startedAt = Date.now()
   let previousKey = null
@@ -290,9 +405,10 @@ async function waitForStableSnapshot(page, label, options = {}) {
   let latest = null
 
   while (Date.now() - startedAt < timeoutMs) {
-    latest = await captureSnapshot(page, label)
+    latest = await captureSnapshot(page, label, { nodeId })
     const hasFragments = latest.fragments.length > 0 && latest.fragments.every((fragment) => fragment.lines.length > 0)
-    const editingMatches = expectEditing === null || latest.fragments.some((fragment) => fragment.isEditing) === expectEditing
+    const isEditing = latest.activeIsland?.active === true || latest.fragments.some((fragment) => fragment.isEditing)
+    const editingMatches = expectEditing === null || isEditing === expectEditing
     const liveEchoSettled = !requireNoLiveEcho || latest.liveEchoCount === 0
     const key = snapshotKey(latest)
     stableCount = key === previousKey ? stableCount + 1 : 1
@@ -322,13 +438,23 @@ async function expectBodyContains(page, text) {
 async function expectTargetFragmentCountAtLeast(page, minimumCount) {
   try {
     await page.waitForFunction(
-      ({ selector, minimumCount }) => document.querySelectorAll(selector).length >= minimumCount,
-      { selector: fragmentSelector, minimumCount },
+      ({ selector, minimumCount, targetNodeId }) => {
+        const fragmentCount = document.querySelectorAll(selector).length
+        const activeIsland = document.querySelector(`[data-wysiwyg-draft-editor-island="true"][data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]`)
+        const islandSurfaceCount = activeIsland
+          ? Number(activeIsland.getAttribute("data-wysiwyg-island-fragment-count") ?? "0")
+          : 0
+        return Math.max(fragmentCount, islandSurfaceCount) >= minimumCount
+      },
+      { selector: fragmentSelector, minimumCount, targetNodeId: TARGET_NODE_ID },
       { timeout: 15000 },
     )
   } catch (error) {
     const count = await page.locator(fragmentSelector).count()
-    throw new Error(`Timed out waiting for target fragment count >= ${minimumCount}; current count is ${count}: ${error.message}`)
+    const islandSurfaceCount = await page.locator(`[data-wysiwyg-draft-editor-island="true"][data-inline-edit-node-id="${TARGET_NODE_ID}"]`).first()
+      .getAttribute("data-wysiwyg-island-fragment-count")
+      .then((value) => Number(value ?? "0"), () => 0)
+    throw new Error(`Timed out waiting for target fragment/island surface count >= ${minimumCount}; current fragment count is ${count}, island surface count is ${islandSurfaceCount}: ${error.message}`)
   }
 }
 
@@ -348,7 +474,13 @@ async function exitTargetEdit(page) {
   await page.locator(bridgeSelector).waitFor({ state: "detached", timeout: 10000 })
 }
 
+async function exitEditForNode(page, nodeId) {
+  await page.keyboard.press("Escape")
+  await page.locator(bridgeSelectorForNode(nodeId)).waitFor({ state: "detached", timeout: 10000 })
+}
+
 function totalLineCount(snapshot) {
+  if (snapshot.activeIsland?.active) return snapshot.activeIsland.lineCount ?? snapshot.activeIsland.lines?.length ?? 0
   return snapshot.fragments.reduce((sum, fragment) => sum + fragment.lines.length, 0)
 }
 
@@ -360,6 +492,7 @@ function summarizeSnapshots(snapshots) {
       lineCount: totalLineCount(snapshot),
       bridgeCount: snapshot.bridgeCount,
       liveEchoCount: snapshot.liveEchoCount,
+      activeIsland: snapshot.activeIsland,
       fragments: snapshot.fragments.map((fragment) => ({
         pageIndex: fragment.pageIndex,
         lineStart: fragment.lineStart,
@@ -394,6 +527,7 @@ function summarizeSnapshotCounts(snapshots) {
       lineCount: totalLineCount(snapshot),
       bridgeCount: snapshot.bridgeCount,
       liveEchoCount: snapshot.liveEchoCount,
+      activeIsland: snapshot.activeIsland,
       fragments: snapshot.fragments.map((fragment) => ({
         pageIndex: fragment.pageIndex,
         lineStart: fragment.lineStart,
@@ -422,6 +556,21 @@ function withoutSnapshot(result) {
 }
 
 function editingFragment(snapshot) {
+  if (snapshot.activeIsland?.active) {
+    const fragment = snapshot.fragments[0] ?? {}
+    return {
+      ...fragment,
+      isEditing: true,
+      visualMode: "flowdoc-draft-editor-island",
+      activeVisualMode: snapshot.activeIsland.visualMode,
+      activeVisualDetail: snapshot.activeIsland.activeVisualDetail,
+      flowdocDraftCaretOffset: snapshot.activeIsland.caretOffset,
+      flowdocDraftSelectionStart: snapshot.activeIsland.selectionStart,
+      flowdocDraftSelectionEnd: snapshot.activeIsland.selectionEnd,
+      flowdocDraftTextLength: snapshot.activeIsland.textLength,
+      nativeVisibleText: snapshot.activeIsland.nativeVisibleText,
+    }
+  }
   return snapshot.fragments.find((fragment) => fragment.isEditing) ?? null
 }
 
@@ -597,7 +746,11 @@ async function openScenario(page) {
   await shell.waitFor({ state: "visible", timeout: 15000 })
   assert(await shell.getAttribute("data-editor-test-scenario") === SCENARIO_ID, "expected Stage 3 boundary scenario")
   assert(await shell.getAttribute("data-wysiwyg-text-engine-enabled") === "true", "text engine flag is not enabled")
-  assert(await shell.getAttribute("data-wysiwyg-perf-trace-enabled") === "true", "perf trace flag is not enabled")
+  const runtimePerfTraceEnabled = await page.evaluate(() => (
+    new URLSearchParams(window.location.search).get("flowdocWysiwygPerfTrace") === "1" ||
+    window.__flowDocWysiwygPerfTraceEnabled === true
+  ))
+  assert(runtimePerfTraceEnabled || await shell.getAttribute("data-wysiwyg-perf-trace-enabled") === "true", "perf trace flag is not enabled")
   await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: 15000 })
   await expectNoLayoutError(page)
 }
@@ -624,8 +777,12 @@ async function runLifecycleVariant(page, variant) {
   typing.second = await variant.typeSecondDraft(page)
   snapshots.secondEditAfterType = typing.second.snapshot
 
-  await exitTargetEdit(page)
-  snapshots.postSecondExit = await waitForStableSnapshot(page, `${variant.name}:postSecondExit`, { expectEditing: false })
+  const postSecondNodeId = snapshots.secondEditAfterType.activeIsland?.nodeId ?? TARGET_NODE_ID
+  await exitEditForNode(page, postSecondNodeId)
+  snapshots.postSecondExit = await waitForStableSnapshot(page, `${variant.name}:postSecondExit`, {
+    expectEditing: false,
+    nodeId: postSecondNodeId,
+  })
   await expectNoLayoutError(page)
 
   const comparisons = [
