@@ -183,6 +183,7 @@ function boxIntersectsVertically(box, target, tolerancePx = CARET_ALIGNMENT_TOLE
 function scenarioUrl() {
   const url = new URL(baseEditorUrl)
   url.searchParams.set("flowdocTestScenario", SCENARIO_ID)
+  url.searchParams.set("flowdocWysiwygPerfTrace", "1")
   return url.toString()
 }
 

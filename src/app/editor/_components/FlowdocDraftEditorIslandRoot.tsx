@@ -15,7 +15,7 @@ import {
   type PointerEvent,
   type ProfilerOnRenderCallback,
 } from "react"
-import { flushSync } from "react-dom"
+import { createPortal } from "react-dom"
 import { getTextRunParagraphText } from "@/document"
 import type { TextMeasurer } from "@/layout"
 import { resolvePaginatedLineBaselineY, type PageFragment, type PaginatedLine, type PaginatedPage, type ParagraphRenderProps } from "@/pagination"
@@ -23,6 +23,7 @@ import type { ParagraphNode } from "@/schema"
 import { resolveFontCssFamily } from "@/font-registry"
 import { buildSplitEditInput, buildWysiwygDraftParagraphLayout, resolveWysiwygPointerSelectionState } from "./ParagraphTextSurface"
 import {
+  getWysiwygFragmentTextRange,
   resolveCaretOffsetFromPointInFragment,
   resolveCollapsedCaretOverlayInFragment,
   resolveVerticalCaretNavigationInFragments,
@@ -49,6 +50,7 @@ import {
 } from "./wysiwygReflow"
 import {
   recordWysiwygPerfEvent,
+  finishWysiwygPerfSpan,
   startWysiwygPerfSpan,
 } from "./wysiwygPerformance"
 
@@ -72,6 +74,9 @@ interface FlowdocDraftEditorIslandRootProps {
   onEndEdit: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph?: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph?: (nodeId: string, text?: string) => void
+  onRequestUndo?: () => void
+  structuralRefocusStartedAt?: number | null
+  onStructuralRefocusPainted?: (nodeId: string) => void
 }
 
 interface DraftIslandState {
@@ -82,19 +87,13 @@ interface DraftIslandState {
   revision: number
 }
 
-interface IslandPosition {
-  left: number
-  top: number
-  width: number
-  pageLeft: number
-  pageTop: number
-}
-
 interface DraftIslandSurface {
   key: string
   pageKey: string
   fragment: PageFragment
 }
+
+type DraftIslandAnchorLookup = Record<string, HTMLElement>
 
 export interface DraftIslandHeightPreviewState {
   key: string
@@ -106,15 +105,43 @@ interface DraftIslandPointerSelectionDrag {
   anchorOffset: number
 }
 
+export type DraftIslandStructuralEditOperation = "split" | "merge" | "delete-empty"
+export type DraftIslandStructuralEditGuardUnlockReason =
+  | "active-node-changed"
+  | "inactive"
+  | "timeout"
+  | "unmount"
+
+export interface DraftIslandStructuralEditGuard {
+  token: number
+  operation: DraftIslandStructuralEditOperation
+  sourceNodeId: string
+  expectedActiveNodeId: string | null
+  removedNodeId: string | null
+  draftRevision: number
+  startedAt: number
+}
+
+interface DraftIslandStructuralGuardKeyInput {
+  key: string
+  nodeId: string | null
+  shiftKey?: boolean
+  altKey?: boolean
+  ctrlKey?: boolean
+  metaKey?: boolean
+  isComposing?: boolean
+}
+
 const ISLAND_PARENT_SYNC_DEBOUNCE_MS = 240
+const ISLAND_STRUCTURAL_EDIT_GUARD_TIMEOUT_MS = 180
 const ISLAND_MIN_HEIGHT_PT = 1
 const ISLAND_Z_INDEX = 8000
 
 const islandSvgStyle: CSSProperties = {
-  position: "fixed",
+  position: "absolute",
   overflow: "visible",
   pointerEvents: "auto",
-  zIndex: ISLAND_Z_INDEX,
+  zIndex: 1,
   color: "#111827",
   cursor: "text",
   userSelect: "none",
@@ -122,6 +149,8 @@ const islandSvgStyle: CSSProperties = {
 
 const hiddenInputBridgeStyle: CSSProperties = {
   position: "fixed",
+  left: -10000,
+  top: -10000,
   width: 1,
   height: 1,
   opacity: 0,
@@ -178,6 +207,11 @@ function clearBrowserTextSelection(): void {
 function isSelectAllShortcut(event: { altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; code?: string; key: string }): boolean {
   if (event.altKey || (!event.ctrlKey && !event.metaKey)) return false
   return event.code === "KeyA" || event.key.toLowerCase() === "a"
+}
+
+function isUndoShortcut(event: { altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; code?: string; key: string }): boolean {
+  if (event.altKey || event.shiftKey || (!event.ctrlKey && !event.metaKey)) return false
+  return event.code === "KeyZ" || event.key.toLowerCase() === "z"
 }
 
 function isVerticalNavigationKey(key: string): key is "ArrowUp" | "ArrowDown" {
@@ -396,8 +430,9 @@ function resolveDraftIslandFragmentForCaret(
   if (fragments.length === 0) return null
   if (caretOffset == null) return fragments[0]
   for (const fragment of fragments) {
-    if (fragment.lineStart == null || fragment.lineEnd == null) continue
-    if (caretOffset >= fragment.lineStart && caretOffset <= fragment.lineEnd) return fragment
+    const range = getWysiwygFragmentTextRange(fragment)
+    if (!range) continue
+    if (caretOffset >= range.start && caretOffset <= range.end) return fragment
   }
   return fragments[fragments.length - 1]
 }
@@ -414,6 +449,58 @@ export function shouldReportDraftIslandHeightPreview(input: {
     return Math.abs(input.nextHeight - input.fragmentHeight) >= threshold
   }
   return Math.abs(input.nextHeight - input.previous.height) >= threshold
+}
+
+export function shouldQueueDraftIslandPageBoundaryReflow(input: {
+  active: boolean
+  nodeId: string | null
+  fragment: PageFragment | null
+  reflow: WysiwygTextReflowDecision | null
+  draftRevision: number | null | undefined
+  hasReflowHandler: boolean
+}): boolean {
+  if (!input.active || !input.nodeId || !input.fragment || !input.hasReflowHandler) return false
+  if (input.draftRevision == null || input.draftRevision <= 0) return false
+  return (
+    input.reflow?.kind === "hard-page-boundary" &&
+    input.reflow.shouldQueueSettledPagination
+  )
+}
+
+export function shouldDropDraftIslandStructuralKeyForGuard(
+  guard: DraftIslandStructuralEditGuard | null,
+  input: DraftIslandStructuralGuardKeyInput,
+): boolean {
+  if (!guard) return false
+  if (input.key !== "Enter" && input.key !== "Backspace") return false
+  if (input.shiftKey || input.altKey || input.ctrlKey || input.metaKey || input.isComposing) return false
+  return input.nodeId === guard.sourceNodeId
+}
+
+export function resolveDraftIslandStructuralGuardUnlockReason(
+  guard: DraftIslandStructuralEditGuard | null,
+  input: {
+    active: boolean
+    nodeId: string | null | undefined
+    now: number
+    timeoutMs?: number
+  },
+): DraftIslandStructuralEditGuardUnlockReason | null {
+  if (!guard) return null
+  if (!input.active || !input.nodeId) return "inactive"
+  if (guard.expectedActiveNodeId && input.nodeId === guard.expectedActiveNodeId) return "active-node-changed"
+  if (input.nodeId !== guard.sourceNodeId) return "active-node-changed"
+  const timeoutMs = input.timeoutMs ?? ISLAND_STRUCTURAL_EDIT_GUARD_TIMEOUT_MS
+  if (input.now - guard.startedAt >= timeoutMs) return "timeout"
+  return null
+}
+
+function resolveDraftIslandAnchorElement(
+  pageKey: string,
+  anchorElementsByPageKey: DraftIslandAnchorLookup,
+  getPageElement: (pageKey: string) => HTMLElement | null,
+): HTMLElement | null {
+  return anchorElementsByPageKey[pageKey] ?? getPageElement(pageKey) ?? null
 }
 
 export function FlowdocDraftEditorIslandRoot({
@@ -436,6 +523,9 @@ export function FlowdocDraftEditorIslandRoot({
   onEndEdit,
   onSplitParagraph,
   onMergeParagraph,
+  onRequestUndo,
+  structuralRefocusStartedAt,
+  onStructuralRefocusPainted,
 }: FlowdocDraftEditorIslandRootProps) {
   const inputBridgeRef = useRef<HTMLTextAreaElement | null>(null)
   const latestDraftRef = useRef<DraftIslandState | null>(null)
@@ -445,12 +535,17 @@ export function FlowdocDraftEditorIslandRoot({
   const lastHeightPreviewRef = useRef<DraftIslandHeightPreviewState | null>(null)
   const heightPreviewFrameRef = useRef<number | null>(null)
   const lastInputStartedAtRef = useRef<number | null>(null)
-  const latestPageRectByPageKeyRef = useRef<Map<string, IslandPosition>>(new Map())
   const latestSurfacesRef = useRef<DraftIslandSurface[]>([])
   const pointerSelectionDragRef = useRef<DraftIslandPointerSelectionDrag | null>(null)
+  const outsidePointerFlushPendingRef = useRef(false)
   const verticalCaretXRef = useRef<number | null>(null)
   const verticalCaretLineAffinityRef = useRef<WysiwygVerticalCaretLineAffinity | null>(null)
   const pageBoundaryReflowRequestRef = useRef<string | null>(null)
+  const lastStructuralRefocusPaintKeyRef = useRef<string | null>(null)
+  const structuralEditGuardRef = useRef<DraftIslandStructuralEditGuard | null>(null)
+  const structuralEditGuardTokenRef = useRef(0)
+  const structuralEditGuardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const endEditRequestedRef = useRef(false)
   const onEndEditRef = useRef(onEndEdit)
   onEndEditRef.current = onEndEdit
   const [draftState, setDraftState] = useState<DraftIslandState | null>(() => (
@@ -458,23 +553,150 @@ export function FlowdocDraftEditorIslandRoot({
       ? createDraftIslandState({ nodeId, paragraph, draftText, caretOffset, selection })
       : null
   ))
-  const [positionsByPageKey, setPositionsByPageKey] = useState<Record<string, IslandPosition>>({})
+  const [anchorElementsByPageKey, setAnchorElementsByPageKey] = useState<DraftIslandAnchorLookup>({})
+  const [committing, setCommitting] = useState(false)
+
+  const recordStructuralGuardEvent = useCallback((input: {
+    action: "engaged" | "accepted" | "dropped" | `unlocked-${DraftIslandStructuralEditGuardUnlockReason}`
+    guard: DraftIslandStructuralEditGuard
+    source: string
+    key?: string
+    attemptedOperation?: DraftIslandStructuralEditOperation
+    nodeId?: string | null
+  }) => {
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-structural-guard",
+      startedAt: input.guard.startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - input.guard.startedAt),
+      nodeId: input.nodeId ?? input.guard.sourceNodeId,
+      sourceNodeId: input.guard.sourceNodeId,
+      expectedActiveNodeId: input.guard.expectedActiveNodeId,
+      removedNodeId: input.guard.removedNodeId,
+      draftVersion: input.guard.draftRevision,
+      operation: input.guard.operation,
+      attemptedOperation: input.attemptedOperation ?? input.guard.operation,
+      token: input.guard.token,
+      source: input.source,
+      key: input.key,
+      action: input.action,
+      active: input.action !== "dropped",
+    })
+  }, [])
+
+  const clearStructuralEditGuard = useCallback((
+    reason: DraftIslandStructuralEditGuardUnlockReason,
+    source: string,
+    nodeIdForEvent?: string | null,
+  ) => {
+    const guard = structuralEditGuardRef.current
+    if (!guard) return false
+    if (structuralEditGuardTimeoutRef.current) {
+      clearTimeout(structuralEditGuardTimeoutRef.current)
+      structuralEditGuardTimeoutRef.current = null
+    }
+    structuralEditGuardRef.current = null
+    recordStructuralGuardEvent({
+      action: `unlocked-${reason}`,
+      guard,
+      source,
+      nodeId: nodeIdForEvent,
+    })
+    return true
+  }, [recordStructuralGuardEvent])
+
+  const engageStructuralEditGuard = useCallback((
+    operation: DraftIslandStructuralEditOperation,
+    current: DraftIslandState,
+    source: string,
+  ) => {
+    if (structuralEditGuardTimeoutRef.current) clearTimeout(structuralEditGuardTimeoutRef.current)
+    const startedAt = startWysiwygPerfSpan()
+    const token = structuralEditGuardTokenRef.current + 1
+    structuralEditGuardTokenRef.current = token
+    const guard: DraftIslandStructuralEditGuard = {
+      token,
+      operation,
+      sourceNodeId: current.nodeId,
+      expectedActiveNodeId: null,
+      removedNodeId: operation === "merge" || operation === "delete-empty" ? current.nodeId : null,
+      draftRevision: current.revision,
+      startedAt,
+    }
+    structuralEditGuardRef.current = guard
+    recordStructuralGuardEvent({ action: "engaged", guard, source, nodeId: current.nodeId })
+    recordStructuralGuardEvent({ action: "accepted", guard, source, nodeId: current.nodeId })
+    structuralEditGuardTimeoutRef.current = setTimeout(() => {
+      if (structuralEditGuardRef.current?.token !== token) return
+      clearStructuralEditGuard("timeout", "timeout-fallback", current.nodeId)
+    }, ISLAND_STRUCTURAL_EDIT_GUARD_TIMEOUT_MS)
+    return guard
+  }, [clearStructuralEditGuard, recordStructuralGuardEvent])
+
+  const dropGuardedStructuralKey = useCallback((
+    key: "Enter" | "Backspace",
+    current: DraftIslandState,
+    source: string,
+    attemptedOperation: DraftIslandStructuralEditOperation,
+    event?: KeyboardEvent<Element> | null,
+  ) => {
+    const guard = structuralEditGuardRef.current
+    const shouldDrop = shouldDropDraftIslandStructuralKeyForGuard(guard, {
+      key,
+      nodeId: current.nodeId,
+      shiftKey: event?.shiftKey,
+      altKey: event?.altKey,
+      ctrlKey: event?.ctrlKey,
+      metaKey: event?.metaKey,
+      isComposing: event?.nativeEvent.isComposing,
+    })
+    if (!guard || !shouldDrop) return false
+    recordStructuralGuardEvent({
+      action: "dropped",
+      guard,
+      source,
+      key,
+      attemptedOperation,
+      nodeId: current.nodeId,
+    })
+    return true
+  }, [recordStructuralGuardEvent])
 
   useEffect(() => {
     if (!active || !nodeId || !paragraph) {
+      clearStructuralEditGuard("inactive", "props-inactive", nodeId)
       latestDraftRef.current = null
       parentSyncedRevisionRef.current = -1
+      endEditRequestedRef.current = false
+      setCommitting(false)
       setDraftState(null)
       return
     }
+    const unlockReason = resolveDraftIslandStructuralGuardUnlockReason(structuralEditGuardRef.current, {
+      active,
+      nodeId,
+      now: startWysiwygPerfSpan(),
+    })
+    if (unlockReason && unlockReason !== "timeout") {
+      clearStructuralEditGuard(unlockReason, "props-commit", nodeId)
+    }
+    setCommitting(false)
     setDraftState((current) => {
       if (current?.nodeId === nodeId) return current
+      endEditRequestedRef.current = false
       const next = createDraftIslandState({ nodeId, paragraph, draftText, caretOffset, selection })
       latestDraftRef.current = next
       parentSyncedRevisionRef.current = next.revision
       return next
     })
-  }, [active, caretOffset, draftText, nodeId, paragraph, selection])
+  }, [active, caretOffset, clearStructuralEditGuard, draftText, nodeId, paragraph, selection])
+
+  useEffect(() => () => {
+    clearStructuralEditGuard("unmount", "component-unmount", nodeId)
+  }, [clearStructuralEditGuard, nodeId])
+
+  useEffect(() => {
+    pageBoundaryReflowRequestRef.current = null
+  }, [active, nodeId])
 
   useEffect(() => {
     latestDraftRef.current = draftState
@@ -482,6 +704,7 @@ export function FlowdocDraftEditorIslandRoot({
 
   const draftLayout = useMemo(() => {
     if (!active || !fragment || !paragraph || !draftState) return null
+    if (draftState.nodeId !== nodeId) return null
     const startedAt = startWysiwygPerfSpan()
     const layout = buildWysiwygDraftParagraphLayout(fragment, paragraph, draftState.text, textMeasurer, {
       allowContinuedFirstFragment: true,
@@ -502,7 +725,7 @@ export function FlowdocDraftEditorIslandRoot({
       source: "out-of-canvas-v2",
     })
     return layout
-  }, [active, draftState, fragment, paragraph, textMeasurer])
+  }, [active, draftState, fragment, nodeId, paragraph, textMeasurer])
 
   const draftFragments = useMemo<PageFragment[]>(() => {
     if (!fragment || !draftLayout) return []
@@ -550,6 +773,13 @@ export function FlowdocDraftEditorIslandRoot({
       })
       .filter((surface): surface is DraftIslandSurface => surface !== null)
   }, [draftFragments, fragment, getPageKeyByPageIndex, pageKey])
+
+  const draftSurfaceAnchorsReady = useMemo(() => (
+    draftSurfaces.length > 0 &&
+    draftSurfaces.every((surface) => (
+      resolveDraftIslandAnchorElement(surface.pageKey, anchorElementsByPageKey, getPageElement) != null
+    ))
+  ), [anchorElementsByPageKey, draftSurfaces, getPageElement])
 
   useEffect(() => {
     latestSurfacesRef.current = draftSurfaces
@@ -603,111 +833,60 @@ export function FlowdocDraftEditorIslandRoot({
     }
   }, [active, draftReflowDecision, fragment, nodeId, onHeightChange, visualHeightPt])
 
-  const updatePosition = useCallback(() => {
+  useLayoutEffect(() => {
     if (!active || draftSurfaces.length === 0) {
-      latestPageRectByPageKeyRef.current = new Map()
-      setPositionsByPageKey({})
-      return
+      setAnchorElementsByPageKey({})
+      return undefined
     }
-    const nextByPageKey = new Map<string, IslandPosition>()
-    const nextRecord: Record<string, IslandPosition> = {}
+    const nextRecord: Record<string, HTMLElement> = {}
     for (const surface of draftSurfaces) {
-      const pageElement = getPageElement(surface.pageKey)
-      if (!pageElement) continue
-      const pageRect = pageElement.getBoundingClientRect()
-      const next: IslandPosition = {
-        left: pageRect.left + surface.fragment.x * scale,
-        top: pageRect.top + surface.fragment.y * scale,
-        width: Math.max(1, surface.fragment.width * scale),
-        pageLeft: pageRect.left,
-        pageTop: pageRect.top,
-      }
-      nextByPageKey.set(surface.pageKey, next)
-      nextRecord[surface.pageKey] = next
+      const anchor = getPageElement(surface.pageKey)
+      if (anchor) nextRecord[surface.pageKey] = anchor
     }
-    latestPageRectByPageKeyRef.current = nextByPageKey
-    setPositionsByPageKey((current) => {
+    setAnchorElementsByPageKey((current) => {
       const currentKeys = Object.keys(current)
       const nextKeys = Object.keys(nextRecord)
       if (
         currentKeys.length === nextKeys.length &&
-        nextKeys.every((key) => {
-          const a = current[key]
-          const b = nextRecord[key]
-          return a &&
-            Math.abs(a.left - b.left) < 0.5 &&
-            Math.abs(a.top - b.top) < 0.5 &&
-            Math.abs(a.width - b.width) < 0.5 &&
-            Math.abs(a.pageLeft - b.pageLeft) < 0.5 &&
-            Math.abs(a.pageTop - b.pageTop) < 0.5
-        })
+        nextKeys.every((key) => current[key] === nextRecord[key])
       ) {
         return current
       }
       return nextRecord
     })
-  }, [active, draftSurfaces, getPageElement, scale])
-
-  useLayoutEffect(() => {
-    updatePosition()
-    if (!active) return undefined
-    const pageElements = draftSurfaces
-      .map((surface) => getPageElement(surface.pageKey))
-      .filter((element): element is HTMLElement => element !== null)
-    const resizeObserver = typeof ResizeObserver !== "undefined" && pageElements.length > 0
-      ? new ResizeObserver(updatePosition)
-      : null
-    if (resizeObserver) {
-      for (const pageElement of pageElements) resizeObserver.observe(pageElement)
-    }
-    window.addEventListener("resize", updatePosition)
-    window.addEventListener("scroll", updatePosition, true)
-    return () => {
-      resizeObserver?.disconnect()
-      window.removeEventListener("resize", updatePosition)
-      window.removeEventListener("scroll", updatePosition, true)
-    }
-  }, [active, draftSurfaces, getPageElement, updatePosition])
+    return undefined
+  }, [active, draftSurfaces, getPageElement])
 
   useEffect(() => {
     if (!active) return
     inputBridgeRef.current?.focus({ preventScroll: true })
   }, [active, nodeId])
 
-  const flushParentDraft = useCallback((source: string) => {
+  const flushParentDraft = useCallback((source: string): boolean => {
     const current = latestDraftRef.current
-    if (!current || parentSyncedRevisionRef.current === current.revision) return
+    if (!current || parentSyncedRevisionRef.current === current.revision) return false
+    const startedAt = startWysiwygPerfSpan()
     parentSyncedRevisionRef.current = current.revision
-    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-      kind: "flowdoc-island-parent-sync",
-      startedAt: startWysiwygPerfSpan(),
-      durationMs: 0,
+    onDraftChange(current.nodeId, current.text, current.caretOffset, current.selection)
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-island-parent-sync", startedAt, {
       nodeId: current.nodeId,
       draftVersion: current.revision,
       textLength: current.text.length,
       source,
     })
-    if (source === "blur" || source === "keyboard-exit") {
-      flushSync(() => {
-        onDraftChange(current.nodeId, current.text, current.caretOffset, current.selection)
-      })
-      return
-    }
-    onDraftChange(current.nodeId, current.text, current.caretOffset, current.selection)
+    return true
   }, [onDraftChange])
 
   useEffect(() => {
-    if (
-      !active ||
-      !nodeId ||
-      !fragment ||
-      !draftReflowDecision ||
-      draftReflowDecision.kind !== "hard-page-boundary" ||
-      !draftReflowDecision.shouldQueueSettledPagination ||
-      !onReflowDecision
-    ) {
-      return
-    }
+    if (!shouldQueueDraftIslandPageBoundaryReflow({
+      active,
+      nodeId,
+      fragment,
+      reflow: draftReflowDecision,
+      draftRevision: draftState?.revision,
+      hasReflowHandler: onReflowDecision != null,
+    })) return
+    if (!nodeId || !fragment || !draftReflowDecision || !onReflowDecision) return
     const key = [
       nodeId,
       fragment.pageIndex ?? "null",
@@ -720,6 +899,7 @@ export function FlowdocDraftEditorIslandRoot({
   }, [
     active,
     draftReflowDecision,
+    draftState?.revision,
     flushParentDraft,
     fragment,
     nodeId,
@@ -733,6 +913,38 @@ export function FlowdocDraftEditorIslandRoot({
       flushParentDraft("idle-debounce")
     }, ISLAND_PARENT_SYNC_DEBOUNCE_MS)
   }, [flushParentDraft])
+
+  useEffect(() => {
+    if (!active || !nodeId) return undefined
+    const isInsideCurrentIsland = (event: globalThis.PointerEvent): boolean => {
+      const path = event.composedPath()
+      return path.some((target) => {
+        if (!(target instanceof Element)) return false
+        const owner = target.closest?.('[data-wysiwyg-draft-editor-island="true"], [data-wysiwyg-input-bridge="true"]')
+        return owner?.getAttribute("data-inline-edit-node-id") === nodeId
+      })
+    }
+    const handleDocumentPointerDownCapture = (event: globalThis.PointerEvent) => {
+      if (isInsideCurrentIsland(event)) return
+      const currentBeforeFlush = latestDraftRef.current
+      const startedAt = startWysiwygPerfSpan()
+      if (parentSyncTimerRef.current) clearTimeout(parentSyncTimerRef.current)
+      parentSyncTimerRef.current = null
+      const flushed = flushParentDraft("outside-pointerdown")
+      if (flushed) outsidePointerFlushPendingRef.current = true
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-island-blur-handoff", startedAt, {
+        nodeId: currentBeforeFlush?.nodeId,
+        draftVersion: currentBeforeFlush?.revision,
+        textLength: currentBeforeFlush?.text.length,
+        action: "outside-pointerdown-parent-sync",
+        active: flushed,
+      })
+    }
+    document.addEventListener("pointerdown", handleDocumentPointerDownCapture, true)
+    return () => {
+      document.removeEventListener("pointerdown", handleDocumentPointerDownCapture, true)
+    }
+  }, [active, flushParentDraft, nodeId])
 
   useEffect(() => () => {
     if (parentSyncTimerRef.current) clearTimeout(parentSyncTimerRef.current)
@@ -972,6 +1184,12 @@ export function FlowdocDraftEditorIslandRoot({
         applySelectAll()
         return
       }
+      if (isUndoShortcut(event) && onRequestUndo) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        onRequestUndo()
+        return
+      }
       if (!hasPlatformShortcutModifier(event)) return
       const key = normalizeShortcutKey(event)
       if (key !== "c" && key !== "x" && key !== "v") return
@@ -1018,6 +1236,7 @@ export function FlowdocDraftEditorIslandRoot({
     getClipboardCutDraft,
     getSelectedDraftText,
     mirrorClipboardTextToInputBridge,
+    onRequestUndo,
     readClipboardText,
     copyTextToClipboard,
   ])
@@ -1030,48 +1249,55 @@ export function FlowdocDraftEditorIslandRoot({
   const applyStructuralEnter = useCallback((event: KeyboardEvent<Element> | null, current: DraftIslandState, source: string) => {
     if (!onSplitParagraph) return false
     if (event && (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing)) return false
+    if (dropGuardedStructuralKey("Enter", current, source, "split", event)) return true
     const range = draftSelectionRange(current)
     const splitInput = buildSplitEditInput("", current.text, range.start, range.end)
+    engageStructuralEditGuard("split", current, source)
     clearPendingParentSync()
     pointerSelectionDragRef.current = null
     suppressNextUnmountParentSyncRef.current = true
     parentSyncedRevisionRef.current = current.revision
+    const startedAt = startWysiwygPerfSpan()
+    onSplitParagraph(current.nodeId, splitInput.splitIndex, splitInput.text)
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "flowdoc-island-structural-edit",
-      startedAt: startWysiwygPerfSpan(),
-      durationMs: 0,
+      startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
       nodeId: current.nodeId,
       draftVersion: current.revision,
       textLength: current.text.length,
       source,
       action: "split-paragraph",
     })
-    onSplitParagraph(current.nodeId, splitInput.splitIndex, splitInput.text)
     return true
-  }, [clearPendingParentSync, onSplitParagraph])
+  }, [clearPendingParentSync, dropGuardedStructuralKey, engageStructuralEditGuard, onSplitParagraph])
 
   const applyStructuralBackspace = useCallback((event: KeyboardEvent<Element>, current: DraftIslandState) => {
     if (!onMergeParagraph) return false
     if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return false
+    if (dropGuardedStructuralKey("Backspace", current, "key:Backspace", current.text.length === 0 ? "delete-empty" : "merge", event)) return true
     const range = draftSelectionRange(current)
     if (!range.isCollapsed || range.start !== 0) return false
+    const operation = current.text.length === 0 ? "delete-empty" : "merge"
+    engageStructuralEditGuard(operation, current, "key:Backspace")
     clearPendingParentSync()
     pointerSelectionDragRef.current = null
     suppressNextUnmountParentSyncRef.current = true
     parentSyncedRevisionRef.current = current.revision
+    const startedAt = startWysiwygPerfSpan()
+    onMergeParagraph(current.nodeId, current.text)
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "flowdoc-island-structural-edit",
-      startedAt: startWysiwygPerfSpan(),
-      durationMs: 0,
+      startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
       nodeId: current.nodeId,
       draftVersion: current.revision,
       textLength: current.text.length,
       source: "key:Backspace",
       action: "merge-paragraph",
     })
-    onMergeParagraph(current.nodeId, current.text)
     return true
-  }, [clearPendingParentSync, onMergeParagraph])
+  }, [clearPendingParentSync, dropGuardedStructuralKey, engageStructuralEditGuard, onMergeParagraph])
 
   const applyVerticalKeyInput = useCallback((event: KeyboardEvent<Element>, current: DraftIslandState) => {
     if (draftFragments.length === 0 || !isVerticalNavigationKey(event.key)) return false
@@ -1113,7 +1339,15 @@ export function FlowdocDraftEditorIslandRoot({
       if (parentSyncTimerRef.current) clearTimeout(parentSyncTimerRef.current)
       parentSyncTimerRef.current = null
       flushParentDraft("keyboard-exit")
+      if (endEditRequestedRef.current) return
+      endEditRequestedRef.current = true
       window.setTimeout(() => onEndEditRef.current(current.nodeId, "keyboard"), 0)
+      return
+    }
+    if (isUndoShortcut(event) && onRequestUndo) {
+      event.preventDefault()
+      event.stopPropagation()
+      onRequestUndo()
       return
     }
     if (handleClipboardShortcutKeyDown(event)) return
@@ -1153,6 +1387,7 @@ export function FlowdocDraftEditorIslandRoot({
     applyVerticalKeyInput,
     flushParentDraft,
     handleClipboardShortcutKeyDown,
+    onRequestUndo,
     resetVerticalCaretMemory,
   ])
 
@@ -1273,18 +1508,23 @@ export function FlowdocDraftEditorIslandRoot({
 
   const resolvePointerCandidate = useCallback((input: { clientX: number; clientY: number; currentTarget?: EventTarget | null }, source: string) => {
     if (!fragment) return null
-    const targetElement = input.currentTarget instanceof SVGElement ? input.currentTarget : null
-    const targetPageKey = targetElement?.getAttribute("data-wysiwyg-island-page-key") ?? null
+    const targetElement = input.currentTarget instanceof SVGSVGElement ? input.currentTarget : null
+    if (!targetElement) return null
+    const targetSurfaceKey = targetElement.getAttribute("data-wysiwyg-island-surface-key")
+    const targetPageKey = targetElement.getAttribute("data-wysiwyg-island-page-key")
     const surfaces = latestSurfacesRef.current
-    const surface = (targetPageKey ? surfaces.find((candidate) => candidate.pageKey === targetPageKey) : null) ??
+    const surface = (targetSurfaceKey ? surfaces.find((candidate) => candidate.key === targetSurfaceKey) : null) ??
+      (targetPageKey ? surfaces.find((candidate) => candidate.pageKey === targetPageKey) : null) ??
       surfaces[0] ??
       null
     if (!surface) return null
-    const pagePosition = latestPageRectByPageKeyRef.current.get(surface.pageKey) ?? positionsByPageKey[surface.pageKey]
-    if (!pagePosition) return null
+    const svgRect = targetElement.getBoundingClientRect()
+    if (svgRect.width <= 0 || svgRect.height <= 0) return null
+    const viewBoxWidth = surface.fragment.width
+    const viewBoxHeight = resolveDraftIslandSurfaceHeightPt(fragment, surface.fragment)
     const point = {
-      x: (input.clientX - pagePosition.pageLeft) / scale,
-      y: (input.clientY - pagePosition.pageTop) / scale,
+      x: surface.fragment.x + ((input.clientX - svgRect.left) / svgRect.width) * viewBoxWidth,
+      y: surface.fragment.y + ((input.clientY - svgRect.top) / svgRect.height) * viewBoxHeight,
     }
     const startedAt = startWysiwygPerfSpan()
     const candidate = resolveCaretOffsetFromPointInFragment(surface.fragment, point, { textMeasurer })
@@ -1299,7 +1539,7 @@ export function FlowdocDraftEditorIslandRoot({
       source: `${source}:${candidate?.source ?? "miss"}`,
     })
     return candidate
-  }, [fragment, positionsByPageKey, scale, textMeasurer])
+  }, [fragment, textMeasurer])
 
   const applyPointerSelection = useCallback((anchorOffset: number, focusOffset: number, source: string) => {
     const current = latestDraftRef.current
@@ -1373,14 +1613,90 @@ export function FlowdocDraftEditorIslandRoot({
   }, [])
 
   const handleBlur = useCallback(() => {
+    const blurStartedAt = startWysiwygPerfSpan()
+    const currentBeforeFlush = latestDraftRef.current
+    setCommitting(true)
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-blur-handoff",
+      startedAt: blurStartedAt,
+      durationMs: 0,
+      nodeId: currentBeforeFlush?.nodeId,
+      draftVersion: currentBeforeFlush?.revision,
+      textLength: currentBeforeFlush?.text.length,
+      action: "blur-start",
+      source: parentSyncTimerRef.current ? "pending-parent-sync" : "no-pending-parent-sync",
+    })
     pointerSelectionDragRef.current = null
     if (parentSyncTimerRef.current) clearTimeout(parentSyncTimerRef.current)
     parentSyncTimerRef.current = null
-    if (suppressNextUnmountParentSyncRef.current) return
-    flushParentDraft("blur")
+    if (suppressNextUnmountParentSyncRef.current) {
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-island-blur-handoff", blurStartedAt, {
+        nodeId: currentBeforeFlush?.nodeId,
+        draftVersion: currentBeforeFlush?.revision,
+        textLength: currentBeforeFlush?.text.length,
+        action: "blur-suppressed",
+      })
+      return
+    }
+    const flushed = flushParentDraft("blur")
     const current = latestDraftRef.current
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-island-blur-handoff", blurStartedAt, {
+      nodeId: current?.nodeId ?? currentBeforeFlush?.nodeId,
+      draftVersion: current?.revision ?? currentBeforeFlush?.revision,
+      textLength: current?.text.length ?? currentBeforeFlush?.text.length,
+      action: "after-parent-sync",
+      active: flushed,
+    })
     if (!current) return
-    window.setTimeout(() => onEndEditRef.current(current.nodeId, "blur"), 0)
+    const runEndEdit = () => {
+      if (endEditRequestedRef.current) {
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-island-blur-handoff",
+          startedAt: startWysiwygPerfSpan(),
+          durationMs: 0,
+          nodeId: current.nodeId,
+          draftVersion: current.revision,
+          textLength: current.text.length,
+          action: "end-edit-suppressed",
+          source: "already-requested",
+          active: false,
+        })
+        return
+      }
+      endEditRequestedRef.current = true
+      const callbackStartedAt = startWysiwygPerfSpan()
+      onEndEditRef.current(current.nodeId, "blur")
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-island-blur-handoff", callbackStartedAt, {
+        nodeId: current.nodeId,
+        draftVersion: current.revision,
+        textLength: current.text.length,
+        action: "end-edit-callback",
+      })
+    }
+    const hadOutsidePointerFlush = outsidePointerFlushPendingRef.current
+    outsidePointerFlushPendingRef.current = false
+    const scheduleAfterPaint = () => {
+      const scheduleCallback = () => {
+        window.setTimeout(runEndEdit, 0)
+      }
+      if (typeof window.requestAnimationFrame !== "function") {
+        scheduleCallback()
+        return
+      }
+      window.requestAnimationFrame(scheduleCallback)
+    }
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-blur-handoff",
+      startedAt: startWysiwygPerfSpan(),
+      durationMs: 0,
+      nodeId: current.nodeId,
+      draftVersion: current.revision,
+      textLength: current.text.length,
+      action: "end-edit-scheduled-after-paint",
+      source: hadOutsidePointerFlush ? "outside-pointerdown-parent-sync" : "blur",
+      active: true,
+    })
+    scheduleAfterPaint()
   }, [flushParentDraft])
 
   const handleIslandRender = useCallback<ProfilerOnRenderCallback>((
@@ -1422,7 +1738,61 @@ export function FlowdocDraftEditorIslandRoot({
     }
   }, [activeDraftFragment?.height, totalLineCount])
 
-  if (!active || !nodeId || !paragraph || !fragment || !pageKey || !draftState || draftSurfaces.length === 0 || !draftLayout) {
+  useLayoutEffect(() => {
+    if (!active || !nodeId || structuralRefocusStartedAt == null || !draftSurfaceAnchorsReady) return
+    const paintKey = `${nodeId}:${structuralRefocusStartedAt}`
+    if (lastStructuralRefocusPaintKeyRef.current === paintKey) return
+    lastStructuralRefocusPaintKeyRef.current = paintKey
+    const durationMs = Math.max(0, startWysiwygPerfSpan() - structuralRefocusStartedAt)
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "enter-key-to-optimistic-island-visible",
+      startedAt: structuralRefocusStartedAt,
+      durationMs,
+      nodeId,
+      pageIndex: activeDraftFragment?.pageIndex ?? fragment?.pageIndex,
+      textLength: draftState?.text.length,
+      lineCount: totalLineCount,
+      paragraphHeight: activeDraftFragment?.height,
+      source: "out-of-canvas-v2",
+      active: true,
+    })
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "enter-key-to-new-caret-visible",
+      startedAt: structuralRefocusStartedAt,
+      durationMs,
+      nodeId,
+      pageIndex: activeDraftFragment?.pageIndex ?? fragment?.pageIndex,
+      textLength: draftState?.text.length,
+      lineCount: totalLineCount,
+      paragraphHeight: activeDraftFragment?.height,
+      source: "out-of-canvas-v2",
+      active: true,
+    })
+    onStructuralRefocusPainted?.(nodeId)
+  }, [
+    active,
+    activeDraftFragment?.height,
+    activeDraftFragment?.pageIndex,
+    draftState?.text.length,
+    draftSurfaceAnchorsReady,
+    fragment?.pageIndex,
+    nodeId,
+    onStructuralRefocusPainted,
+    structuralRefocusStartedAt,
+    totalLineCount,
+  ])
+
+  if (
+    !active ||
+    !nodeId ||
+    !paragraph ||
+    !fragment ||
+    !pageKey ||
+    !draftState ||
+    draftState.nodeId !== nodeId ||
+    draftSurfaces.length === 0 ||
+    !draftLayout
+  ) {
     return null
   }
 
@@ -1437,12 +1807,10 @@ export function FlowdocDraftEditorIslandRoot({
       sum + resolveSelectionOverlayRectsInFragment(surface.fragment, draftState.selection!.anchorOffset, draftState.selection!.focusOffset, { textMeasurer }).length
     ), 0)
     : 0
-  const firstSurfacePosition = positionsByPageKey[draftSurfaces[0]?.pageKey ?? ""]
   const inputBridgeStyle: CSSProperties = {
     ...hiddenInputBridgeStyle,
-    left: firstSurfacePosition?.left ?? -10000,
-    top: firstSurfacePosition?.top ?? -10000,
   }
+  const allowInlineFallback = typeof window === "undefined"
 
   return (
     <Profiler id="flowdoc-draft-editor-island-v2" onRender={handleIslandRender}>
@@ -1451,9 +1819,11 @@ export function FlowdocDraftEditorIslandRoot({
           ref={inputBridgeRef}
           data-wysiwyg-input-bridge="true"
           data-wysiwyg-input-bridge-mode="hidden-flowdoc-draft-editor-island-v2"
+          data-wysiwyg-island-committing={committing ? "true" : undefined}
           data-wysiwyg-visible-area-pointer-target="false"
           data-inline-edit-node-id={nodeId}
           spellCheck={false}
+          readOnly={committing}
           role="textbox"
           aria-label="WYSIWYG text input"
           style={inputBridgeStyle}
@@ -1468,7 +1838,8 @@ export function FlowdocDraftEditorIslandRoot({
         {draftSurfaces.map((surface, surfaceIndex) => {
           const surfaceFragment = surface.fragment
           const surfaceHeightPt = resolveDraftIslandSurfaceHeightPt(fragment, surfaceFragment)
-          const position = positionsByPageKey[surface.pageKey]
+          const anchorElement = resolveDraftIslandAnchorElement(surface.pageKey, anchorElementsByPageKey, getPageElement)
+          if (!anchorElement && !allowInlineFallback) return null
           const caret = resolveCollapsedCaretOverlayInFragment(surfaceFragment, draftState.caretOffset ?? draftState.text.length, { textMeasurer })
           const selectionRects = draftState.selection && draftState.selection.anchorOffset !== draftState.selection.focusOffset
             ? resolveSelectionOverlayRectsInFragment(surfaceFragment, draftState.selection.anchorOffset, draftState.selection.focusOffset, { textMeasurer })
@@ -1476,21 +1847,23 @@ export function FlowdocDraftEditorIslandRoot({
           const draftLineRanges = resolveDraftLineRangeAttrs(surfaceFragment.lines ?? [])
           const svgStyle: CSSProperties = {
             ...islandSvgStyle,
-            left: position?.left ?? -10000,
-            top: position?.top ?? -10000,
-            width: position?.width ?? Math.max(1, surfaceFragment.width * scale),
+            left: surfaceFragment.x * scale,
+            top: surfaceFragment.y * scale,
+            width: Math.max(1, surfaceFragment.width * scale),
             height: Math.max(1, surfaceHeightPt * scale),
-            display: position ? "block" : "none",
+            display: "block",
           }
           const viewBox = `${surfaceFragment.x} ${surfaceFragment.y} ${surfaceFragment.width} ${surfaceHeightPt}`
-          return (
+          const islandSurface = (
             <svg
               key={surface.key}
               data-wysiwyg-draft-editor-island="true"
               data-wysiwyg-out-of-canvas-island="true"
+              data-wysiwyg-island-anchor={anchorElement ? "page-overlay" : "inline-fallback"}
               data-wysiwyg-text-engine-layer="true"
               data-wysiwyg-active-visual-mode="flowdoc-draft-editor-island"
               data-wysiwyg-active-visual-detail="out-of-canvas-v2"
+              data-wysiwyg-island-surface-key={surface.key}
               data-wysiwyg-island-page-key={surface.pageKey}
               data-page-index={surfaceFragment.pageIndex}
               data-wysiwyg-island-surface-index={surfaceIndex}
@@ -1498,6 +1871,7 @@ export function FlowdocDraftEditorIslandRoot({
               data-wysiwyg-island-page-boundary-preview={isPageBoundaryPreview ? "true" : "false"}
               data-wysiwyg-island-reflow-kind={draftReflowDecision?.kind ?? undefined}
               data-wysiwyg-island-reflow-reason={draftReflowDecision?.reason ?? undefined}
+              data-wysiwyg-island-committing={committing ? "true" : undefined}
               data-wysiwyg-line-count={surfaceFragment.lines?.length ?? 0}
               data-wysiwyg-flowdoc-draft-line-count={surfaceFragment.lines?.length ?? 0}
               data-wysiwyg-flowdoc-draft-total-line-count={totalLineCount}
@@ -1601,6 +1975,7 @@ export function FlowdocDraftEditorIslandRoot({
               ) : null}
             </svg>
           )
+          return anchorElement ? createPortal(islandSurface, anchorElement, surface.key) : islandSurface
         })}
       </>
     </Profiler>

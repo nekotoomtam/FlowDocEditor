@@ -2676,6 +2676,7 @@ export function splitParagraphAtIndex(
   doc: DocumentNode,
   nodeId: string,
   splitIndex: number,
+  options: { newNodeId?: string } = {},
 ): { doc: DocumentNode; newNodeId: string } {
   for (let si = 0; si < doc.document.sections.length; si++) {
     const section = doc.document.sections[si]
@@ -2696,7 +2697,10 @@ export function splitParagraphAtIndex(
       props: beforeProps,
       children: [{ ...firstRun, text: textBefore }],
     }
-    const newPara = createParagraphNode(textAfter, afterProps)
+    const generatedNewPara = createParagraphNode(textAfter, afterProps)
+    const newPara = options.newNodeId && !section.nodes[options.newNodeId]
+      ? { ...generatedNewPara, id: options.newNodeId }
+      : generatedNewPara
 
     const parentInfo = findParentInfo(section.nodes, nodeId)
     if (!parentInfo) continue

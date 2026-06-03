@@ -343,6 +343,12 @@ export function useWysiwygTextSession({
     return true
   }, [enabled, getParagraphText])
 
+  const startFromText = useCallback((startInput: WysiwygTextSessionStart) => {
+    if (!enabled) return false
+    setState((current) => startWysiwygTextSessionState(current, startInput))
+    return true
+  }, [enabled])
+
   const changeDraft = useCallback((change: WysiwygTextSessionDraftChange) => {
     if (!enabled) return
     setState((current) => changeWysiwygTextSessionDraft(current, change))
@@ -367,6 +373,7 @@ export function useWysiwygTextSession({
     isActive: state.nodeId !== null,
     isLayoutFresh: isWysiwygTextSessionLayoutFresh(state),
     start,
+    startFromText,
     changeDraft,
     moveCaret,
     markLayoutFresh,

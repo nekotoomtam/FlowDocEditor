@@ -1950,6 +1950,47 @@ describe("paragraph text operations", () => {
     expect(paragraphText(second)).toBe("world")
   })
 
+  it("uses a non-colliding preallocated split paragraph id", () => {
+    const p = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello world" },
+    ])
+    const result = splitParagraphAtIndex(makeDoc({ p1: p }, ["p1"]), "p1", 6, {
+      newNodeId: "preallocated-split-id",
+    })
+    const section = result.doc.document.sections[0]
+
+    expect(result.newNodeId).toBe("preallocated-split-id")
+    expect(section.nodes["preallocated-split-id"]?.type).toBe("paragraph")
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual([
+      "p1",
+      "preallocated-split-id",
+    ])
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("does not reuse a colliding preallocated split paragraph id", () => {
+    const p1 = makeParagraph("p1", [
+      { id: "t1", type: "text", text: "Hello world" },
+    ])
+    const existing = makeParagraph("existing", [
+      { id: "t2", type: "text", text: "Existing paragraph" },
+    ])
+    const result = splitParagraphAtIndex(makeDoc({ p1, existing }, ["p1", "existing"]), "p1", 6, {
+      newNodeId: "existing",
+    })
+    const section = result.doc.document.sections[0]
+
+    expect(result.newNodeId).not.toBe("existing")
+    expect(section.nodes.existing).toEqual(existing)
+    expect(section.nodes[result.newNodeId]?.type).toBe("paragraph")
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual([
+      "p1",
+      result.newNodeId,
+      "existing",
+    ])
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
   it("transfers outer paragraph spacing across a plain text split", () => {
     const p = {
       ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]),

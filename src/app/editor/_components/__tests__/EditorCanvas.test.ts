@@ -14,7 +14,9 @@ import {
   pageViewScopedEditPropsAffectPage,
   resolveInlineEditVisualOffsetY,
   shouldRenderLazyPageFrame,
+  shouldSuppressStalePageBreakForActiveWysiwygIsland,
   shouldStartInlineEditOnSingleClick,
+  type ActiveOutOfCanvasStructuralIsland,
 } from "../EditorCanvas"
 import type { DragState } from "../editorReducer"
 
@@ -70,6 +72,38 @@ function textFragment(id: string, text: string, y: number, overrides: Partial<Pa
   }
 }
 
+function pageBreakFragment(id: string, y: number, overrides: Partial<PageFragment> = {}): PageFragment {
+  return {
+    nodeId: id,
+    nodeType: "page-break",
+    pageIndex: 0,
+    x: 36,
+    y,
+    width: 228,
+    height: 0,
+    ...overrides,
+  }
+}
+
+function boundarySafeIsland(nodeId = "p2", overrides: Partial<ActiveOutOfCanvasStructuralIsland> = {}): ActiveOutOfCanvasStructuralIsland {
+  const fragment = textFragment(nodeId, "After split", 92, {
+    height: 18,
+    ...overrides.fragment,
+  })
+  return {
+    nodeId,
+    mode: "boundary-safe",
+    fragment,
+    pageIndex: fragment.pageIndex,
+    suppressedPageBreakNodeId: "break",
+    ...overrides,
+  }
+}
+
+function countMarkup(markup: string, needle: string): number {
+  return markup.split(needle).length - 1
+}
+
 function expectNativeEditLayerMarkup(markup: string, text?: string): void {
   expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
   expect(markup).toContain("data-wysiwyg-active-visual-mode=\"native-edit-layer\"")
@@ -82,18 +116,11 @@ function expectNativeEditLayerMarkup(markup: string, text?: string): void {
   expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
 }
 
-function expectFlowdocDraftLinesMarkup(markup: string, text?: string): void {
-  expect(markup).toContain("data-wysiwyg-text-engine-layer=\"true\"")
-  expect(markup).toContain("data-wysiwyg-draft-editor-island=\"true\"")
-  expect(markup).toContain("data-wysiwyg-active-visual-mode=\"flowdoc-draft-editor-island\"")
-  expect(markup).toContain("data-wysiwyg-flowdoc-draft-lines=\"true\"")
-  expect(markup).toContain("data-wysiwyg-native-visible-text=\"false\"")
-  expect(markup).toContain("data-wysiwyg-hidden-input-bridge=\"true\"")
-  expect(markup).toContain("data-wysiwyg-input-bridge-mode=\"hidden-flowdoc-draft-editor-island\"")
-  expect(markup).toContain("data-inline-edit-visual-mode=\"flowdoc-draft-editor-island\"")
-  expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
-  expect(markup).not.toContain("<textarea")
-  if (text != null) expect(markup).toContain("data-wysiwyg-flowdoc-draft-text-length=")
+function expectActiveCanvasTextSuppressedMarkup(markup: string): void {
+  expect(markup).toContain("data-wysiwyg-active-canvas-text-suppressed=\"true\"")
+  expect(markup).toContain("data-wysiwyg-native-edit-fragment-chrome-suppressed=\"true\"")
+  expect(markup).not.toContain("data-wysiwyg-active-visual-mode=\"flowdoc-draft-editor-island\"")
+  expect(markup).not.toContain("data-wysiwyg-input-bridge-mode=\"hidden-flowdoc-draft-editor-island\"")
   expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
   expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
 }
@@ -777,6 +804,7 @@ interface RenderCanvasOptions {
   wysiwygTextDraftDirtyVersion?: number
   wysiwygTextCaretOffset?: number | null
   wysiwygTextDraftPaginationActive?: boolean
+  activeOutOfCanvasStructuralIsland?: ActiveOutOfCanvasStructuralIsland | null
   marginEditMode?: { sectionIndex: number } | null
   headerFooterEditMode?: { sectionIndex: number; zone: "header" | "footer" } | null
   drag?: DragState | null
@@ -825,6 +853,7 @@ function renderCanvas(
     onSplitParagraph: noop,
     onMergeParagraph: noop,
     setPageRef: noop,
+    setPageOverlayRef: noop,
     onNodePointerDown: noop,
     onBackgroundPointerDown: noop,
     onSelectContextNode: noop,
@@ -849,6 +878,7 @@ function renderCanvas(
     wysiwygTextCaretOffset: options.wysiwygTextCaretOffset ?? null,
     wysiwygTextSelection: null,
     wysiwygTextDraftPaginationActive: options.wysiwygTextDraftPaginationActive ?? false,
+    activeOutOfCanvasStructuralIsland: options.activeOutOfCanvasStructuralIsland ?? null,
     onWysiwygTextDraftChange: noop,
     onWysiwygTextReflowDecision: noop,
   }))
@@ -905,6 +935,13 @@ describe("EditorCanvas TOC rendering", () => {
 })
 
 describe("EditorCanvas page memoization", () => {
+  it("renders a page content overlay root for out-of-canvas WYSIWYG island anchoring", () => {
+    const markup = renderCanvas()
+
+    expect(markup).toContain("data-testid=\"editor-page-flowdoc-island-overlay\"")
+    expect(markup).toContain("data-page-key=\"0-0\"")
+  })
+
   it("renders only visible or forced page frames when lazy rendering is enabled", () => {
     const visible = new Set(["0-0"])
     const forced = new Set(["0-4"])
@@ -1016,6 +1053,34 @@ describe("EditorCanvas page memoization", () => {
     expect(pageViewScopedEditPropsAffectPage(otherPage, props)).toBe(false)
   })
 
+  it("keeps boundary-safe out-of-canvas island page-break suppression in the page render scope", () => {
+    const activePage = pageWithFragments(0, [
+      textFragment("p1", "Before split", 72),
+      pageBreakFragment("break", 112),
+    ])
+    const otherPage = pageWithFragments(1, [
+      textFragment("other-p", "Other", 72, { pageIndex: 1 }),
+      pageBreakFragment("other-break", 112, { pageIndex: 1 }),
+    ])
+    const props = {
+      selectedNodeId: null,
+      selectionAnchorNodeId: null,
+      inlineEditNodeId: null,
+      inlineEditPageIndex: null,
+      wysiwygTextDraftNodeId: null,
+      wysiwygDraftVisualPreview: null,
+      suppressedCanvasTextNodeIds: new Set<string>(),
+      activeOutOfCanvasStructuralIsland: boundarySafeIsland("p2", {
+        suppressedPageBreakNodeId: "break",
+      }),
+      wysiwygTableCellDraftVisualChromeByPageIndex: new Map<number, PageFragment[]>(),
+      wysiwygTextPointerFragments: [],
+    }
+
+    expect(pageViewScopedEditPropsAffectPage(activePage, props)).toBe(true)
+    expect(pageViewScopedEditPropsAffectPage(otherPage, props)).toBe(false)
+  })
+
   it("indexes WYSIWYG pointer fragments by paragraph node", () => {
     const pageKeyByPageIndex = new Map([[0, "0-0"], [1, "0-1"]])
     const firstPage = pageWithFragments(0, [
@@ -1088,7 +1153,7 @@ describe("EditorCanvas rich draft visual preview", () => {
       wysiwygTextCaretOffset: 4,
     })
 
-    expectFlowdocDraftLinesMarkup(markup, "Body text")
+    expectActiveCanvasTextSuppressedMarkup(markup)
     expect(markup).not.toContain("fill=\"#DC2626\"")
   })
 
@@ -1103,23 +1168,14 @@ describe("EditorCanvas rich draft visual preview", () => {
       wysiwygTextCaretOffset: 8,
     })
 
-    expectFlowdocDraftLinesMarkup(markup, "Body text with local native height")
-    expect(markup).toContain("data-wysiwyg-native-edit-fragment-chrome-suppressed=\"true\"")
+    expectActiveCanvasTextSuppressedMarkup(markup)
   })
 
   it("suppresses stale same-page page-break chrome while a plain FlowDoc draft-lines paragraph is active", () => {
     const paginated = makePaginated()
     paginated.sections[0].pages[0].fragments = [
       textFragment("body-p", "Body text", 72),
-      {
-        nodeId: "page-break-1",
-        nodeType: "page-break",
-        pageIndex: 0,
-        x: 36,
-        y: 90,
-        width: 228,
-        height: 0,
-      },
+      pageBreakFragment("page-break-1", 90),
     ]
 
     expect(renderCanvas(paginated, makeDoc())).toContain("data-testid=\"editor-page-break-marker\"")
@@ -1134,8 +1190,86 @@ describe("EditorCanvas rich draft visual preview", () => {
       wysiwygTextCaretOffset: 8,
     })
 
-    expectFlowdocDraftLinesMarkup(editingMarkup, "Body text with local native height")
+    expectActiveCanvasTextSuppressedMarkup(editingMarkup)
     expect(editingMarkup).not.toContain("data-testid=\"editor-page-break-marker\"")
+  })
+
+  it("suppresses an authored page-break marker for a boundary-safe out-of-canvas island", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      textFragment("p1", "Before split", 72),
+      pageBreakFragment("break", 112),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc(), null, {
+      activeOutOfCanvasStructuralIsland: boundarySafeIsland("p2", {
+        suppressedPageBreakNodeId: "break",
+      }),
+    })
+
+    expect(markup).toContain("data-wysiwyg-boundary-safe-page-break-suppressed=\"true\"")
+    expect(markup).not.toContain("data-testid=\"editor-page-break-marker\"")
+    expect(markup).not.toContain(">PAGE BREAK</text>")
+    expect(markup).not.toContain(">page break</text>")
+  })
+
+  it("keeps unrelated authored page-break markers visible during boundary-safe island suppression", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      textFragment("p1", "Before split", 72),
+      pageBreakFragment("break", 112),
+      pageBreakFragment("other-break", 172),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc(), null, {
+      activeOutOfCanvasStructuralIsland: boundarySafeIsland("p2", {
+        suppressedPageBreakNodeId: "break",
+      }),
+    })
+
+    expect(markup).toContain("data-wysiwyg-boundary-safe-page-break-suppressed=\"true\"")
+    expect(countMarkup(markup, "data-testid=\"editor-page-break-marker\"")).toBe(1)
+    expect(markup).toContain(">PAGE BREAK</text>")
+  })
+
+  it("renders authored page-break markers normally when no boundary-safe island is active", () => {
+    const paginated = makePaginated()
+    paginated.sections[0].pages[0].fragments = [
+      textFragment("p1", "Before split", 72),
+      pageBreakFragment("break", 112),
+    ]
+
+    const markup = renderCanvas(paginated, makeDoc(), null, {
+      activeOutOfCanvasStructuralIsland: null,
+    })
+
+    expect(markup).toContain("data-testid=\"editor-page-break-marker\"")
+    expect(markup).toContain(">PAGE BREAK</text>")
+    expect(markup).toContain(">page break</text>")
+    expect(markup).not.toContain("data-wysiwyg-boundary-safe-page-break-suppressed=\"true\"")
+  })
+
+  it("uses a local page-break fallback only near the active boundary-safe island", () => {
+    const nearBreak = pageBreakFragment("near-break", 126)
+    const farBreak = pageBreakFragment("far-break", 260)
+
+    expect(shouldSuppressStalePageBreakForActiveWysiwygIsland({
+      fragment: nearBreak,
+      activeInlineEditIsPlainNativeParagraph: false,
+      activeInlineEditDisplayFragment: null,
+      activeOutOfCanvasStructuralIsland: boundarySafeIsland("p2", {
+        suppressedPageBreakNodeId: null,
+      }),
+    })).toBe(true)
+
+    expect(shouldSuppressStalePageBreakForActiveWysiwygIsland({
+      fragment: farBreak,
+      activeInlineEditIsPlainNativeParagraph: false,
+      activeInlineEditDisplayFragment: null,
+      activeOutOfCanvasStructuralIsland: boundarySafeIsland("p2", {
+        suppressedPageBreakNodeId: null,
+      }),
+    })).toBe(false)
   })
 })
 

@@ -51,4 +51,15 @@ describe("browser pagination strategy", () => {
       inlineEditNodeId: "p1",
     })).toBe(false)
   })
+
+  it("allows the worker for explicit structural inline-edit settle pagination", () => {
+    const doc = makeDocumentWithParagraphs(BACKGROUND_BROWSER_PAGINATION_WEIGHT_THRESHOLD)
+
+    expect(shouldUseBackgroundBrowserPagination({
+      doc,
+      canUseWorker: true,
+      inlineEditNodeId: "p1",
+      allowInlineEdit: true,
+    })).toBe(true)
+  })
 })

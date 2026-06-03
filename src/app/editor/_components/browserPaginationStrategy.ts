@@ -45,8 +45,9 @@ export function shouldUseBackgroundBrowserPagination(input: {
   doc: DocumentNode
   canUseWorker: boolean
   inlineEditNodeId: string | null
+  allowInlineEdit?: boolean
 }): boolean {
   if (!input.canUseWorker) return false
-  if (input.inlineEditNodeId !== null) return false
+  if (input.inlineEditNodeId !== null && !input.allowInlineEdit) return false
   return estimateDocumentPaginationWeight(input.doc) >= BACKGROUND_BROWSER_PAGINATION_WEIGHT_THRESHOLD
 }

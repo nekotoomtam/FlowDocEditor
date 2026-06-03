@@ -20,8 +20,8 @@ const baseEditorUrl = process.env.SMOKE_BASE_URL ?? `http://localhost:${smokePor
 const shouldStartServer = process.env.SMOKE_BASE_URL == null
 const headless = process.env.HEADED !== "1"
 const smokeBrowser = getSmokeBrowserConfig({ headless })
-const stressFilePath = path.resolve(repoRoot, process.env.FLOWDOC_STRESS_FILE ?? DEFAULT_STRESS_FILE)
-const targetPageIndex = Number(process.env.STRESS_PAGE_INDEX ?? DEFAULT_PAGE_INDEX)
+const stressFilePath = path.resolve(repoRoot, process.env.FLOWDOC_STRESS_FILE ?? process.env.FLOWDOC_PROBE_FILE ?? DEFAULT_STRESS_FILE)
+const targetPageIndex = Number(process.env.STRESS_PAGE_INDEX ?? process.env.PROBE_TARGET_PAGE_INDEX ?? DEFAULT_PAGE_INDEX)
 const maxClickSwitchMs = Number(process.env.MAX_CLICK_SWITCH_MS ?? DEFAULT_MAX_CLICK_SWITCH_MS)
 const maxExitMs = Number(process.env.MAX_EXIT_MS ?? DEFAULT_MAX_EXIT_MS)
 const maxResponsiveFinalizeMs = Number(process.env.MAX_RESPONSIVE_FINALIZE_MS ?? DEFAULT_MAX_RESPONSIVE_FINALIZE_MS)
@@ -157,6 +157,8 @@ async function visibleParagraphTargets(page) {
         return {
           index,
           nodeId: element.getAttribute("data-node-id"),
+          lineStart: element.getAttribute("data-line-start"),
+          inlineEditable: element.getAttribute("data-inline-editable") === "true",
           x,
           y,
           width: rect.width,
@@ -171,6 +173,9 @@ async function visibleParagraphTargets(page) {
         return (
           item.width > 4 &&
           item.height > 4 &&
+          item.inlineEditable &&
+          item.nodeId.startsWith("p_") &&
+          (item.lineStart == null || item.lineStart === "0") &&
           item.top > 220 &&
           item.top < window.innerHeight - 40 &&
           item.hitTestId !== "list-toolbar"
@@ -185,9 +190,36 @@ async function clickParagraph(page, target) {
 }
 
 async function waitForInlineEdit(page, nodeId, timeoutMs = 5000) {
-  await page.waitForFunction((id) => (
-    document.querySelector(`[data-inline-edit-node-id="${id}"]`) !== null
-  ), nodeId, { timeout: timeoutMs })
+  try {
+    await page.waitForFunction((id) => (
+      document.querySelector(`[data-inline-edit-node-id="${id}"]`) !== null
+    ), nodeId, { timeout: timeoutMs })
+  } catch (error) {
+    const diagnostics = await page.evaluate((id) => {
+      const fragment = document.querySelector(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(id)}"]`)
+      const rect = fragment instanceof Element ? fragment.getBoundingClientRect() : null
+      const hit = rect
+        ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + Math.min(Math.max(rect.height / 2, 4), rect.height - 2))
+        : null
+      return {
+        nodeId: id,
+        fragmentAttached: Boolean(fragment),
+        fragmentInlineEditable: fragment?.getAttribute("data-inline-editable") ?? null,
+        fragmentNodeType: fragment?.getAttribute("data-node-type") ?? null,
+        fragmentParentNodeId: fragment?.getAttribute("data-parent-node-id") ?? null,
+        fragmentLineStart: fragment?.getAttribute("data-line-start") ?? null,
+        fragmentLineEnd: fragment?.getAttribute("data-line-end") ?? null,
+        hitTag: hit?.tagName ?? null,
+        hitTestId: hit instanceof Element ? hit.getAttribute("data-testid") : null,
+        hitNodeId: hit instanceof Element ? hit.closest("[data-node-id]")?.getAttribute("data-node-id") ?? null : null,
+        activeInlineEditNodeId: document.querySelector("[data-inline-edit-node-id]")?.getAttribute("data-inline-edit-node-id") ?? null,
+        inputBridgeCount: document.querySelectorAll('[data-wysiwyg-input-bridge="true"]').length,
+        activeIslandCount: document.querySelectorAll('[data-wysiwyg-active-visual-mode="flowdoc-draft-editor-island"]').length,
+        lastPerfEvents: (window.__flowDocWysiwygPerfEvents ?? []).slice(-8),
+      }
+    }, nodeId)
+    throw new Error(`Timed out waiting for inline edit on ${nodeId}: ${JSON.stringify(diagnostics)}`)
+  }
 }
 
 async function dispatchBridgeEscape(page, nodeId) {
@@ -236,9 +268,13 @@ async function readSmokeState(page, targetNodeId) {
     const shell = document.querySelector('[data-testid="editor-shell"]')
     const perfEvents = (window.__flowDocWysiwygPerfEvents ?? []).map((event) => ({
       kind: event.kind,
+      startedAt: event.startedAt == null ? null : Math.round(event.startedAt * 10) / 10,
       durationMs: Math.round(event.durationMs * 10) / 10,
       source: event.source,
+      action: event.action,
+      active: event.active,
       nodeId: event.nodeId,
+      pageIndex: event.pageIndex,
       pageCount: event.pageCount,
       fragmentCount: event.fragmentCount,
     }))
@@ -258,6 +294,46 @@ async function readSmokeState(page, targetNodeId) {
       perfEvents,
     }
   }, targetNodeId)
+}
+
+function percentile(values, percentileRank) {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((percentileRank / 100) * sorted.length) - 1))
+  return sorted[index]
+}
+
+function summarizeDurations(events, kind) {
+  const values = events
+    .filter((event) => event.kind === kind && Number.isFinite(event.durationMs))
+    .map((event) => event.durationMs)
+  return {
+    count: values.length,
+    totalMs: Math.round(values.reduce((sum, value) => sum + value, 0) * 10) / 10,
+    p50Ms: percentile(values, 50),
+    p95Ms: percentile(values, 95),
+    maxMs: values.length > 0 ? Math.max(...values) : null,
+  }
+}
+
+function summarizeLifecyclePerf(state) {
+  const events = state.perfEvents
+  return {
+    inlineEditStart: summarizeDurations(events, "inline-edit-start"),
+    inlineEditFinalize: summarizeDurations(events, "inline-edit-finalize"),
+    inlineEditEnd: summarizeDurations(events, "inline-edit-end"),
+    flowdocIslandReactCommit: summarizeDurations(events, "flowdoc-island-react-commit"),
+    editorCanvasReactCommit: summarizeDurations(events, "editor-canvas-react-commit"),
+    flowdocIslandParentSync: summarizeDurations(events, "flowdoc-island-parent-sync"),
+    flowdocIslandBlurHandoff: summarizeDurations(events, "flowdoc-island-blur-handoff"),
+    browserPreviewPagination: summarizeDurations(events, "browser-preview-pagination"),
+    countByKind: events.reduce((acc, event) => {
+      acc[event.kind] = (acc[event.kind] ?? 0) + 1
+      return acc
+    }, {}),
+    firstEvents: events.slice(0, 12),
+    lastEvents: events.slice(-12),
+  }
 }
 
 function assertNoBlocking(state, label) {
@@ -337,6 +413,7 @@ async function runSmoke() {
     await waitForInlineEdit(page, firstTarget.nodeId)
     await waitForDoubleAnimationFrame(page)
 
+    await clearPerfEvents(page)
     await startLayoutMonitor(page)
     const clickSwitchStartedAt = now()
     await clickParagraph(page, secondTarget)
@@ -392,8 +469,13 @@ async function runSmoke() {
       clickSwitchMs,
       exitMs,
       undoObservedMs: now() - undoStartedAt,
+      clickSwitchStartEvents: clickSwitchState.perfEvents.filter((event) => event.kind === "inline-edit-start"),
       clickSwitchFinalizeEvents: clickSwitchState.perfEvents.filter((event) => event.kind === "inline-edit-finalize"),
+      exitStartEvents: exitState.perfEvents.filter((event) => event.kind === "inline-edit-start"),
       exitFinalizeEvents: exitState.perfEvents.filter((event) => event.kind === "inline-edit-finalize"),
+      clickSwitchPerf: summarizeLifecyclePerf(clickSwitchState),
+      exitPerf: summarizeLifecyclePerf(exitState),
+      undoPerf: summarizeLifecyclePerf(undoState),
       undoStatus: undoState.shell.status,
     }
 

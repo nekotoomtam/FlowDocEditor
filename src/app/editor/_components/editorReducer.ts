@@ -79,6 +79,19 @@ interface HistoryEntry {
   paginated: PaginatedDocument
 }
 
+type PrecomputedSplitParagraphResult = {
+  doc: DocumentNode
+  newNodeId: string
+}
+
+type PrecomputedMergeParagraphResult = {
+  doc: DocumentNode
+  prevNodeId: string
+  caretIndex: number
+}
+
+type PrecomputedDocValidation = "shell-optimistic-structural"
+
 interface EditorState {
   past: HistoryEntry[]
   doc: DocumentNode
@@ -140,9 +153,9 @@ export type EditorAction =
   | { type: "ENSURE_HEADER_FOOTER_ZONE_VISIBLE"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE"; sectionIndex: number; mode: "body" | "full" }
-  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; text?: string; history?: HistoryEntry }
+  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; text?: string; history?: HistoryEntry; newNodeId?: string; precomputed?: PrecomputedSplitParagraphResult; precomputedDocValidation?: PrecomputedDocValidation; paginated?: PaginatedDocument }
   | { type: "CLEAR_SPLIT_NODE_ID" }
-  | { type: "MERGE_PARAGRAPH"; nodeId: string; text?: string; history?: HistoryEntry }
+  | { type: "MERGE_PARAGRAPH"; nodeId: string; text?: string; history?: HistoryEntry; precomputed?: PrecomputedMergeParagraphResult; precomputedDocValidation?: PrecomputedDocValidation; paginated?: PaginatedDocument }
   | { type: "CLEAR_MERGE_RESULT" }
   | { type: "EXIT_LIST_ITEM"; nodeId: string; text?: string; history?: HistoryEntry }
   | { type: "CLEAR_LIST_EXIT_NODE_ID" }
@@ -197,6 +210,15 @@ function pushDoc(state: EditorState, newDoc: DocumentNode, history?: HistoryEntr
   }
 }
 
+function pushPrevalidatedDoc(state: EditorState, newDoc: DocumentNode, history?: HistoryEntry): EditorState {
+  return {
+    ...state,
+    past: [...state.past.slice(-(MAX_HISTORY - 1)), history ?? { doc: state.doc, paginated: state.paginated }],
+    doc: newDoc,
+    future: [],
+  }
+}
+
 function setDocWithoutHistory(state: EditorState, newDoc: DocumentNode): EditorState {
   const normalizedDoc = normalizeDocument(newDoc)
   try {
@@ -218,6 +240,18 @@ function shouldDeleteEmptyUnlistedParagraph(doc: DocumentNode, nodeId: string): 
 function getLayoutChildIds(node: LayoutNode): string[] | null {
   if (!("childIds" in node)) return null
   return Array.isArray(node.childIds) ? node.childIds : null
+}
+
+function hasImmediateSiblingOrder(doc: DocumentNode, previousNodeId: string, nextNodeId: string): boolean {
+  for (const section of doc.document.sections) {
+    for (const node of Object.values(section.nodes)) {
+      const childIds = getLayoutChildIds(node)
+      const index = childIds?.indexOf(previousNodeId) ?? -1
+      if (index < 0 || !childIds) continue
+      return childIds[index + 1] === nextNodeId
+    }
+  }
+  return false
 }
 
 function isDirectBodyParagraph(doc: DocumentNode, nodeId: string): boolean {
@@ -591,17 +625,55 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
     }
     case "SPLIT_PARAGRAPH": {
-      const sourceDoc = action.text === undefined
-        ? state.doc
-        : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
-      const listResult = splitListItemAtIndex(sourceDoc, action.nodeId, action.splitIndex)
-      const result = listResult.newNodeId ? listResult : splitParagraphAtIndex(sourceDoc, action.nodeId, action.splitIndex)
+      const result = action.precomputed ?? (() => {
+        const sourceDoc = action.text === undefined
+          ? state.doc
+          : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+        const listResult = splitListItemAtIndex(sourceDoc, action.nodeId, action.splitIndex)
+        return listResult.newNodeId ? listResult : splitParagraphAtIndex(sourceDoc, action.nodeId, action.splitIndex, {
+          newNodeId: action.newNodeId,
+        })
+      })()
       if (!result.newNodeId) return state
-      return { ...pushDoc(state, result.doc, action.history), lastSplitNodeId: result.newNodeId }
+      const canUseShellPrevalidatedDoc = action.precomputedDocValidation === "shell-optimistic-structural" &&
+        action.precomputed === result &&
+        getEditableParagraphFromDocument(result.doc, action.nodeId) &&
+        getEditableParagraphFromDocument(result.doc, result.newNodeId) &&
+        hasImmediateSiblingOrder(result.doc, action.nodeId, result.newNodeId)
+      const nextState = canUseShellPrevalidatedDoc
+        ? pushPrevalidatedDoc(state, result.doc, action.history)
+        : pushDoc(state, result.doc, action.history)
+      return {
+        ...nextState,
+        paginated: action.paginated ?? nextState.paginated,
+        lastSplitNodeId: result.newNodeId,
+      }
     }
     case "CLEAR_SPLIT_NODE_ID":
       return { ...state, lastSplitNodeId: null }
     case "MERGE_PARAGRAPH": {
+      if (
+        action.precomputed &&
+        action.precomputed.prevNodeId &&
+        Number.isFinite(action.precomputed.caretIndex) &&
+        action.precomputed.caretIndex >= 0 &&
+        getEditableParagraphFromDocument(action.precomputed.doc, action.precomputed.prevNodeId)
+      ) {
+        const canUseShellPrevalidatedDoc = action.precomputedDocValidation === "shell-optimistic-structural" &&
+          !getEditableParagraphFromDocument(action.precomputed.doc, action.nodeId)
+        const nextState = canUseShellPrevalidatedDoc
+          ? pushPrevalidatedDoc(state, action.precomputed.doc, action.history)
+          : pushDoc(state, action.precomputed.doc, action.history)
+        return {
+          ...nextState,
+          paginated: action.paginated ?? nextState.paginated,
+          mergeResult: {
+            prevNodeId: action.precomputed.prevNodeId,
+            caretIndex: action.precomputed.caretIndex,
+          },
+        }
+      }
+
       const sourceDoc = action.text === undefined
         ? state.doc
         : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
@@ -610,8 +682,10 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
         const previousSibling = findPreviousEditableParagraphSibling(sourceDoc, action.nodeId)
         const nextDoc = deleteNode(sourceDoc, action.nodeId)
         if (nextDoc !== state.doc) {
+          const nextState = pushDoc(state, nextDoc, action.history)
           return {
-            ...pushDoc(state, nextDoc, action.history),
+            ...nextState,
+            paginated: action.paginated ?? nextState.paginated,
             selectedNodeId: previousSibling?.prevNodeId ?? null,
             selectionAnchorNodeId: previousSibling?.prevNodeId ?? null,
             mergeResult: previousSibling,
@@ -621,8 +695,10 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
 
       const result = mergeListItemWithPrevious(sourceDoc, action.nodeId) ?? mergeParagraphWithPrevious(sourceDoc, action.nodeId)
       if (!result) return state
+      const nextState = pushDoc(state, result.doc, action.history)
       return {
-        ...pushDoc(state, result.doc, action.history),
+        ...nextState,
+        paginated: action.paginated ?? nextState.paginated,
         mergeResult: { prevNodeId: result.prevNodeId, caretIndex: result.caretIndex },
       }
     }

@@ -52,6 +52,7 @@ import { recordWysiwygPerfEvent, startWysiwygPerfSpan } from "./wysiwygPerforman
 const INLINE_EDIT_CHROME_FILL = "#dbeafe"
 const WYSIWYG_TABLE_CELL_DRAFT_CHROME_FILL = "#dbeafe"
 const EMPTY_PAGE_FRAGMENTS: PageFragment[] = []
+const EMPTY_SUPPRESSED_NODE_IDS: ReadonlySet<string> = new Set()
 type HeaderFooterZone = "header" | "footer"
 
 function useStableEvent<TArgs extends unknown[], TResult>(
@@ -140,6 +141,7 @@ const CANVAS_ACTION_RAIL_OFFSET = 8
 const LAZY_PAGE_RENDER_THRESHOLD = 24
 const LAZY_PAGE_RENDER_ROOT_MARGIN_PX = 1600
 const LAZY_PAGE_RENDER_INITIAL_COUNT = 4
+const BOUNDARY_SAFE_PAGE_BREAK_SUPPRESSION_FALLBACK_RANGE_PT = 96
 
 const CANVAS_PATH_LABELS: Record<SelectionContextItem["type"], string> = {
   body: "BODY",
@@ -158,6 +160,14 @@ const CANVAS_PATH_LABELS: Record<SelectionContextItem["type"], string> = {
 }
 
 export type CanvasTableAction = "add-column" | "add-row" | "delete-column" | "delete-row" | "delete-table"
+
+export interface ActiveOutOfCanvasStructuralIsland {
+  nodeId: string
+  mode: "boundary-safe"
+  fragment: PageFragment
+  pageIndex: number
+  suppressedPageBreakNodeId?: string | null
+}
 
 function fragmentSliceIdentity(fragment: PageFragment): string {
   return [
@@ -1068,6 +1078,39 @@ function fragmentVisibleInteractionHeight(fragment: PageFragment, page: Paginate
   return Math.max(1, Math.min(height, pageContentBottom - fragment.y))
 }
 
+export function shouldSuppressStalePageBreakForActiveWysiwygIsland(input: {
+  fragment: PageFragment
+  activeInlineEditIsPlainNativeParagraph: boolean
+  activeInlineEditDisplayFragment: PageFragment | null
+  activeOutOfCanvasStructuralIsland?: ActiveOutOfCanvasStructuralIsland | null
+}): boolean {
+  const { fragment } = input
+  if (fragment.nodeType !== "page-break") return false
+
+  if (
+    input.activeInlineEditIsPlainNativeParagraph &&
+    input.activeInlineEditDisplayFragment != null &&
+    fragment.pageIndex === input.activeInlineEditDisplayFragment.pageIndex &&
+    fragment.y >= input.activeInlineEditDisplayFragment.y
+  ) {
+    return true
+  }
+
+  const activeIsland = input.activeOutOfCanvasStructuralIsland
+  if (!activeIsland || activeIsland.mode !== "boundary-safe") return false
+  if (fragment.pageIndex !== activeIsland.pageIndex) return false
+
+  if (activeIsland.suppressedPageBreakNodeId) {
+    return fragment.nodeId === activeIsland.suppressedPageBreakNodeId
+  }
+
+  const fallbackBottomY = activeIsland.fragment.y + Math.max(
+    activeIsland.fragment.height + PAGE_BREAK_MARKER_HEIGHT * 2,
+    BOUNDARY_SAFE_PAGE_BREAK_SUPPRESSION_FALLBACK_RANGE_PT,
+  )
+  return fragment.y >= activeIsland.fragment.y && fragment.y <= fallbackBottomY
+}
+
 function fragmentClipPathRect(fragment: PageFragment, page: PaginatedPage, scale: number): {
   x: number
   y: number
@@ -1565,6 +1608,7 @@ function ZoneFragments({
   wysiwygTextCaretOffset,
   wysiwygTextSelection,
   wysiwygTextDraftPaginationActive,
+  suppressedCanvasTextNodeIds = EMPTY_SUPPRESSED_NODE_IDS,
   wysiwygTextPointerFragments,
   showTextSegments,
   onInlineEditStart,
@@ -1605,6 +1649,7 @@ function ZoneFragments({
   wysiwygTextCaretOffset: number | null
   wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
   wysiwygTextDraftPaginationActive: boolean
+  suppressedCanvasTextNodeIds?: ReadonlySet<string>
   wysiwygTextPointerFragments: WysiwygTextPointerFragmentTarget[]
   showTextSegments: boolean
   onInlineEditStart: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
@@ -1629,6 +1674,8 @@ function ZoneFragments({
     const editableParagraph = active &&
       fragment.nodeType === "paragraph" &&
       canInlineEditParagraph(doc, fragment.nodeId, wysiwygTextEngineEnabled)
+    const isCanvasTextSuppressed = fragment.nodeType === "paragraph" &&
+      suppressedCanvasTextNodeIds.has(fragment.nodeId)
     const isInlineEditing = editableParagraph &&
       inlineEditNodeId === fragment.nodeId &&
       (activeInlineEditPageIndex == null || fragment.pageIndex === activeInlineEditPageIndex)
@@ -1712,12 +1759,12 @@ function ZoneFragments({
           y={visualDisplayFragment.y * scale}
           width={visualDisplayFragment.width * scale}
           height={Math.max(visualDisplayFragment.height * scale, 2)}
-          fill={isInlineEditing ? INLINE_EDIT_CHROME_FILL : "transparent"}
-          stroke={isInlineEditing ? "#2563eb" : editableParagraph ? "#64748b" : "#cbd5e1"}
+          fill={isCanvasTextSuppressed ? "transparent" : isInlineEditing ? INLINE_EDIT_CHROME_FILL : "transparent"}
+          stroke={isCanvasTextSuppressed ? "transparent" : isInlineEditing ? "#2563eb" : editableParagraph ? "#64748b" : "#cbd5e1"}
           strokeWidth={isInlineEditing ? 1.25 : editableParagraph ? 0.9 : 0.5}
-          opacity={canRenderText ? (active ? 0.72 : 0.5) : 0.45}
+          opacity={isCanvasTextSuppressed ? 0 : canRenderText ? (active ? 0.72 : 0.5) : 0.45}
         />
-        {canRenderText && (
+        {canRenderText && !isCanvasTextSuppressed && (
           <ParagraphTextSurface
             fragment={displayFragment}
             doc={doc}
@@ -2185,7 +2232,7 @@ function PageView({
   pageKey, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction,
   resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, headerFooterZoneScroll, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onHeaderFooterZoneScroll, onHeaderFooterZoneScrollTo, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
-  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygRichTextShortcut, onWysiwygTextReflowDecision,
+  wysiwygTextEngineEnabled, wysiwygTextDraftNodeId, wysiwygTextDraftText, wysiwygTextCaretOffset, wysiwygTextSelection, wysiwygTextDraftPaginationActive, suppressedCanvasTextNodeIds = EMPTY_SUPPRESSED_NODE_IDS, activeOutOfCanvasStructuralIsland, wysiwygDraftVisualPreview, wysiwygTableCellDraftVisualChromeByPageIndex, wysiwygTextPointerFragments, onWysiwygTextDraftChange, onWysiwygRichTextShortcut, onWysiwygTextReflowDecision,
 }: {
   page: PaginatedPage; doc: DocumentNode; drag: DragState | null
   scale: number; selectedNodeId: string | null; selectionAnchorNodeId: string | null; isLayoutLoading: boolean
@@ -2201,6 +2248,8 @@ function PageView({
   wysiwygTextCaretOffset: number | null
   wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
   wysiwygTextDraftPaginationActive: boolean
+  suppressedCanvasTextNodeIds?: ReadonlySet<string>
+  activeOutOfCanvasStructuralIsland: ActiveOutOfCanvasStructuralIsland | null
   wysiwygDraftVisualPreview: WysiwygDraftVisualPreview | null
   wysiwygTableCellDraftVisualChromeByPageIndex: Map<number, PageFragment[]>
   wysiwygTextPointerFragments: WysiwygTextPointerFragmentTarget[]
@@ -2416,6 +2465,16 @@ function PageView({
       nodeById.get(activeInlineEditSourceFragment.parentNodeId)?.type !== "flow-stack"
     ),
   )
+  const shouldSuppressStalePageBreakFragment = useCallback((fragment: PageFragment) => shouldSuppressStalePageBreakForActiveWysiwygIsland({
+    fragment,
+    activeInlineEditIsPlainNativeParagraph,
+    activeInlineEditDisplayFragment,
+    activeOutOfCanvasStructuralIsland,
+  }), [
+    activeInlineEditDisplayFragment,
+    activeInlineEditIsPlainNativeParagraph,
+    activeOutOfCanvasStructuralIsland,
+  ])
   const tableColumnResizeHandles = resolveTableColumnResizeHandles({
     doc,
     selectedNodeId,
@@ -2569,6 +2628,9 @@ function PageView({
   const selectedOverlayFragments = isHeaderFooterEditSection
     ? activeHeaderFooterChromeFragments
     : renderFragments
+  const visibleSelectedOverlayFragments = selectedOverlayFragments.filter((fragment) =>
+    !shouldSuppressStalePageBreakFragment(fragment)
+  )
   const suppressPathOverlays = Boolean(
     drag ||
     resizeDrag ||
@@ -2578,17 +2640,17 @@ function PageView({
     (headerFooterEditMode && !isHeaderFooterEditSection),
   )
   const selectedPathFragment = suppressPathOverlays ? null : findCanvasPathFragment(
-    selectedOverlayFragments,
+    visibleSelectedOverlayFragments,
     selectedNodeId,
     selectedPathAnchorNodeId,
   )
   const hoverPathFragment = suppressPathOverlays || isHeaderFooterEditSection || hoverPathNodeId === selectedPathAnchorNodeId
     ? null
-    : findCanvasPathFragment(renderFragments, hoverPathNodeId)
+    : findCanvasPathFragment(renderFragments.filter((fragment) => !shouldSuppressStalePageBreakFragment(fragment)), hoverPathNodeId)
   const selectedActionNode = selectedNodeId ? nodeById.get(selectedNodeId) ?? null : null
   const selectedActionFragment = suppressPathOverlays || !selectedActionNode
     ? null
-    : findCanvasPathFragment(selectedOverlayFragments, selectedNodeId)
+    : findCanvasPathFragment(visibleSelectedOverlayFragments, selectedNodeId)
   const selectedActionIsHeaderFooterZone = isHeaderFooterEditSection && selectedActionFragment != null
   const selectedActionTableActions = selectedActionIsHeaderFooterZone
     ? []
@@ -2657,13 +2719,12 @@ function PageView({
     const isContinuationParagraphFragment = f.nodeType === "paragraph" &&
       (displayFragment.continuesFrom === true || displayFragment.isContinued === true)
     const isContinuationFlowTableCellFragment = isFlowTableCellContinuationFragment(displayFragment)
-    const shouldSuppressNativeInlineEditFragmentChrome = isInlineEditing && activeInlineEditIsPlainNativeParagraph
-    const shouldSuppressStalePageBreakForNativeEdit = activeInlineEditIsPlainNativeParagraph &&
-      activeInlineEditDisplayFragment != null &&
-      f.nodeType === "page-break" &&
-      f.pageIndex === activeInlineEditDisplayFragment.pageIndex &&
-      f.y >= activeInlineEditDisplayFragment.y
+    const isCanvasTextSuppressed = f.nodeType === "paragraph" && suppressedCanvasTextNodeIds.has(f.nodeId)
+    const shouldSuppressNativeInlineEditFragmentChrome = (isInlineEditing && activeInlineEditIsPlainNativeParagraph) || isCanvasTextSuppressed
+    const shouldSuppressActiveInlineEditTextSurface = shouldSuppressNativeInlineEditFragmentChrome
+    const shouldSuppressStalePageBreakForActiveIsland = shouldSuppressStalePageBreakFragment(f)
     const shouldShowFragmentTypeLabel = !isFlowTableRowVisualOnly &&
+      !shouldSuppressStalePageBreakForActiveIsland &&
       !isTableStructureChrome &&
       !isWysiwygTableCellDraftVisualChrome &&
       !isContinuationParagraphFragment &&
@@ -2699,6 +2760,7 @@ function PageView({
       : isTableStructureChrome ? "transparent"
       : isWysiwygTableCellDraftStructureChrome ? "transparent"
       : isWysiwygTableCellDraftVisualChrome ? WYSIWYG_TABLE_CELL_DRAFT_CHROME_FILL
+      : shouldSuppressStalePageBreakForActiveIsland ? "transparent"
       : shouldSuppressNativeInlineEditFragmentChrome ? "transparent"
       : hasAuthoredFragmentBox && !isInlineEditing ? "transparent" : isInlineEditing ? INLINE_EDIT_CHROME_FILL : "transparent"
     const chromeStroke = isFlowTableRowVisualOnly || (hasAuthoredFragmentBox && !isInlineEditing && !isHovered)
@@ -2706,6 +2768,7 @@ function PageView({
       : isTableStructureChrome ? "transparent"
       : isWysiwygTableCellDraftStructureChrome ? "transparent"
       : isWysiwygTableCellDraftVisualChrome ? "#60a5fa"
+      : shouldSuppressStalePageBreakForActiveIsland ? "transparent"
       : shouldSuppressNativeInlineEditFragmentChrome ? "transparent"
       : isInlineEditing ? "#2563eb" : isHovered ? "#4b5563" : "#9ca3af"
     const chromeOpacity = isFlowTableRowVisualOnly
@@ -2713,6 +2776,7 @@ function PageView({
       : isTableStructureChrome ? 0
       : isWysiwygTableCellDraftStructureChrome ? 0
       : isWysiwygTableCellDraftVisualChrome ? 0.34
+      : shouldSuppressStalePageBreakForActiveIsland ? 0
       : shouldSuppressNativeInlineEditFragmentChrome ? 0
       : hasAuthoredFragmentBox && !isInlineEditing ? 1 : isInlineEditing ? 0.35 : 0.75
     const fragmentKey = buildEditorFragmentRenderKey(displayFragment, i, isInlineEditing)
@@ -2733,13 +2797,16 @@ function PageView({
         data-table-structure-chrome={isTableStructureChrome ? "true" : undefined}
         data-wysiwyg-table-cell-visual-chrome={isWysiwygTableCellDraftVisualChrome ? "true" : undefined}
         data-wysiwyg-table-cell-structure-chrome={isWysiwygTableCellDraftStructureChrome ? "true" : undefined}
-        onPointerEnter={!isFlowTableRowVisualOnly && !drag && !resizeDrag && !minHeightDrag && !marginDrag && !marginEditMode && !headerFooterEditMode && !isInlineEditing
+        data-wysiwyg-active-canvas-text-suppressed={shouldSuppressActiveInlineEditTextSurface ? "true" : undefined}
+        data-wysiwyg-out-of-canvas-island-suppressed={isCanvasTextSuppressed ? "true" : undefined}
+        data-wysiwyg-boundary-safe-page-break-suppressed={shouldSuppressStalePageBreakForActiveIsland ? "true" : undefined}
+        onPointerEnter={!shouldSuppressStalePageBreakForActiveIsland && !isFlowTableRowVisualOnly && !drag && !resizeDrag && !minHeightDrag && !marginDrag && !marginEditMode && !headerFooterEditMode && !isInlineEditing
           ? () => queueHoverPath(f.nodeId)
           : undefined}
-        onPointerLeave={!isFlowTableRowVisualOnly
+        onPointerLeave={!shouldSuppressStalePageBreakForActiveIsland && !isFlowTableRowVisualOnly
           ? () => clearHoverPath(f.nodeId)
           : undefined}
-        onPointerDown={!isFlowTableRowVisualOnly && (isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !marginEditMode && !headerFooterEditMode && !isInlineEditing
+        onPointerDown={!shouldSuppressStalePageBreakForActiveIsland && !isFlowTableRowVisualOnly && (isSelectable || f.nodeType === "stack") && !drag && !resizeDrag && !marginEditMode && !headerFooterEditMode && !isInlineEditing
           ? (e) => {
             e.stopPropagation()
             const clickAction = shouldStartInlineEditOnSingleClick({
@@ -2777,7 +2844,7 @@ function PageView({
           }
           : undefined}
         style={{
-          pointerEvents: isFlowTableRowVisualOnly || isWysiwygTableCellDraftVisualChrome ? "none" : undefined,
+          pointerEvents: shouldSuppressStalePageBreakForActiveIsland || isFlowTableRowVisualOnly || isWysiwygTableCellDraftVisualChrome ? "none" : undefined,
           cursor: isInlineEditing ? "text" : isDraggable && !drag ? "grab" : "default",
         }}
       >
@@ -2792,7 +2859,7 @@ function PageView({
         />
         {(f.nodeType === "paragraph" || f.nodeType === "flow-stack" || f.nodeType === "flow-table-cell") && renderFragmentBox(resizedDisplayFragment, scale)}
         {f.nodeType === "divider" && renderDividerFragment(displayFragment, scale)}
-        {f.nodeType === "page-break" && !shouldSuppressStalePageBreakForNativeEdit && renderPageBreakMarker(displayFragment, scale)}
+        {f.nodeType === "page-break" && !shouldSuppressStalePageBreakForActiveIsland && renderPageBreakMarker(displayFragment, scale)}
         {showDrift && f.nodeType === "paragraph" && (() => {
           const drift = driftMap?.get(f.nodeId)
           if (!drift) return null
@@ -2838,7 +2905,7 @@ function PageView({
             วางที่นี่
           </text>
         )}
-        {(f.nodeType === "paragraph" || f.nodeType === "toc") && (
+        {(f.nodeType === "paragraph" || f.nodeType === "toc") && !shouldSuppressActiveInlineEditTextSurface && (
           <ParagraphTextSurface
             fragment={displayFragment}
             doc={doc}
@@ -2918,7 +2985,9 @@ function PageView({
     scale,
     showDrift,
     showTextSegments,
+    shouldSuppressStalePageBreakFragment,
     sourceTableCellDraftVisualChromeByKey,
+    suppressedCanvasTextNodeIds,
     tableCellDraftVisualChromeSet,
     tableCellIds,
     textMeasurer,
@@ -2940,6 +3009,7 @@ function PageView({
     if (selectedIndex < 0 || selectedIndex === activeInlineEditRenderIndex) return null
     const selectedFragment = renderFragments[selectedIndex]
     if (!selectedFragment || selectedFragment.nodeType === "flow-table-row") return null
+    if (shouldSuppressStalePageBreakFragment(selectedFragment)) return null
     const displayFragment = visualDraftFragmentForPage &&
       selectedFragment.nodeId === visualDraftFragmentForPage.nodeId &&
       selectedFragment.nodeType === "paragraph"
@@ -2969,6 +3039,7 @@ function PageView({
     renderFragments,
     scale,
     selectedNodeId,
+    shouldSuppressStalePageBreakFragment,
     sourceTableCellDraftVisualChromeByKey,
     visualDraftFragmentForPage,
   ])
@@ -3112,6 +3183,7 @@ function PageView({
           wysiwygTextCaretOffset={wysiwygTextCaretOffset}
           wysiwygTextSelection={wysiwygTextSelection}
           wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive}
+          suppressedCanvasTextNodeIds={suppressedCanvasTextNodeIds}
           wysiwygTextPointerFragments={wysiwygTextPointerFragments}
           showTextSegments={showTextSegments}
           onInlineEditStart={onInlineEditStart}
@@ -3161,6 +3233,7 @@ function PageView({
           wysiwygTextCaretOffset={wysiwygTextCaretOffset}
           wysiwygTextSelection={wysiwygTextSelection}
           wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive}
+          suppressedCanvasTextNodeIds={suppressedCanvasTextNodeIds}
           wysiwygTextPointerFragments={wysiwygTextPointerFragments}
           showTextSegments={showTextSegments}
           onInlineEditStart={onInlineEditStart}
@@ -3592,6 +3665,8 @@ const PAGE_VIEW_SCOPED_EDIT_PROP_KEYS: Array<keyof PageViewProps> = [
   "wysiwygTextCaretOffset",
   "wysiwygTextSelection",
   "wysiwygTextDraftPaginationActive",
+  "suppressedCanvasTextNodeIds",
+  "activeOutOfCanvasStructuralIsland",
   "wysiwygDraftVisualPreview",
   "wysiwygTableCellDraftVisualChromeByPageIndex",
   "wysiwygTextPointerFragments",
@@ -3606,6 +3681,8 @@ interface PageViewScopedEditProps {
   inlineEditPageIndex: number | null
   wysiwygTextDraftNodeId: string | null
   wysiwygDraftVisualPreview: WysiwygDraftVisualPreview | null
+  suppressedCanvasTextNodeIds?: ReadonlySet<string>
+  activeOutOfCanvasStructuralIsland?: ActiveOutOfCanvasStructuralIsland | null
   wysiwygTableCellDraftVisualChromeByPageIndex: Map<number, PageFragment[]>
   wysiwygTextPointerFragments: WysiwygTextPointerFragmentTarget[]
 }
@@ -3674,6 +3751,16 @@ function pageHasAnyNodeFragment(page: PaginatedPage, nodeId: string | null): boo
   ].some((fragment) => fragment.nodeId === nodeId)
 }
 
+function pageHasSuppressedBoundarySafePageBreak(
+  page: PaginatedPage,
+  activeIsland: ActiveOutOfCanvasStructuralIsland | null | undefined,
+): boolean {
+  if (!activeIsland) return false
+  if (page.index === activeIsland.pageIndex) return true
+  const suppressedPageBreakNodeId = activeIsland.suppressedPageBreakNodeId ?? null
+  return pageHasAnyNodeFragment(page, suppressedPageBreakNodeId)
+}
+
 export function pageViewScopedEditPropsAffectPage(
   page: PaginatedPage,
   props: PageViewScopedEditProps,
@@ -3682,7 +3769,11 @@ export function pageViewScopedEditPropsAffectPage(
   if (pageHasAnyNodeFragment(page, props.selectionAnchorNodeId)) return true
   if (pageHasNodeFragment(page, props.inlineEditNodeId)) return true
   if (pageHasNodeFragment(page, props.wysiwygTextDraftNodeId)) return true
+  for (const nodeId of props.suppressedCanvasTextNodeIds ?? EMPTY_SUPPRESSED_NODE_IDS) {
+    if (pageHasNodeFragment(page, nodeId)) return true
+  }
   if (props.inlineEditPageIndex === page.index && props.inlineEditNodeId !== null) return true
+  if (pageHasSuppressedBoundarySafePageBreak(page, props.activeOutOfCanvasStructuralIsland)) return true
   if (props.wysiwygDraftVisualPreview?.fragmentsByPageIndex.has(page.index)) return true
   if (props.wysiwygDraftVisualPreview?.caretPageIndex === page.index) return true
   if (props.wysiwygTableCellDraftVisualChromeByPageIndex.has(page.index)) return true
@@ -3795,6 +3886,7 @@ function LazyPageFrame({
   scale,
   rendered,
   setPageFrameRef,
+  setPageOverlayRef,
   children,
 }: {
   page: PaginatedPage
@@ -3802,11 +3894,15 @@ function LazyPageFrame({
   scale: number
   rendered: boolean
   setPageFrameRef: (key: string, el: HTMLDivElement | null) => void
+  setPageOverlayRef: (key: string, el: HTMLDivElement | null) => void
   children: React.ReactNode
 }) {
   const setFrameRef = useCallback((el: HTMLDivElement | null) => {
     setPageFrameRef(pageKey, el)
   }, [pageKey, setPageFrameRef])
+  const setOverlayRef = useCallback((el: HTMLDivElement | null) => {
+    setPageOverlayRef(pageKey, el)
+  }, [pageKey, setPageOverlayRef])
   const W = page.width * scale
   const H = page.height * scale
 
@@ -3824,6 +3920,22 @@ function LazyPageFrame({
       }}
     >
       {rendered ? children : <LazyPagePlaceholder page={page} scale={scale} />}
+      <div
+        ref={setOverlayRef}
+        data-testid="editor-page-flowdoc-island-overlay"
+        data-page-key={pageKey}
+        data-page-index={page.index}
+        style={{
+          position: "absolute",
+          left: 1,
+          top: 1,
+          width: W,
+          height: H,
+          overflow: "visible",
+          pointerEvents: "none",
+          zIndex: 30,
+        }}
+      />
     </div>
   )
 }
@@ -3831,11 +3943,13 @@ function LazyPageFrame({
 type EditorCanvasPageSlotProps = PageViewProps & {
   rendered: boolean
   setPageFrameRef: (key: string, el: HTMLDivElement | null) => void
+  setPageOverlayRef: (key: string, el: HTMLDivElement | null) => void
 }
 
 function EditorCanvasPageSlot({
   rendered,
   setPageFrameRef,
+  setPageOverlayRef,
   ...pageViewProps
 }: EditorCanvasPageSlotProps) {
   const { page, pageKey, scale } = pageViewProps
@@ -3849,6 +3963,7 @@ function EditorCanvasPageSlot({
         scale={scale}
         rendered={rendered}
         setPageFrameRef={setPageFrameRef}
+        setPageOverlayRef={setPageOverlayRef}
       >
         <MemoizedPageView {...pageViewProps} />
       </LazyPageFrame>
@@ -3865,6 +3980,7 @@ function areEditorCanvasPageSlotPropsEqual(
   if (prev.pageKey !== next.pageKey) return false
   if (prev.scale !== next.scale) return false
   if (prev.setPageFrameRef !== next.setPageFrameRef) return false
+  if (prev.setPageOverlayRef !== next.setPageOverlayRef) return false
   if (!prev.rendered && !next.rendered) return true
   return arePageViewPropsEqual(prev, next)
 }
@@ -3900,6 +4016,7 @@ interface Props {
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
   setPageRef: (key: string, el: HTMLElement | null) => void
+  setPageOverlayRef: (key: string, el: HTMLElement | null) => void
   onNodePointerDown: (source: DragSource, e: React.PointerEvent, clickAction?: PendingClickAction) => void
   onBackgroundPointerDown: () => void
   onSelectContextNode: (nodeId: string) => void
@@ -3934,6 +4051,8 @@ interface Props {
   wysiwygTextCaretOffset: number | null
   wysiwygTextSelection: { anchorOffset: number; focusOffset: number } | null
   wysiwygTextDraftPaginationActive: boolean
+  suppressedCanvasTextNodeIds?: ReadonlySet<string>
+  activeOutOfCanvasStructuralIsland?: ActiveOutOfCanvasStructuralIsland | null
   onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
   onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
@@ -4029,7 +4148,7 @@ export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, scale, activePageIndex, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
   textMeasurer,
   inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
-  setPageRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, onScaleChange,
+  setPageRef, setPageOverlayRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
   wysiwygTextEngineEnabled,
@@ -4040,6 +4159,8 @@ export function EditorCanvas({
   wysiwygTextCaretOffset,
   wysiwygTextSelection,
   wysiwygTextDraftPaginationActive,
+  suppressedCanvasTextNodeIds = EMPTY_SUPPRESSED_NODE_IDS,
+  activeOutOfCanvasStructuralIsland = null,
   onWysiwygTextDraftChange,
   onWysiwygRichTextShortcut,
   onWysiwygTextReflowDecision,
@@ -4369,6 +4490,10 @@ export function EditorCanvas({
       const key = pageKeyByPageIndex.get(wysiwygDraftVisualPreview.caretPageIndex)
       if (key) keys.add(key)
     }
+    if (activeOutOfCanvasStructuralIsland) {
+      const key = pageKeyByPageIndex.get(activeOutOfCanvasStructuralIsland.pageIndex)
+      if (key) keys.add(key)
+    }
     if (resizeDrag?.pageKey) keys.add(resizeDrag.pageKey)
     if (minHeightDrag?.pageKey) keys.add(minHeightDrag.pageKey)
     if (marginDrag?.pageKey) keys.add(marginDrag.pageKey)
@@ -4379,6 +4504,7 @@ export function EditorCanvas({
     return keys
   }, [
     activePageIndex,
+    activeOutOfCanvasStructuralIsland,
     headerFooterReservedDrag,
     inlineEditPageIndex,
     marginDrag,
@@ -4600,6 +4726,8 @@ export function EditorCanvas({
                   wysiwygTextCaretOffset={wysiwygTextCaretOffset}
                   wysiwygTextSelection={wysiwygTextSelection}
                   wysiwygTextDraftPaginationActive={wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive}
+                  suppressedCanvasTextNodeIds={suppressedCanvasTextNodeIds}
+                  activeOutOfCanvasStructuralIsland={activeOutOfCanvasStructuralIsland}
                   wysiwygDraftVisualPreview={wysiwygDraftVisualPreview}
                   wysiwygTableCellDraftVisualChromeByPageIndex={wysiwygTableCellDraftVisualChromeByPageIndex}
                   wysiwygTextPointerFragments={wysiwygTextPointerFragments}
@@ -4608,6 +4736,7 @@ export function EditorCanvas({
                   onWysiwygTextReflowDecision={stableOnWysiwygTextReflowDecision}
                   rendered={rendered}
                   setPageFrameRef={setPageFrameRef}
+                  setPageOverlayRef={setPageOverlayRef}
                 />
               )
             })}

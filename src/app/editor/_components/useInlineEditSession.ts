@@ -4,6 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { DocumentNode } from "@/schema"
 import type { PaginatedDocument } from "@/pagination"
 import { decideInlineEditStart, getFocusedInlineEditNodeId, shouldFinalizeInlineEditBlur } from "./inlineEditBlur"
+import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
+import {
+  finishWysiwygPerfSpan,
+  startWysiwygPerfSpan,
+  summarizePaginatedForWysiwygPerf,
+} from "./wysiwygPerformance"
 
 export interface InlineEditTransaction {
   nodeId: string
@@ -268,12 +274,27 @@ export function useInlineEditSession({
   }, [])
 
   const startAfterStructuralChange = useCallback((nextNodeId: string, nextCaretIndex: number | null): PaginatedDocument | null => {
+    const refocusStartedAt = startWysiwygPerfSpan()
     cancelPendingEnd()
     const beforeDoc = getCurrentDoc()
     const beforeText = getParagraphText(beforeDoc, nextNodeId)
-    if (beforeText == null) return null
+    if (beforeText == null) {
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-structural-refocus", refocusStartedAt, {
+        nodeId: nextNodeId,
+        action: "missing-paragraph",
+        active: false,
+      })
+      return null
+    }
 
+    const paginationStartedAt = startWysiwygPerfSpan()
     const beforePaginated = paginatePreviewDoc(beforeDoc)
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-structural-refocus", paginationStartedAt, {
+      nodeId: nextNodeId,
+      action: "paginate-preview",
+      active: true,
+      ...summarizePaginatedForWysiwygPerf(beforePaginated),
+    })
     setPaginated(beforePaginated)
     transactionRef.current = {
       nodeId: nextNodeId,
@@ -286,6 +307,12 @@ export function useInlineEditSession({
     setActiveNodeId(nextNodeId)
     setCaretIndex(nextCaretIndex)
     setPageIndex(null)
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-structural-refocus", refocusStartedAt, {
+      nodeId: nextNodeId,
+      action: "start-session",
+      active: true,
+      ...summarizePaginatedForWysiwygPerf(beforePaginated),
+    })
     return beforePaginated
   }, [
     cancelPendingEnd,
@@ -297,6 +324,56 @@ export function useInlineEditSession({
     setActiveNodeId,
     setPageIndex,
     setPaginated,
+  ])
+
+  const startAfterOptimisticStructuralChange = useCallback((
+    nextNodeId: string,
+    nextCaretIndex: number | null,
+    beforePaginated: PaginatedDocument,
+    nextPageIndex: number | null = null,
+    beforeDocOverride?: DocumentNode,
+    beforeTextOverride?: string | null,
+  ): boolean => {
+    const refocusStartedAt = startWysiwygPerfSpan()
+    cancelPendingEnd()
+    const beforeDoc = beforeDocOverride ?? getCurrentDoc()
+    const beforeText = beforeTextOverride ?? getParagraphText(beforeDoc, nextNodeId)
+    if (beforeText == null) {
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-structural-refocus", refocusStartedAt, {
+        nodeId: nextNodeId,
+        action: "optimistic-missing-paragraph",
+        active: false,
+      })
+      return false
+    }
+
+    transactionRef.current = {
+      nodeId: nextNodeId,
+      beforeDoc,
+      beforePaginated,
+      beforeText,
+    }
+    resetVisualFreshness()
+    markVisualFresh(0)
+    setActiveNodeId(nextNodeId)
+    setCaretIndex(nextCaretIndex)
+    setPageIndex(nextPageIndex)
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-structural-refocus", refocusStartedAt, {
+      nodeId: nextNodeId,
+      pageIndex: nextPageIndex,
+      action: "optimistic-start-session",
+      active: true,
+      ...summarizePaginatedForWysiwygPerf(beforePaginated),
+    })
+    return true
+  }, [
+    cancelPendingEnd,
+    getCurrentDoc,
+    getParagraphText,
+    markVisualFresh,
+    resetVisualFreshness,
+    setActiveNodeId,
+    setPageIndex,
   ])
 
   return {
@@ -323,5 +400,6 @@ export function useInlineEditSession({
     heightChange,
     consumeHistory,
     startAfterStructuralChange,
+    startAfterOptimisticStructuralChange,
   }
 }

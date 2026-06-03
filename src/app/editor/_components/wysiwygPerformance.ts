@@ -30,6 +30,17 @@ export type WysiwygPerfEventKind =
   | "flowdoc-island-parent-sync"
   | "flowdoc-island-pointer-hit-test"
   | "flowdoc-island-structural-edit"
+  | "flowdoc-island-structural-guard"
+  | "flowdoc-structural-transaction"
+  | "flowdoc-structural-pagination-schedule"
+  | "flowdoc-island-blur-handoff"
+  | "inline-edit-structural-refocus"
+  | "enter-key-to-optimistic-island-visible"
+  | "enter-key-to-new-caret-visible"
+  | "structural-refocus-used-full-pagination-before-island"
+  | "optimistic-refocus-stale-settle-ignored"
+  | "structural-refocus-settled-pagination"
+  | "inline-edit-end"
 
 export interface WysiwygPerfEvent {
   kind: WysiwygPerfEventKind
@@ -37,8 +48,12 @@ export interface WysiwygPerfEvent {
   durationMs: number
   nodeId?: string
   previousNodeId?: string | null
+  sourceNodeId?: string | null
+  expectedActiveNodeId?: string | null
+  removedNodeId?: string | null
   pageIndex?: number | null
   draftVersion?: number | null
+  currentDraftVersion?: number | null
   textLength?: number
   lineCount?: number
   availableWidth?: number
@@ -48,6 +63,10 @@ export interface WysiwygPerfEvent {
   firstRequestedAtMs?: number
   source?: string
   action?: string
+  operation?: string
+  attemptedOperation?: string
+  token?: number
+  key?: string
   active?: boolean
   reflowKind?: string
   reflowReason?: string
@@ -81,6 +100,9 @@ export interface WysiwygPerfEvent {
   pageCount?: number
   fragmentCount?: number
   paginationProfile?: PaginationProfile
+  usedFullPaginationBeforeIsland?: boolean
+  overflowedPage?: boolean
+  optimisticMode?: "same-page" | "boundary-safe"
 }
 
 export interface FlowDocPerfEvent {
@@ -95,6 +117,14 @@ declare global {
     __flowDocWysiwygPerfEvents?: WysiwygPerfEvent[]
     __flowDocWysiwygPerfTraceEnabled?: boolean
     __flowDocPaginationProfileEnabled?: boolean
+    __flowDocEditorSmokeState?: {
+      document?: unknown
+      selectedNodeId?: string | null
+      selectionAnchorNodeId?: string | null
+      lastSplitNodeId?: string | null
+      mergeResult?: unknown
+      updatedAt?: number
+    }
     __FLOWDOC_PERF_EVENTS__?: FlowDocPerfEvent[]
   }
 }

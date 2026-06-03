@@ -13,15 +13,41 @@ import { getSmokeBrowserConfig, launchSmokeBrowser } from "./smoke-browser.mjs"
 const DEFAULT_PORT = 4017
 const DEFAULT_TARGET_NODE_ID = "stage3-boundary-target"
 const MIXED_PAGINATION_TARGET_NODE_ID = "mixed-pagination-target"
+const LONG_MOCK_STRUCTURAL_TARGET_NODE_ID = "cover_note"
+const LONG_MOCK_STRUCTURAL_NEXT_NODE_ID = "cover_break"
+const LONG_MOCK_STRUCTURAL_SPLIT_TEXT = "pagination"
+const LONG_MOCK_STRUCTURAL_STALE_TAIL_TEXT = "TOC"
 const SCENARIO_ID = "wysiwyg-stage3-boundary"
 const PROBE_MODE = process.env.PROBE_MODE?.trim() || "typing"
 const NO_WAIT_BURST_PROBE_MODES = new Set(["held-repeat", "no-wait-burst"])
-const DEFAULT_TYPE_BURST_LENGTH = PROBE_MODE === "mixed-pagination" ? 80 : (PROBE_MODE === "long-unbroken" || NO_WAIT_BURST_PROBE_MODES.has(PROBE_MODE)) ? 220 : 400
+const STRUCTURAL_REFOCUS_PROBE_MODES = new Set([
+  "enter-rapid",
+  "enter-type-before-settle",
+  "enter-mid-split",
+  "enter-undo",
+  "enter-blur-before-settle",
+  "enter-backspace-after-dispatch",
+  "enter-backspace-immediate",
+  "backspace-rapid",
+])
+const DEFAULT_TYPE_BURST_LENGTH = PROBE_MODE === "mixed-pagination" ? 80 : (PROBE_MODE === "long-unbroken" || NO_WAIT_BURST_PROBE_MODES.has(PROBE_MODE)) ? 220 : STRUCTURAL_REFOCUS_PROBE_MODES.has(PROBE_MODE) ? 3 : 400
 const TYPE_BURST_LENGTH = Number(process.env.PROBE_BURST_LENGTH ?? DEFAULT_TYPE_BURST_LENGTH)
 const DEFAULT_TYPE_INTERVAL_MS = (PROBE_MODE === "long-unbroken" || NO_WAIT_BURST_PROBE_MODES.has(PROBE_MODE)) ? 0 : 30
 const TYPE_INTERVAL_MS = Number(process.env.PROBE_INTERVAL_MS ?? DEFAULT_TYPE_INTERVAL_MS)
+const STRUCTURAL_REFOCUS_TYPE_LENGTH = Number(process.env.PROBE_STRUCTURAL_TYPE_LENGTH ?? 80)
+const STRUCTURAL_REFOCUS_ENTER_COUNT = Number(process.env.PROBE_STRUCTURAL_ENTER_COUNT ?? Math.max(2, TYPE_BURST_LENGTH))
+const STRUCTURAL_REFOCUS_BACKSPACE_COUNT = Number(process.env.PROBE_STRUCTURAL_BACKSPACE_COUNT ?? Math.max(2, TYPE_BURST_LENGTH))
+const STRUCTURAL_MID_SPLIT_REQUESTED = process.env.PROBE_ENTER_SPLIT_TEXT != null && process.env.PROBE_ENTER_SPLIT_TEXT.trim() !== ""
+const STRUCTURAL_MID_SPLIT_TEXT = process.env.PROBE_ENTER_SPLIT_TEXT?.trim() || "TOC"
+const STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS = (process.env.PROBE_ENTER_FRAME_DELAYS_MS?.trim() || "0,50,120,300,800,1800,4200")
+  .split(",")
+  .map((value) => Number(value.trim()))
+  .filter((value) => Number.isFinite(value) && value >= 0)
 const TYPE_TEXT_SEQUENCE = Array.from(process.env.PROBE_TYPE_TEXT ?? "")
 const KEY_INPUT_PROBE_MODES = new Set(["typing", "space-repeat", "delete", "enter", "wrap-typing", "mixed-pagination", "long-unbroken", "held-repeat", "no-wait-burst"])
+const SCROLL_ANCHORING_PROBE_MODES = new Set(["scroll-anchoring"])
+const BLUR_HANDOFF_PROBE_MODES = new Set(["blur-handoff"])
+const BLUR_HANDOFF_WAIT_BEFORE_CLICK_MS = Number(process.env.PROBE_BLUR_WAIT_BEFORE_CLICK_MS ?? 0)
 const NATIVE_WRAP_VARIANT = process.env.PROBE_NATIVE_WRAP_VARIANT?.trim() || "control"
 const CAPTURE_EDIT_EXIT = process.env.PROBE_CAPTURE_EDIT_EXIT === "1" || PROBE_MODE === "mixed-pagination"
 const PROBE_SCREENSHOT_DIR = process.env.PROBE_SCREENSHOT_DIR?.trim() || null
@@ -33,6 +59,7 @@ const READY_TIMEOUT_MS = Number(process.env.PROBE_READY_TIMEOUT_MS ?? 15000)
 const TARGET_PAGE_INDEX = process.env.PROBE_TARGET_PAGE_INDEX == null
   ? null
   : Number(process.env.PROBE_TARGET_PAGE_INDEX)
+const HAS_TARGET_PAGE_INDEX = TARGET_PAGE_INDEX !== null && Number.isFinite(TARGET_PAGE_INDEX)
 const FRAME_BUDGET_MS = 16
 const JANK_BUDGET_MS = 100
 
@@ -45,11 +72,13 @@ const headless = process.env.HEADED !== "1"
 const smokeBrowser = getSmokeBrowserConfig({ headless })
 const probeFlowDocFile = process.env.FLOWDOC_PROBE_FILE?.trim() || null
 const configuredTargetNodeId = process.env.PROBE_TARGET_NODE_ID?.trim() || null
+const configuredStaleTailText = process.env.PROBE_ENTER_STALE_TAIL_TEXT?.trim() || null
 const shouldUseMixedPaginationDocument = PROBE_MODE === "mixed-pagination" && !probeFlowDocFile
 
 const paragraphFragmentSelector = `[data-testid="editor-fragment"][data-node-type="paragraph"]`
 const resizeHandleSelector = `[data-testid="column-resize-handle"]`
 const editorShellSelector = `[data-testid="editor-shell"]`
+const activeFlowdocDraftIslandSelector = `[data-wysiwyg-text-engine-layer="true"][data-wysiwyg-active-visual-mode="flowdoc-draft-editor-island"]`
 
 function pageFrameSelector(pageIndex) {
   return `[data-testid="editor-page-frame"][data-page-index="${pageIndex}"]`
@@ -231,13 +260,48 @@ function textEngineLayerSelectorForNode(nodeId) {
   return `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${nodeId}"]`
 }
 
+function isLongMockStructuralProbe() {
+  return (PROBE_MODE === "enter-mid-split" || PROBE_MODE === "enter-rapid" || isEnterBackspaceProbeMode(PROBE_MODE) || isBackspaceRapidProbeMode(PROBE_MODE)) &&
+    probeFlowDocFile != null &&
+    path.basename(probeFlowDocFile).toLowerCase() === "flowdoc-long-mock.flowdoc.json"
+}
+
+function isEnterBackspaceProbeMode(mode) {
+  return mode === "enter-backspace-after-dispatch" || mode === "enter-backspace-immediate"
+}
+
+function isBackspaceRapidProbeMode(mode) {
+  return mode === "backspace-rapid"
+}
+
+function resolveStructuralMidSplitText(targetNodeId) {
+  if (STRUCTURAL_MID_SPLIT_REQUESTED) return STRUCTURAL_MID_SPLIT_TEXT
+  return isLongMockStructuralProbe() && targetNodeId === LONG_MOCK_STRUCTURAL_TARGET_NODE_ID
+    ? LONG_MOCK_STRUCTURAL_SPLIT_TEXT
+    : STRUCTURAL_MID_SPLIT_TEXT
+}
+
+function resolveStructuralStaleTailText(targetNodeId) {
+  if (configuredStaleTailText) return configuredStaleTailText
+  return isLongMockStructuralProbe() && targetNodeId === LONG_MOCK_STRUCTURAL_TARGET_NODE_ID
+    ? LONG_MOCK_STRUCTURAL_STALE_TAIL_TEXT
+    : null
+}
+
+function resolveStructuralNextNodeId(targetNodeId) {
+  return isLongMockStructuralProbe() && targetNodeId === LONG_MOCK_STRUCTURAL_TARGET_NODE_ID
+    ? LONG_MOCK_STRUCTURAL_NEXT_NODE_ID
+    : null
+}
+
 async function resolveTargetNodeId(page) {
   if (configuredTargetNodeId) return configuredTargetNodeId
+  if (isLongMockStructuralProbe()) return LONG_MOCK_STRUCTURAL_TARGET_NODE_ID
   if (shouldUseMixedPaginationDocument) return MIXED_PAGINATION_TARGET_NODE_ID
   if (!probeFlowDocFile) return DEFAULT_TARGET_NODE_ID
 
   await page.locator(paragraphFragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
-  const candidates = await page.locator(paragraphFragmentSelector).evaluateAll((nodes) => nodes
+  const allCandidates = await page.locator(paragraphFragmentSelector).evaluateAll((nodes) => nodes
     .map((node) => {
       const element = node
       const rect = element.getBoundingClientRect()
@@ -249,15 +313,20 @@ async function resolveTargetNodeId(page) {
         top: rect.top,
       }
     })
-    .filter((item) => item.nodeId && item.width > 0 && item.height > 0)
-    .sort((a, b) => {
-      const areaDelta = (b.width * b.height) - (a.width * a.height)
-      if (Math.abs(areaDelta) > 1) return areaDelta
-      if (a.pageIndex !== b.pageIndex) return a.pageIndex - b.pageIndex
-      return a.top - b.top
-    }))
+    .filter((item) => item.nodeId && item.width > 0 && item.height > 0))
+  const candidates = (HAS_TARGET_PAGE_INDEX
+    ? allCandidates.filter((item) => item.pageIndex === TARGET_PAGE_INDEX)
+    : allCandidates
+  ).sort((a, b) => {
+    const areaDelta = (b.width * b.height) - (a.width * a.height)
+    if (Math.abs(areaDelta) > 1) return areaDelta
+    if (a.pageIndex !== b.pageIndex) return a.pageIndex - b.pageIndex
+    return a.top - b.top
+  })
   const target = candidates[0]?.nodeId
-  assert(target, "Could not find a paragraph fragment target in the loaded document")
+  assert(target, HAS_TARGET_PAGE_INDEX
+    ? `Could not find a visible paragraph fragment target on page index ${TARGET_PAGE_INDEX} in the loaded document`
+    : "Could not find a paragraph fragment target in the loaded document")
   return target
 }
 
@@ -491,8 +560,36 @@ function summarizePerfEvents(perfEvents) {
   const flowdocIslandCommitEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-react-commit")
   const flowdocIslandParentSyncEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-parent-sync")
   const flowdocIslandStructuralEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-structural-edit")
+  const flowdocIslandStructuralGuardEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-structural-guard")
+  const flowdocIslandBlurHandoffEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-blur-handoff")
+  const flowdocStructuralTransactionEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-transaction")
+  const flowdocStructuralPaginationScheduleEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-pagination-schedule")
+  const inlineEditStructuralRefocusEvents = perfEvents.filter((event) => event.kind === "inline-edit-structural-refocus")
+  const optimisticIslandVisibleEvents = perfEvents.filter((event) => event.kind === "enter-key-to-optimistic-island-visible")
+  const newCaretVisibleEvents = perfEvents.filter((event) => event.kind === "enter-key-to-new-caret-visible")
+  const structuralFullPaginationBeforeIslandEvents = perfEvents.filter((event) => event.kind === "structural-refocus-used-full-pagination-before-island")
+  const optimisticRefocusStaleSettleIgnoredEvents = perfEvents.filter((event) => event.kind === "optimistic-refocus-stale-settle-ignored")
+  const structuralSettledPaginationEvents = perfEvents.filter((event) => event.kind === "structural-refocus-settled-pagination")
+  const inlineEditEndEvents = perfEvents.filter((event) => event.kind === "inline-edit-end")
+  const inlineEditFinalizeEvents = perfEvents.filter((event) => event.kind === "inline-edit-finalize")
   const browserPreviewPaginationEvents = perfEvents.filter((event) => event.kind === "browser-preview-pagination")
+  const editorActionDispatchEvents = perfEvents.filter((event) => event.kind === "editor-action-dispatch")
   const canvasCommitEvents = perfEvents.filter((event) => event.kind === "editor-canvas-react-commit")
+  const structuralTransactionEventsByAction = flowdocStructuralTransactionEvents.reduce((acc, event) => {
+    const key = `${event.operation ?? "unknown"}:${event.action ?? "unknown"}`
+    acc[key] = (acc[key] ?? 0) + 1
+    return acc
+  }, {})
+  const structuralPaginationScheduleEventsByAction = flowdocStructuralPaginationScheduleEvents.reduce((acc, event) => {
+    const action = event.action ?? "unknown"
+    acc[action] = (acc[action] ?? 0) + 1
+    return acc
+  }, {})
+  const editorActionDispatchByCommand = editorActionDispatchEvents.reduce((acc, event) => {
+    const commandType = event.commandType ?? "unknown"
+    acc[commandType] = (acc[commandType] ?? 0) + 1
+    return acc
+  }, {})
   return {
     total: perfEvents.length,
     countByKind: eventCounts,
@@ -527,13 +624,84 @@ function summarizePerfEvents(perfEvents) {
       visibleLines: summarizeDurations(flowdocIslandVisibleEvents),
       reactCommit: summarizeDurations(flowdocIslandCommitEvents),
       parentSyncCount: flowdocIslandParentSyncEvents.length,
+      parentSync: summarizeDurations(flowdocIslandParentSyncEvents),
+      blurHandoff: {
+        count: flowdocIslandBlurHandoffEvents.length,
+        byAction: flowdocIslandBlurHandoffEvents.reduce((acc, event) => {
+          const action = event.action ?? "unknown"
+          acc[action] = (acc[action] ?? 0) + 1
+          return acc
+        }, {}),
+        durations: summarizeDurations(flowdocIslandBlurHandoffEvents),
+        events: flowdocIslandBlurHandoffEvents,
+      },
+      inlineEditEnd: summarizeDurations(inlineEditEndEvents),
+      inlineEditFinalize: summarizeDurations(inlineEditFinalizeEvents),
       browserPreviewPaginationCount: browserPreviewPaginationEvents.length,
       structuralEdit: {
         count: flowdocIslandStructuralEvents.length,
         splitParagraphCount: flowdocIslandStructuralEvents.filter((event) => event.action === "split-paragraph").length,
         mergeParagraphCount: flowdocIslandStructuralEvents.filter((event) => event.action === "merge-paragraph").length,
+        splitParagraph: summarizeDurations(flowdocIslandStructuralEvents.filter((event) => event.action === "split-paragraph")),
+        mergeParagraph: summarizeDurations(flowdocIslandStructuralEvents.filter((event) => event.action === "merge-paragraph")),
         sources: [...new Set(flowdocIslandStructuralEvents.map((event) => event.source ?? "unknown"))],
       },
+      structuralTransaction: {
+        count: flowdocStructuralTransactionEvents.length,
+        byAction: structuralTransactionEventsByAction,
+        draftTextResolve: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "draft-text-resolve")),
+        draftTextReplaceCount: flowdocStructuralTransactionEvents.filter((event) => (
+          event.action === "draft-text-resolve" &&
+          event.source === "draft-text-replaced"
+        )).length,
+        splitOperation: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "split-operation")),
+        mergeOperation: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "merge-operation")),
+        paragraphResolve: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "paragraph-resolve")),
+        optimisticPagination: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "optimistic-pagination")),
+        flushSyncTransition: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "flush-sync-transition")),
+        total: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "total")),
+        events: flowdocStructuralTransactionEvents,
+      },
+      structuralPaginationSchedule: {
+        count: flowdocStructuralPaginationScheduleEvents.length,
+        scheduledCount: structuralPaginationScheduleEventsByAction.scheduled ?? 0,
+        completedCount: structuralPaginationScheduleEventsByAction.completed ?? 0,
+        supersededCount: structuralPaginationScheduleEventsByAction.superseded ?? 0,
+        byAction: structuralPaginationScheduleEventsByAction,
+        scheduled: summarizeDurations(flowdocStructuralPaginationScheduleEvents.filter((event) => event.action === "scheduled")),
+        completed: summarizeDurations(flowdocStructuralPaginationScheduleEvents.filter((event) => event.action === "completed")),
+        superseded: summarizeDurations(flowdocStructuralPaginationScheduleEvents.filter((event) => event.action === "superseded")),
+        events: flowdocStructuralPaginationScheduleEvents,
+      },
+      structuralGuard: {
+        count: flowdocIslandStructuralGuardEvents.length,
+        engagedCount: flowdocIslandStructuralGuardEvents.filter((event) => event.action === "engaged").length,
+        acceptedCount: flowdocIslandStructuralGuardEvents.filter((event) => event.action === "accepted").length,
+        droppedCount: flowdocIslandStructuralGuardEvents.filter((event) => event.action === "dropped").length,
+        unlockedByActiveNodeChangeCount: flowdocIslandStructuralGuardEvents.filter((event) => event.action === "unlocked-active-node-changed").length,
+        unlockedByInactiveCount: flowdocIslandStructuralGuardEvents.filter((event) => event.action === "unlocked-inactive").length,
+        unlockedByTimeoutCount: flowdocIslandStructuralGuardEvents.filter((event) => event.action === "unlocked-timeout").length,
+        unlockedByUnmountCount: flowdocIslandStructuralGuardEvents.filter((event) => event.action === "unlocked-unmount").length,
+        events: flowdocIslandStructuralGuardEvents,
+      },
+      structuralRefocus: {
+        count: inlineEditStructuralRefocusEvents.length,
+        paginatePreview: summarizeDurations(inlineEditStructuralRefocusEvents.filter((event) => event.action === "paginate-preview")),
+        startSession: summarizeDurations(inlineEditStructuralRefocusEvents.filter((event) => event.action === "start-session")),
+        optimisticStartSession: summarizeDurations(inlineEditStructuralRefocusEvents.filter((event) => event.action === "optimistic-start-session")),
+        missingParagraphCount: inlineEditStructuralRefocusEvents.filter((event) => event.action === "missing-paragraph").length,
+        optimisticIslandVisible: summarizeDurations(optimisticIslandVisibleEvents),
+        newCaretVisible: summarizeDurations(newCaretVisibleEvents),
+        settledPagination: summarizeDurations(structuralSettledPaginationEvents),
+        staleSettleIgnoredCount: optimisticRefocusStaleSettleIgnoredEvents.length,
+        staleSettleIgnoredEvents: optimisticRefocusStaleSettleIgnoredEvents,
+        usedFullPaginationBeforeIsland: structuralFullPaginationBeforeIslandEvents.some((event) => event.usedFullPaginationBeforeIsland === true),
+        fullPaginationBeforeIslandEvents: structuralFullPaginationBeforeIslandEvents,
+      },
+    },
+    editorActionDispatch: {
+      ...summarizeDurations(editorActionDispatchEvents),
+      byCommand: editorActionDispatchByCommand,
     },
     editorCanvasCommit: summarizeDurations(canvasCommitEvents),
   }
@@ -877,6 +1045,463 @@ async function readTextEngineLayerState(page, layerSelector) {
       },
     }
   }, layerSelector)
+}
+
+async function readActiveFlowdocDraftIsland(page) {
+  return await page.evaluate((selector) => {
+    const layers = Array.from(document.querySelectorAll(selector))
+      .filter((node) => node instanceof SVGElement)
+    const readAt = performance.now()
+    const layer = layers.find((node) => {
+      const rect = node.getBoundingClientRect()
+      return rect.width > 0 && rect.height > 0
+    }) ?? layers[0] ?? null
+    if (!(layer instanceof SVGElement)) {
+      return {
+        active: false,
+        readAt,
+        nodeId: null,
+        textLength: null,
+        caretOffset: null,
+        revision: null,
+        lineCount: null,
+        lineSignatures: [],
+        nativeVisibleText: null,
+        liveEchoCount: 0,
+        draftReplacementCount: 0,
+        inputBridgeOwnsVisiblePointer: null,
+      }
+    }
+    const numberAttr = (name) => {
+      const raw = layer.getAttribute(name)
+      const value = raw == null ? NaN : Number(raw)
+      return Number.isFinite(value) ? value : null
+    }
+    const nodeId = layer.getAttribute("data-inline-edit-node-id")
+    const inputBridge = nodeId
+      ? document.querySelector(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${CSS.escape(nodeId)}"]`)
+      : null
+    const inputBridgeElement = inputBridge instanceof HTMLElement ? inputBridge : null
+    const hitArea = layer.querySelector('[data-wysiwyg-hit-area="true"]')
+    const hitAreaRect = hitArea instanceof Element ? hitArea.getBoundingClientRect() : null
+    const hitCenterElement = hitAreaRect
+      ? document.elementFromPoint(
+          hitAreaRect.left + hitAreaRect.width / 2,
+          hitAreaRect.top + Math.min(hitAreaRect.height / 2, 16),
+        )
+      : null
+    const inputBridgeOwnsVisiblePointer = Boolean(
+      inputBridgeElement &&
+      hitCenterElement &&
+      (hitCenterElement === inputBridgeElement || inputBridgeElement.contains(hitCenterElement)),
+    )
+    return {
+      active: true,
+      readAt,
+      nodeId,
+      textLength: numberAttr("data-wysiwyg-flowdoc-draft-text-length"),
+      caretOffset: numberAttr("data-wysiwyg-flowdoc-draft-caret-offset"),
+      revision: numberAttr("data-wysiwyg-island-revision"),
+      lineCount: numberAttr("data-wysiwyg-flowdoc-draft-total-line-count"),
+      lineSignatures: Array.from(layer.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
+        .slice(0, 16)
+        .map((node) => node.textContent ?? ""),
+      nativeVisibleText: layer.getAttribute("data-wysiwyg-native-visible-text"),
+      liveEchoCount: layer.querySelectorAll('[data-wysiwyg-live-echo="true"]').length,
+      draftReplacementCount: layer.querySelectorAll('[data-wysiwyg-draft-text-replacement="true"]').length,
+      inputBridgeOwnsVisiblePointer,
+    }
+  }, activeFlowdocDraftIslandSelector)
+}
+
+async function waitForActiveFlowdocDraftIsland(page, previousNodeId = null, timeoutMs = 5000) {
+  await page.waitForFunction(({ selector, previousNodeId }) => {
+    const layers = Array.from(document.querySelectorAll(selector))
+      .filter((node) => node instanceof SVGElement)
+    return layers.some((node) => {
+      const rect = node.getBoundingClientRect()
+      const nodeId = node.getAttribute("data-inline-edit-node-id")
+      return rect.width > 0 &&
+        rect.height > 0 &&
+        nodeId &&
+        (!previousNodeId || nodeId !== previousNodeId)
+    })
+  }, { selector: activeFlowdocDraftIslandSelector, previousNodeId }, { timeout: timeoutMs })
+  return await readActiveFlowdocDraftIsland(page)
+}
+
+async function waitForWysiwygPerfEvent(page, kind, timeoutMs = READY_TIMEOUT_MS) {
+  try {
+    await page.waitForFunction((kind) => (
+      (window.__flowDocWysiwygPerfEvents ?? []).some((event) => event.kind === kind)
+    ), kind, { timeout: timeoutMs })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForEditorActionDispatch(page, commandType, timeoutMs = READY_TIMEOUT_MS) {
+  try {
+    await page.waitForFunction((commandType) => (
+      (window.__flowDocWysiwygPerfEvents ?? []).some((event) => (
+        event.kind === "editor-action-dispatch" &&
+        event.commandType === commandType
+      ))
+    ), commandType, { timeout: timeoutMs })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function hasEditorActionDispatch(page, commandType) {
+  return await page.evaluate((commandType) => (
+    (window.__flowDocWysiwygPerfEvents ?? []).some((event) => (
+      event.kind === "editor-action-dispatch" &&
+      event.commandType === commandType
+    ))
+  ), commandType)
+}
+
+async function placeCaretAfterVisibleDraftText(page, nodeId, targetText) {
+  const placement = await page.evaluate(({ selector, nodeId, targetText }) => {
+    const layer = Array.from(document.querySelectorAll(selector))
+      .find((node) => (
+        node instanceof SVGElement &&
+        node.getAttribute("data-inline-edit-node-id") === nodeId &&
+        node.getBoundingClientRect().width > 0 &&
+        node.getBoundingClientRect().height > 0
+      ))
+    if (!(layer instanceof SVGElement)) {
+      return { ok: false, reason: "active-island-not-found", nodeId, targetText }
+    }
+
+    const lineNodes = Array.from(layer.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
+      .filter((node) => node instanceof Element)
+    const line = lineNodes.find((node) => (node.textContent ?? "").includes(targetText))
+    if (!(line instanceof Element)) {
+      return {
+        ok: false,
+        reason: "target-text-not-found",
+        nodeId,
+        targetText,
+        lineSignatures: lineNodes.slice(0, 8).map((node) => node.textContent ?? ""),
+      }
+    }
+
+    const lineText = line.textContent ?? ""
+    const targetIndex = lineText.indexOf(targetText)
+    const afterIndex = Math.min(lineText.length, Math.max(0, targetIndex + targetText.length))
+    const rect = line.getBoundingClientRect()
+    let x = rect.left + rect.width * (afterIndex / Math.max(1, lineText.length))
+    const y = rect.top + rect.height / 2
+    try {
+      const ctm = typeof line.getScreenCTM === "function" ? line.getScreenCTM() : null
+      if (ctm && afterIndex > 0 && typeof line.getEndPositionOfChar === "function") {
+        const point = line.getEndPositionOfChar(Math.min(afterIndex - 1, lineText.length - 1))
+        x = point.x * ctm.a + point.y * ctm.c + ctm.e
+      }
+    } catch {
+      // Fall back to the proportional line rect coordinate above.
+    }
+
+    return {
+      ok: true,
+      nodeId,
+      targetText,
+      targetIndex,
+      afterIndex,
+      lineText,
+      x,
+      y,
+      lineRect: {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        right: rect.right,
+        bottom: rect.bottom,
+      },
+    }
+  }, { selector: activeFlowdocDraftIslandSelector, nodeId, targetText })
+
+  if (placement.ok) {
+    await page.mouse.click(placement.x, placement.y)
+    await waitForDoubleAnimationFrame(page)
+    const afterClickIsland = await readActiveFlowdocDraftIsland(page)
+    return { ...placement, afterClickCaretOffset: afterClickIsland.caretOffset }
+  }
+  return placement
+}
+
+async function readEnterMidSplitFrame(page, previousNodeId, newNodeId = null, options = {}) {
+  return await page.evaluate(({ islandSelector, previousNodeId, newNodeId, nextNodeId, staleTailText }) => {
+    const serializeRect = (rect) => rect
+      ? {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          right: rect.right,
+          bottom: rect.bottom,
+        }
+      : null
+    const summarizeFragments = (nodeId) => {
+      if (!nodeId) return []
+      return Array.from(document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`))
+        .filter((node) => node instanceof Element)
+        .map((node) => {
+          const textNodes = Array.from(node.querySelectorAll("text"))
+            .filter((textNode) => (
+              textNode instanceof SVGTextElement &&
+              textNode.getAttribute("data-list-marker") !== "true" &&
+              !textNode.closest('[data-wysiwyg-draft-editor-island="true"]') &&
+              !textNode.closest('[data-wysiwyg-draft-text-replacement="true"]')
+            ))
+          const rect = node.getBoundingClientRect()
+          const textSignatures = textNodes.slice(0, 8).map((textNode) => textNode.textContent ?? "")
+          const pageBreakMarker = node.querySelector('[data-testid="editor-page-break-marker"]')
+          const pageBreakMarkerRect = pageBreakMarker instanceof Element
+            ? pageBreakMarker.getBoundingClientRect()
+            : null
+          const boundarySafePageBreakSuppressed = node.getAttribute("data-wysiwyg-boundary-safe-page-break-suppressed") === "true"
+          return {
+            nodeId,
+            nodeType: node.getAttribute("data-node-type"),
+            pageIndex: Number(node.getAttribute("data-page-index") ?? "0"),
+            lineStart: node.getAttribute("data-line-start"),
+            lineEnd: node.getAttribute("data-line-end"),
+            activeCanvasSuppressed: node.getAttribute("data-wysiwyg-out-of-canvas-island-suppressed") === "true" ||
+              node.getAttribute("data-wysiwyg-active-canvas-text-suppressed") === "true",
+            boundarySafePageBreakSuppressed,
+            pageBreakMarkerVisible: Boolean(pageBreakMarkerRect && pageBreakMarkerRect.width > 0 && pageBreakMarkerRect.height > 0),
+            pageBreakLabelVisible: textSignatures.includes("PAGE BREAK") || textSignatures.includes("page break"),
+            rect: serializeRect(rect),
+            textLineCount: textNodes.length,
+            textSignatures,
+            combinedText: textSignatures.join(""),
+          }
+        })
+    }
+    const visibleNodeOrder = Array.from(document.querySelectorAll('[data-testid="editor-fragment"]'))
+      .filter((node) => node instanceof Element)
+      .map((node, index) => {
+        const rect = node.getBoundingClientRect()
+        return {
+          index,
+          nodeId: node.getAttribute("data-node-id"),
+          nodeType: node.getAttribute("data-node-type"),
+          pageIndex: Number(node.getAttribute("data-page-index") ?? "0"),
+          top: rect.top,
+          left: rect.left,
+        }
+      })
+      .filter((item) => item.nodeId)
+      .sort((a, b) => {
+        if (a.pageIndex !== b.pageIndex) return a.pageIndex - b.pageIndex
+        if (Math.abs(a.top - b.top) > 0.5) return a.top - b.top
+        if (Math.abs(a.left - b.left) > 0.5) return a.left - b.left
+        return a.index - b.index
+      })
+    const islands = Array.from(document.querySelectorAll(islandSelector))
+      .filter((node) => node instanceof SVGElement)
+      .map((node) => {
+        const rect = node.getBoundingClientRect()
+        const lineNodes = Array.from(node.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
+        return {
+          nodeId: node.getAttribute("data-inline-edit-node-id"),
+          activeVisualMode: node.getAttribute("data-wysiwyg-active-visual-mode"),
+          textLength: Number(node.getAttribute("data-wysiwyg-flowdoc-draft-text-length") ?? "0"),
+          caretOffset: Number(node.getAttribute("data-wysiwyg-flowdoc-draft-caret-offset") ?? "0"),
+          lineCount: Number(node.getAttribute("data-wysiwyg-flowdoc-draft-total-line-count") ?? String(lineNodes.length)),
+          rect: serializeRect(rect),
+          lineSignatures: lineNodes.slice(0, 8).map((line) => line.textContent ?? ""),
+        }
+      })
+    const sourceFragments = summarizeFragments(previousNodeId)
+    const newFragments = summarizeFragments(newNodeId)
+    const nextFragments = summarizeFragments(nextNodeId)
+    const sourceCombinedText = sourceFragments.map((fragment) => fragment.combinedText).join("")
+    const newCombinedText = newFragments.map((fragment) => fragment.combinedText).join("")
+    const islandCombinedText = islands.map((island) => island.lineSignatures.join("")).join("")
+    const sourceContainsStaleTail = staleTailText ? sourceCombinedText.includes(staleTailText) : null
+    const islandContainsStaleTail = staleTailText ? islandCombinedText.includes(staleTailText) : null
+    const newCanvasContainsStaleTail = staleTailText ? newCombinedText.includes(staleTailText) : null
+    const sourceIndex = visibleNodeOrder.findIndex((item) => item.nodeId === previousNodeId)
+    const newIndex = newNodeId ? visibleNodeOrder.findIndex((item) => item.nodeId === newNodeId) : -1
+    const nextIndex = nextNodeId ? visibleNodeOrder.findIndex((item) => item.nodeId === nextNodeId) : -1
+    const visibleOrderOk = nextNodeId && newNodeId && sourceIndex >= 0 && newIndex >= 0 && nextIndex >= 0
+      ? sourceIndex < newIndex && newIndex < nextIndex
+      : null
+    return {
+      at: performance.now(),
+      activeIslands: islands,
+      sourceFragments,
+      newFragments,
+      nextFragments,
+      sourceCombinedText,
+      newCombinedText,
+      islandCombinedText,
+      staleTailText,
+      sourceContainsStaleTail,
+      islandContainsStaleTail,
+      newCanvasContainsStaleTail,
+      sourceImmediatelyCleared: staleTailText ? sourceContainsStaleTail === false : null,
+      duplicateStaleTailBetweenSourceAndIsland: staleTailText
+        ? Boolean(sourceContainsStaleTail && islandContainsStaleTail)
+        : null,
+      duplicateStaleTailBetweenSourceAndNewCanvas: staleTailText
+        ? Boolean(sourceContainsStaleTail && newCanvasContainsStaleTail)
+        : null,
+      nextPageBreakMarkerVisible: nextFragments.some((fragment) => fragment.pageBreakMarkerVisible === true),
+      nextPageBreakLabelVisible: nextFragments.some((fragment) => fragment.pageBreakLabelVisible === true),
+      nextPageBreakBoundarySafeSuppressed: nextFragments.some((fragment) => fragment.boundarySafePageBreakSuppressed === true),
+      visibleNodeOrder,
+      visibleOrder: {
+        sourceIndex,
+        newIndex,
+        nextIndex,
+        ok: visibleOrderOk,
+      },
+      previewBlocking: document.querySelector('[data-testid="editor-shell"]')?.getAttribute("data-preview-layout-blocking") ?? null,
+    }
+  }, {
+    islandSelector: activeFlowdocDraftIslandSelector,
+    previousNodeId,
+    newNodeId,
+    nextNodeId: options.nextNodeId ?? null,
+    staleTailText: options.staleTailText ?? null,
+  })
+}
+
+function finalizeMidSplitFrames(midSplit, step) {
+  if (!midSplit) return null
+  const immediateState = midSplit.frames[0]?.state ?? null
+  const sourceClearedFrame = midSplit.frames.find((frame) => frame.state.sourceImmediatelyCleared === true)
+  midSplit.immediateSourceCleared = immediateState?.sourceImmediatelyCleared ?? null
+  midSplit.sourceParagraphClearedMs = sourceClearedFrame?.delayMs ?? null
+  midSplit.activeNewParagraphInIsland = midSplit.frames.some((frame) => (
+    frame.state.activeIslands.some((island) => island.nodeId === step.newNodeId)
+  ))
+  midSplit.duplicateOldTextDetected = midSplit.frames.some((frame) => (
+    frame.state.duplicateStaleTailBetweenSourceAndIsland === true ||
+    frame.state.duplicateStaleTailBetweenSourceAndNewCanvas === true
+  ))
+  midSplit.visibleOrderOk = midSplit.frames
+    .map((frame) => frame.state.visibleOrder?.ok)
+    .find((value) => value !== null && value !== undefined) ?? null
+  midSplit.pageBreakMarkerVisibleImmediatelyAfterEnter =
+    immediateState?.nextPageBreakMarkerVisible ?? null
+  midSplit.boundarySafePageBreakSuppressedWhileActive = midSplit.frames.some((frame) => (
+    frame.state.activeIslands.some((island) => island.nodeId === step.newNodeId) &&
+    frame.state.nextPageBreakBoundarySafeSuppressed === true &&
+    frame.state.nextPageBreakMarkerVisible === false &&
+    frame.state.nextPageBreakLabelVisible === false
+  ))
+  midSplit.pageBreakMarkerReturnedAfterSuppression = midSplit.frames.some((frame) => (
+    frame.state.nextPageBreakBoundarySafeSuppressed === false &&
+    frame.state.nextPageBreakMarkerVisible === true
+  ))
+  return midSplit
+}
+
+async function readStoredStructuralDocumentState(page, previousNodeId, newNodeId = null, nextNodeId = null) {
+  return await page.evaluate(({ previousNodeId, newNodeId, nextNodeId }) => {
+    const collectNodeText = (node, nodes, seen = new Set()) => {
+      if (!node || typeof node !== "object") return ""
+      const nodeId = typeof node.id === "string" ? node.id : null
+      if (nodeId) {
+        if (seen.has(nodeId)) return ""
+        seen.add(nodeId)
+      }
+      if (typeof node.text === "string") return node.text
+      if (Array.isArray(node.children)) {
+        return node.children.map((child) => collectNodeText(child, nodes, seen)).join("")
+      }
+      if (Array.isArray(node.childIds)) {
+        return node.childIds.map((childId) => collectNodeText(nodes[childId], nodes, seen)).join("")
+      }
+      return ""
+    }
+    const result = {
+      available: false,
+      invalidDocumentDetected: false,
+      sourceExists: false,
+      newExists: null,
+      nextExists: null,
+      sourceIndex: -1,
+      newIndex: -1,
+      nextIndex: -1,
+      bodyChildIds: [],
+      nextNodeType: null,
+      sourceText: null,
+      newText: null,
+      nextText: null,
+      source: null,
+      orderAfterEnterOk: null,
+      orderAfterBackspaceOk: null,
+    }
+    try {
+      const smokeStateDoc = window.__flowDocEditorSmokeState?.document
+      const raw = smokeStateDoc ? null : localStorage.getItem("flowdoc_document")
+      if (!smokeStateDoc && !raw) return result
+      const parsed = smokeStateDoc ?? JSON.parse(raw)
+      const doc = parsed?.version === 1 && parsed?.document?.sections
+        ? parsed
+        : parsed?.document?.version === 1 && parsed?.document?.document?.sections
+          ? parsed.document
+          : null
+      if (!doc) return { ...result, invalidDocumentDetected: true }
+      const sections = Array.isArray(doc.document.sections) ? doc.document.sections : []
+      for (const section of sections) {
+        const nodes = section?.nodes ?? {}
+        const bodyRootId = section?.bodyRootId
+        const body = bodyRootId ? nodes[bodyRootId] : null
+        const childIds = Array.isArray(body?.childIds) ? body.childIds : []
+        const sourceIndex = childIds.indexOf(previousNodeId)
+        const newIndex = newNodeId ? childIds.indexOf(newNodeId) : -1
+        const nextIndex = nextNodeId ? childIds.indexOf(nextNodeId) : -1
+        if (sourceIndex < 0 && newIndex < 0 && nextIndex < 0) continue
+        const sourceNode = nodes[previousNodeId] ?? null
+        const newNode = newNodeId ? nodes[newNodeId] ?? null : null
+        const nextNode = nextNodeId ? nodes[nextNodeId] : null
+        const missingBodyChildReference = childIds.some((childId) => !nodes[childId])
+        return {
+          available: true,
+          invalidDocumentDetected: missingBodyChildReference,
+          sourceExists: Boolean(sourceNode),
+          newExists: newNodeId ? Boolean(newNode) : null,
+          nextExists: nextNodeId ? Boolean(nextNode) : null,
+          sourceIndex,
+          newIndex,
+          nextIndex,
+          bodyChildIds: childIds,
+          nextNodeType: nextNode?.type ?? null,
+          sourceText: sourceNode ? collectNodeText(sourceNode, nodes) : null,
+          newText: newNode ? collectNodeText(newNode, nodes) : null,
+          nextText: nextNode ? collectNodeText(nextNode, nodes) : null,
+          source: smokeStateDoc ? "editor-smoke-state" : "localStorage",
+          orderAfterEnterOk: previousNodeId && newNodeId && nextNodeId && sourceIndex >= 0 && newIndex >= 0 && nextIndex >= 0
+            ? sourceIndex < newIndex && newIndex < nextIndex
+            : null,
+          orderAfterBackspaceOk: previousNodeId && newNodeId && nextNodeId && sourceIndex >= 0 && nextIndex >= 0
+            ? newIndex < 0 && sourceIndex < nextIndex
+            : null,
+        }
+      }
+      return {
+        ...result,
+        available: true,
+        sourceExists: Boolean(sections.some((section) => section?.nodes?.[previousNodeId])),
+        newExists: newNodeId ? Boolean(sections.some((section) => section?.nodes?.[newNodeId])) : null,
+        nextExists: nextNodeId ? Boolean(sections.some((section) => section?.nodes?.[nextNodeId])) : null,
+        source: smokeStateDoc ? "editor-smoke-state" : "localStorage",
+      }
+    } catch {
+      return { ...result, invalidDocumentDetected: true }
+    }
+  }, { previousNodeId, newNodeId, nextNodeId })
 }
 
 async function readFragmentVisualState(page, fragmentSelector, layerSelector) {
@@ -1449,10 +2074,19 @@ async function runFlowdocDraftPointerHitProbe(page, layerSelector) {
       node.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island"
     )) ?? layers[0] ?? null
     if (!(layer instanceof SVGElement)) return null
-    const draftLineGroups = Array.from(layer.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
-      .filter((node) => node instanceof Element)
-    if (draftLineGroups.length === 0) return null
     const layerNodeId = layer.getAttribute("data-inline-edit-node-id")
+    const activeIslandLayers = layer.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island"
+      ? layers.filter((node) => (
+          node.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island" &&
+          node.getAttribute("data-inline-edit-node-id") === layerNodeId
+        ))
+      : [layer]
+    const draftLineGroups = activeIslandLayers.flatMap((surface, surfaceIndex) =>
+      Array.from(surface.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
+        .filter((node) => node instanceof Element)
+        .map((node) => ({ node, surface, surfaceIndex }))
+    )
+    if (draftLineGroups.length === 0) return null
     const bridge = layer.querySelector('[data-wysiwyg-input-bridge="true"]') ??
       (layerNodeId
         ? document.querySelector(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${CSS.escape(layerNodeId)}"]`)
@@ -1465,7 +2099,9 @@ async function runFlowdocDraftPointerHitProbe(page, layerSelector) {
           wysiwygDraftIslandHitArea: element.getAttribute("data-wysiwyg-draft-editor-island-hit-area"),
         }
       : null
-    const candidateFor = (candidateGroup, fallbackLineIndex) => {
+    const candidateFor = (candidateItem, fallbackLineIndex) => {
+      const candidateGroup = candidateItem.node
+      const ownerLayer = candidateItem.surface
       const text = candidateGroup.querySelector("text")
       if (!(text instanceof Element)) return null
       let rect = text.getBoundingClientRect()
@@ -1488,17 +2124,19 @@ async function runFlowdocDraftPointerHitProbe(page, layerSelector) {
           (bridge === elementAtPoint || bridge.contains(elementAtPoint)),
         )
         const layerOwnsPoint = Boolean(elementAtPoint && layer.contains(elementAtPoint))
+        const surfaceOwnsPoint = Boolean(elementAtPoint && ownerLayer.contains(elementAtPoint))
         if (elementAtPoint) {
           return {
             x: point.x,
             y: point.y,
             lineIndex: Number(candidateGroup.getAttribute("data-wysiwyg-draft-line-index") ?? fallbackLineIndex),
+            surfaceIndex: candidateItem.surfaceIndex,
             lineStart: start,
             lineEnd: end,
             lineText: text.textContent ?? "",
-            beforeCaretOffset: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-caret-offset") ?? "0"),
+            beforeCaretOffset: Number(ownerLayer.getAttribute("data-wysiwyg-flowdoc-draft-caret-offset") ?? layer.getAttribute("data-wysiwyg-flowdoc-draft-caret-offset") ?? "0"),
             bridgeOwnsPoint,
-            layerOwnsPoint,
+            layerOwnsPoint: surfaceOwnsPoint || layerOwnsPoint,
             elementAtPoint: serializeElement(elementAtPoint),
           }
         }
@@ -2238,6 +2876,1321 @@ async function runSelectionProbe(page) {
   }
 }
 
+async function readScrollAnchoringSnapshot(page, layerSelector, fragmentSelector, label) {
+  return await page.evaluate(({ layerSelector: layerSel, fragmentSelector: fragmentSel, label: snapshotLabel }) => {
+    const serializeRect = (rect) => rect
+      ? {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          right: rect.right,
+          bottom: rect.bottom,
+        }
+      : null
+    const layer = Array.from(document.querySelectorAll(layerSel))
+      .find((node) => (
+        node instanceof SVGElement &&
+        node.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island"
+      )) ?? document.querySelector(layerSel)
+    const layerElement = layer instanceof SVGElement ? layer : null
+    const fragment = document.querySelector(fragmentSel)
+    const overlay = layerElement?.parentElement?.getAttribute("data-testid") === "editor-page-flowdoc-island-overlay"
+      ? layerElement.parentElement
+      : null
+    const pageFrame = overlay?.closest('[data-testid="editor-page-frame"]') ?? null
+    const scrollContainer = (() => {
+      let current = pageFrame?.parentElement ?? null
+      while (current) {
+        const style = getComputedStyle(current)
+        const scrollable = /(auto|scroll)/.test(style.overflowY) && current.scrollHeight > current.clientHeight
+        if (scrollable) return current
+        current = current.parentElement
+      }
+      return null
+    })()
+    const layerRect = layerElement?.getBoundingClientRect() ?? null
+    const overlayRect = overlay?.getBoundingClientRect() ?? null
+    const fragmentRect = fragment instanceof Element ? fragment.getBoundingClientRect() : null
+    const style = layerElement ? getComputedStyle(layerElement) : null
+    const leftPx = style ? Number.parseFloat(style.left) : NaN
+    const topPx = style ? Number.parseFloat(style.top) : NaN
+    const expectedLeft = overlayRect && Number.isFinite(leftPx) ? overlayRect.left + leftPx : null
+    const expectedTop = overlayRect && Number.isFinite(topPx) ? overlayRect.top + topPx : null
+    const deltaX = layerRect && expectedLeft != null ? layerRect.left - expectedLeft : null
+    const deltaY = layerRect && expectedTop != null ? layerRect.top - expectedTop : null
+    return {
+      label: snapshotLabel,
+      active: Boolean(layerElement),
+      anchor: layerElement?.getAttribute("data-wysiwyg-island-anchor") ?? null,
+      pageKey: layerElement?.getAttribute("data-wysiwyg-island-page-key") ?? null,
+      surfaceKey: layerElement?.getAttribute("data-wysiwyg-island-surface-key") ?? null,
+      layerRect: serializeRect(layerRect),
+      overlayRect: serializeRect(overlayRect),
+      pageFrameRect: serializeRect(pageFrame instanceof Element ? pageFrame.getBoundingClientRect() : null),
+      fragmentRect: serializeRect(fragmentRect),
+      expectedRect: layerRect && expectedLeft != null && expectedTop != null
+        ? {
+            x: expectedLeft,
+            y: expectedTop,
+            width: layerRect.width,
+            height: layerRect.height,
+            right: expectedLeft + layerRect.width,
+            bottom: expectedTop + layerRect.height,
+          }
+        : null,
+      deltaX,
+      deltaY,
+      absDeltaPx: deltaX != null && deltaY != null
+        ? Math.max(Math.abs(deltaX), Math.abs(deltaY))
+        : null,
+      scrollTop: scrollContainer?.scrollTop ?? null,
+    }
+  }, { layerSelector, fragmentSelector, label })
+}
+
+async function scrollEditorCanvasBy(page, fragmentSelector, deltaY) {
+  return await page.evaluate(({ fragmentSelector: fragmentSel, deltaY: scrollDeltaY }) => {
+    const fragment = document.querySelector(fragmentSel)
+    if (!(fragment instanceof Element)) return { ok: false, reason: "missing-fragment" }
+    const pageFrame = fragment.closest('[data-testid="editor-page-frame"]')
+    let current = pageFrame?.parentElement ?? null
+    while (current) {
+      const style = getComputedStyle(current)
+      const scrollable = /(auto|scroll)/.test(style.overflowY) && current.scrollHeight > current.clientHeight
+      if (scrollable) {
+        const before = current.scrollTop
+        current.scrollTop = before + scrollDeltaY
+        return {
+          ok: true,
+          before,
+          after: current.scrollTop,
+          delta: current.scrollTop - before,
+        }
+      }
+      current = current.parentElement
+    }
+    return { ok: false, reason: "missing-scroll-container" }
+  }, { fragmentSelector, deltaY })
+}
+
+async function runFlowdocDraftClickOnlyProbe(page, layerSelector) {
+  const target = await page.evaluate((selector) => {
+    const layer = Array.from(document.querySelectorAll(selector))
+      .find((node) => (
+        node instanceof SVGElement &&
+        node.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island"
+      )) ?? null
+    if (!(layer instanceof SVGElement)) return null
+    const lineGroups = Array.from(layer.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
+      .filter((node) => node instanceof Element)
+    const candidateGroup = lineGroups[Math.max(0, lineGroups.length - 1)] ?? null
+    const text = candidateGroup?.querySelector("text") ?? null
+    if (!(candidateGroup instanceof Element) || !(text instanceof Element)) return null
+    const rect = text.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return null
+    const point = {
+      x: rect.left + Math.max(1, Math.min(rect.width - 1, rect.width / 2)),
+      y: rect.top + rect.height / 2,
+    }
+    const elementAtPoint = document.elementFromPoint(point.x, point.y)
+    return {
+      ...point,
+      lineStart: Number(candidateGroup.getAttribute("data-wysiwyg-draft-line-start") ?? "0"),
+      lineEnd: Number(candidateGroup.getAttribute("data-wysiwyg-draft-line-end") ?? "0"),
+      beforeCaretOffset: Number(layer.getAttribute("data-wysiwyg-flowdoc-draft-caret-offset") ?? "0"),
+      layerOwnsPoint: Boolean(elementAtPoint && layer.contains(elementAtPoint)),
+      elementAtPointTag: elementAtPoint instanceof Element ? elementAtPoint.tagName : null,
+      elementAtPointHitArea: elementAtPoint instanceof Element ? elementAtPoint.getAttribute("data-wysiwyg-hit-area") : null,
+    }
+  }, layerSelector)
+  if (!target) return { attempted: false, ok: false, reason: "missing-click-target" }
+
+  await page.mouse.click(target.x, target.y)
+  await waitForDoubleAnimationFrame(page)
+  const afterState = await readTextEngineLayerState(page, layerSelector)
+  const afterCaretOffset = afterState?.flowdocDraft?.caretOffset ?? null
+  const caretWithinClickedLine = typeof afterCaretOffset === "number" &&
+    afterCaretOffset >= target.lineStart &&
+    afterCaretOffset <= target.lineEnd
+  return {
+    attempted: true,
+    ok: Boolean(target.layerOwnsPoint && caretWithinClickedLine),
+    target,
+    afterCaretOffset,
+    caretWithinClickedLine,
+    activeVisualMode: afterState?.activeVisualMode ?? null,
+    inputBridgeOwnsVisiblePointer: afterState?.flowdocDraft?.inputBridgeOwnsVisiblePointer ?? null,
+  }
+}
+
+async function runScrollAnchoringProbe(page) {
+  const targetNodeId = await resolveTargetNodeId(page)
+  const fragmentSelector = fragmentSelectorForNode(targetNodeId)
+  const bridgeSelector = bridgeSelectorForNode(targetNodeId)
+  const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
+  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
+  await page.locator(fragmentSelector).first().click()
+  await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
+  await page.locator(layerSelector).first().waitFor({ state: "attached", timeout: 10000 })
+  await waitForDoubleAnimationFrame(page)
+
+  const before = await readScrollAnchoringSnapshot(page, layerSelector, fragmentSelector, "before-scroll")
+  const scroll = await scrollEditorCanvasBy(page, fragmentSelector, 180)
+  const immediate = await readScrollAnchoringSnapshot(page, layerSelector, fragmentSelector, "immediate-after-scroll")
+  await waitForDoubleAnimationFrame(page)
+  const after = await readScrollAnchoringSnapshot(page, layerSelector, fragmentSelector, "after-scroll")
+  const clickAfterScroll = await runFlowdocDraftClickOnlyProbe(page, layerSelector)
+  const snapshots = [before, immediate, after]
+  const deltas = snapshots
+    .map((snapshot) => snapshot.absDeltaPx)
+    .filter((value) => typeof value === "number" && Number.isFinite(value))
+  const maxDeltaPx = deltas.length ? Math.max(...deltas) : null
+  const perfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
+  return {
+    targetNodeId,
+    action: {
+      mode: "scroll-anchoring",
+      scroll,
+    },
+    paintLatencyMs: {
+      p50: null,
+      p95: null,
+      p99: null,
+      max: null,
+    },
+    scrollAnchoring: {
+      ok: Boolean(
+        before.active &&
+        immediate.active &&
+        after.active &&
+        before.anchor === "page-overlay" &&
+        immediate.anchor === "page-overlay" &&
+        after.anchor === "page-overlay" &&
+        maxDeltaPx != null &&
+        maxDeltaPx <= 1.25 &&
+        clickAfterScroll.ok
+      ),
+      maxDeltaPx,
+      before,
+      immediate,
+      after,
+      clickAfterScroll,
+    },
+    pointerHitTest: clickAfterScroll,
+    perfEvents: summarizePerfEvents(perfEvents),
+    pageBoundary: null,
+  }
+}
+
+async function clickOutsideActiveIsland(page, layerSelector) {
+  const target = await page.evaluate((selector) => {
+    const layer = Array.from(document.querySelectorAll(selector))
+      .find((node) => (
+        node instanceof SVGElement &&
+        node.getAttribute("data-wysiwyg-active-visual-mode") === "flowdoc-draft-editor-island"
+      )) ?? null
+    const layerElement = layer instanceof SVGElement ? layer : null
+    const layerRect = layerElement?.getBoundingClientRect() ?? null
+    const overlay = layerElement?.parentElement?.getAttribute("data-testid") === "editor-page-flowdoc-island-overlay"
+      ? layerElement.parentElement
+      : null
+    const pageFrame = overlay?.closest('[data-testid="editor-page-frame"]') ?? null
+    const frameRect = pageFrame instanceof Element ? pageFrame.getBoundingClientRect() : null
+    const viewportWidth = window.innerWidth
+    const viewportHeight = window.innerHeight
+    const inside = (point, rect) => Boolean(
+      rect &&
+      point.x >= rect.left &&
+      point.x <= rect.right &&
+      point.y >= rect.top &&
+      point.y <= rect.bottom
+    )
+    const inViewport = (point) => (
+      point.x >= 2 &&
+      point.x <= viewportWidth - 2 &&
+      point.y >= 2 &&
+      point.y <= viewportHeight - 2
+    )
+    const candidates = frameRect
+      ? [
+          { x: frameRect.left + 20, y: frameRect.top + 20, source: "page-top-left" },
+          { x: frameRect.right - 20, y: frameRect.top + 20, source: "page-top-right" },
+          { x: frameRect.left + 20, y: frameRect.bottom - 20, source: "page-bottom-left" },
+          { x: frameRect.right - 20, y: frameRect.bottom - 20, source: "page-bottom-right" },
+        ]
+      : []
+    const target = candidates.find((candidate) => (
+      inViewport(candidate) &&
+      !inside(candidate, layerRect)
+    )) ?? { x: 8, y: 8, source: "viewport-fallback" }
+    const elementAtPoint = document.elementFromPoint(target.x, target.y)
+    return {
+      ...target,
+      layerRect: layerRect
+        ? { x: layerRect.x, y: layerRect.y, width: layerRect.width, height: layerRect.height, right: layerRect.right, bottom: layerRect.bottom }
+        : null,
+      frameRect: frameRect
+        ? { x: frameRect.x, y: frameRect.y, width: frameRect.width, height: frameRect.height, right: frameRect.right, bottom: frameRect.bottom }
+        : null,
+      elementAtPointTag: elementAtPoint instanceof Element ? elementAtPoint.tagName : null,
+      elementAtPointTestId: elementAtPoint instanceof Element ? elementAtPoint.getAttribute("data-testid") : null,
+    }
+  }, layerSelector)
+  await page.mouse.click(target.x, target.y)
+  return target
+}
+
+async function runBlurHandoffProbe(page) {
+  const targetNodeId = await resolveTargetNodeId(page)
+  const fragmentSelector = fragmentSelectorForNode(targetNodeId)
+  const bridgeSelector = bridgeSelectorForNode(targetNodeId)
+  const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
+  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
+  await page.locator(fragmentSelector).first().click()
+  await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
+  await page.locator(layerSelector).first().waitFor({ state: "attached", timeout: 10000 })
+  await page.keyboard.press("End")
+  const appendedText = " zblurz"
+  const appendedMarker = "zblurz"
+  await page.keyboard.type(appendedText)
+  await waitForDoubleAnimationFrame(page)
+
+  const beforeBlur = await readFragmentVisualState(page, fragmentSelector, layerSelector)
+  const beforeBlurHasAppend = Boolean(beforeBlur?.flowdocDraftLineSignatures?.some((line) => line.includes(appendedMarker)))
+  if (BLUR_HANDOFF_WAIT_BEFORE_CLICK_MS > 0) {
+    await page.waitForTimeout(BLUR_HANDOFF_WAIT_BEFORE_CLICK_MS)
+  }
+  await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+  const blurStartedAt = await page.evaluate(() => performance.now())
+  const clickTarget = await clickOutsideActiveIsland(page, layerSelector)
+  const immediateAfterClick = await readFragmentVisualState(page, fragmentSelector, layerSelector)
+  let layerGoneAt = null
+  let layerGone = true
+  try {
+    await page.waitForFunction((selector) => !document.querySelector(selector), layerSelector, { timeout: READY_TIMEOUT_MS })
+    layerGoneAt = await page.evaluate(() => performance.now())
+  } catch {
+    layerGone = false
+  }
+  await waitForDoubleAnimationFrame(page)
+  const settledAt = await page.evaluate(() => performance.now())
+  const afterSettle = await readFragmentVisualState(page, fragmentSelector, layerSelector)
+  const perfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
+  const blurEvents = perfEvents.filter((event) => (
+    event.kind === "flowdoc-island-blur-handoff" ||
+    event.kind === "flowdoc-island-parent-sync" ||
+    event.kind === "inline-edit-end" ||
+    event.kind === "inline-edit-finalize" ||
+    event.kind === "editor-canvas-react-commit" ||
+    event.kind === "browser-preview-pagination"
+  ))
+  const blurHandoffEventCount = blurEvents.filter((event) => event.kind === "flowdoc-island-blur-handoff").length
+  const firstParentSyncIndex = blurEvents.findIndex((event) => event.kind === "flowdoc-island-parent-sync")
+  const firstFinalizeIndex = blurEvents.findIndex((event) => event.kind === "inline-edit-finalize")
+  const firstBlurHandoffIndex = blurEvents.findIndex((event) => event.kind === "flowdoc-island-blur-handoff")
+  const finalizeBeforeParentSyncDetected = firstFinalizeIndex >= 0 &&
+    firstParentSyncIndex >= 0 &&
+    firstFinalizeIndex < firstParentSyncIndex
+  const finalizeBeforeBlurHandoffDetected = firstFinalizeIndex >= 0 &&
+    firstBlurHandoffIndex >= 0 &&
+    firstFinalizeIndex < firstBlurHandoffIndex
+  const afterSettleHasAppend = Boolean(afterSettle?.measuredLineSignatures?.some((line) => line.includes(appendedMarker)))
+  return {
+    targetNodeId,
+    action: {
+      mode: "blur-handoff",
+      clickTarget,
+      waitBeforeClickMs: BLUR_HANDOFF_WAIT_BEFORE_CLICK_MS,
+    },
+    paintLatencyMs: {
+      p50: null,
+      p95: null,
+      p99: null,
+      max: null,
+    },
+    blurHandoff: {
+      ok: Boolean(
+        layerGone &&
+        beforeBlurHasAppend &&
+        !afterSettle?.nativeActive &&
+        afterSettle?.activeVisualMode === "measured-svg" &&
+        afterSettleHasAppend &&
+        !finalizeBeforeParentSyncDetected
+      ),
+      layerGone,
+      appendedText,
+      appendedMarker,
+      waitBeforeClickMs: BLUR_HANDOFF_WAIT_BEFORE_CLICK_MS,
+      activeDraftHadAppendBeforeBlur: beforeBlurHasAppend,
+      appendedTextCommitted: afterSettleHasAppend,
+      blurHandoffEventCount,
+      firstParentSyncIndex,
+      firstFinalizeIndex,
+      firstBlurHandoffIndex,
+      finalizeBeforeParentSyncDetected,
+      finalizeBeforeBlurHandoffDetected,
+      clickToLayerGoneMs: layerGoneAt != null ? layerGoneAt - blurStartedAt : null,
+      clickToSettledMs: settledAt - blurStartedAt,
+      beforeBlur,
+      immediateAfterClick,
+      afterSettle,
+      events: blurEvents,
+    },
+    perfEvents: summarizePerfEvents(perfEvents),
+    pageBoundary: null,
+  }
+}
+
+async function waitForActiveIslandGone(page, nodeId, timeoutMs = 5000) {
+  try {
+    await page.waitForFunction(({ selector, nodeId }) => (
+      !Array.from(document.querySelectorAll(selector)).some((node) => (
+        node instanceof SVGElement &&
+        node.getAttribute("data-inline-edit-node-id") === nodeId &&
+        node.getBoundingClientRect().width > 0 &&
+        node.getBoundingClientRect().height > 0
+      ))
+    ), { selector: activeFlowdocDraftIslandSelector, nodeId }, { timeout: timeoutMs })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForNodeFragmentGone(page, nodeId, timeoutMs = 5000) {
+  try {
+    await page.waitForFunction((nodeId) => (
+      document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`).length === 0
+    ), nodeId, { timeout: timeoutMs })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForNodeFragmentPresent(page, nodeId, timeoutMs = 5000) {
+  try {
+    await page.waitForFunction((nodeId) => (
+      document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`).length > 0
+    ), nodeId, { timeout: timeoutMs })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function pressEnterForOptimisticRefocus(page, previousNodeId) {
+  const startedAt = await page.evaluate(() => performance.now())
+  await page.keyboard.press("Enter")
+  let island = await waitForActiveFlowdocDraftIsland(page, previousNodeId, 10000)
+  if (!island.nodeId) {
+    const fallbackNodeId = await page.evaluate((previousNodeId) => {
+      const events = (window.__flowDocWysiwygPerfEvents ?? [])
+        .filter((event) => event.kind === "enter-key-to-new-caret-visible")
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const nodeId = events[index]?.nodeId
+        if (nodeId && (!previousNodeId || nodeId !== previousNodeId)) return nodeId
+      }
+      return null
+    }, previousNodeId)
+    if (fallbackNodeId) island = { ...island, active: true, nodeId: fallbackNodeId }
+  }
+  const endedAt = await page.evaluate(() => performance.now())
+  return {
+    previousNodeId,
+    newNodeId: island.nodeId,
+    island,
+    enterStartedAt: startedAt,
+    enterToObservedIslandMs: endedAt - startedAt,
+  }
+}
+
+async function runStructuralRefocusSafetyProbe(page) {
+  const targetNodeId = await resolveTargetNodeId(page)
+  const structuralMidSplitText = resolveStructuralMidSplitText(targetNodeId)
+  const structuralStaleTailText = resolveStructuralStaleTailText(targetNodeId)
+  const structuralNextNodeId = resolveStructuralNextNodeId(targetNodeId)
+  const fragmentSelector = fragmentSelectorForNode(targetNodeId)
+  const bridgeSelector = bridgeSelectorForNode(targetNodeId)
+  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
+  await page.locator(fragmentSelector).first().click()
+  await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
+  const beforeStructuralDocument = await readStoredStructuralDocumentState(page, targetNodeId, null, structuralNextNodeId)
+  let midSplit = null
+  const useMidSplitCaret = PROBE_MODE === "enter-mid-split" ||
+    (PROBE_MODE === "enter-rapid" && (STRUCTURAL_MID_SPLIT_REQUESTED || isLongMockStructuralProbe())) ||
+    (isEnterBackspaceProbeMode(PROBE_MODE) && (STRUCTURAL_MID_SPLIT_REQUESTED || isLongMockStructuralProbe())) ||
+    (isBackspaceRapidProbeMode(PROBE_MODE) && (STRUCTURAL_MID_SPLIT_REQUESTED || isLongMockStructuralProbe())) ||
+    (PROBE_MODE === "enter-blur-before-settle" && STRUCTURAL_MID_SPLIT_REQUESTED)
+  const originalSourceText = beforeStructuralDocument.sourceText
+  const splitTextIndex = typeof originalSourceText === "string"
+    ? originalSourceText.indexOf(structuralMidSplitText)
+    : -1
+  const expectedSplitIndex = useMidSplitCaret && splitTextIndex >= 0
+    ? splitTextIndex + structuralMidSplitText.length
+    : typeof originalSourceText === "string"
+      ? originalSourceText.length
+      : null
+  const structuralExpectedSplit = {
+    sourceDocumentAvailable: beforeStructuralDocument.available,
+    originalText: originalSourceText,
+    splitText: structuralMidSplitText,
+    splitTextFound: splitTextIndex >= 0,
+    splitIndex: expectedSplitIndex,
+    expectedBeforeText: typeof originalSourceText === "string" && expectedSplitIndex != null
+      ? originalSourceText.slice(0, expectedSplitIndex)
+      : null,
+    expectedAfterText: typeof originalSourceText === "string" && expectedSplitIndex != null
+      ? originalSourceText.slice(expectedSplitIndex)
+      : null,
+  }
+  if (useMidSplitCaret) {
+    await waitForActiveFlowdocDraftIsland(page, null, 10000)
+    await page.waitForFunction(({ selector, nodeId, targetText }) => {
+      const layer = Array.from(document.querySelectorAll(selector))
+        .find((node) => (
+          node instanceof SVGElement &&
+          node.getAttribute("data-inline-edit-node-id") === nodeId &&
+          node.getBoundingClientRect().width > 0 &&
+          node.getBoundingClientRect().height > 0
+        ))
+      return Boolean(layer && Array.from(layer.querySelectorAll('[data-wysiwyg-flowdoc-draft-line="true"]'))
+        .some((line) => (line.textContent ?? "").includes(targetText)))
+    }, { selector: activeFlowdocDraftIslandSelector, nodeId: targetNodeId, targetText: structuralMidSplitText }, { timeout: 10000 })
+    const caretPlacement = await placeCaretAfterVisibleDraftText(page, targetNodeId, structuralMidSplitText)
+    assert(caretPlacement.ok, `Could not place caret after "${structuralMidSplitText}": ${caretPlacement.reason ?? "unknown"}`)
+    midSplit = {
+      targetText: structuralMidSplitText,
+      staleTailText: structuralStaleTailText,
+      nextNodeId: structuralNextNodeId,
+      frameDelaysMs: STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS,
+      caretPlacement,
+      frames: [],
+      immediateSourceCleared: null,
+      sourceParagraphClearedMs: null,
+      activeNewParagraphInIsland: null,
+      duplicateOldTextDetected: null,
+      visibleOrderOk: null,
+      pageBreakMarkerVisibleImmediatelyAfterEnter: null,
+      boundarySafePageBreakSuppressedWhileActive: null,
+      pageBreakMarkerReturnedAfterSuppression: null,
+    }
+  } else {
+    await page.keyboard.press("End")
+  }
+  await waitForDoubleAnimationFrame(page)
+  await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+
+  const steps = []
+  let latestNodeId = targetNodeId
+  let typedBeforeSettle = null
+  let undoSafety = null
+  let blurSafety = null
+  let backspaceAfterDispatchSafety = null
+  let backspaceRapidSafety = null
+  const screenshots = {
+    before: await captureProbeScreenshot(page, "structural-before"),
+    afterOptimisticIsland: null,
+    afterAction: null,
+    midSplitFrames: [],
+  }
+
+  if (isEnterBackspaceProbeMode(PROBE_MODE)) {
+    const enterStartedAt = await page.evaluate(() => performance.now())
+    await page.keyboard.press("Enter")
+    const enterKeyPressReturnedAt = await page.evaluate(() => performance.now())
+    const shouldWaitForSplitDispatchBeforeBackspace = PROBE_MODE === "enter-backspace-after-dispatch"
+    let splitDispatchObserved = shouldWaitForSplitDispatchBeforeBackspace
+      ? await waitForEditorActionDispatch(page, "SPLIT_PARAGRAPH", 5000)
+      : false
+    let island
+    if (shouldWaitForSplitDispatchBeforeBackspace) {
+      await waitForWysiwygPerfEvent(page, "enter-key-to-new-caret-visible", 5000)
+      island = await readActiveFlowdocDraftIsland(page)
+    } else {
+      try {
+        island = await waitForActiveFlowdocDraftIsland(page, latestNodeId, 5000)
+      } catch {
+        island = await readActiveFlowdocDraftIsland(page)
+      }
+      splitDispatchObserved = await hasEditorActionDispatch(page, "SPLIT_PARAGRAPH")
+    }
+    if (!island.nodeId || island.nodeId === latestNodeId) {
+      const fallbackNodeId = await page.evaluate((previousNodeId) => {
+        const events = (window.__flowDocWysiwygPerfEvents ?? [])
+          .filter((event) => event.kind === "enter-key-to-new-caret-visible")
+        for (let index = events.length - 1; index >= 0; index -= 1) {
+          const nodeId = events[index]?.nodeId
+          if (nodeId && nodeId !== previousNodeId) return nodeId
+        }
+        return null
+      }, latestNodeId)
+      if (fallbackNodeId) island = { ...island, active: true, nodeId: fallbackNodeId }
+    }
+    const step = {
+      previousNodeId: latestNodeId,
+      newNodeId: island.nodeId,
+      island,
+      enterStartedAt,
+      enterKeyPressDurationMs: enterKeyPressReturnedAt - enterStartedAt,
+      enterToObservedIslandMs: island.readAt ? island.readAt - enterStartedAt : null,
+    }
+    steps.push({ index: 0, ...step })
+    latestNodeId = step.newNodeId
+    screenshots.afterOptimisticIsland = await captureProbeScreenshot(page, "after-optimistic-island")
+    const splitFrame = await readEnterMidSplitFrame(page, step.previousNodeId, step.newNodeId, {
+      nextNodeId: structuralNextNodeId,
+      staleTailText: structuralStaleTailText,
+    })
+    const splitStoredDocument = await readStoredStructuralDocumentState(
+      page,
+      step.previousNodeId,
+      step.newNodeId,
+      structuralNextNodeId,
+    )
+
+    const splitFragmentPresent = await page.evaluate((nodeId) => (
+      document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`).length > 0
+    ), latestNodeId)
+    await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+    const backspaceStartedAt = await page.evaluate(() => performance.now())
+    await page.keyboard.press("Backspace")
+    await waitForDoubleAnimationFrame(page)
+    const activeIslandAfterBackspace = await readActiveFlowdocDraftIsland(page)
+    const newNodeGone = await waitForNodeFragmentGone(page, latestNodeId, 5000)
+    const afterNodeGoneAt = await page.evaluate(() => performance.now())
+    const activeIsland = await readActiveFlowdocDraftIsland(page)
+    const mergeFrame = await readEnterMidSplitFrame(page, step.previousNodeId, step.newNodeId, {
+      nextNodeId: structuralNextNodeId,
+      staleTailText: structuralStaleTailText,
+    })
+    const backspacePerfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
+    const mergeEvents = backspacePerfEvents.filter((event) => (
+      event.kind === "flowdoc-island-structural-edit" &&
+      event.action === "merge-paragraph"
+    ))
+    const mergeRefocusEvents = backspacePerfEvents.filter((event) => (
+      event.kind === "structural-refocus-used-full-pagination-before-island" &&
+      event.source === "optimistic-merge-prestarted"
+    ))
+    const mergeDispatchEvents = backspacePerfEvents.filter((event) => (
+      event.kind === "editor-action-dispatch" &&
+      event.commandType === "MERGE_PARAGRAPH"
+    ))
+    const returnedToPreviousNode = activeIslandAfterBackspace.nodeId === step.previousNodeId || activeIsland.nodeId === step.previousNodeId
+    const mergeVisibleOrder = mergeFrame.visibleOrder ?? null
+    const documentOrderAfterMergeOk = structuralNextNodeId
+      ? Boolean(
+          mergeVisibleOrder &&
+          mergeVisibleOrder.sourceIndex >= 0 &&
+          mergeVisibleOrder.nextIndex > mergeVisibleOrder.sourceIndex &&
+          mergeVisibleOrder.newIndex < 0
+        )
+      : null
+    const ghostNewFragmentVisible = mergeFrame.newFragments.length > 0
+    const ghostNewTextVisible = structuralStaleTailText
+      ? mergeFrame.newCanvasContainsStaleTail === true
+      : null
+    const sourceRestoredTail = structuralStaleTailText
+      ? (
+          mergeFrame.sourceCombinedText.includes(structuralStaleTailText) ||
+          mergeFrame.islandCombinedText.includes(structuralStaleTailText)
+        )
+      : null
+    backspaceAfterDispatchSafety = {
+      splitDispatchObserved,
+      splitFragmentPresent,
+      newNodeId: latestNodeId,
+      previousNodeId: step.previousNodeId,
+      splitFrame,
+      splitStoredDocument,
+      newNodeGone,
+      returnedToPreviousNode,
+      activeNodeId: activeIslandAfterBackspace.nodeId ?? activeIsland.nodeId,
+      activeIslandVisible: activeIslandAfterBackspace.active || activeIsland.active,
+      activeNodeIdAfterFragmentGone: activeIsland.nodeId,
+      activeIslandVisibleAfterFragmentGone: activeIsland.active,
+      mergeFrame,
+      documentOrderAfterMergeOk,
+      ghostNewFragmentVisible,
+      ghostNewTextVisible,
+      sourceRestoredTail,
+      backspaceToActiveIslandMs: activeIslandAfterBackspace.active ? activeIslandAfterBackspace.readAt - backspaceStartedAt : null,
+      backspaceToMergedFragmentGoneMs: newNodeGone ? afterNodeGoneAt - backspaceStartedAt : null,
+      mergeEventCount: mergeEvents.length,
+      optimisticMergeRefocusCount: mergeRefocusEvents.length,
+      mergeDispatchCount: mergeDispatchEvents.length,
+      usedFullPaginationBeforeIsland: mergeRefocusEvents.some((event) => event.usedFullPaginationBeforeIsland === true),
+    }
+    latestNodeId = step.previousNodeId
+  } else if (isBackspaceRapidProbeMode(PROBE_MODE)) {
+    const step = await pressEnterForOptimisticRefocus(page, latestNodeId)
+    steps.push({ index: 0, ...step })
+    latestNodeId = step.newNodeId
+    screenshots.afterOptimisticIsland = await captureProbeScreenshot(page, "backspace-rapid-after-island")
+    const splitFrame = await readEnterMidSplitFrame(page, step.previousNodeId, step.newNodeId, {
+      nextNodeId: structuralNextNodeId,
+      staleTailText: structuralStaleTailText,
+    })
+    const splitStoredDocument = await readStoredStructuralDocumentState(
+      page,
+      step.previousNodeId,
+      step.newNodeId,
+      structuralNextNodeId,
+    )
+    await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+    const backspaceStartedAt = await page.evaluate(() => performance.now())
+    await page.keyboard.down("Backspace")
+    for (let i = 1; i < STRUCTURAL_REFOCUS_BACKSPACE_COUNT; i += 1) {
+      await page.keyboard.down("Backspace")
+    }
+    await page.keyboard.up("Backspace")
+    await waitForDoubleAnimationFrame(page)
+    const activeIslandAfterBackspace = await readActiveFlowdocDraftIsland(page)
+    const newNodeGone = await waitForNodeFragmentGone(page, latestNodeId, 5000)
+    const afterNodeGoneAt = await page.evaluate(() => performance.now())
+    const activeIsland = await readActiveFlowdocDraftIsland(page)
+    const mergeFrame = await readEnterMidSplitFrame(page, step.previousNodeId, step.newNodeId, {
+      nextNodeId: structuralNextNodeId,
+      staleTailText: structuralStaleTailText,
+    })
+    const backspacePerfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
+    const mergeEvents = backspacePerfEvents.filter((event) => (
+      event.kind === "flowdoc-island-structural-edit" &&
+      event.action === "merge-paragraph"
+    ))
+    const guardEvents = backspacePerfEvents.filter((event) => event.kind === "flowdoc-island-structural-guard")
+    const mergeDispatchEvents = backspacePerfEvents.filter((event) => (
+      event.kind === "editor-action-dispatch" &&
+      event.commandType === "MERGE_PARAGRAPH"
+    ))
+    const returnedToPreviousNode = activeIslandAfterBackspace.nodeId === step.previousNodeId || activeIsland.nodeId === step.previousNodeId
+    const mergeVisibleOrder = mergeFrame.visibleOrder ?? null
+    const documentOrderAfterMergeOk = structuralNextNodeId
+      ? Boolean(
+          mergeVisibleOrder &&
+          mergeVisibleOrder.sourceIndex >= 0 &&
+          mergeVisibleOrder.nextIndex > mergeVisibleOrder.sourceIndex &&
+          mergeVisibleOrder.newIndex < 0
+        )
+      : null
+    const ghostNewFragmentVisible = mergeFrame.newFragments.length > 0
+    const ghostNewTextVisible = structuralStaleTailText
+      ? mergeFrame.newCanvasContainsStaleTail === true
+      : null
+    backspaceRapidSafety = {
+      count: STRUCTURAL_REFOCUS_BACKSPACE_COUNT,
+      splitFrame,
+      splitStoredDocument,
+      newNodeId: latestNodeId,
+      previousNodeId: step.previousNodeId,
+      newNodeGone,
+      returnedToPreviousNode,
+      activeNodeId: activeIslandAfterBackspace.nodeId ?? activeIsland.nodeId,
+      activeIslandVisible: activeIslandAfterBackspace.active || activeIsland.active,
+      activeNodeIdAfterFragmentGone: activeIsland.nodeId,
+      activeIslandVisibleAfterFragmentGone: activeIsland.active,
+      mergeFrame,
+      documentOrderAfterMergeOk,
+      ghostNewFragmentVisible,
+      ghostNewTextVisible,
+      backspaceToActiveIslandMs: activeIslandAfterBackspace.active ? activeIslandAfterBackspace.readAt - backspaceStartedAt : null,
+      backspaceToMergedFragmentGoneMs: newNodeGone ? afterNodeGoneAt - backspaceStartedAt : null,
+      mergeEventCount: mergeEvents.length,
+      mergeDispatchCount: mergeDispatchEvents.length,
+      structuralGuardEngagedCount: guardEvents.filter((event) => event.action === "engaged").length,
+      structuralGuardAcceptedCount: guardEvents.filter((event) => event.action === "accepted").length,
+      structuralGuardDroppedCount: guardEvents.filter((event) => event.action === "dropped").length,
+      structuralGuardUnlockedCount: guardEvents.filter((event) => String(event.action ?? "").startsWith("unlocked-")).length,
+    }
+    latestNodeId = step.previousNodeId
+  } else if (PROBE_MODE === "enter-rapid") {
+    const rapidEnterMetrics = await page.evaluate(({ count }) => {
+      const target = document.activeElement instanceof Element
+        ? document.activeElement
+        : document.querySelector('[data-wysiwyg-input-bridge="true"]')
+      if (!target) return { startedAt: performance.now(), returnedAt: performance.now(), dispatched: 0 }
+      const startedAt = performance.now()
+      let dispatched = 0
+      for (let i = 0; i < count; i += 1) {
+        const event = new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          bubbles: true,
+          cancelable: true,
+          repeat: i > 0,
+        })
+        target.dispatchEvent(event)
+        dispatched += 1
+      }
+      target.dispatchEvent(new KeyboardEvent("keyup", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }))
+      return { startedAt, returnedAt: performance.now(), dispatched }
+    }, { count: STRUCTURAL_REFOCUS_ENTER_COUNT })
+    const enterStartedAt = rapidEnterMetrics.startedAt
+    const enterKeyPressReturnedAt = rapidEnterMetrics.returnedAt
+    let island
+    try {
+      island = await waitForActiveFlowdocDraftIsland(page, latestNodeId, 10000)
+    } catch {
+      island = await readActiveFlowdocDraftIsland(page)
+    }
+    if (!island.nodeId || island.nodeId === latestNodeId) {
+      const fallbackNodeId = await page.evaluate((previousNodeId) => {
+        const events = (window.__flowDocWysiwygPerfEvents ?? [])
+          .filter((event) => event.kind === "enter-key-to-new-caret-visible")
+        for (let index = events.length - 1; index >= 0; index -= 1) {
+          const nodeId = events[index]?.nodeId
+          if (nodeId && nodeId !== previousNodeId) return nodeId
+        }
+        return null
+      }, latestNodeId)
+      if (fallbackNodeId) island = { ...island, active: true, nodeId: fallbackNodeId }
+    }
+    const step = {
+      previousNodeId: latestNodeId,
+      newNodeId: island.nodeId,
+      island,
+      enterStartedAt,
+      enterKeyPressDurationMs: enterKeyPressReturnedAt - enterStartedAt,
+      enterToObservedIslandMs: island.readAt ? island.readAt - enterStartedAt : null,
+    }
+    steps.push({ index: 0, ...step })
+    latestNodeId = step.newNodeId
+    screenshots.afterOptimisticIsland = await captureProbeScreenshot(page, "rapid-after-island")
+    if (midSplit) {
+      const state = await readEnterMidSplitFrame(page, step.previousNodeId, step.newNodeId, {
+        nextNodeId: structuralNextNodeId,
+        staleTailText: structuralStaleTailText,
+      })
+      midSplit.frames.push({ delayMs: 0, screenshot: null, state })
+      finalizeMidSplitFrames(midSplit, step)
+    }
+  } else {
+    const step = await pressEnterForOptimisticRefocus(page, latestNodeId)
+    steps.push({ index: 0, ...step })
+    latestNodeId = step.newNodeId
+    screenshots.afterOptimisticIsland = await captureProbeScreenshot(page, "after-optimistic-island")
+
+    if (PROBE_MODE === "enter-mid-split") {
+      let previousDelay = 0
+      for (const delay of STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS) {
+        const waitMs = Math.max(0, delay - previousDelay)
+        if (waitMs > 0) await page.waitForTimeout(waitMs)
+        previousDelay = delay
+        const label = `mid-split-after-enter-${delay}ms`
+        const screenshot = await captureProbeScreenshot(page, label)
+        const state = await readEnterMidSplitFrame(page, step.previousNodeId, step.newNodeId, {
+          nextNodeId: structuralNextNodeId,
+          staleTailText: structuralStaleTailText,
+        })
+        const frame = { delayMs: delay, screenshot, state }
+        if (midSplit) midSplit.frames.push(frame)
+        screenshots.midSplitFrames.push({ delayMs: delay, screenshot })
+      }
+      if (midSplit) {
+        finalizeMidSplitFrames(midSplit, step)
+      }
+    } else if (PROBE_MODE === "enter-type-before-settle") {
+      const marker = "zp0b"
+      const text = marker.repeat(Math.max(1, Math.ceil(STRUCTURAL_REFOCUS_TYPE_LENGTH / marker.length)))
+        .slice(0, STRUCTURAL_REFOCUS_TYPE_LENGTH)
+      const firstInput = text.slice(0, 1)
+      const remainingInput = text.slice(1)
+      const beforeFirstInput = await page.evaluate(() => performance.now())
+      if (firstInput) await page.keyboard.type(firstInput)
+      const afterFirstInput = await page.evaluate(() => performance.now())
+      if (remainingInput) await page.keyboard.type(remainingInput)
+      await waitForDoubleAnimationFrame(page)
+      const afterTypeIsland = await readActiveFlowdocDraftIsland(page)
+      const parentSyncObserved = await waitForWysiwygPerfEvent(page, "flowdoc-island-parent-sync", 2000)
+      const settledObserved = await waitForWysiwygPerfEvent(page, "structural-refocus-settled-pagination", Math.min(READY_TIMEOUT_MS, 10000))
+      await waitForDoubleAnimationFrame(page)
+      const afterSettleIsland = await readActiveFlowdocDraftIsland(page)
+      const lineText = afterSettleIsland.lineSignatures.join("")
+      typedBeforeSettle = {
+        marker,
+        textLength: text.length,
+        firstInputDurationMs: afterFirstInput - beforeFirstInput,
+        enterToFirstInputAcceptedMs: afterFirstInput - step.enterStartedAt,
+        activeNodeAfterType: afterTypeIsland.nodeId,
+        activeNodeAfterSettle: afterSettleIsland.nodeId,
+        parentSyncObserved,
+        settledObserved,
+        activeTextLengthAfterType: afterTypeIsland.textLength,
+        activeTextLengthAfterSettle: afterSettleIsland.textLength,
+        typedTextVisibleAfterType: afterTypeIsland.lineSignatures.join("").includes(marker),
+        typedTextVisibleAfterSettle: lineText.includes(marker),
+        caretVisibleAfterSettle: afterSettleIsland.caretOffset != null,
+      }
+    } else if (PROBE_MODE === "enter-undo") {
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+Z" : "Control+Z")
+      await waitForDoubleAnimationFrame(page)
+      const layerGone = await waitForActiveIslandGone(page, latestNodeId, 5000)
+      const nodeGone = await waitForNodeFragmentGone(page, latestNodeId, 5000)
+      const activeIsland = await readActiveFlowdocDraftIsland(page)
+      undoSafety = {
+        newNodeId: latestNodeId,
+        layerGone,
+        nodeGone,
+        activeNodeId: activeIsland.nodeId,
+        activeIslandVisible: activeIsland.active,
+      }
+    } else if (PROBE_MODE === "enter-backspace-after-dispatch") {
+      const splitDispatchObserved = await waitForEditorActionDispatch(page, "SPLIT_PARAGRAPH", 5000)
+      const splitFragmentPresent = await page.evaluate((nodeId) => (
+        document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`).length > 0
+      ), latestNodeId)
+      await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+      const backspaceStartedAt = await page.evaluate(() => performance.now())
+      await page.keyboard.press("Backspace")
+      await waitForDoubleAnimationFrame(page)
+      const activeIslandAfterBackspace = await readActiveFlowdocDraftIsland(page)
+      const newNodeGone = await waitForNodeFragmentGone(page, latestNodeId, 5000)
+      const afterNodeGoneAt = await page.evaluate(() => performance.now())
+      const activeIsland = await readActiveFlowdocDraftIsland(page)
+      const backspacePerfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
+      const mergeEvents = backspacePerfEvents.filter((event) => (
+        event.kind === "flowdoc-island-structural-edit" &&
+        event.action === "merge-paragraph"
+      ))
+      const mergeRefocusEvents = backspacePerfEvents.filter((event) => (
+        event.kind === "structural-refocus-used-full-pagination-before-island" &&
+        event.source === "optimistic-merge-prestarted"
+      ))
+      const mergeDispatchEvents = backspacePerfEvents.filter((event) => (
+        event.kind === "editor-action-dispatch" &&
+        event.commandType === "MERGE_PARAGRAPH"
+      ))
+      const returnedToPreviousNode = activeIslandAfterBackspace.nodeId === step.previousNodeId || activeIsland.nodeId === step.previousNodeId
+      backspaceAfterDispatchSafety = {
+        splitDispatchObserved,
+        splitFragmentPresent,
+        newNodeId: latestNodeId,
+        previousNodeId: step.previousNodeId,
+        newNodeGone,
+        returnedToPreviousNode,
+        activeNodeId: activeIslandAfterBackspace.nodeId ?? activeIsland.nodeId,
+        activeIslandVisible: activeIslandAfterBackspace.active || activeIsland.active,
+        activeNodeIdAfterFragmentGone: activeIsland.nodeId,
+        activeIslandVisibleAfterFragmentGone: activeIsland.active,
+        backspaceToActiveIslandMs: activeIslandAfterBackspace.active ? activeIslandAfterBackspace.readAt - backspaceStartedAt : null,
+        backspaceToMergedFragmentGoneMs: newNodeGone ? afterNodeGoneAt - backspaceStartedAt : null,
+        mergeEventCount: mergeEvents.length,
+        optimisticMergeRefocusCount: mergeRefocusEvents.length,
+        mergeDispatchCount: mergeDispatchEvents.length,
+        usedFullPaginationBeforeIsland: mergeRefocusEvents.some((event) => event.usedFullPaginationBeforeIsland === true),
+      }
+      latestNodeId = step.previousNodeId
+    } else if (PROBE_MODE === "enter-blur-before-settle") {
+      const clickTarget = await clickOutsideActiveIsland(page, activeFlowdocDraftIslandSelector)
+      await waitForDoubleAnimationFrame(page)
+      const immediateAfterClickIsland = await readActiveFlowdocDraftIsland(page)
+      const immediateNewFragmentPresent = await page.evaluate((nodeId) => (
+        document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`).length > 0
+      ), latestNodeId)
+      const layerGone = await waitForActiveIslandGone(page, latestNodeId, 5000)
+      const settledObserved = await waitForWysiwygPerfEvent(page, "structural-refocus-settled-pagination", Math.min(READY_TIMEOUT_MS, 10000))
+      const activeIsland = await readActiveFlowdocDraftIsland(page)
+      blurSafety = {
+        newNodeId: latestNodeId,
+        clickTarget,
+        immediateAfterClickIslandVisible: immediateAfterClickIsland.active && immediateAfterClickIsland.nodeId === latestNodeId,
+        immediateAfterClickIslandTextLength: immediateAfterClickIsland.textLength,
+        immediateAfterClickIslandLineSignatures: immediateAfterClickIsland.lineSignatures,
+        immediateNewFragmentPresent,
+        layerGone,
+        settledObserved,
+        ghostIslandVisible: activeIsland.active && activeIsland.nodeId === latestNodeId,
+        activeNodeId: activeIsland.nodeId,
+      }
+    }
+  }
+
+  screenshots.afterAction = await captureProbeScreenshot(page, "structural-after-action")
+  await page.waitForTimeout(650)
+  const storedStructuralDocument = await readStoredStructuralDocumentState(
+    page,
+    targetNodeId,
+    steps[0]?.newNodeId ?? latestNodeId,
+    structuralNextNodeId,
+  )
+  const perfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
+  const perfSummary = summarizePerfEvents(perfEvents)
+  const structural = perfSummary.flowdocIsland.structuralRefocus
+  const structuralEdit = perfSummary.flowdocIsland.structuralEdit
+  const structuralTransaction = perfSummary.flowdocIsland.structuralTransaction
+  const structuralPaginationSchedule = perfSummary.flowdocIsland.structuralPaginationSchedule
+  const optimisticVisibleMs = structural.optimisticIslandVisible.p95 ?? structural.optimisticIslandVisible.maxMs
+  const fullPaginationBeforeIsland = structural.usedFullPaginationBeforeIsland === true
+  const allObservedIslandsValid = steps.every((step) => (
+    step.newNodeId &&
+    step.newNodeId !== step.previousNodeId
+  ))
+  const currentActiveNodeId = backspaceAfterDispatchSafety?.activeNodeId ??
+    backspaceRapidSafety?.activeNodeId ??
+    steps.at(-1)?.newNodeId ??
+    latestNodeId
+  const activeNodeMissingFromDocument = storedStructuralDocument.available && currentActiveNodeId
+    ? currentActiveNodeId === targetNodeId
+      ? storedStructuralDocument.sourceExists === false
+      : currentActiveNodeId === steps[0]?.newNodeId
+        ? storedStructuralDocument.newExists === false
+        : false
+    : false
+  const ghostFragmentDetected = backspaceAfterDispatchSafety?.ghostNewFragmentVisible === true ||
+    backspaceRapidSafety?.ghostNewFragmentVisible === true
+  const duplicateTextDetected = midSplit?.duplicateOldTextDetected === true ||
+    backspaceAfterDispatchSafety?.ghostNewTextVisible === true ||
+    backspaceRapidSafety?.ghostNewTextVisible === true
+  const documentOrderAfterEnterOk = midSplit?.visibleOrderOk ??
+    (PROBE_MODE === "enter-mid-split" || PROBE_MODE === "enter-rapid" ? storedStructuralDocument.orderAfterEnterOk : null)
+  const documentOrderAfterBackspaceOk = backspaceAfterDispatchSafety?.documentOrderAfterMergeOk ??
+    backspaceRapidSafety?.documentOrderAfterMergeOk ??
+    (isEnterBackspaceProbeMode(PROBE_MODE) || isBackspaceRapidProbeMode(PROBE_MODE)
+      ? storedStructuralDocument.orderAfterBackspaceOk
+      : null)
+  const coverBreakSuppressedDuringActiveIsland = midSplit?.boundarySafePageBreakSuppressedWhileActive ??
+    backspaceAfterDispatchSafety?.splitFrame?.nextPageBreakBoundarySafeSuppressed ??
+    backspaceRapidSafety?.splitFrame?.nextPageBreakBoundarySafeSuppressed ??
+    null
+  const coverBreakMarkerReturnedAfterSuppression = midSplit?.pageBreakMarkerReturnedAfterSuppression ??
+    backspaceAfterDispatchSafety?.mergeFrame?.nextPageBreakMarkerVisible ??
+    backspaceRapidSafety?.mergeFrame?.nextPageBreakMarkerVisible ??
+    null
+  const structuralRegression = {
+    ok: (
+      activeNodeMissingFromDocument === false &&
+      ghostFragmentDetected === false &&
+      duplicateTextDetected === false &&
+      storedStructuralDocument.invalidDocumentDetected === false &&
+      documentOrderAfterEnterOk !== false &&
+      documentOrderAfterBackspaceOk !== false &&
+      (structuralNextNodeId ? storedStructuralDocument.nextNodeType !== null
+        ? storedStructuralDocument.nextNodeType === "page-break"
+        : true
+      : true)
+    ),
+    activeNodeId: currentActiveNodeId ?? null,
+    activeNodeMissingFromDocument,
+    ghostFragmentDetected,
+    duplicateTextDetected,
+    invalidDocumentDetected: storedStructuralDocument.invalidDocumentDetected,
+    storedDocument: storedStructuralDocument,
+    documentOrderAfterEnterOk,
+    documentOrderAfterBackspaceOk,
+    coverBreakRemainsPageBreak: structuralNextNodeId
+      ? storedStructuralDocument.nextNodeType === null
+        ? null
+        : storedStructuralDocument.nextNodeType === "page-break"
+      : null,
+    coverBreakSuppressedDuringActiveIsland,
+    coverBreakMarkerReturnedAfterSuppression,
+    scheduledPaginationCount: structuralPaginationSchedule.scheduledCount,
+    completedPaginationCount: structuralPaginationSchedule.completedCount,
+    supersededPaginationCount: structuralPaginationSchedule.supersededCount,
+  }
+  const requiresEnterVisibilityEvents = !isEnterBackspaceProbeMode(PROBE_MODE) && !isBackspaceRapidProbeMode(PROBE_MODE)
+  const optimisticIslandVisibleObserved = !requiresEnterVisibilityEvents ||
+    structural.optimisticIslandVisible.count >= steps.length &&
+    structural.newCaretVisible.count >= steps.length
+  const optimisticIslandVisibleWithinBudget = !requiresEnterVisibilityEvents ||
+    structural.optimisticIslandVisible.count >= steps.length &&
+    structural.newCaretVisible.count >= steps.length &&
+    (structural.optimisticIslandVisible.maxMs ?? Number.POSITIVE_INFINITY) <= 500 &&
+    (structural.newCaretVisible.maxMs ?? Number.POSITIVE_INFINITY) <= 500
+  const modeSpecificOk = PROBE_MODE === "enter-type-before-settle"
+    ? Boolean(
+        typedBeforeSettle?.parentSyncObserved &&
+        typedBeforeSettle?.typedTextVisibleAfterType &&
+        typedBeforeSettle?.typedTextVisibleAfterSettle &&
+        typedBeforeSettle?.activeNodeAfterSettle === latestNodeId
+      )
+    : PROBE_MODE === "enter-rapid"
+      ? Boolean(perfSummary.flowdocIsland.structuralEdit.splitParagraphCount === 1)
+    : PROBE_MODE === "enter-undo"
+      ? Boolean(undoSafety?.layerGone && undoSafety?.nodeGone)
+      : PROBE_MODE === "enter-mid-split"
+        ? Boolean(
+            midSplit?.activeNewParagraphInIsland &&
+            midSplit?.duplicateOldTextDetected === false &&
+            midSplit?.immediateSourceCleared !== false &&
+            (!structuralNextNodeId || (
+              midSplit?.pageBreakMarkerVisibleImmediatelyAfterEnter === false &&
+              midSplit?.boundarySafePageBreakSuppressedWhileActive === true
+            ))
+          )
+        : isEnterBackspaceProbeMode(PROBE_MODE)
+          ? Boolean(
+              backspaceAfterDispatchSafety?.splitDispatchObserved &&
+              backspaceAfterDispatchSafety?.newNodeGone &&
+              backspaceAfterDispatchSafety?.returnedToPreviousNode &&
+              backspaceAfterDispatchSafety?.mergeEventCount >= 1 &&
+              backspaceAfterDispatchSafety?.optimisticMergeRefocusCount >= 1 &&
+              backspaceAfterDispatchSafety?.mergeDispatchCount >= 1 &&
+              !backspaceAfterDispatchSafety?.usedFullPaginationBeforeIsland &&
+              backspaceAfterDispatchSafety?.ghostNewFragmentVisible === false &&
+              backspaceAfterDispatchSafety?.ghostNewTextVisible !== true &&
+              backspaceAfterDispatchSafety?.sourceRestoredTail !== false &&
+              backspaceAfterDispatchSafety?.documentOrderAfterMergeOk !== false
+            )
+          : isBackspaceRapidProbeMode(PROBE_MODE)
+            ? Boolean(
+                backspaceRapidSafety?.newNodeGone &&
+                backspaceRapidSafety?.returnedToPreviousNode &&
+                backspaceRapidSafety?.mergeEventCount >= 1 &&
+                backspaceRapidSafety?.mergeDispatchCount >= 1 &&
+                backspaceRapidSafety?.mergeEventCount <= 1 &&
+                backspaceRapidSafety?.mergeDispatchCount <= 1 &&
+                backspaceRapidSafety?.ghostNewFragmentVisible === false &&
+                backspaceRapidSafety?.ghostNewTextVisible !== true &&
+                backspaceRapidSafety?.documentOrderAfterMergeOk !== false
+              )
+          : PROBE_MODE === "enter-blur-before-settle"
+            ? Boolean(
+                blurSafety?.settledObserved &&
+                !blurSafety?.ghostIslandVisible &&
+                (
+                  blurSafety?.layerGone ||
+                  blurSafety?.immediateAfterClickIslandVisible ||
+                  blurSafety?.immediateNewFragmentPresent
+                )
+              )
+            : true
+
+  return {
+    targetNodeId,
+    action: {
+      mode: PROBE_MODE,
+      burstLength: TYPE_BURST_LENGTH,
+      structuralEnterCount: PROBE_MODE === "enter-rapid" ? STRUCTURAL_REFOCUS_ENTER_COUNT : 1,
+      structuralTypeLength: PROBE_MODE === "enter-type-before-settle" ? STRUCTURAL_REFOCUS_TYPE_LENGTH : 0,
+      structuralMidSplitText: (PROBE_MODE === "enter-mid-split" || PROBE_MODE === "enter-rapid" || isEnterBackspaceProbeMode(PROBE_MODE) || isBackspaceRapidProbeMode(PROBE_MODE)) ? structuralMidSplitText : null,
+      structuralStaleTailText: (PROBE_MODE === "enter-mid-split" || PROBE_MODE === "enter-rapid" || isEnterBackspaceProbeMode(PROBE_MODE) || isBackspaceRapidProbeMode(PROBE_MODE)) ? structuralStaleTailText : null,
+      structuralNextNodeId: (PROBE_MODE === "enter-mid-split" || PROBE_MODE === "enter-rapid" || isEnterBackspaceProbeMode(PROBE_MODE) || isBackspaceRapidProbeMode(PROBE_MODE)) ? structuralNextNodeId : null,
+      structuralMidSplitRequested: useMidSplitCaret,
+    },
+    paintLatencyMs: {
+      p50: null,
+      p95: optimisticVisibleMs,
+      p99: optimisticVisibleMs,
+      max: structural.optimisticIslandVisible.maxMs,
+    },
+    keystrokeTotalMs: {
+      p50: null,
+      p95: null,
+      p99: null,
+      max: null,
+    },
+    structuralRefocusSafety: {
+      ok: allObservedIslandsValid && optimisticIslandVisibleObserved && !fullPaginationBeforeIsland && modeSpecificOk && structuralRegression.ok,
+      steps: steps.map((step) => ({
+        index: step.index,
+        previousNodeId: step.previousNodeId,
+        newNodeId: step.newNodeId,
+        enterKeyPressDurationMs: step.enterKeyPressDurationMs ?? null,
+        enterToObservedIslandMs: step.enterToObservedIslandMs,
+        islandTextLength: step.island.textLength,
+        islandCaretOffset: step.island.caretOffset,
+        nativeVisibleText: step.island.nativeVisibleText,
+        liveEchoCount: step.island.liveEchoCount,
+        draftReplacementCount: step.island.draftReplacementCount,
+        inputBridgeOwnsVisiblePointer: step.island.inputBridgeOwnsVisiblePointer,
+      })),
+      enterKeyToOptimisticIslandVisibleMs: structural.optimisticIslandVisible,
+      enterKeyToNewCaretVisibleMs: structural.newCaretVisible,
+      latencyBudgetOk: optimisticIslandVisibleWithinBudget,
+      enterKeyToFirstPostEnterInputAcceptedMs: typedBeforeSettle?.enterToFirstInputAcceptedMs ?? null,
+      enterKeyToSettledPaginationMs: structural.settledPagination,
+      optimisticRefocusStaleSettleIgnoredCount: structural.staleSettleIgnoredCount,
+      structuralRefocusUsedFullPaginationBeforeIsland: fullPaginationBeforeIsland,
+      typedBeforeSettle,
+      midSplit,
+      undoSafety,
+      blurSafety,
+      backspaceAfterDispatchSafety,
+      backspaceRapidSafety,
+    },
+    structuralLatency: {
+      keydownSplitHandlerMaxMs: structuralEdit.splitParagraph.maxMs,
+      keydownMergeHandlerMaxMs: structuralEdit.mergeParagraph.maxMs,
+      draftTextResolveMaxMs: structuralTransaction.draftTextResolve.maxMs,
+      draftTextReplaceCount: structuralTransaction.draftTextReplaceCount,
+      splitOperationMaxMs: structuralTransaction.splitOperation.maxMs,
+      mergeOperationMaxMs: structuralTransaction.mergeOperation.maxMs,
+      paragraphResolveMaxMs: structuralTransaction.paragraphResolve.maxMs,
+      optimisticPaginationMaxMs: structuralTransaction.optimisticPagination.maxMs,
+      reducerDispatchCommitMaxMs: perfSummary.editorActionDispatch.maxMs,
+      flushSyncTransitionMaxMs: structuralTransaction.flushSyncTransition.maxMs,
+      totalTransactionMaxMs: structuralTransaction.total.maxMs,
+      activeIslandPaintMaxMs: structural.optimisticIslandVisible.maxMs,
+      newCaretPaintMaxMs: structural.newCaretVisible.maxMs,
+      sourceParagraphClearedMs: midSplit?.sourceParagraphClearedMs ?? null,
+      fullSettleMaxMs: structural.settledPagination.maxMs,
+      paginationScheduledCount: structuralPaginationSchedule.scheduledCount,
+      paginationCompletedCount: structuralPaginationSchedule.completedCount,
+      paginationSupersededCount: structuralPaginationSchedule.supersededCount,
+      staleSettleIgnoredCount: structural.staleSettleIgnoredCount,
+      structuralGuardDroppedCount: perfSummary.flowdocIsland.structuralGuard.droppedCount,
+    },
+    structuralExpectedSplit,
+    structuralRegression,
+    screenshots,
+    perfEvents: perfSummary,
+    pageBoundary: null,
+  }
+}
+
+function reportFilePath(filePath) {
+  if (!filePath) return null
+  return path.relative(process.cwd(), filePath).replaceAll("\\", "/")
+}
+
+function orderBetween(docState, firstNodeId, lastNodeId) {
+  const childIds = Array.isArray(docState?.bodyChildIds) ? docState.bodyChildIds : []
+  const firstIndex = childIds.indexOf(firstNodeId)
+  const lastIndex = childIds.indexOf(lastNodeId)
+  if (firstIndex < 0 || lastIndex < firstIndex) return []
+  return childIds.slice(firstIndex, lastIndex + 1)
+}
+
+function pushUxError(errors, condition, message) {
+  if (!condition) errors.push(message)
+}
+
+function buildLongMockUxVerification({ probeResult, structuralRegression, consoleNodeNotFoundErrorCount, consoleErrors, pageErrors, probeDocument }) {
+  const action = probeResult.action ?? {}
+  const file = reportFilePath(probeDocument?.path)
+  const targetNodeId = probeResult.targetNodeId
+  const splitText = action.structuralMidSplitText
+  const nextNodeId = action.structuralNextNodeId
+  const isLongMockTarget = file === "public/mock/flowdoc-long-mock.flowdoc.json" &&
+    targetNodeId === LONG_MOCK_STRUCTURAL_TARGET_NODE_ID &&
+    splitText === LONG_MOCK_STRUCTURAL_SPLIT_TEXT
+  if (!isLongMockTarget || !probeResult.structuralRefocusSafety || !structuralRegression) return null
+
+  const safety = probeResult.structuralRefocusSafety
+  const firstStep = safety.steps?.[0] ?? null
+  const newParagraphNodeId = firstStep?.newNodeId ??
+    safety.backspaceAfterDispatchSafety?.newNodeId ??
+    safety.backspaceRapidSafety?.newNodeId ??
+    null
+  const splitStoredDocument = safety.backspaceAfterDispatchSafety?.splitStoredDocument ??
+    safety.backspaceRapidSafety?.splitStoredDocument ??
+    structuralRegression.storedDocument
+  const finalStoredDocument = structuralRegression.storedDocument
+  const expected = probeResult.structuralExpectedSplit ?? {}
+  const expectedBeforeText = expected.expectedBeforeText ?? null
+  const expectedAfterText = expected.expectedAfterText ?? null
+  const originalText = expected.originalText ?? null
+  const mode = action.mode ?? PROBE_MODE
+  const isBackspaceMode = isEnterBackspaceProbeMode(mode) || isBackspaceRapidProbeMode(mode)
+  const documentOrderAfterEnter = nextNodeId
+    ? orderBetween(splitStoredDocument, targetNodeId, nextNodeId)
+    : []
+  const documentOrderAfterBackspace = isBackspaceMode && nextNodeId
+    ? orderBetween(finalStoredDocument, targetNodeId, nextNodeId)
+    : []
+  const sourceTextAfterEnter = splitStoredDocument?.sourceText ?? null
+  const newParagraphTextAfterEnter = splitStoredDocument?.newText ?? null
+  const sourceTextAfterBackspace = isBackspaceMode ? finalStoredDocument?.sourceText ?? null : null
+  const guardSummary = probeResult.perfEvents?.flowdocIsland?.structuralGuard ?? {}
+  const structuralGuardDroppedCount = safety.backspaceRapidSafety?.structuralGuardDroppedCount ?? guardSummary.droppedCount ?? 0
+  const structuralGuardAcceptedCount = safety.backspaceRapidSafety?.structuralGuardAcceptedCount ?? guardSummary.acceptedCount ?? 0
+  const structuralLatency = probeResult.structuralLatency ?? {}
+  const errors = []
+  const enterOrderOk = nextNodeId && newParagraphNodeId
+    ? documentOrderAfterEnter.join("\u0000") === [targetNodeId, newParagraphNodeId, nextNodeId].join("\u0000")
+    : false
+  const backspaceOrderOk = !isBackspaceMode || !nextNodeId
+    ? true
+    : documentOrderAfterBackspace.join("\u0000") === [targetNodeId, nextNodeId].join("\u0000")
+  const shouldExpectExactSplitText = mode === "enter-mid-split" || mode === "enter-rapid" || mode === "enter-backspace-immediate"
+  const sourceBeforeOnlyOk = !shouldExpectExactSplitText ||
+    (sourceTextAfterEnter === expectedBeforeText && sourceTextAfterEnter !== originalText)
+  const newAfterOnlyOk = !shouldExpectExactSplitText ||
+    newParagraphTextAfterEnter === expectedAfterText
+  const sourceRestoredAfterImmediateBackspaceOk = mode !== "enter-backspace-immediate" ||
+    sourceTextAfterBackspace === originalText
+
+  pushUxError(errors, finalStoredDocument?.available === true, "stored document was not available")
+  pushUxError(errors, finalStoredDocument?.invalidDocumentDetected === false, "invalid document detected")
+  pushUxError(errors, splitStoredDocument?.sourceExists === true, "cover_note missing after Enter")
+  pushUxError(errors, splitStoredDocument?.newExists === true, "new paragraph missing after Enter")
+  pushUxError(errors, splitStoredDocument?.nextExists === true, "cover_break missing after Enter")
+  pushUxError(errors, splitStoredDocument?.nextNodeType === "page-break", "cover_break is not a page-break after Enter")
+  pushUxError(errors, enterOrderOk, "document order after Enter is not cover_note -> new paragraph -> cover_break")
+  pushUxError(errors, sourceBeforeOnlyOk, "cover_note text after Enter is not before-text only")
+  pushUxError(errors, newAfterOnlyOk, "new paragraph text after Enter is not after-text only")
+  pushUxError(errors, structuralRegression.activeNodeMissingFromDocument === false, "active node missing from document")
+  pushUxError(errors, structuralRegression.ghostFragmentDetected === false, "ghost fragment detected")
+  pushUxError(errors, structuralRegression.duplicateTextDetected === false, "duplicate stale text detected")
+  pushUxError(errors, consoleNodeNotFoundErrorCount === 0, "node-not-found console error detected")
+  pushUxError(errors, consoleErrors.length === 0, "browser console errors detected")
+  pushUxError(errors, pageErrors.length === 0, "browser page errors detected")
+  pushUxError(errors, structuralRegression.coverBreakSuppressedDuringActiveIsland !== false, "cover_break marker was not suppressed during boundary-safe island")
+  if (mode === "enter-mid-split" || isBackspaceMode) {
+    pushUxError(errors, structuralRegression.coverBreakMarkerReturnedAfterSuppression === true, "cover_break marker did not return after suppression")
+  }
+  if (isBackspaceMode) {
+    pushUxError(errors, finalStoredDocument?.newExists === false, "new paragraph remained after Backspace")
+    pushUxError(errors, backspaceOrderOk, "document order after Backspace is not cover_note -> cover_break")
+    pushUxError(errors, sourceRestoredAfterImmediateBackspaceOk, "cover_note text did not restore after immediate Backspace")
+  }
+  if (mode === "enter-rapid") {
+    pushUxError(errors, (probeResult.perfEvents?.flowdocIsland?.structuralEdit?.splitParagraphCount ?? 0) === 1, "rapid Enter created more than one structural split")
+  }
+  if (mode === "backspace-rapid") {
+    pushUxError(errors, (safety.backspaceRapidSafety?.mergeEventCount ?? 0) <= 1, "rapid Backspace created more than one merge event")
+    pushUxError(errors, (safety.backspaceRapidSafety?.mergeDispatchCount ?? 0) <= 1, "rapid Backspace dispatched more than one merge")
+  }
+
+  return {
+    mode,
+    file,
+    targetNodeId,
+    splitText,
+    passed: errors.length === 0,
+    newParagraphNodeId,
+    documentOrderAfterEnter,
+    documentOrderAfterBackspace,
+    activeNodeId: structuralRegression.activeNodeId ?? null,
+    activeNodeMissingFromDocument: structuralRegression.activeNodeMissingFromDocument,
+    ghostFragmentDetected: structuralRegression.ghostFragmentDetected,
+    duplicateTextDetected: structuralRegression.duplicateTextDetected,
+    invalidDocumentDetected: structuralRegression.invalidDocumentDetected,
+    consoleNodeNotFoundErrorCount,
+    pageBreakMarkerSuppressedDuringBoundarySafe: structuralRegression.coverBreakSuppressedDuringActiveIsland,
+    pageBreakMarkerReturnedAfterSettle: structuralRegression.coverBreakMarkerReturnedAfterSuppression,
+    enterHandlerMs: structuralLatency.keydownSplitHandlerMaxMs ?? firstStep?.enterKeyPressDurationMs ?? null,
+    backspaceHandlerMs: structuralLatency.keydownMergeHandlerMaxMs ?? null,
+    firstIslandPaintMs: structuralLatency.activeIslandPaintMaxMs ?? firstStep?.enterToObservedIslandMs ?? null,
+    sourceParagraphUpdatedMs: structuralLatency.sourceParagraphClearedMs ??
+      (safety.backspaceAfterDispatchSafety?.splitFrame?.sourceImmediatelyCleared === true ||
+      safety.backspaceRapidSafety?.splitFrame?.sourceImmediatelyCleared === true
+        ? 0
+        : null),
+    fullPaginationSettledMs: structuralLatency.fullSettleMaxMs ?? null,
+    scheduledPaginationCount: structuralRegression.scheduledPaginationCount,
+    completedPaginationCount: structuralRegression.completedPaginationCount,
+    supersededPaginationCount: structuralRegression.supersededPaginationCount,
+    structuralGuardDroppedCount,
+    structuralGuardAcceptedCount,
+    sourceTextAfterEnter,
+    newParagraphTextAfterEnter,
+    sourceTextAfterBackspace,
+    expectedSourceTextAfterEnter: expectedBeforeText,
+    expectedNewParagraphTextAfterEnter: expectedAfterText,
+    expectedSourceTextAfterBackspace: mode === "enter-backspace-immediate" ? originalText : null,
+    errors,
+  }
+}
+
 async function runProbe() {
   const server = shouldStartServer ? startNextDevServer() : null
   if (server) await waitForServer(baseEditorUrl, server)
@@ -2273,9 +4226,15 @@ async function runProbe() {
       ? await runResizeProbe(page)
       : PROBE_MODE === "selection"
         ? await runSelectionProbe(page)
-        : KEY_INPUT_PROBE_MODES.has(PROBE_MODE)
-          ? await runTypingProbe(page)
-          : (() => { throw new Error(`Unsupported PROBE_MODE: ${PROBE_MODE}`) })()
+        : SCROLL_ANCHORING_PROBE_MODES.has(PROBE_MODE)
+          ? await runScrollAnchoringProbe(page)
+          : BLUR_HANDOFF_PROBE_MODES.has(PROBE_MODE)
+            ? await runBlurHandoffProbe(page)
+            : STRUCTURAL_REFOCUS_PROBE_MODES.has(PROBE_MODE)
+              ? await runStructuralRefocusSafetyProbe(page)
+              : KEY_INPUT_PROBE_MODES.has(PROBE_MODE)
+                ? await runTypingProbe(page)
+                : (() => { throw new Error(`Unsupported PROBE_MODE: ${PROBE_MODE}`) })()
 
     const typingLayerOk = !probeResult.typingLayer ||
       (
@@ -2301,8 +4260,31 @@ async function runProbe() {
     const structuralEnterHandled = PROBE_MODE === "enter" &&
       (probeResult.perfEvents?.flowdocIsland?.structuralEdit?.splitParagraphCount ?? 0) > 0
     const pointerHitTestOk = !probeResult.pointerHitTest || probeResult.pointerHitTest.ok || structuralEnterHandled
+    const scrollAnchoringOk = !probeResult.scrollAnchoring || probeResult.scrollAnchoring.ok
+    const blurHandoffOk = !probeResult.blurHandoff || probeResult.blurHandoff.ok
+    const structuralRefocusSafetyOk = !probeResult.structuralRefocusSafety || probeResult.structuralRefocusSafety.ok
+    const consoleNodeNotFoundErrors = consoleErrors.filter((error) => (
+      /node[^.\n]*(not found|missing)|missing[^.\n]*node|node-not-found/i.test(error)
+    ))
+    const structuralRegression = probeResult.structuralRegression
+      ? {
+          ...probeResult.structuralRegression,
+          consoleNodeNotFoundErrorCount: consoleNodeNotFoundErrors.length,
+        }
+      : null
+    const structuralRegressionOk = !structuralRegression ||
+      (structuralRegression.ok && structuralRegression.consoleNodeNotFoundErrorCount === 0)
+    const uxVerification = buildLongMockUxVerification({
+      probeResult,
+      structuralRegression,
+      consoleNodeNotFoundErrorCount: consoleNodeNotFoundErrors.length,
+      consoleErrors,
+      pageErrors,
+      probeDocument,
+    })
+    const uxVerificationOk = !uxVerification || uxVerification.passed
     const report = {
-      ok: consoleErrors.length === 0 && pageErrors.length === 0 && typingLayerOk && editExitOk && pointerHitTestOk,
+      ok: consoleErrors.length === 0 && pageErrors.length === 0 && typingLayerOk && editExitOk && pointerHitTestOk && scrollAnchoringOk && blurHandoffOk && structuralRefocusSafetyOk && structuralRegressionOk && uxVerificationOk,
       probe: {
         mode: PROBE_MODE,
         nativeWrapVariant: NATIVE_WRAP_VARIANT,
@@ -2317,6 +4299,12 @@ async function runProbe() {
       ...(probeResult.firstVisibleText ? { firstVisibleText: probeResult.firstVisibleText } : {}),
       ...(probeResult.screenshots ? { screenshots: probeResult.screenshots } : {}),
       ...(probeResult.pointerHitTest ? { pointerHitTest: probeResult.pointerHitTest } : {}),
+      ...(probeResult.scrollAnchoring ? { scrollAnchoring: probeResult.scrollAnchoring } : {}),
+      ...(probeResult.blurHandoff ? { blurHandoff: probeResult.blurHandoff } : {}),
+      ...(probeResult.structuralRefocusSafety ? { structuralRefocusSafety: probeResult.structuralRefocusSafety } : {}),
+      ...(structuralRegression ? { structuralRegression } : {}),
+      ...(uxVerification ? { uxVerification } : {}),
+      ...(probeResult.structuralLatency ? { structuralLatency: probeResult.structuralLatency } : {}),
       ...(probeResult.typingInputPhases ? { typingInputPhases: probeResult.typingInputPhases } : {}),
       ...(probeResult.heldInput ? { heldInput: probeResult.heldInput } : {}),
       ...(probeResult.activeReflowHandoff ? { activeReflowHandoff: probeResult.activeReflowHandoff } : {}),
@@ -2328,7 +4316,10 @@ async function runProbe() {
       pageBoundary: probeResult.pageBoundary,
       console: {
         errors: consoleErrors.length,
+        nodeNotFoundErrorCount: consoleNodeNotFoundErrors.length,
+        errorSamples: consoleErrors.slice(0, 5),
         pageErrors: pageErrors.length,
+        pageErrorSamples: pageErrors.slice(0, 5),
       },
     }
 

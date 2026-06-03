@@ -18,7 +18,831 @@ Each entry should include:
 
 ---
 
+## 2026-06-03
+
+### Release 0.6.25 Structural Editing Gate
+
+Goal: Mark the accepted structural Enter/Backspace WYSIWYG draft-island
+hardening as the next project release-readiness baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.24` to `0.6.25`.
+- Updated the root lockfile version metadata and project version marker test to
+  assert the accepted `0.6.25` baseline.
+- Updated `docs/VERSIONING.md` with the structural editing release gate
+  baseline and retained the persisted document/package schema version boundary.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `git diff --check`
+
+Notes:
+
+- No git tag was created; project versions remain release-readiness markers.
+- This patch does not change `DocumentNode.version`, FlowDoc package version,
+  storage package version, pagination semantics, undo/redo, export behavior, or
+  Flow Table behavior.
+
+---
+
+### Boundary-Safe Island Page-Break Visual Suppression
+
+Goal: Hide the stale authored page-break marker/chrome while a boundary-safe
+out-of-canvas WYSIWYG structural split island owns the newly split paragraph
+immediately before that page-break.
+
+Completed:
+
+- Added a visual-only `ActiveOutOfCanvasStructuralIsland` prop from
+  `EditorShell` to `EditorCanvas` for active `mode="boundary-safe"`
+  optimistic structural islands.
+- Computed `suppressedPageBreakNodeId` from the optimistic document child order
+  so `cover_note -> new paragraph -> cover_break` suppresses only `cover_break`.
+- Refactored stale page-break suppression into
+  `shouldSuppressStalePageBreakForActiveWysiwygIsland`, combining the existing
+  native inline edit condition with the new out-of-canvas boundary-safe island
+  condition.
+- Suppressed the stale page-break marker, fragment label, chrome opacity, and
+  pointer interaction while leaving the document and paginated data intact.
+- Added page memo/lazy render scope wiring for the active boundary-safe island
+  and suppressed page-break page.
+- Extended the smoothness probe frame capture to report immediate page-break
+  marker visibility, boundary-safe suppression, and marker return after settle.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `SMOKE_BASE_URL=http://localhost:4000/editor PROBE_MODE=enter-mid-split FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json PROBE_TARGET_NODE_ID=cover_note PROBE_ENTER_SPLIT_TEXT=pagination PROBE_READY_TIMEOUT_MS=30000 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed:
+
+- Focused app coverage passed with 181 tests.
+- Long-mock smoke captured `cover_break` with
+  `boundarySafePageBreakSuppressed=true`,
+  `nextPageBreakMarkerVisible=false`, and `nextPageBreakLabelVisible=false`
+  at the immediate post-Enter frame while the new paragraph island was active.
+- The same smoke captured marker return after settled pagination at the later
+  frame with `nextPageBreakBoundarySafeSuppressed=false` and
+  `nextPageBreakMarkerVisible=true`.
+- The smoke command still exited nonzero because the existing structural
+  visibility budget is `<=500ms` and this 119-page dev-server run reported
+  about `1170ms`; this is the pre-existing performance risk, not stale
+  page-break visual evidence.
+
+Notes:
+
+- Scope intentionally did not change document operations, core pagination,
+  PDF/DOCX renderers, package persistence, Flow Table code, SVG live echo,
+  custom caret rendering, or key-repeat behavior.
+- The fallback suppression remains local to the active island page and a narrow
+  vertical range, and is only used when Shell cannot identify the precise
+  page-break sibling id.
+
+---
+
+### WYSIWYG Structural Key Repeat Guard
+
+Goal: Guard structural Enter/Backspace in the FlowDoc draft island so rapid key
+repeat cannot run split/merge/delete-empty operations against half-transitioned
+island or document state.
+
+Completed:
+
+- Added a narrow structural edit guard in `FlowdocDraftEditorIslandRoot` for
+  `Enter` and `Backspace` only, with operation/source metadata, expected active
+  node/remove hints, deterministic unlock on active-node/session change, and a
+  180ms safety timeout.
+- Kept normal typing and IME/composition outside the guard path.
+- Added `flowdoc-island-structural-guard` perf events for engage, accept, drop,
+  and unlock actions.
+- Extended the smoothness probe with `enter-rapid` burst dispatch,
+  `backspace-rapid`, and guard-event summaries for the long mock
+  `cover_note -> cover_break` structural case.
+- Added focused tests for repeated Enter/Backspace guard drops, unlock before
+  immediate Enter-to-Backspace, and normal text/IME bypass.
+
+Files changed:
+
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `npm.cmd run type-check`
+- `SMOKE_BASE_URL=http://localhost:4000/editor PROBE_MODE=enter-rapid FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json PROBE_TARGET_NODE_ID=cover_note PROBE_ENTER_SPLIT_TEXT=pagination PROBE_STRUCTURAL_ENTER_COUNT=8 PROBE_READY_TIMEOUT_MS=30000 npm.cmd run smoke:wysiwyg-smoothness`
+- `SMOKE_BASE_URL=http://localhost:4000/editor PROBE_MODE=enter-backspace-immediate FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json PROBE_TARGET_NODE_ID=cover_note PROBE_ENTER_SPLIT_TEXT=pagination PROBE_READY_TIMEOUT_MS=30000 npm.cmd run smoke:wysiwyg-smoothness`
+- `SMOKE_BASE_URL=http://localhost:4000/editor PROBE_MODE=backspace-rapid FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json PROBE_TARGET_NODE_ID=cover_note PROBE_ENTER_SPLIT_TEXT=pagination PROBE_STRUCTURAL_BACKSPACE_COUNT=8 PROBE_READY_TIMEOUT_MS=30000 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed:
+
+- Focused app coverage passed with 145 tests.
+- `enter-rapid` passed with one structural split dispatch for eight Enter
+  events and no console/page errors.
+- `enter-backspace-immediate` passed with the source paragraph immediately
+  cleared to before-text, the tail active in the draft island, source/new/page
+  break order safe, no duplicate stale text, and one merge dispatch.
+- `backspace-rapid` passed with one structural merge dispatch, no ghost new
+  fragment/text, active node returned to `cover_note`, and no console/page
+  errors.
+
+Notes:
+
+- Scope intentionally did not change core document operations, pagination,
+  renderers, package persistence, Flow Table code, page-break suppression, or
+  non-structural typing behavior.
+- After a Backspace merge commits, later repeated Backspace events may edit the
+  now-current paragraph text; the guard only blocks stale structural operations.
+- Real IME/manual browser verification remains outside this automated pass.
+
+---
+
+### Long Mock Optimistic Enter Backspace Merge Commit Ordering
+
+Goal: Fix the immediate Backspace-after-Enter path for the `cover_note`
+long-mock structural island so merge/refocus uses the committed optimistic split
+document and does not fall back to stale or delayed state.
+
+Completed:
+
+- Added a reducer fast path so `MERGE_PARAGRAPH` can accept a shell-precomputed
+  merge result plus supplied optimistic `PaginatedDocument`.
+- Changed optimistic merge refocus to dispatch `MERGE_PARAGRAPH` in the same
+  `flushSync` transition as the island refocus setup, removing the deferred
+  merge dispatch window.
+- Updated immediate Backspace handling to use the optimistic split document when
+  the current new paragraph exists there before the settled reducer ref catches
+  up, while preserving the legacy pending split flush safety fallback.
+- Allowed optimistic merge refocus to use the current paragraph fragment from
+  the out-of-canvas island when a boundary-safe split has no in-canvas current
+  fragment.
+- Extended the smoothness probe with `enter-backspace-immediate` long-mock
+  capture for node removal, returned active island, source/page-break order,
+  ghost fragment/text checks, and merge timings.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/editorReducer.ts`
+- `src/app/editor/_components/optimisticStructuralRefocus.ts`
+- `src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `npm.cmd run type-check`
+- `SMOKE_BASE_URL=http://localhost:4000/editor PROBE_MODE=enter-backspace-immediate FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json PROBE_TARGET_NODE_ID=cover_note PROBE_ENTER_SPLIT_TEXT=pagination PROBE_ENTER_FRAME_DELAYS_MS=0,50,120,300,800 PROBE_READY_TIMEOUT_MS=30000 npm.cmd run smoke:wysiwyg-smoothness`
+- `git diff --check`
+
+Observed:
+
+- Focused app coverage passed with 141 tests.
+- The long-mock Backspace probe passed with `newNodeGone=true`,
+  `returnedToPreviousNode=true`, `documentOrderAfterMergeOk=true`,
+  `ghostNewFragmentVisible=false`, `ghostNewTextVisible=false`,
+  `sourceRestoredTail=true`, `optimisticMergeRefocusCount=1`, and
+  `usedFullPaginationBeforeIsland=false`.
+- Re-running `enter-mid-split` still captured `sourceImmediatelyCleared=true`,
+  `activeNewParagraphInIsland=true`, and `duplicateOldTextDetected=false`, but
+  exited nonzero because the existing `<=500ms` visibility budget reported
+  about `530ms` on the 119-page dev-server run.
+
+Notes:
+
+- Merge/backspace changes were limited to optimistic plain paragraph refocus;
+  table, flow-stack, row-stack, list marker, core pagination, renderers,
+  package persistence, and Flow Table code were not changed.
+
+---
+
+### Long Mock Optimistic Enter Split Commit Ordering
+
+Goal: Fix the `cover_note` structural Enter race where the V2 out-of-canvas
+draft island could appear before the reducer/model and optimistic paginated
+snapshot had committed.
+
+Completed:
+
+- Changed the optimistic `SPLIT_PARAGRAPH` path to dispatch in the same
+  `flushSync` transition as the structural island setup, removing the deferred
+  split dispatch window.
+- Added a reducer fast path so `SPLIT_PARAGRAPH` can accept a shell-precomputed
+  split result and supplied optimistic `PaginatedDocument` without recomputing
+  the split.
+- Extended the smoothness probe's `enter-mid-split` long-mock case to default
+  to `public/mock/flowdoc-long-mock.flowdoc.json`, `cover_note`, split text
+  `pagination`, next node `cover_break`, and immediate source/tail duplication
+  frame capture.
+- Added reducer coverage for precomputed split before a page break, source text
+  clearing, child order, `lastSplitNodeId`, history, and optimistic pagination.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/editorReducer.ts`
+- `src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `SMOKE_BASE_URL=http://localhost:4000/editor PROBE_MODE=enter-mid-split FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json PROBE_ENTER_FRAME_DELAYS_MS=0,50,120,300,800 PROBE_READY_TIMEOUT_MS=30000 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed:
+
+- Focused reducer coverage passed and preserved document order
+  `cover_note -> cover_note_split -> cover_break`.
+- Long-mock probe captured `sourceImmediatelyCleared=true`,
+  `activeNewParagraphInIsland=true`, and `duplicateOldTextDetected=false`.
+- The long-mock probe still exited nonzero because the existing structural
+  visibility budget is `<=500ms` and the current 119-page dev-server run
+  reported about `1613ms`; this remains a performance RISK, not stale-source
+  duplication evidence.
+
+Notes:
+
+- Scope intentionally did not change merge/backspace semantics beyond keeping
+  split compatible with the existing paths.
+- Core pagination, renderers, package persistence, and Flow Table code were not
+  changed.
+
+---
+
+## 2026-06-02
+
+### V2 WYSIWYG Risk Sweep: Blur, Click, Enter, Table, Stack Guards
+
+Goal: Sweep the eight active WYSIWYG risks after the V2 editor-island work,
+keeping the patch narrow and avoiding pagination, schema, export, table-cell V2,
+and flow-stack V2 expansion.
+
+Completed:
+
+- Kept the V2 island in a committing state during blur/click-out and delayed the
+  final edit end until after paint, so the island remains the visual bridge while
+  parent sync/finalize runs.
+- Fixed stale closure handling in inline-edit end so WYSIWYG blur finalization
+  runs once against the current session node.
+- Suppressed the in-canvas paragraph text surface while the out-of-canvas V2
+  island owns active plain-paragraph editing, preventing a duplicate active
+  visual owner during click/edit and Enter handoff.
+- Added pending optimistic Enter split rollback for immediate
+  Enter-then-Backspace before the deferred split dispatch commits.
+- Tightened stress lifecycle smoke target selection to skip continuation
+  fragments and added env aliases so both `STRESS_PAGE_INDEX` /
+  `FLOWDOC_STRESS_FILE` and `PROBE_TARGET_PAGE_INDEX` / `FLOWDOC_PROBE_FILE`
+  reach the same stress target.
+- Ensured the table-cell boundary smoke enables runtime WYSIWYG perf trace when
+  connecting to an existing dev server.
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `node --check scripts\wysiwyg-stress-lifecycle-smoke.mjs`
+- `node --check scripts\wysiwyg-table-cell-boundary-smoke.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `PROBE_MODE=blur-handoff npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=enter PROBE_BURST_LENGTH=1 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=long-unbroken PROBE_BURST_LENGTH=220 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=mixed-pagination PROBE_BURST_LENGTH=180 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_TARGET_PAGE_INDEX=15 FLOWDOC_PROBE_FILE=public/mock/flowdoc-stress-mock.flowdoc.json npm.cmd run smoke:wysiwyg-stress-lifecycle`
+- `SMOKE_BASE_URL=http://localhost:4000/editor npm.cmd run smoke:wysiwyg-table-cell-boundary`
+
+Observed:
+
+- Stress click-switch passed at about `656ms` with
+  `browserPreviewPagination.count=0`; inline edit start/finalize were about
+  `40ms` each in the passing alias-env run.
+- Blur handoff finalized once after the stale-session closure fix.
+- Long-unbroken typing kept `editorCanvasCommit.count=0` during the key burst.
+- Mixed-pagination typing passed with no old visual leakage and no stale measured
+  preview after blur.
+- Table-cell boundary smoke passed on the existing server with first draft
+  pagination delay about `113ms`; visual chrome rose to `6` before settle and
+  cleared to `0` after settled pagination.
+
+Notes:
+
+- PASS for the guarded plain-paragraph V2 lifecycle checks and the existing
+  table-cell boundary guard.
+- RISK remains for manual Enter-then-Backspace after the split has already
+  committed; the new rollback only covers the pending optimistic window.
+- RISK remains for page-boundary continuation polish, full table-cell V2 parity,
+  and flow-stack/row-stack V2 enablement. Those paths stay intentionally
+  excluded from this slice.
+- Manual QA remains the final product gate; smoke PASS is not a full UX PASS.
+
+---
+
+### P1 Edit/Enter Handoff Flicker Reduction
+
+Goal: Investigate the remaining manual flicker/brief double-render feeling when
+clicking into edit mode or pressing Enter, without changing pagination
+algorithms, schema, table-cell behavior, flow-stack behavior, export, or the V2
+typing visual model.
+
+Completed:
+
+- Identified that the V2 island portal could miss the first active render when
+  the page overlay anchor existed in the shell ref map but had not yet been
+  copied into island state.
+- Resolved the page overlay anchor synchronously during island render so the
+  portal does not need a second state pass just to find an already-mounted page
+  overlay.
+- Identified that optimistic Enter split previously committed `SET_PAGINATED`
+  before `SPLIT_PARAGRAPH`, creating a short mismatch where `state.paginated`
+  represented the split document while `state.doc` was still the old document.
+- Changed `SPLIT_PARAGRAPH` to accept the optimistic `PaginatedDocument` and
+  commit the document split plus optimistic page state in the same reducer
+  action.
+- Added reducer coverage for the same-action optimistic split pagination path.
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `node --check scripts\wysiwyg-smoothness-probe.mjs`
+- `node --check scripts\wysiwyg-stress-lifecycle-smoke.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `npm.cmd run smoke:wysiwyg-stress-lifecycle`
+- `PROBE_MODE=enter-rapid PROBE_BURST_LENGTH=3 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=long-unbroken PROBE_BURST_LENGTH=220 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed:
+
+- Stress click-switch passed at about `287ms`.
+- Click-switch `browserPreviewPagination.count` stayed `0`.
+- Click-switch `flowdocIslandReactCommit.maxMs` was about `0.1ms`; the largest
+  remaining `editorCanvasReactCommit.maxMs` was about `49.4ms`.
+- Enter rapid kept `structuralRefocusUsedFullPaginationBeforeIsland=false`;
+  optimistic island/caret visibility was about `26.4ms` p50 and `169.5ms` max in
+  the focused run.
+- Long-unbroken active typing kept `editorCanvasCommit.count=0` and
+  `browserPreviewPaginationCount=0`.
+
+Notes:
+
+- This reduces two concrete double-render/flicker causes but is not a product
+  PASS claim. Manual QA still decides whether the remaining perceived lag is
+  acceptable.
+- Settled pagination after Enter can still produce a later visual settle.
+- Click/exit still have some EditorCanvas commit cost; that should remain a
+  separate targeted slice.
+
+---
+
+### P1 Clean Edit-Entry Page-Boundary Pagination Guard
+
+Goal: Reduce the remaining stress click/edit-switch spike without changing the
+pagination algorithm, schema, table-cell behavior, or V2 typing visual model.
+
+Completed:
+
+- Reproduced the stress lifecycle spike after separating the probe's first edit
+  setup events from the actual click-switch window.
+- Identified that the large click-switch cost was caused by a clean edit-entry
+  `browser-preview-pagination` from the previous paragraph session, not by
+  draft text measurement.
+- Added a V2 island guard so page-boundary reflow/pagination is only queued
+  after the local draft revision has changed.
+- Reset the page-boundary reflow request guard per active edit session.
+- Extended smoke output to include console/page error samples for future
+  diagnosis.
+
+Verification performed:
+
+- `node --check scripts\wysiwyg-stress-lifecycle-smoke.mjs`
+- `node --check scripts\wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `npm.cmd run smoke:wysiwyg-stress-lifecycle`
+- `PROBE_MODE=long-unbroken PROBE_BURST_LENGTH=220 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=enter-rapid PROBE_BURST_LENGTH=3 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=mixed-pagination PROBE_BURST_LENGTH=180 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed:
+
+- Stress click-switch passed at about `295ms`.
+- Click-switch `browserPreviewPagination.count` dropped to `0`.
+- Click-switch `editorCanvasReactCommit.maxMs` was about `47.2ms` in the
+  passing run.
+- Long-unbroken active typing kept `editorCanvasCommit.count=0` and
+  `browserPreviewPaginationCount=0`.
+- Console errors and page errors were `0` in the final focused smokes.
+
+Notes:
+
+- This slice intentionally does not optimize full pagination/cache.
+- Dirty page-boundary typing can still use the existing V2 local draft surface
+  and deferred settle paths; clean edit entry should not schedule settled draft
+  pagination.
+
+### Optimistic Plain Paragraph Structural Refocus
+
+Goal: Fix the P0 Enter split/refocus delay for eligible plain body paragraphs
+without optimizing full pagination, changing schema, or enabling table/stack
+paths.
+
+Completed:
+
+- Added a plain-paragraph optimistic structural refocus path for V2
+  out-of-canvas editor island Enter split.
+- Preallocates the new paragraph id, locally patches the current page
+  `PaginatedDocument` with source/new paragraph fragments, and starts the new
+  island before full preview pagination settles.
+- Keeps reducer/core operations as the actual document mutation path by passing
+  the preallocated id into `SPLIT_PARAGRAPH`.
+- Added structural refocus markers for optimistic island/caret visibility,
+  whether full pagination happened before the island, and settled pagination.
+- Kept fallback to the previous full-pagination refocus path when the paragraph
+  is not an eligible plain non-continuation body paragraph.
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- operations`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts`
+- `npm.cmd run test:app`
+- `PROBE_MODE=enter PROBE_BURST_LENGTH=1 SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=60000 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=enter PROBE_BURST_LENGTH=1 FLOWDOC_PROBE_FILE=public/mock/flowdoc-stress-mock.flowdoc.json PROBE_TARGET_PAGE_INDEX=15 SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=180000 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed:
+
+- Stage 3 Enter smoke: optimistic island/caret visible around `41.6ms`,
+  settled pagination around `88.8ms`, and
+  `usedFullPaginationBeforeIsland=false`.
+- Stress fixture page `15`, paragraph `p_00134`: optimistic island/caret
+  visible around `127.3ms`, full pagination before island stayed `false`, and
+  settled pagination followed later around `3561.4ms`.
+- Console errors and page errors stayed at `0` in the focused smokes.
+
+Notes:
+
+- This slice intentionally does not optimize full pagination/cache. The large
+  document still needs several seconds for settled pagination after the island is
+  visible.
+- Scope remains plain paragraph only. Table-cell, flow-stack/row-stack,
+  continuation, click-switch, and blur/click-out pauses remain separate risks.
+
+P0b hardening follow-up:
+
+- Added split-id collision coverage for preallocated optimistic paragraph ids in
+  core operations and reducer undo tests.
+- Added stale optimistic-settle guard events so scheduled/worker preview
+  pagination is ignored if the active inline-edit node changes, the generation
+  no longer matches, or the draft revision advances before commit.
+- Extended the smoothness probe with structural safety modes:
+  `enter-type-before-settle`, `enter-rapid`, `enter-undo`, and
+  `enter-blur-before-settle`.
+- Routed island-owned `Ctrl/Cmd+Z` to `EditorShell` undo so the hidden input
+  bridge does not keep browser textarea undo as the active truth.
+
+P0b verification:
+
+- `node --check scripts\wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test -w packages/core -- operations`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `PROBE_MODE=enter-type-before-settle PROBE_STRUCTURAL_TYPE_LENGTH=80 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=enter-rapid PROBE_STRUCTURAL_ENTER_COUNT=3 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=enter-undo npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=enter-blur-before-settle npm.cmd run smoke:wysiwyg-smoothness`
+
+P0b observed:
+
+- Focused Stage 3 structural safety probes pass with
+  `structuralRefocusUsedFullPaginationBeforeIsland=false`.
+- Fresh-server examples: optimistic island/caret visible at about `14ms` for
+  type-before-settle, `18.2ms` max across three rapid Enter splits, `11.4ms`
+  for undo safety, and `13.3ms` for blur-before-settle.
+- Type-before-settle preserved the typed marker after settled pagination; undo
+  removed the optimistic split node and island; blur-before-settle left no ghost
+  island.
+- Re-running stress-file probes in the existing dev environment exposed a
+  separate pre-editor load blocker: the 4.7MB stress fixture can remain on the
+  dynamic-import prepare overlay before `[data-testid="editor-shell"]` appears
+  for more than 180s, with no console/page errors. This is outside the Enter
+  refocus path and should be handled as a separate pre-shell load/readiness
+  slice before using stress smoke as a hard P0b gate again.
+
+### P1 Plain Paragraph Click/Edit Switch Isolation
+
+Goal: Reduce stress-document click/edit switch latency for eligible plain body
+paragraphs without changing pagination, table-cell WYSIWYG, flow-stack/row-stack
+paths, schema, or export behavior.
+
+Completed:
+
+- Added a fast inline-edit start path for single-click V2 plain paragraphs that
+  are text-only, non-continuation fragments, and not inside table cells,
+  flow-stacks, or row-stacks.
+- The fast path starts the V2 island immediately on pointer release instead of
+  waiting for the selection/canvas paint rAF + timeout path.
+- Kept the existing deferred selection-paint path for table-cell, stack,
+  continuation, and other non-eligible click actions.
+- Extended the stress lifecycle smoke output with start/finalize, island commit,
+  canvas commit, parent sync, blur handoff, and browser-preview pagination
+  summaries.
+
+Verification performed:
+
+- `node --check scripts\wysiwyg-stress-lifecycle-smoke.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `npm.cmd run smoke:wysiwyg-stress-lifecycle`
+- `PROBE_MODE=enter-rapid PROBE_BURST_LENGTH=3 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed:
+
+- Before this patch, the stress lifecycle smoke reproduced click-switch
+  instability: one default run failed at about `3844ms`, and a diagnostic run
+  timed out waiting for the second paragraph to enter edit mode.
+- After this patch, focused stress lifecycle runs passed the default `<=2000ms`
+  gate with examples around `1491ms` and `363ms`.
+- The second stress target (`p_00134`) used `inline-edit-start` source
+  `canvas-click-immediate`; finalize remained responsive-preview and did not
+  require full pagination before the island appeared.
+- Stage 3 rapid Enter guard still reported
+  `structuralRefocusUsedFullPaginationBeforeIsland=false`.
+- The earlier pre-editor stress load blocker was not reproduced after a fresh
+  dev-server run; it is currently classified as stale local dev-server state,
+  not as part of this click-switch slice.
+
+Notes:
+
+- This is not a full canvas commit optimization. Stress runs still show
+  background `EditorCanvas` commits and undo/blur costs that belong to later
+  slices.
+- The fast path is intentionally limited to eligible plain paragraphs. Table
+  cells, flow-stack/row-stack, continuation fragments, page-boundary behavior,
+  and blur/click-out atomic swap remain separate risks.
+
+### P1 Blur / Click-Out Handoff Guard
+
+Goal: Reduce duplicate exit/finalize work and make V2 plain-paragraph
+click-out/keyboard exit ordering safer without changing pagination, schema,
+table-cell WYSIWYG, flow-stack/row-stack, or export behavior.
+
+Completed:
+
+- Added a per-session V2 island guard so `onEndEdit` is requested only once
+  even if keyboard exit and native blur both fire.
+- Added a deferred Shell end path for background pointerdown while an
+  out-of-canvas V2 island is active. The Shell may clear selection immediately,
+  but the measured finalize/end work is scheduled after paint and skipped if
+  another session has already taken over.
+- Kept the existing immediate finalize path for non-V2 inline edit, header/footer
+  edit, margin edit, and non-eligible paths.
+- Adjusted blur-handoff instrumentation so suppressed duplicate end callbacks
+  report zero-duration marker events instead of inflating latency summaries.
+
+Verification performed:
+
+- `node --check scripts\wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- `PROBE_MODE=blur-handoff npm.cmd run smoke:wysiwyg-smoothness`
+- `npm.cmd run smoke:wysiwyg-stress-lifecycle`
+
+Observed:
+
+- `blur-handoff` smoke passed with parent sync before finalize,
+  `finalizeBeforeParentSyncDetected=false`, and committed marker text visible
+  after settle.
+- Latest focused blur sample: `clickToLayerGoneMs≈506ms`,
+  `clickToSettledMs≈556ms`, one `inline-edit-finalize`, and no console/page
+  errors.
+- Stress lifecycle passed with `exitMs≈217ms`, one exit finalize event, and the
+  duplicate blur callback reported as `end-edit-suppressed` with zero duration.
+
+Notes:
+
+- This is a lifecycle/order hardening slice, not a full click-out latency
+  optimization. The remaining pause is still dominated by measured finalize and
+  `EditorCanvas` commit work.
+- Stress lifecycle still shows background `EditorCanvas` commit spikes; one
+  sample had a click-switch canvas commit around `1072ms` while still passing
+  the current `<=2000ms` gate. That belongs to a later canvas/render-cost slice.
+
+---
+
 ## 2026-06-01
+
+### Instrument Plain Paragraph Structural Refocus
+
+Goal: Classify the remaining plain-paragraph Enter split latency risk without
+changing document structure, pagination output, or the V2 island visual model.
+
+Completed:
+
+- Added `inline-edit-structural-refocus` perf events around
+  `useInlineEditSession.startAfterStructuralChange`.
+- Split the marker into `paginate-preview`, `start-session`, and
+  `missing-paragraph` actions so Enter split can be separated from canvas
+  commits and draft measurement in smoke output.
+- Extended the WYSIWYG smoothness probe summary with a structural refocus
+  section.
+- Fixed external-file smoothness target selection so
+  `FLOWDOC_PROBE_FILE + PROBE_TARGET_PAGE_INDEX` filters visible paragraph
+  candidates by the requested page instead of selecting the largest attached
+  paragraph fragment globally.
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/useInlineEditSession.test.ts`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `PROBE_MODE=enter PROBE_BURST_LENGTH=1 SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=60000 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=held-repeat PROBE_BURST_LENGTH=220 SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=60000 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=enter PROBE_BURST_LENGTH=1 FLOWDOC_PROBE_FILE=public/mock/flowdoc-stress-mock.flowdoc.json PROBE_TARGET_PAGE_INDEX=15 SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=180000 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed:
+
+- Single Enter in the Stage 3 smoke scenario passed with
+  `paginatePreview=17.8ms`, `startSession=17.8ms`, `editorCanvasCommitCount=3`,
+  `editorCanvasCommitMaxMs=12.9ms`, and console/page errors at `0`.
+- Held-repeat still passed with stable `flowdoc-draft-editor-island` mode,
+  hidden native input bridge, no live echo/draft replacement leakage, and
+  console/page errors at `0`.
+- Held-repeat still showed broader page-boundary work:
+  `inputToVisibleDraftLinesMs max=128.3ms`,
+  `flowdoc-island-visible-lines max=35.1ms`, and frame gap max around
+  `124.2ms`.
+- Follow-up on `public/mock/flowdoc-stress-mock.flowdoc.json`
+  (`Mock FlowDoc Stress Thai Document`) reproduced the large-document issue:
+  single Enter reported `paginatePreview` around `2718.1ms` on one run and
+  `2265.5ms` on a second run, with `EditorCanvas` commit max around
+  `154ms` to `234ms`.
+- After page-target selection was fixed, page index `15` correctly targeted
+  paragraph `p_00134` and still reported `paginatePreview=2367.7ms`,
+  `startSession=2368.1ms`, and `EditorCanvas` commit max `322.1ms`.
+- `npm.cmd run smoke:wysiwyg-stress-lifecycle` against the existing dev server
+  failed its click-switch gate with `Click switch took 3328ms, expected <=
+  2000ms`.
+
+Notes:
+
+- This slice intentionally does not optimize pagination or Enter split
+  semantics. The small Stage 3 scenario was not enough to prove the bottleneck,
+  but the stress fixture confirms the current Enter/refocus path still performs
+  expensive synchronous full-preview pagination.
+- The next implementation slice should avoid blocking structural refocus on
+  full synchronous preview pagination for eligible plain paragraphs, while
+  preserving normal measured pagination as the settled source of truth.
+
+---
+
+### Guard FlowDoc Island Click-Out Draft Handoff
+
+Goal: Fix and characterize the remaining plain-paragraph V2 click-out handoff
+where manual QA saw a brief pause after leaving edit mode.
+
+Completed:
+
+- Added a `blur-handoff` WYSIWYG smoke probe that verifies the active island
+  draft text is committed after clicking outside the island.
+- Added island blur/parent-sync and editor inline-edit-end perf markers so the
+  click-out event order is explicit.
+- Fixed the stale commit ordering by flushing the V2 island draft during
+  document `pointerdown` capture when the pointer target is outside the active
+  island, before `EditorShell` finalizes the edit.
+- Followed up by removing the `flushSync` parent-draft path from blur/click-out
+  and making finalize read the latest synchronous draft snapshot through the
+  shared `resolveWysiwygDraftPaginationSource` helper.
+- Kept the outside-pointer fix scoped to the active out-of-canvas island path;
+  it does not change pagination, schema, table logic, export, or data binding.
+- Investigated a precomputed preview fast lane and backed it out because it
+  made the outside-pointer sync heavier while finalize still used the settled
+  path.
+
+Files changed:
+
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `PROBE_MODE=blur-handoff SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=60000 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=held-repeat PROBE_BURST_LENGTH=220 SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=60000 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed blur-handoff result:
+
+- Before the fix, `inline-edit-finalize` ran before
+  `flowdoc-island-parent-sync`, and the appended probe marker was missing from
+  settled measured SVG.
+- After the fix, `appendedTextCommitted=true` and
+  `finalizeBeforeParentSyncDetected=false`.
+- Latest follow-up sample after removing the blur `flushSync` path:
+  `flowdoc-island-parent-sync=0.6ms`, `inline-edit-finalize=28.7ms`,
+  `clickToLayerGoneMs=158.9ms`, and `clickToSettledMs=193.1ms`.
+- Held-repeat smoke still passed with stable `flowdoc-draft-editor-island` mode,
+  no visible native textarea, no live echo/draft replacement leakage, and
+  console/page errors at `0`.
+
+Notes:
+
+- This is a correctness and diagnostics slice, not a full click-out latency
+  optimization.
+- Remaining latency is now mostly the measured-layout finalize/swap path and
+  `EditorCanvas` commits, not stale draft ordering.
+- Structural Enter split latency remains a separate risk because the current
+  split/refocus path still runs synchronous preview pagination before reopening
+  the new paragraph edit session.
+
+---
+
+### Anchor FlowDoc Draft Editor Island V2 To Page Overlay
+
+Goal: Fix the approved plain-paragraph V2 scroll-anchoring blocker before
+continuing selection, table-cell, page-boundary, or performance polish.
+
+Completed:
+
+- Added a page content overlay root inside each `EditorCanvas` page frame so
+  the FlowDoc Draft Editor Island can move with the page through normal browser
+  scrolling instead of viewport-fixed React state updates.
+- Portaled each V2 island surface into its matching page overlay root and kept
+  the hidden input bridge offscreen as input plumbing only.
+- Changed V2 pointer hit testing to resolve from the actual island SVG
+  `getBoundingClientRect()` and viewBox coordinate space, so click/caret mapping
+  uses the same geometry the user sees.
+- Added `PROBE_MODE=scroll-anchoring` to the WYSIWYG smoothness probe and
+  updated multi-surface pointer probing to choose visible island-owned surfaces.
+
+Files changed:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `PROBE_MODE=scroll-anchoring SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=60000 npm.cmd run smoke:wysiwyg-smoothness`
+- `PROBE_MODE=held-repeat PROBE_BURST_LENGTH=220 SMOKE_BASE_URL=http://localhost:4000/editor PROBE_READY_TIMEOUT_MS=60000 npm.cmd run smoke:wysiwyg-smoothness`
+
+Observed scroll-anchoring smoke result:
+
+- `ok=true`
+- active island anchor: `page-overlay`
+- `maxDeltaPx=0.0152`
+- click after scroll: `ok=true`
+- console errors: `0`; page errors: `0`
+
+Notes:
+
+- This slice intentionally does not change pagination, document schema,
+  export, table-cell behavior, selection feature scope, or the hidden-input
+  bridge contract.
+- Remaining risks: structural Enter split latency, click-out/blur handoff
+  pause, broader page-boundary continuation behavior, and table-cell parity
+  remain separate slices.
 
 ### Release 0.6.24 FlowDoc Draft Editor Island Follow-Up Baseline
 

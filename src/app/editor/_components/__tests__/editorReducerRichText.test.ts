@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest"
 import {
+  assertDocument,
   DEFAULT_HEADER_FOOTER_RESERVED_PT,
   DEFAULT_PARAGRAPH_PROPS,
   BULLET_BASIC_LIST_STYLE_ID,
   getAllListStylePresets,
   MAX_HEADER_FOOTER_RESERVED_RATIO,
   MIN_HEADER_FOOTER_RESERVED_PT,
+  mergeParagraphWithPrevious,
   resolveStyledParagraphProps,
+  splitParagraphAtIndex,
   TOR_BODY_PARAGRAPH_STYLE_ID,
   TOR_CLAUSE_LIST_STYLE_ID,
   TOR_HEADING1_PARAGRAPH_STYLE_ID,
@@ -15,6 +18,11 @@ import { getPageDimensions } from "@/pagination"
 import type { DocumentNode, LayoutNode, ParagraphNode } from "@/schema"
 import { pt } from "@/schema"
 import { createInitialEditorState, reducer } from "../editorReducer"
+
+const PAGE_BREAK_SPLIT_TEXT = "ชุดข้อมูลนี้สร้างขึ้นเพื่อทดลอง pagination, TOC, heading, list, table, field และ editor interaction ในเอกสารขนาดใหญ่"
+const PAGE_BREAK_SPLIT_INDEX = PAGE_BREAK_SPLIT_TEXT.indexOf("pagination") + "pagination".length
+const PAGE_BREAK_SOURCE_TEXT = PAGE_BREAK_SPLIT_TEXT.slice(0, PAGE_BREAK_SPLIT_INDEX)
+const PAGE_BREAK_AFTER_TEXT = PAGE_BREAK_SPLIT_TEXT.slice(PAGE_BREAK_SPLIT_INDEX)
 
 function docWithParagraph(): DocumentNode {
   return {
@@ -42,6 +50,52 @@ function docWithParagraph(): DocumentNode {
             type: "paragraph",
             props: DEFAULT_PARAGRAPH_PROPS,
             children: [{ id: "t1", type: "text", text: "Hello" }],
+          },
+        },
+      }],
+    },
+  }
+}
+
+function docWithParagraphBeforePageBreak(): DocumentNode {
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: pt(72),
+            right: pt(72),
+            bottom: pt(72),
+            left: pt(72),
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["cover_note", "cover_break", "after_break"] },
+          cover_note: {
+            id: "cover_note",
+            type: "paragraph",
+            props: {
+              ...DEFAULT_PARAGRAPH_PROPS,
+              spacingBefore: pt(42),
+            },
+            children: [{ id: "cover_note_text", type: "text", text: PAGE_BREAK_SPLIT_TEXT }],
+          },
+          cover_break: { id: "cover_break", type: "page-break", props: {} } as LayoutNode,
+          after_break: {
+            id: "after_break",
+            type: "paragraph",
+            props: {
+              ...DEFAULT_PARAGRAPH_PROPS,
+              headingLevel: 1,
+            },
+            children: [{ id: "after_break_text", type: "text", text: "หลัง page break" }],
           },
         },
       }],
@@ -628,6 +682,289 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(first.props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "tor.stack.left" })
     expect(inserted.props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: newNodeId })
     expect(next.past).toHaveLength(1)
+  })
+
+  it("uses a non-colliding preallocated split id and undo removes the optimistic node", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const next = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "p1",
+      splitIndex: 2,
+      newNodeId: "optimistic-split-node",
+    })
+    const section = next.doc.document.sections[0]
+    const source = section.nodes.p1 as ParagraphNode
+    const inserted = section.nodes["optimistic-split-node"] as ParagraphNode
+
+    expect(next.lastSplitNodeId).toBe("optimistic-split-node")
+    expect(source.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("He")
+    expect(inserted.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("llo")
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual([
+      "p1",
+      "optimistic-split-node",
+    ])
+
+    const undone = reducer(next, { type: "UNDO" })
+    const undoneSection = undone.doc.document.sections[0]
+    expect(undoneSection.nodes["optimistic-split-node"]).toBeUndefined()
+    expect(undoneSection.nodes.body?.type === "body" ? undoneSection.nodes.body.childIds : []).toEqual(["p1"])
+    expect((undoneSection.nodes.p1 as ParagraphNode).children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .toBe("Hello")
+  })
+
+  it("keeps optimistic split pagination in the same reducer commit as the document split", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const optimisticPaginated = {
+      ...state.paginated,
+      tocEntries: [...state.paginated.tocEntries],
+    }
+    const next = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "p1",
+      splitIndex: 2,
+      newNodeId: "optimistic-split-node",
+      paginated: optimisticPaginated,
+    })
+
+    expect(next.doc).not.toBe(state.doc)
+    expect(next.paginated).toBe(optimisticPaginated)
+    expect(next.lastSplitNodeId).toBe("optimistic-split-node")
+    expect(next.past).toHaveLength(1)
+    expect(next.past[0].paginated).toBe(state.paginated)
+  })
+
+  it("uses a precomputed split before a page break without leaving stale source text", () => {
+    const doc = docWithParagraphBeforePageBreak()
+    const state = createInitialEditorState(doc)
+    const precomputed = splitParagraphAtIndex(state.doc, "cover_note", PAGE_BREAK_SPLIT_INDEX, {
+      newNodeId: "cover_note_split",
+    })
+    const optimisticPaginated = {
+      ...state.paginated,
+      tocEntries: [...state.paginated.tocEntries],
+    }
+    const next = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "cover_note",
+      splitIndex: 0,
+      precomputed,
+      paginated: optimisticPaginated,
+    })
+    const section = next.doc.document.sections[0]
+    const source = section.nodes.cover_note as ParagraphNode
+    const inserted = section.nodes.cover_note_split as ParagraphNode
+
+    expect(next.lastSplitNodeId).toBe("cover_note_split")
+    expect(source.children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .toBe(PAGE_BREAK_SOURCE_TEXT)
+    expect(inserted.children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .toBe(PAGE_BREAK_AFTER_TEXT)
+    expect(source.children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .not.toBe(PAGE_BREAK_SPLIT_TEXT)
+    expect(source.children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .not.toContain("TOC")
+    expect(source.props.spacingAfter).toEqual(pt(0))
+    expect(inserted.props.spacingBefore).toEqual(pt(0))
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual([
+      "cover_note",
+      "cover_note_split",
+      "cover_break",
+      "after_break",
+    ])
+    expect(section.nodes.cover_break?.type).toBe("page-break")
+    expect(() => assertDocument(next.doc)).not.toThrow()
+    expect(next.paginated).toBe(optimisticPaginated)
+    expect(next.past[0].doc).toBe(state.doc)
+  })
+
+  it("uses a prevalidated precomputed split without normalizing the shell result", () => {
+    const doc = docWithParagraphBeforePageBreak()
+    const state = reducer(createInitialEditorState(doc), {
+      type: "SELECT_NODE",
+      nodeId: "cover_note",
+      anchorNodeId: "cover_note",
+    })
+    const precomputed = splitParagraphAtIndex(state.doc, "cover_note", PAGE_BREAK_SPLIT_INDEX, {
+      newNodeId: "cover_note_fast_split",
+    })
+    const optimisticPaginated = {
+      ...state.paginated,
+      tocEntries: [...state.paginated.tocEntries],
+    }
+    const next = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "cover_note",
+      splitIndex: 999,
+      text: "fallback text should not be applied",
+      newNodeId: "fallback_split_id",
+      precomputed,
+      precomputedDocValidation: "shell-optimistic-structural",
+      paginated: optimisticPaginated,
+    })
+    const section = next.doc.document.sections[0]
+    const source = section.nodes.cover_note as ParagraphNode
+    const inserted = section.nodes.cover_note_fast_split as ParagraphNode
+
+    expect(next).not.toBe(state)
+    expect(next.doc).toBe(precomputed.doc)
+    expect(next.paginated).toBe(optimisticPaginated)
+    expect(next.lastSplitNodeId).toBe("cover_note_fast_split")
+    expect(next.selectedNodeId).toBe("cover_note")
+    expect(next.selectionAnchorNodeId).toBe("cover_note")
+    expect(section.nodes.fallback_split_id).toBeUndefined()
+    expect(source.children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .toBe(PAGE_BREAK_SOURCE_TEXT)
+    expect(inserted.children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .toBe(PAGE_BREAK_AFTER_TEXT)
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual([
+      "cover_note",
+      "cover_note_fast_split",
+      "cover_break",
+      "after_break",
+    ])
+    expect(next.past).toHaveLength(1)
+  })
+
+  it("uses a precomputed merge payload with optimistic pagination", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const afterSplit = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "p1",
+      splitIndex: 2,
+      newNodeId: "optimistic-split-node",
+    })
+    const merge = mergeParagraphWithPrevious(afterSplit.doc, "optimistic-split-node")
+    expect(merge).toBeTruthy()
+    if (!merge) return
+
+    const optimisticPaginated = {
+      ...afterSplit.paginated,
+      tocEntries: [...afterSplit.paginated.tocEntries],
+    }
+    const next = reducer(afterSplit, {
+      type: "MERGE_PARAGRAPH",
+      nodeId: "optimistic-split-node",
+      precomputed: merge,
+      paginated: optimisticPaginated,
+    })
+    const section = next.doc.document.sections[0]
+    const merged = section.nodes.p1 as ParagraphNode
+
+    expect(section.nodes["optimistic-split-node"]).toBeUndefined()
+    expect(merged.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("Hello")
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["p1"])
+    expect(next.mergeResult).toEqual({ prevNodeId: "p1", caretIndex: 2 })
+    expect(next.paginated).toBe(optimisticPaginated)
+    expect(next.past).toHaveLength(2)
+  })
+
+  it("uses a prevalidated precomputed merge without normalizing the shell result", () => {
+    const state = createInitialEditorState(docWithParagraphBeforePageBreak())
+    const afterSplit = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "cover_note",
+      splitIndex: PAGE_BREAK_SPLIT_INDEX,
+      newNodeId: "cover_note_fast_merge",
+    })
+    const merge = mergeParagraphWithPrevious(afterSplit.doc, "cover_note_fast_merge")
+    expect(merge).toBeTruthy()
+    if (!merge) return
+
+    const optimisticPaginated = {
+      ...afterSplit.paginated,
+      tocEntries: [...afterSplit.paginated.tocEntries],
+    }
+    const next = reducer(afterSplit, {
+      type: "MERGE_PARAGRAPH",
+      nodeId: "cover_note_fast_merge",
+      text: "fallback text should not be applied",
+      precomputed: merge,
+      precomputedDocValidation: "shell-optimistic-structural",
+      paginated: optimisticPaginated,
+    })
+    const section = next.doc.document.sections[0]
+    const merged = section.nodes.cover_note as ParagraphNode
+
+    expect(next.doc).toBe(merge.doc)
+    expect(next.paginated).toBe(optimisticPaginated)
+    expect(section.nodes.cover_note_fast_merge).toBeUndefined()
+    expect(merged.children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .toBe(PAGE_BREAK_SPLIT_TEXT)
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual([
+      "cover_note",
+      "cover_break",
+      "after_break",
+    ])
+    expect(section.nodes.cover_break?.type).toBe("page-break")
+    expect(next.mergeResult).toEqual({
+      prevNodeId: "cover_note",
+      caretIndex: PAGE_BREAK_SPLIT_INDEX,
+    })
+  })
+
+  it("merges an immediate split back into the source paragraph", () => {
+    const state = createInitialEditorState(docWithParagraph())
+    const afterSplit = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "p1",
+      splitIndex: 3,
+      newNodeId: "immediate-backspace-node",
+    })
+    const merge = mergeParagraphWithPrevious(afterSplit.doc, "immediate-backspace-node")
+    expect(merge).toBeTruthy()
+    if (!merge) return
+
+    const next = reducer(afterSplit, {
+      type: "MERGE_PARAGRAPH",
+      nodeId: "immediate-backspace-node",
+      precomputed: merge,
+    })
+    const section = next.doc.document.sections[0]
+    const merged = section.nodes.p1 as ParagraphNode
+
+    expect(section.nodes["immediate-backspace-node"]).toBeUndefined()
+    expect(merged.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("Hello")
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["p1"])
+    expect(next.mergeResult).toEqual({ prevNodeId: "p1", caretIndex: 3 })
+  })
+
+  it("merges a split-before-page-break back without leaving a ghost node", () => {
+    const doc = docWithParagraphBeforePageBreak()
+    const state = createInitialEditorState(doc)
+    const splitIndex = PAGE_BREAK_SPLIT_INDEX
+    const afterSplit = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "cover_note",
+      splitIndex,
+      newNodeId: "cover_note_split",
+    })
+    expect(afterSplit.doc.document.sections[0].nodes.body?.type === "body"
+      ? afterSplit.doc.document.sections[0].nodes.body.childIds
+      : []).toEqual(["cover_note", "cover_note_split", "cover_break", "after_break"])
+
+    const merge = mergeParagraphWithPrevious(afterSplit.doc, "cover_note_split")
+    expect(merge).toBeTruthy()
+    if (!merge) return
+
+    const next = reducer(afterSplit, {
+      type: "MERGE_PARAGRAPH",
+      nodeId: "cover_note_split",
+      precomputed: merge,
+    })
+    const section = next.doc.document.sections[0]
+    const merged = section.nodes.cover_note as ParagraphNode
+
+    expect(section.nodes.cover_note_split).toBeUndefined()
+    expect(merged.children.map((child) => child.type === "text" ? child.text : "").join(""))
+      .toBe(PAGE_BREAK_SPLIT_TEXT)
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual([
+      "cover_note",
+      "cover_break",
+      "after_break",
+    ])
+    expect(section.nodes.cover_break?.type).toBe("page-break")
+    expect(next.mergeResult).toEqual({ prevNodeId: "cover_note", caretIndex: splitIndex })
+    expect(() => assertDocument(next.doc)).not.toThrow()
   })
 
   it("exits a listed paragraph when the current edit text is empty", () => {

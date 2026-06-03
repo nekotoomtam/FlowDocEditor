@@ -47,9 +47,14 @@ import {
 } from "../ParagraphTextSurface"
 import {
   FlowdocDraftEditorIslandRoot,
+  resolveDraftIslandStructuralGuardUnlockReason,
+  shouldDropDraftIslandStructuralKeyForGuard,
+  shouldQueueDraftIslandPageBoundaryReflow,
   shouldReportDraftIslandHeightPreview,
+  type DraftIslandStructuralEditGuard,
 } from "../FlowdocDraftEditorIslandRoot"
-import type { PageFragment, PaginatedPage } from "@/pagination"
+import { createOptimisticMergeRefocusPaginated, createOptimisticSplitRefocusPaginated } from "../optimisticStructuralRefocus"
+import type { PageFragment, PaginatedDocument, PaginatedPage } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import type { TextMeasurer } from "@/layout"
 
@@ -321,6 +326,561 @@ function expectFlowdocDraftLinesMarkup(markup: string, text?: string): void {
 }
 
 describe("FlowdocDraftEditorIslandRoot", () => {
+  it("drops repeated Enter while a split structural guard is in flight", () => {
+    const guard: DraftIslandStructuralEditGuard = {
+      token: 1,
+      operation: "split",
+      sourceNodeId: "cover_note",
+      expectedActiveNodeId: null,
+      removedNodeId: null,
+      draftRevision: 0,
+      startedAt: 100,
+    }
+    let splitCount = 1
+    if (!shouldDropDraftIslandStructuralKeyForGuard(guard, {
+      key: "Enter",
+      nodeId: "cover_note",
+    })) {
+      splitCount += 1
+    }
+
+    expect(splitCount).toBe(1)
+  })
+
+  it("drops repeated Backspace while a merge structural guard is in flight", () => {
+    const guard: DraftIslandStructuralEditGuard = {
+      token: 2,
+      operation: "merge",
+      sourceNodeId: "cover_note_split",
+      expectedActiveNodeId: null,
+      removedNodeId: "cover_note_split",
+      draftRevision: 0,
+      startedAt: 100,
+    }
+    let mergeCount = 1
+    if (!shouldDropDraftIslandStructuralKeyForGuard(guard, {
+      key: "Backspace",
+      nodeId: "cover_note_split",
+    })) {
+      mergeCount += 1
+    }
+
+    expect(mergeCount).toBe(1)
+  })
+
+  it("allows Backspace after an Enter split guard unlocks on the new active node", () => {
+    const guard: DraftIslandStructuralEditGuard = {
+      token: 3,
+      operation: "split",
+      sourceNodeId: "cover_note",
+      expectedActiveNodeId: null,
+      removedNodeId: null,
+      draftRevision: 0,
+      startedAt: 100,
+    }
+
+    expect(resolveDraftIslandStructuralGuardUnlockReason(guard, {
+      active: true,
+      nodeId: "cover_note_split",
+      now: 120,
+    })).toBe("active-node-changed")
+    expect(shouldDropDraftIslandStructuralKeyForGuard(null, {
+      key: "Backspace",
+      nodeId: "cover_note_split",
+    })).toBe(false)
+  })
+
+  it("does not block normal text input or IME composition", () => {
+    const guard: DraftIslandStructuralEditGuard = {
+      token: 4,
+      operation: "split",
+      sourceNodeId: "cover_note",
+      expectedActiveNodeId: null,
+      removedNodeId: null,
+      draftRevision: 0,
+      startedAt: 100,
+    }
+
+    expect(shouldDropDraftIslandStructuralKeyForGuard(guard, {
+      key: "a",
+      nodeId: "cover_note",
+    })).toBe(false)
+    expect(shouldDropDraftIslandStructuralKeyForGuard(guard, {
+      key: "Enter",
+      nodeId: "cover_note",
+      isComposing: true,
+    })).toBe(false)
+  })
+
+  it("builds an optimistic same-page split fragment for structural refocus", () => {
+    const doc = makeDoc("Before")
+    const section = doc.document.sections[0]
+    const p1 = section.nodes.p1 as ParagraphNode
+    const p2: ParagraphNode = {
+      ...p1,
+      id: "p2",
+      children: [{ id: "p2-text", type: "text", text: "After split wraps" }],
+    }
+    const splitDoc: DocumentNode = {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            ...section.nodes,
+            body: { ...section.nodes.body, childIds: ["p1", "p2", "p3"] },
+            p2,
+            p3: {
+              ...p1,
+              id: "p3",
+              children: [{ id: "p3-text", type: "text", text: "Downstream" }],
+            },
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+    const sourceFragment = makeFragment({
+      nodeId: "p1",
+      x: 36,
+      y: 48,
+      width: 70,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 6,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 12,
+        textColor: "111827",
+        spacingBefore: 42,
+        spacingAfter: 8,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const downstreamFragment = makeFragment({
+      nodeId: "p3",
+      y: 80,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 10,
+    })
+    const paginated: PaginatedDocument = {
+      sections: [{
+        sectionId: "section",
+        pages: [{
+          index: 0,
+          width: 300,
+          height: 300,
+          contentBox: { x: 36, y: 48, width: 220, height: 220 },
+          fragments: [sourceFragment, downstreamFragment],
+          headerFragments: [],
+          footerFragments: [],
+        }],
+      }],
+    } as unknown as PaginatedDocument
+
+    const result = createOptimisticSplitRefocusPaginated({
+      doc: splitDoc,
+      paginated,
+      sourceNodeId: "p1",
+      newNodeId: "p2",
+      sourceFragment,
+      textMeasurer: fixedMeasurer,
+    })
+
+    expect(result).not.toBeNull()
+    const fragments = result!.paginated.sections[0].pages[0].fragments
+    expect(fragments.map((fragment) => fragment.nodeId)).toEqual(["p1", "p2", "p3"])
+    expect(result!.newFragment.nodeId).toBe("p2")
+    expect(result!.mode).toBe("same-page")
+    expect(result!.sourceFragment.lineStart).toBe(0)
+    expect(result!.sourceFragment.lineEnd).toBe(result!.sourceFragment.lines?.length)
+    expect(result!.newFragment.lineStart).toBe(0)
+    expect(result!.newFragment.lineEnd).toBe(result!.newFragment.lines?.length)
+    expect(result!.newFragment.y).toBeGreaterThan(result!.sourceFragment.y)
+    expect(fragments[2].y).toBeGreaterThan(downstreamFragment.y)
+    expect(result!.overflowedPage).toBe(false)
+  })
+
+  it("uses boundary-safe structural refocus near a page break without fake same-page canvas insertion", () => {
+    const doc = makeDoc("Before")
+    const section = doc.document.sections[0]
+    const p1 = section.nodes.p1 as ParagraphNode
+    const p2: ParagraphNode = {
+      ...p1,
+      id: "p2",
+      children: [{ id: "p2-text", type: "text", text: "After split wraps" }],
+    }
+    const splitDoc: DocumentNode = {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            ...section.nodes,
+            body: { ...section.nodes.body, childIds: ["p1", "p2", "p3"] },
+            p2,
+            p3: {
+              ...p1,
+              id: "p3",
+              children: [{ id: "p3-text", type: "text", text: "Downstream" }],
+            },
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+    const sourceFragment = makeFragment({
+      nodeId: "p1",
+      x: 36,
+      y: 48,
+      width: 70,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 12,
+        textColor: "111827",
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const downstreamFragment = makeFragment({
+      nodeId: "p3",
+      y: 80,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+    })
+    const paginated: PaginatedDocument = {
+      sections: [{
+        sectionId: "section",
+        pages: [{
+          index: 0,
+          width: 300,
+          height: 300,
+          contentBox: { x: 36, y: 48, width: 220, height: 45 },
+          fragments: [sourceFragment, downstreamFragment],
+          headerFragments: [],
+          footerFragments: [],
+        }],
+      }],
+    } as unknown as PaginatedDocument
+
+    const result = createOptimisticSplitRefocusPaginated({
+      doc: splitDoc,
+      paginated,
+      sourceNodeId: "p1",
+      newNodeId: "p2",
+      sourceFragment,
+      textMeasurer: fixedMeasurer,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.mode).toBe("boundary-safe")
+    expect(result!.overflowedPage).toBe(true)
+    expect(result!.newFragment.nodeId).toBe("p2")
+    expect(result!.newFragment.lineEnd).toBe(result!.newFragment.lines?.length)
+    const fragments = result!.paginated.sections[0].pages[0].fragments
+    expect(fragments.map((fragment) => fragment.nodeId)).toEqual(["p1", "p3"])
+    expect(fragments[1].y).toBe(downstreamFragment.y)
+  })
+
+  it("uses boundary-safe structural refocus when a split would collide with an explicit page-break marker", () => {
+    const doc = makeDoc("Before")
+    const section = doc.document.sections[0]
+    const p1 = section.nodes.p1 as ParagraphNode
+    const p2: ParagraphNode = {
+      ...p1,
+      id: "p2",
+      children: [{ id: "p2-text", type: "text", text: "After split wraps" }],
+    }
+    const splitDoc: DocumentNode = {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            ...section.nodes,
+            body: { ...section.nodes.body, childIds: ["p1", "p2", "break"] },
+            p2,
+            break: {
+              id: "break",
+              type: "page-break",
+              props: {},
+            },
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+    const sourceFragment = makeFragment({
+      nodeId: "p1",
+      x: 36,
+      y: 48,
+      width: 70,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 12,
+        textColor: "111827",
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const pageBreakFragment = makeFragment({
+      nodeId: "break",
+      nodeType: "page-break",
+      y: 78,
+      height: 10,
+      lineStart: undefined,
+      lineEnd: undefined,
+      lines: undefined,
+    })
+    const paginated: PaginatedDocument = {
+      sections: [{
+        sectionId: "section",
+        pages: [{
+          index: 0,
+          width: 300,
+          height: 300,
+          contentBox: { x: 36, y: 48, width: 220, height: 220 },
+          fragments: [sourceFragment, pageBreakFragment],
+          headerFragments: [],
+          footerFragments: [],
+        }],
+      }],
+    } as unknown as PaginatedDocument
+
+    const result = createOptimisticSplitRefocusPaginated({
+      doc: splitDoc,
+      paginated,
+      sourceNodeId: "p1",
+      newNodeId: "p2",
+      sourceFragment,
+      textMeasurer: fixedMeasurer,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.mode).toBe("boundary-safe")
+    expect(result!.overflowedPage).toBe(false)
+    expect(result!.newFragment.nodeId).toBe("p2")
+    expect(result!.sourceFragment.renderProps?.spacingAfter).toBe(0)
+    expect(result!.newFragment.renderProps?.spacingBefore).toBe(0)
+    expect(result!.newFragment.lines?.[0]?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(result!.newFragment.y + 24)
+    const fragments = result!.paginated.sections[0].pages[0].fragments
+    expect(fragments.map((fragment) => fragment.nodeId)).toEqual(["p1", "break"])
+    expect(fragments[1].y).toBe(pageBreakFragment.y)
+  })
+
+  it("builds an optimistic same-page merge fragment for structural Backspace refocus", () => {
+    const doc = makeDoc("BeforeAfter")
+    const section = doc.document.sections[0]
+    const p1 = section.nodes.p1 as ParagraphNode
+    const p3: ParagraphNode = {
+      ...p1,
+      id: "p3",
+      children: [{ id: "p3-text", type: "text", text: "Downstream" }],
+    }
+    const mergedDoc: DocumentNode = {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            ...section.nodes,
+            body: { ...section.nodes.body, childIds: ["p1", "p3"] },
+            p3,
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+    const previousFragment = makeFragment({
+      nodeId: "p1",
+      x: 36,
+      y: 48,
+      width: 70,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 12,
+        textColor: "111827",
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const currentFragment = makeFragment({
+      nodeId: "p2",
+      x: 36,
+      y: 80,
+      width: 70,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+    })
+    const downstreamFragment = makeFragment({
+      nodeId: "p3",
+      y: 112,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+    })
+    const paginated: PaginatedDocument = {
+      sections: [{
+        sectionId: "section",
+        pages: [{
+          index: 0,
+          width: 300,
+          height: 300,
+          contentBox: { x: 36, y: 48, width: 220, height: 220 },
+          fragments: [previousFragment, currentFragment, downstreamFragment],
+          headerFragments: [],
+          footerFragments: [],
+        }],
+      }],
+    } as unknown as PaginatedDocument
+
+    const result = createOptimisticMergeRefocusPaginated({
+      doc: mergedDoc,
+      paginated,
+      previousNodeId: "p1",
+      currentNodeId: "p2",
+      previousFragment,
+      currentFragment,
+      textMeasurer: fixedMeasurer,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.mode).toBe("same-page")
+    expect(result!.mergedFragment.nodeId).toBe("p1")
+    expect(result!.mergedFragment.lineStart).toBe(0)
+    expect(result!.mergedFragment.lineEnd).toBe(result!.mergedFragment.lines?.length)
+    const fragments = result!.paginated.sections[0].pages[0].fragments
+    expect(fragments.map((fragment) => fragment.nodeId)).toEqual(["p1", "p3"])
+    expect(fragments[0].lineEnd).toBe(fragments[0].lines?.length)
+    expect(fragments[1].y).toBeLessThan(downstreamFragment.y)
+  })
+
+  it("builds an optimistic merge when the current split paragraph only exists in the island", () => {
+    const doc = makeDoc("BeforeAfter")
+    const section = doc.document.sections[0]
+    const mergedDoc: DocumentNode = {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            ...section.nodes,
+            body: { ...section.nodes.body, childIds: ["p1", "break"] },
+            break: {
+              id: "break",
+              type: "page-break",
+              props: {},
+            },
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+    const previousFragment = makeFragment({
+      nodeId: "p1",
+      x: 36,
+      y: 48,
+      width: 70,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 12,
+        textColor: "111827",
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const currentIslandFragment = makeFragment({
+      nodeId: "p2",
+      x: 36,
+      y: 72,
+      width: 70,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+    })
+    const pageBreakFragment = makeFragment({
+      nodeId: "break",
+      nodeType: "page-break",
+      y: 96,
+      height: 10,
+      lineStart: undefined,
+      lineEnd: undefined,
+      lines: undefined,
+    })
+    const paginated: PaginatedDocument = {
+      sections: [{
+        sectionId: "section",
+        pages: [{
+          index: 0,
+          width: 300,
+          height: 300,
+          contentBox: { x: 36, y: 48, width: 220, height: 220 },
+          fragments: [previousFragment, pageBreakFragment],
+          headerFragments: [],
+          footerFragments: [],
+        }],
+      }],
+    } as unknown as PaginatedDocument
+
+    const result = createOptimisticMergeRefocusPaginated({
+      doc: mergedDoc,
+      paginated,
+      previousNodeId: "p1",
+      currentNodeId: "p2",
+      previousFragment,
+      currentFragment: currentIslandFragment,
+      textMeasurer: fixedMeasurer,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.mode).toBe("same-page")
+    const fragments = result!.paginated.sections[0].pages[0].fragments
+    expect(fragments.map((fragment) => fragment.nodeId)).toEqual(["p1", "break"])
+    expect(fragments.some((fragment) => fragment.nodeId === "p2")).toBe(false)
+    expect(result!.mergedFragment.nodeId).toBe("p1")
+    expect(result!.mergedFragment.lineEnd).toBe(result!.mergedFragment.lines?.length)
+    expect(fragments[1].y).toBeLessThan(pageBreakFragment.y)
+  })
+
   it("reports active island height only when the draft visual height changes meaningfully", () => {
     expect(shouldReportDraftIslandHeightPreview({
       previous: null,
@@ -348,6 +908,35 @@ describe("FlowdocDraftEditorIslandRoot", () => {
       key: "p1:0",
       nextHeight: 48,
       fragmentHeight: 36,
+    })).toBe(true)
+  })
+
+  it("does not queue page-boundary pagination for a clean edit-entry draft", () => {
+    const fragment = makeFragment()
+    const pageBoundaryReflow = {
+      kind: "hard-page-boundary",
+      reason: "page-boundary",
+      shouldPatchActiveLines: false,
+      shouldPatchSamePageHeight: false,
+      shouldQueueSettledPagination: true,
+    } as const
+
+    expect(shouldQueueDraftIslandPageBoundaryReflow({
+      active: true,
+      nodeId: "p1",
+      fragment,
+      reflow: pageBoundaryReflow,
+      draftRevision: 0,
+      hasReflowHandler: true,
+    })).toBe(false)
+
+    expect(shouldQueueDraftIslandPageBoundaryReflow({
+      active: true,
+      nodeId: "p1",
+      fragment,
+      reflow: pageBoundaryReflow,
+      draftRevision: 1,
+      hasReflowHandler: true,
     })).toBe(true)
   })
 
@@ -390,6 +979,7 @@ describe("FlowdocDraftEditorIslandRoot", () => {
 
     expect(markup).toContain("data-wysiwyg-draft-editor-island=\"true\"")
     expect(markup).toContain("data-wysiwyg-out-of-canvas-island=\"true\"")
+    expect(markup).toContain("data-wysiwyg-island-anchor=\"inline-fallback\"")
     expect(markup).toContain("data-wysiwyg-active-visual-detail=\"out-of-canvas-v2\"")
     expect(markup).toContain("data-wysiwyg-flowdoc-draft-lines=\"true\"")
     expect(markup).toContain("data-wysiwyg-native-visible-text=\"false\"")
