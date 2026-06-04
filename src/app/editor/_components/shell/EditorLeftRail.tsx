@@ -1,4 +1,4 @@
-import { useCallback, type CSSProperties, type PointerEvent } from "react"
+import { memo, useCallback, type CSSProperties, type PointerEvent } from "react"
 import type { DocumentNode } from "@/schema"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DragSource } from "@/placement/types"
@@ -94,7 +94,7 @@ const leftRailBookmarkButton = (active: boolean, height = 28, fontSize = 11): CS
   transition: "width 120ms ease, background 120ms ease, box-shadow 120ms ease, color 120ms ease",
 })
 
-export function EditorLeftRail({
+function EditorLeftRailImpl({
   mode,
   outlineDoc,
   styleDoc,
@@ -184,3 +184,5 @@ export function EditorLeftRail({
     </div>
   )
 }
+
+export const EditorLeftRail = memo(EditorLeftRailImpl)

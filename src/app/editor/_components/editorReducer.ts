@@ -57,7 +57,7 @@ import { createEditorPlaceholderPaginatedDocument } from "./editorInitialPaginat
 import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
-import { finishFlowDocPerfSpan, startWysiwygPerfSpan } from "./wysiwygPerformance"
+import { finishFlowDocPerfSpan, finishWysiwygPerfSpan, startWysiwygPerfSpan } from "./wysiwygPerformance"
 import {
   commitWysiwygRichTextEditState,
   commitWysiwygTextEditState,
@@ -194,29 +194,90 @@ export function resizeColumnsDocument(
 
 const MAX_HISTORY = 50
 
-function pushDoc(state: EditorState, newDoc: DocumentNode, history?: HistoryEntry): EditorState {
+type StructuralReducerAttribution = {
+  operation: "split" | "merge"
+  nodeId: string
+  previousNodeId?: string | null
+  sourceNodeId?: string | null
+  reducerPath?: string
+}
+
+function finishStructuralReducerAttribution(
+  attribution: StructuralReducerAttribution | undefined,
+  action: string,
+  startedAt: number,
+  metadata: Record<string, unknown> = {},
+): void {
+  if (!attribution) return
+  finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", startedAt, {
+    nodeId: attribution.nodeId,
+    previousNodeId: attribution.previousNodeId,
+    sourceNodeId: attribution.sourceNodeId,
+    operation: attribution.operation,
+    action,
+    reducerPath: attribution.reducerPath,
+    ...metadata,
+  })
+}
+
+function pushDoc(
+  state: EditorState,
+  newDoc: DocumentNode,
+  history?: HistoryEntry,
+  attribution?: StructuralReducerAttribution,
+): EditorState {
+  const pushStartedAt = startWysiwygPerfSpan()
+  const normalizeStartedAt = startWysiwygPerfSpan()
   const normalizedDoc = normalizeDocument(newDoc)
+  finishStructuralReducerAttribution(attribution, "normalize", normalizeStartedAt, {
+    validationMode: "full",
+  })
+  const assertStartedAt = startWysiwygPerfSpan()
   try {
     assertDocument(normalizedDoc)
+    finishStructuralReducerAttribution(attribution, "assert-document", assertStartedAt, {
+      validationMode: "full",
+      active: true,
+    })
   } catch (error) {
+    finishStructuralReducerAttribution(attribution, "assert-document", assertStartedAt, {
+      validationMode: "full",
+      active: false,
+    })
     console.error("document operation produced invalid document:", error)
     return { ...state, drag: null }
   }
-  return {
+  const nextState = {
     ...state,
     past: [...state.past.slice(-(MAX_HISTORY - 1)), history ?? { doc: state.doc, paginated: state.paginated }],
     doc: normalizedDoc,
     future: [],
   }
+  finishStructuralReducerAttribution(attribution, "push-doc", pushStartedAt, {
+    validationMode: "full",
+    active: true,
+  })
+  return nextState
 }
 
-function pushPrevalidatedDoc(state: EditorState, newDoc: DocumentNode, history?: HistoryEntry): EditorState {
-  return {
+function pushPrevalidatedDoc(
+  state: EditorState,
+  newDoc: DocumentNode,
+  history?: HistoryEntry,
+  attribution?: StructuralReducerAttribution,
+): EditorState {
+  const startedAt = startWysiwygPerfSpan()
+  const nextState = {
     ...state,
     past: [...state.past.slice(-(MAX_HISTORY - 1)), history ?? { doc: state.doc, paginated: state.paginated }],
     doc: newDoc,
     future: [],
   }
+  finishStructuralReducerAttribution(attribution, "push-prevalidated-doc", startedAt, {
+    validationMode: "prevalidated",
+    active: true,
+  })
+  return nextState
 }
 
 function setDocWithoutHistory(state: EditorState, newDoc: DocumentNode): EditorState {
@@ -625,33 +686,96 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       return nextDoc === state.doc ? state : pushDoc(state, nextDoc)
     }
     case "SPLIT_PARAGRAPH": {
-      const result = action.precomputed ?? (() => {
-        const sourceDoc = action.text === undefined
-          ? state.doc
-          : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+      const reducerStartedAt = startWysiwygPerfSpan()
+      const attributionBase: StructuralReducerAttribution = {
+        operation: "split",
+        nodeId: action.precomputed?.newNodeId ?? action.newNodeId ?? action.nodeId,
+        previousNodeId: action.nodeId,
+        sourceNodeId: action.nodeId,
+        reducerPath: action.precomputed ? "precomputed" : "fallback",
+      }
+      let result = action.precomputed
+      if (!result) {
+        let sourceDoc = state.doc
+        if (action.text !== undefined) {
+          const replaceStartedAt = startWysiwygPerfSpan()
+          sourceDoc = replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+          finishStructuralReducerAttribution(attributionBase, "replace-draft-text", replaceStartedAt, {
+            textLength: action.text.length,
+          })
+        }
+        const listSplitStartedAt = startWysiwygPerfSpan()
         const listResult = splitListItemAtIndex(sourceDoc, action.nodeId, action.splitIndex)
-        return listResult.newNodeId ? listResult : splitParagraphAtIndex(sourceDoc, action.nodeId, action.splitIndex, {
-          newNodeId: action.newNodeId,
+        finishStructuralReducerAttribution(attributionBase, "reducer-split-list-attempt", listSplitStartedAt, {
+          active: Boolean(listResult.newNodeId),
         })
-      })()
-      if (!result.newNodeId) return state
+        if (listResult.newNodeId) {
+          result = listResult
+        } else {
+          const splitStartedAt = startWysiwygPerfSpan()
+          result = splitParagraphAtIndex(sourceDoc, action.nodeId, action.splitIndex, {
+            newNodeId: action.newNodeId,
+          })
+          finishStructuralReducerAttribution(attributionBase, "reducer-split-fallback-operation", splitStartedAt, {
+            active: Boolean(result.newNodeId),
+          })
+        }
+      }
+      if (!result.newNodeId) {
+        finishStructuralReducerAttribution(attributionBase, "reducer-total", reducerStartedAt, {
+          active: false,
+          validationMode: action.precomputed ? "mixed" : "full",
+        })
+        return state
+      }
       const canUseShellPrevalidatedDoc = action.precomputedDocValidation === "shell-optimistic-structural" &&
         action.precomputed === result &&
         getEditableParagraphFromDocument(result.doc, action.nodeId) &&
         getEditableParagraphFromDocument(result.doc, result.newNodeId) &&
         hasImmediateSiblingOrder(result.doc, action.nodeId, result.newNodeId)
+      const attribution: StructuralReducerAttribution = {
+        ...attributionBase,
+        nodeId: result.newNodeId,
+        reducerPath: canUseShellPrevalidatedDoc
+          ? "precomputed-fast-path"
+          : action.precomputed
+            ? "precomputed-full-validation"
+            : "fallback",
+      }
+      finishStructuralReducerAttribution(attribution, canUseShellPrevalidatedDoc
+        ? "reducer-precomputed-split-fast-path"
+        : action.precomputed
+          ? "reducer-precomputed-split-full-validation"
+          : "reducer-split-fallback-path",
+      reducerStartedAt, {
+        validationMode: canUseShellPrevalidatedDoc ? "prevalidated" : "full",
+        active: true,
+      })
       const nextState = canUseShellPrevalidatedDoc
-        ? pushPrevalidatedDoc(state, result.doc, action.history)
-        : pushDoc(state, result.doc, action.history)
-      return {
+        ? pushPrevalidatedDoc(state, result.doc, action.history, attribution)
+        : pushDoc(state, result.doc, action.history, attribution)
+      const finalState = {
         ...nextState,
         paginated: action.paginated ?? nextState.paginated,
         lastSplitNodeId: result.newNodeId,
       }
+      finishStructuralReducerAttribution(attribution, "reducer-total", reducerStartedAt, {
+        validationMode: canUseShellPrevalidatedDoc ? "prevalidated" : "full",
+        active: true,
+      })
+      return finalState
     }
     case "CLEAR_SPLIT_NODE_ID":
       return { ...state, lastSplitNodeId: null }
     case "MERGE_PARAGRAPH": {
+      const reducerStartedAt = startWysiwygPerfSpan()
+      const attributionBase: StructuralReducerAttribution = {
+        operation: "merge",
+        nodeId: action.precomputed?.prevNodeId ?? action.nodeId,
+        previousNodeId: action.nodeId,
+        sourceNodeId: action.nodeId,
+        reducerPath: action.precomputed ? "precomputed" : "fallback",
+      }
       if (
         action.precomputed &&
         action.precomputed.prevNodeId &&
@@ -661,10 +785,24 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       ) {
         const canUseShellPrevalidatedDoc = action.precomputedDocValidation === "shell-optimistic-structural" &&
           !getEditableParagraphFromDocument(action.precomputed.doc, action.nodeId)
+        const attribution: StructuralReducerAttribution = {
+          ...attributionBase,
+          nodeId: action.precomputed.prevNodeId,
+          reducerPath: canUseShellPrevalidatedDoc
+            ? "precomputed-fast-path"
+            : "precomputed-full-validation",
+        }
+        finishStructuralReducerAttribution(attribution, canUseShellPrevalidatedDoc
+          ? "reducer-precomputed-merge-fast-path"
+          : "reducer-precomputed-merge-full-validation",
+        reducerStartedAt, {
+          validationMode: canUseShellPrevalidatedDoc ? "prevalidated" : "full",
+          active: true,
+        })
         const nextState = canUseShellPrevalidatedDoc
-          ? pushPrevalidatedDoc(state, action.precomputed.doc, action.history)
-          : pushDoc(state, action.precomputed.doc, action.history)
-        return {
+          ? pushPrevalidatedDoc(state, action.precomputed.doc, action.history, attribution)
+          : pushDoc(state, action.precomputed.doc, action.history, attribution)
+        const finalState = {
           ...nextState,
           paginated: action.paginated ?? nextState.paginated,
           mergeResult: {
@@ -672,35 +810,86 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
             caretIndex: action.precomputed.caretIndex,
           },
         }
+        finishStructuralReducerAttribution(attribution, "reducer-total", reducerStartedAt, {
+          validationMode: canUseShellPrevalidatedDoc ? "prevalidated" : "full",
+          active: true,
+        })
+        return finalState
       }
 
-      const sourceDoc = action.text === undefined
-        ? state.doc
-        : replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+      let sourceDoc = state.doc
+      if (action.text !== undefined) {
+        const replaceStartedAt = startWysiwygPerfSpan()
+        sourceDoc = replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+        finishStructuralReducerAttribution(attributionBase, "replace-draft-text", replaceStartedAt, {
+          textLength: action.text.length,
+        })
+      }
 
       if (shouldDeleteEmptyUnlistedParagraph(sourceDoc, action.nodeId)) {
         const previousSibling = findPreviousEditableParagraphSibling(sourceDoc, action.nodeId)
+        const deleteStartedAt = startWysiwygPerfSpan()
         const nextDoc = deleteNode(sourceDoc, action.nodeId)
+        finishStructuralReducerAttribution(attributionBase, "reducer-delete-empty-operation", deleteStartedAt, {
+          active: nextDoc !== state.doc,
+        })
         if (nextDoc !== state.doc) {
-          const nextState = pushDoc(state, nextDoc, action.history)
-          return {
+          const nextState = pushDoc(state, nextDoc, action.history, {
+            ...attributionBase,
+            nodeId: previousSibling?.prevNodeId ?? action.nodeId,
+            reducerPath: "delete-empty-fallback",
+          })
+          const finalState = {
             ...nextState,
             paginated: action.paginated ?? nextState.paginated,
             selectedNodeId: previousSibling?.prevNodeId ?? null,
             selectionAnchorNodeId: previousSibling?.prevNodeId ?? null,
             mergeResult: previousSibling,
           }
+          finishStructuralReducerAttribution(attributionBase, "reducer-total", reducerStartedAt, {
+            validationMode: "full",
+            active: true,
+          })
+          return finalState
         }
       }
 
-      const result = mergeListItemWithPrevious(sourceDoc, action.nodeId) ?? mergeParagraphWithPrevious(sourceDoc, action.nodeId)
-      if (!result) return state
-      const nextState = pushDoc(state, result.doc, action.history)
-      return {
+      const listMergeStartedAt = startWysiwygPerfSpan()
+      const listResult = mergeListItemWithPrevious(sourceDoc, action.nodeId)
+      finishStructuralReducerAttribution(attributionBase, "reducer-merge-list-attempt", listMergeStartedAt, {
+        active: Boolean(listResult),
+      })
+      let result = listResult
+      if (!result) {
+        const mergeStartedAt = startWysiwygPerfSpan()
+        result = mergeParagraphWithPrevious(sourceDoc, action.nodeId)
+        finishStructuralReducerAttribution(attributionBase, "reducer-merge-fallback-operation", mergeStartedAt, {
+          active: Boolean(result),
+        })
+      }
+      if (!result) {
+        finishStructuralReducerAttribution(attributionBase, "reducer-total", reducerStartedAt, {
+          validationMode: "full",
+          active: false,
+        })
+        return state
+      }
+      const attribution: StructuralReducerAttribution = {
+        ...attributionBase,
+        nodeId: result.prevNodeId,
+        reducerPath: "fallback",
+      }
+      const nextState = pushDoc(state, result.doc, action.history, attribution)
+      const finalState = {
         ...nextState,
         paginated: action.paginated ?? nextState.paginated,
         mergeResult: { prevNodeId: result.prevNodeId, caretIndex: result.caretIndex },
       }
+      finishStructuralReducerAttribution(attribution, "reducer-total", reducerStartedAt, {
+        validationMode: "full",
+        active: true,
+      })
+      return finalState
     }
     case "CLEAR_MERGE_RESULT":
       return { ...state, mergeResult: null }

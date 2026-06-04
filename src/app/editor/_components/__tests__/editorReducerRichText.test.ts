@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   assertDocument,
   DEFAULT_HEADER_FOOTER_RESERVED_PT,
@@ -23,6 +23,10 @@ const PAGE_BREAK_SPLIT_TEXT = "ชุดข้อมูลนี้สร้า�
 const PAGE_BREAK_SPLIT_INDEX = PAGE_BREAK_SPLIT_TEXT.indexOf("pagination") + "pagination".length
 const PAGE_BREAK_SOURCE_TEXT = PAGE_BREAK_SPLIT_TEXT.slice(0, PAGE_BREAK_SPLIT_INDEX)
 const PAGE_BREAK_AFTER_TEXT = PAGE_BREAK_SPLIT_TEXT.slice(PAGE_BREAK_SPLIT_INDEX)
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function docWithParagraph(): DocumentNode {
   return {
@@ -778,6 +782,10 @@ describe("editorReducer list-aware structural paragraph actions", () => {
   })
 
   it("uses a prevalidated precomputed split without normalizing the shell result", () => {
+    vi.stubGlobal("window", {
+      __flowDocWysiwygPerfTraceEnabled: true,
+      location: { search: "" },
+    })
     const doc = docWithParagraphBeforePageBreak()
     const state = reducer(createInitialEditorState(doc), {
       type: "SELECT_NODE",
@@ -823,6 +831,15 @@ describe("editorReducer list-aware structural paragraph actions", () => {
       "after_break",
     ])
     expect(next.past).toHaveLength(1)
+    const attributionEvents = window.__flowDocWysiwygPerfEvents?.filter((event) => (
+      event.kind === "flowdoc-structural-attribution"
+    )) ?? []
+    expect(attributionEvents.map((event) => event.action)).toContain("reducer-precomputed-split-fast-path")
+    expect(attributionEvents.map((event) => event.action)).toContain("push-prevalidated-doc")
+    expect(attributionEvents.map((event) => event.action)).toContain("reducer-total")
+    expect(attributionEvents.some((event) => event.action === "normalize")).toBe(false)
+    expect(attributionEvents.some((event) => event.action === "assert-document")).toBe(false)
+    expect(JSON.stringify(attributionEvents)).not.toContain("fallback text should not be applied")
   })
 
   it("uses a precomputed merge payload with optimistic pagination", () => {

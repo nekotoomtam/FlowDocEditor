@@ -1250,8 +1250,48 @@ export function FlowdocDraftEditorIslandRoot({
     if (!onSplitParagraph) return false
     if (event && (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing)) return false
     if (dropGuardedStructuralKey("Enter", current, source, "split", event)) return true
+    const currentTextStartedAt = startWysiwygPerfSpan()
+    const currentTextLength = current.text.length
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-attribution",
+      startedAt: currentTextStartedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - currentTextStartedAt),
+      nodeId: current.nodeId,
+      draftVersion: current.revision,
+      textLength: currentTextLength,
+      operation: "split",
+      source,
+      action: "current-text-resolve",
+    })
+    const caretStartedAt = startWysiwygPerfSpan()
     const range = draftSelectionRange(current)
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-attribution",
+      startedAt: caretStartedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - caretStartedAt),
+      nodeId: current.nodeId,
+      draftVersion: current.revision,
+      selectionCollapsed: range.isCollapsed,
+      selectionRangeLength: Math.abs(range.end - range.start),
+      operation: "split",
+      source,
+      action: "caret-resolve",
+    })
+    const draftResolveStartedAt = startWysiwygPerfSpan()
     const splitInput = buildSplitEditInput("", current.text, range.start, range.end)
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-attribution",
+      startedAt: draftResolveStartedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - draftResolveStartedAt),
+      nodeId: current.nodeId,
+      draftVersion: current.revision,
+      textLength: splitInput.text.length,
+      selectionCollapsed: range.isCollapsed,
+      selectionRangeLength: Math.abs(range.end - range.start),
+      operation: "split",
+      source,
+      action: "draft-split-text-resolve",
+    })
     engageStructuralEditGuard("split", current, source)
     clearPendingParentSync()
     pointerSelectionDragRef.current = null
@@ -1276,7 +1316,33 @@ export function FlowdocDraftEditorIslandRoot({
     if (!onMergeParagraph) return false
     if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return false
     if (dropGuardedStructuralKey("Backspace", current, "key:Backspace", current.text.length === 0 ? "delete-empty" : "merge", event)) return true
+    const currentTextStartedAt = startWysiwygPerfSpan()
+    const currentTextLength = current.text.length
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-attribution",
+      startedAt: currentTextStartedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - currentTextStartedAt),
+      nodeId: current.nodeId,
+      draftVersion: current.revision,
+      textLength: currentTextLength,
+      operation: currentTextLength === 0 ? "delete-empty" : "merge",
+      source: "key:Backspace",
+      action: "current-text-resolve",
+    })
+    const caretStartedAt = startWysiwygPerfSpan()
     const range = draftSelectionRange(current)
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-attribution",
+      startedAt: caretStartedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - caretStartedAt),
+      nodeId: current.nodeId,
+      draftVersion: current.revision,
+      selectionCollapsed: range.isCollapsed,
+      selectionRangeLength: Math.abs(range.end - range.start),
+      operation: currentTextLength === 0 ? "delete-empty" : "merge",
+      source: "key:Backspace",
+      action: "caret-resolve",
+    })
     if (!range.isCollapsed || range.start !== 0) return false
     const operation = current.text.length === 0 ? "delete-empty" : "merge"
     engageStructuralEditGuard(operation, current, "key:Backspace")
@@ -1351,15 +1417,71 @@ export function FlowdocDraftEditorIslandRoot({
       return
     }
     if (handleClipboardShortcutKeyDown(event)) return
-    if (event.key === "Enter" && applyStructuralEnter(event, current, "key:Enter")) {
-      event.preventDefault()
-      event.stopPropagation()
-      return
+    if (event.key === "Enter") {
+      const keydownStartedAt = startWysiwygPerfSpan()
+      const handled = applyStructuralEnter(event, current, "key:Enter")
+      if (!handled) {
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-structural-attribution",
+          startedAt: keydownStartedAt,
+          durationMs: Math.max(0, startWysiwygPerfSpan() - keydownStartedAt),
+          nodeId: current.nodeId,
+          draftVersion: current.revision,
+          operation: "split",
+          source: "key:Enter",
+          action: "keydown-total",
+          active: false,
+        })
+      }
+      if (handled) {
+        event.preventDefault()
+        event.stopPropagation()
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-structural-attribution",
+          startedAt: keydownStartedAt,
+          durationMs: Math.max(0, startWysiwygPerfSpan() - keydownStartedAt),
+          nodeId: current.nodeId,
+          draftVersion: current.revision,
+          operation: "split",
+          source: "key:Enter",
+          action: "keydown-total",
+          active: true,
+        })
+        return
+      }
     }
-    if (event.key === "Backspace" && applyStructuralBackspace(event, current)) {
-      event.preventDefault()
-      event.stopPropagation()
-      return
+    if (event.key === "Backspace") {
+      const keydownStartedAt = startWysiwygPerfSpan()
+      const handled = applyStructuralBackspace(event, current)
+      if (!handled) {
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-structural-attribution",
+          startedAt: keydownStartedAt,
+          durationMs: Math.max(0, startWysiwygPerfSpan() - keydownStartedAt),
+          nodeId: current.nodeId,
+          draftVersion: current.revision,
+          operation: current.text.length === 0 ? "delete-empty" : "merge",
+          source: "key:Backspace",
+          action: "keydown-total",
+          active: false,
+        })
+      }
+      if (handled) {
+        event.preventDefault()
+        event.stopPropagation()
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-structural-attribution",
+          startedAt: keydownStartedAt,
+          durationMs: Math.max(0, startWysiwygPerfSpan() - keydownStartedAt),
+          nodeId: current.nodeId,
+          draftVersion: current.revision,
+          operation: current.text.length === 0 ? "delete-empty" : "merge",
+          source: "key:Backspace",
+          action: "keydown-total",
+          active: true,
+        })
+        return
+      }
     }
     if (applyVerticalKeyInput(event, current)) {
       event.preventDefault()

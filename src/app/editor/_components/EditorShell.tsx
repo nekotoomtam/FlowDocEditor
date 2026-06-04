@@ -841,19 +841,27 @@ function resolveStructuralSourceDoc(input: {
   textSupplied: boolean
   textChanged: boolean
   textResolved: boolean
+  currentTextResolveMs: number
+  replaceDraftTextMs: number
 } {
   if (input.text === undefined) {
-    return { doc: input.doc, textSupplied: false, textChanged: false, textResolved: false }
+    return { doc: input.doc, textSupplied: false, textChanged: false, textResolved: false, currentTextResolveMs: 0, replaceDraftTextMs: 0 }
   }
+  const currentTextStartedAt = startWysiwygPerfSpan()
   const currentText = getParagraphTextFromDoc(input.doc, input.nodeId)
+  const currentTextResolveMs = Math.max(0, startWysiwygPerfSpan() - currentTextStartedAt)
   if (currentText === input.text) {
-    return { doc: input.doc, textSupplied: true, textChanged: false, textResolved: currentText !== null }
+    return { doc: input.doc, textSupplied: true, textChanged: false, textResolved: currentText !== null, currentTextResolveMs, replaceDraftTextMs: 0 }
   }
+  const replaceStartedAt = startWysiwygPerfSpan()
+  const doc = replaceEditableParagraphTextInDocument(input.doc, input.nodeId, input.text)
   return {
-    doc: replaceEditableParagraphTextInDocument(input.doc, input.nodeId, input.text),
+    doc,
     textSupplied: true,
     textChanged: true,
     textResolved: currentText !== null,
+    currentTextResolveMs,
+    replaceDraftTextMs: Math.max(0, startWysiwygPerfSpan() - replaceStartedAt),
   }
 }
 
@@ -1084,6 +1092,17 @@ function EditorSubtreePerfProfiler({
         commitTime,
       },
     })
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-render-attribution",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      componentName: id,
+      source: id,
+      action: phase,
+      active: true,
+    })
   }, [])
 
   if (!enabled) return <>{children}</>
@@ -1216,6 +1235,8 @@ export default function EditorShell() {
     return registry
   })
   const isTemplateMode = mode === "template"
+  const [optimisticStructuralRefocusPaint, setOptimisticStructuralRefocusPaint] = useState<OptimisticStructuralRefocusPaint | null>(null)
+  const [optimisticStructuralIslandOverride, setOptimisticStructuralIslandOverride] = useState<OptimisticStructuralIslandOverride | null>(null)
   const selectedParagraphListContext = useMemo(() => (
     resolveParagraphListContext(state.doc, state.selectedNodeId)
   ), [state.doc, state.selectedNodeId])
@@ -1230,6 +1251,7 @@ export default function EditorShell() {
     findSectionIndexForNode(state.doc, state.selectedNodeId)
   ), [state.doc, state.selectedNodeId])
   useEffect(() => {
+    if (optimisticStructuralIslandOverride) return
     let frameId: number | null = null
     let idleId: number | null = null
     let timeoutId: number | null = null
@@ -1272,7 +1294,7 @@ export default function EditorShell() {
       }
       if (timeoutId !== null) window.clearTimeout(timeoutId)
     }
-  }, [activeOutlineListGroupId, state.selectedNodeId])
+  }, [activeOutlineListGroupId, optimisticStructuralIslandOverride, state.selectedNodeId])
   const resolvePreviewDoc = useCallback((doc: DocumentNode) => (
     isTemplateMode
       ? doc
@@ -1373,8 +1395,6 @@ export default function EditorShell() {
   const [exportFeedbackTick, setExportFeedbackTick] = useState(0)
   const [documentIoStatus, setDocumentIoStatus] = useState<{ type: "info" | "error"; message: string } | null>(null)
   const [localSaveStatus, setLocalSaveStatus] = useState<"saved" | "saving">("saved")
-  const [optimisticStructuralRefocusPaint, setOptimisticStructuralRefocusPaint] = useState<OptimisticStructuralRefocusPaint | null>(null)
-  const [optimisticStructuralIslandOverride, setOptimisticStructuralIslandOverride] = useState<OptimisticStructuralIslandOverride | null>(null)
   const resizePreviewRef = useRef<HTMLDivElement | null>(null)
   const resizePreviewFrameRef = useRef<number | null>(null)
   const pendingResizePreviewRef = useRef<ResizeDrag | null>(null)
@@ -1457,6 +1477,29 @@ export default function EditorShell() {
     partialPreviewPaginated,
     previewLayout: browserPreviewLayout,
   }), [browserPreviewLayout, partialPreviewPaginated, state.paginated])
+  const currentLeftRailOutlineDoc = isTemplateMode ? state.doc : previewDoc
+  const currentLeftRailStyleDoc = state.doc
+  const deferLeftRailDocForStructuralPaint = optimisticStructuralRefocusPaint !== null
+  const leftRailDocumentSnapshotRef = useRef<{ outlineDoc: DocumentNode; styleDoc: DocumentNode } | null>(null)
+  if (leftRailDocumentSnapshotRef.current === null) {
+    leftRailDocumentSnapshotRef.current = {
+      outlineDoc: currentLeftRailOutlineDoc,
+      styleDoc: currentLeftRailStyleDoc,
+    }
+  }
+  const leftRailOutlineDoc = deferLeftRailDocForStructuralPaint
+    ? leftRailDocumentSnapshotRef.current.outlineDoc
+    : currentLeftRailOutlineDoc
+  const leftRailStyleDoc = deferLeftRailDocForStructuralPaint
+    ? leftRailDocumentSnapshotRef.current.styleDoc
+    : currentLeftRailStyleDoc
+  useLayoutEffect(() => {
+    if (deferLeftRailDocForStructuralPaint) return
+    leftRailDocumentSnapshotRef.current = {
+      outlineDoc: currentLeftRailOutlineDoc,
+      styleDoc: currentLeftRailStyleDoc,
+    }
+  }, [currentLeftRailOutlineDoc, currentLeftRailStyleDoc, deferLeftRailDocForStructuralPaint])
   useEffect(() => {
     if (!selectedStyleResource) return
     const exists = selectedStyleResource.kind === "paragraph-style"
@@ -1778,6 +1821,18 @@ export default function EditorShell() {
         selectionCollapsed: selection.anchorOffset === selection.focusOffset,
         selectionRangeLength: Math.abs(selection.focusOffset - selection.anchorOffset),
       } : {}),
+      ...paginatedPerfSummaryRef.current,
+    })
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-render-attribution",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      componentName: "EditorCanvas",
+      source: "EditorCanvas",
+      action: phase,
+      active: true,
       ...paginatedPerfSummaryRef.current,
     })
   }, [])
@@ -2904,6 +2959,30 @@ export default function EditorShell() {
       operation: "split",
       active: source.textResolved,
     })
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-attribution",
+      startedAt: sourceStartedAt,
+      durationMs: source.currentTextResolveMs,
+      nodeId: pending.sourceNodeId,
+      sourceNodeId: pending.sourceNodeId,
+      operation: "split",
+      source: source.textSupplied ? "draft-text" : "doc-current",
+      action: "current-text-resolve",
+      active: source.textResolved,
+    })
+    if (source.textChanged) {
+      recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        kind: "flowdoc-structural-attribution",
+        startedAt: sourceStartedAt,
+        durationMs: source.replaceDraftTextMs,
+        nodeId: pending.sourceNodeId,
+        sourceNodeId: pending.sourceNodeId,
+        operation: "split",
+        source: "draft-text-replaced",
+        action: "replace-draft-text",
+        active: true,
+      })
+    }
     const sourceDoc = source.doc
     const splitStartedAt = startWysiwygPerfSpan()
     const result = splitParagraphAtIndex(sourceDoc, pending.sourceNodeId, splitIndex, {
@@ -2940,6 +3019,7 @@ export default function EditorShell() {
       sourceFragment: pending.sourceFragment,
       textMeasurer: editorTextMeasurer,
     })
+    const optimisticSummary = optimistic ? summarizePaginatedForWysiwygPerf(optimistic.paginated) : null
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", optimisticStartedAt, {
       nodeId: pending.newNodeId,
       previousNodeId: pending.sourceNodeId,
@@ -2950,7 +3030,10 @@ export default function EditorShell() {
       active: optimistic !== null,
       overflowedPage: optimistic?.overflowedPage,
       optimisticMode: optimistic?.mode,
-      ...(optimistic ? summarizePaginatedForWysiwygPerf(optimistic.paginated) : {}),
+      boundarySafeMode: optimistic?.mode === "boundary-safe",
+      affectedPageIndex: optimistic?.newFragment.pageIndex ?? pending.sourceFragment.pageIndex,
+      optimisticFragmentCount: optimisticSummary?.fragmentCount,
+      ...(optimisticSummary ?? {}),
     })
     if (!optimistic) return false
 
@@ -2963,14 +3046,27 @@ export default function EditorShell() {
     suppressNextLayoutLoadingOverlayRef.current = true
     const pageKey = editorPageNavigation.pageKeyByPageIndex.get(optimistic.newFragment.pageIndex) ?? null
     if (!pageKey) return false
+    const suppressionStartedAt = startWysiwygPerfSpan()
     const suppressedPageBreakNodeId = optimistic.mode === "boundary-safe"
       ? findImmediatePageBreakSiblingAfterNode(result.doc, pending.newNodeId)
       : null
+    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", suppressionStartedAt, {
+      nodeId: pending.newNodeId,
+      previousNodeId: pending.sourceNodeId,
+      sourceNodeId: pending.sourceNodeId,
+      pageIndex: optimistic.newFragment.pageIndex,
+      action: "boundary-safe-metadata",
+      operation: "split",
+      boundarySafeMode: optimistic.mode === "boundary-safe",
+      suppressedPageBreakNodeId,
+      affectedPageIndex: optimistic.newFragment.pageIndex,
+    })
     let inlineStarted = false
     let textSessionStarted = false
     let splitDispatched = false
     const flushStartedAt = startWysiwygPerfSpan()
     flushSync(() => {
+      const inlineSetupStartedAt = startWysiwygPerfSpan()
       inlineStarted = startInlineEditAfterOptimisticStructuralChange(
         pending.newNodeId,
         0,
@@ -2979,13 +3075,34 @@ export default function EditorShell() {
         result.doc,
         newText,
       )
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", inlineSetupStartedAt, {
+        nodeId: pending.newNodeId,
+        previousNodeId: pending.sourceNodeId,
+        sourceNodeId: pending.sourceNodeId,
+        pageIndex: optimistic.newFragment.pageIndex,
+        action: "inline-edit-session-setup",
+        operation: "split",
+        active: inlineStarted,
+      })
+      const textSessionSetupStartedAt = startWysiwygPerfSpan()
       textSessionStarted = startPlainWysiwygTextSessionFromText({
         nodeId: pending.newNodeId,
         text: newText,
         caretOffset: 0,
         pageIndex: optimistic.newFragment.pageIndex,
       })
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", textSessionSetupStartedAt, {
+        nodeId: pending.newNodeId,
+        previousNodeId: pending.sourceNodeId,
+        sourceNodeId: pending.sourceNodeId,
+        pageIndex: optimistic.newFragment.pageIndex,
+        textLength: newText.length,
+        action: "text-session-setup",
+        operation: "split",
+        active: textSessionStarted,
+      })
       if (!inlineStarted || !textSessionStarted) return
+      const dispatchStartedAt = startWysiwygPerfSpan()
       dispatchEditorAction({
         type: "SPLIT_PARAGRAPH",
         nodeId: pending.sourceNodeId,
@@ -3000,7 +3117,18 @@ export default function EditorShell() {
         precomputedDocValidation: "shell-optimistic-structural",
         paginated: optimistic.paginated,
       })
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", dispatchStartedAt, {
+        nodeId: pending.newNodeId,
+        previousNodeId: pending.sourceNodeId,
+        sourceNodeId: pending.sourceNodeId,
+        pageIndex: optimistic.newFragment.pageIndex,
+        action: "dispatch",
+        operation: "split",
+        commandType: "SPLIT_PARAGRAPH",
+        active: true,
+      })
       splitDispatched = true
+      const islandOverrideStartedAt = startWysiwygPerfSpan()
       setOptimisticStructuralIslandOverride({
         nodeId: pending.newNodeId,
         paragraph: newParagraph,
@@ -3011,6 +3139,17 @@ export default function EditorShell() {
         suppressedPageBreakNodeId,
       })
       setOptimisticStructuralRefocusPaint({ nodeId: pending.newNodeId, startedAt: pending.startedAt })
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", islandOverrideStartedAt, {
+        nodeId: pending.newNodeId,
+        previousNodeId: pending.sourceNodeId,
+        sourceNodeId: pending.sourceNodeId,
+        pageIndex: optimistic.newFragment.pageIndex,
+        action: "island-override-setup",
+        operation: "split",
+        boundarySafeMode: optimistic.mode === "boundary-safe",
+        suppressedPageBreakNodeId,
+        active: true,
+      })
     })
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", flushStartedAt, {
       nodeId: pending.newNodeId,
@@ -3085,6 +3224,30 @@ export default function EditorShell() {
       operation: "merge",
       active: source.textResolved,
     })
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-attribution",
+      startedAt: sourceStartedAt,
+      durationMs: source.currentTextResolveMs,
+      nodeId,
+      sourceNodeId: nodeId,
+      operation: "merge",
+      source: source.textSupplied ? "draft-text" : "doc-current",
+      action: "current-text-resolve",
+      active: source.textResolved,
+    })
+    if (source.textChanged) {
+      recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        kind: "flowdoc-structural-attribution",
+        startedAt: sourceStartedAt,
+        durationMs: source.replaceDraftTextMs,
+        nodeId,
+        sourceNodeId: nodeId,
+        operation: "merge",
+        source: "draft-text-replaced",
+        action: "replace-draft-text",
+        active: true,
+      })
+    }
     const sourceDoc = source.doc
     const currentParagraph = getParagraphFromDoc(sourceDoc, nodeId)
     if (!currentParagraph || !isTextRunOnlyParagraph(currentParagraph)) return false
@@ -3154,6 +3317,7 @@ export default function EditorShell() {
       currentFragment,
       textMeasurer: editorTextMeasurer,
     })
+    const optimisticSummary = optimistic ? summarizePaginatedForWysiwygPerf(optimistic.paginated) : null
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", optimisticStartedAt, {
       nodeId: result.prevNodeId,
       previousNodeId: nodeId,
@@ -3164,7 +3328,10 @@ export default function EditorShell() {
       active: optimistic !== null,
       overflowedPage: optimistic?.overflowedPage,
       optimisticMode: optimistic?.mode,
-      ...(optimistic ? summarizePaginatedForWysiwygPerf(optimistic.paginated) : {}),
+      boundarySafeMode: optimistic?.mode === "boundary-safe",
+      affectedPageIndex: optimistic?.mergedFragment.pageIndex ?? currentFragment.pageIndex,
+      optimisticFragmentCount: optimisticSummary?.fragmentCount,
+      ...(optimisticSummary ?? {}),
     })
     if (!optimistic) return false
 
@@ -3197,6 +3364,7 @@ export default function EditorShell() {
     let mergeDispatched = false
     const flushStartedAt = startWysiwygPerfSpan()
     flushSync(() => {
+      const inlineSetupStartedAt = startWysiwygPerfSpan()
       inlineStarted = startInlineEditAfterOptimisticStructuralChange(
         result.prevNodeId,
         result.caretIndex,
@@ -3205,13 +3373,34 @@ export default function EditorShell() {
         result.doc,
         mergedText,
       )
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", inlineSetupStartedAt, {
+        nodeId: result.prevNodeId,
+        previousNodeId: nodeId,
+        sourceNodeId: nodeId,
+        pageIndex: optimistic.mergedFragment.pageIndex,
+        action: "inline-edit-session-setup",
+        operation: "merge",
+        active: inlineStarted,
+      })
+      const textSessionSetupStartedAt = startWysiwygPerfSpan()
       textSessionStarted = startPlainWysiwygTextSessionFromText({
         nodeId: result.prevNodeId,
         text: mergedText,
         caretOffset: result.caretIndex,
         pageIndex: optimistic.mergedFragment.pageIndex,
       })
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", textSessionSetupStartedAt, {
+        nodeId: result.prevNodeId,
+        previousNodeId: nodeId,
+        sourceNodeId: nodeId,
+        pageIndex: optimistic.mergedFragment.pageIndex,
+        textLength: mergedText.length,
+        action: "text-session-setup",
+        operation: "merge",
+        active: textSessionStarted,
+      })
       if (!inlineStarted || !textSessionStarted) return
+      const dispatchStartedAt = startWysiwygPerfSpan()
       dispatchEditorAction({
         type: "MERGE_PARAGRAPH",
         nodeId,
@@ -3225,7 +3414,18 @@ export default function EditorShell() {
         precomputedDocValidation: "shell-optimistic-structural",
         paginated: optimistic.paginated,
       })
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", dispatchStartedAt, {
+        nodeId: result.prevNodeId,
+        previousNodeId: nodeId,
+        sourceNodeId: nodeId,
+        pageIndex: optimistic.mergedFragment.pageIndex,
+        action: "dispatch",
+        operation: "merge",
+        commandType: "MERGE_PARAGRAPH",
+        active: true,
+      })
       mergeDispatched = true
+      const islandOverrideStartedAt = startWysiwygPerfSpan()
       setOptimisticStructuralIslandOverride({
         nodeId: result.prevNodeId,
         paragraph: previousParagraph,
@@ -3236,6 +3436,16 @@ export default function EditorShell() {
         settleRemovedNodeId: nodeId,
       })
       setOptimisticStructuralRefocusPaint({ nodeId: result.prevNodeId, startedAt })
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", islandOverrideStartedAt, {
+        nodeId: result.prevNodeId,
+        previousNodeId: nodeId,
+        sourceNodeId: nodeId,
+        pageIndex: optimistic.mergedFragment.pageIndex,
+        action: "island-override-setup",
+        operation: "merge",
+        boundarySafeMode: optimistic.mode === "boundary-safe",
+        active: true,
+      })
     })
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", flushStartedAt, {
       nodeId: result.prevNodeId,
@@ -4011,6 +4221,7 @@ export default function EditorShell() {
         source,
         action: reason,
         active: true,
+        latestSettleApplied: false,
         ...extra,
       })
     }
@@ -4103,6 +4314,7 @@ export default function EditorShell() {
             scheduledDelayMs: debounceMs,
             source,
             active: true,
+            latestSettleApplied: true,
           })
           finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "structural-refocus-settled-pagination", structuralSettle.startedAt, {
             nodeId: structuralSettle.newNodeId,
@@ -4110,6 +4322,7 @@ export default function EditorShell() {
             pageIndex: structuralSettle.sourceFragment.pageIndex,
             source,
             active: true,
+            latestSettleApplied: true,
             ...summarizePaginatedForWysiwygPerf(paginated),
           })
         }
@@ -4496,11 +4709,11 @@ export default function EditorShell() {
   const activeOutOfCanvasStructuralIsland = useMemo<ActiveOutOfCanvasStructuralIsland | null>(() => {
     const override = optimisticStructuralIslandOverride
     if (!isTemplateMode || !useOutOfCanvasWysiwygIsland) return null
-    if (!override || override.mode !== "boundary-safe") return null
+    if (!override) return null
     if (flowdocDraftEditorIslandConfig?.nodeId !== override.nodeId) return null
     return {
       nodeId: override.nodeId,
-      mode: "boundary-safe",
+      mode: override.mode,
       fragment: override.fragment,
       pageIndex: override.fragment.pageIndex,
       suppressedPageBreakNodeId: override.suppressedPageBreakNodeId ?? null,
@@ -5742,8 +5955,8 @@ export default function EditorShell() {
         <EditorSubtreePerfProfiler enabled={wysiwygPerfTraceActive} id="left-rail">
           <EditorLeftRail
             mode={leftRailMode}
-            outlineDoc={isTemplateMode ? state.doc : previewDoc}
-            styleDoc={state.doc}
+            outlineDoc={leftRailOutlineDoc}
+            styleDoc={leftRailStyleDoc}
             selectedNodeId={outlineSelectionState.selectedNodeId}
             selectedStyleResource={selectedStyleResource}
             activeOutlineListGroupId={outlineSelectionState.activeListGroupId}

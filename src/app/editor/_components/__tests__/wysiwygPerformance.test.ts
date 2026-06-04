@@ -255,6 +255,41 @@ describe("finishWysiwygPerfSpan", () => {
     expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
   })
 
+  it("records structural attribution metadata without document content", () => {
+    vi.stubGlobal("window", {})
+
+    finishWysiwygPerfSpan(true, "flowdoc-structural-attribution", 10, {
+      nodeId: "cover_note_split",
+      previousNodeId: "cover_note",
+      sourceNodeId: "cover_note",
+      operation: "split",
+      action: "reducer-precomputed-split-fast-path",
+      validationMode: "prevalidated",
+      reducerPath: "precomputed-fast-path",
+      boundarySafeMode: true,
+      affectedPageIndex: 0,
+      optimisticFragmentCount: 123,
+      suppressedPageBreakNodeId: "cover_break",
+      textLength: 42,
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "flowdoc-structural-attribution",
+      nodeId: "cover_note_split",
+      previousNodeId: "cover_note",
+      operation: "split",
+      action: "reducer-precomputed-split-fast-path",
+      validationMode: "prevalidated",
+      reducerPath: "precomputed-fast-path",
+      boundarySafeMode: true,
+      affectedPageIndex: 0,
+      optimisticFragmentCount: 123,
+      suppressedPageBreakNodeId: "cover_break",
+      textLength: 42,
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
   it("mirrors canonical baseline perf events without document content", () => {
     vi.stubGlobal("window", {})
 

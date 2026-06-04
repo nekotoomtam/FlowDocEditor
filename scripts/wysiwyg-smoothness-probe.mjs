@@ -350,6 +350,36 @@ function summarizeDurations(events) {
   }
 }
 
+function summarizeComponentRenderEvents(events) {
+  return events.reduce((acc, event) => {
+    const component = event.componentName ?? event.source ?? "unknown"
+    const current = acc[component] ?? {
+      count: 0,
+      totalMs: 0,
+      maxMs: null,
+      pageIndexes: [],
+      affectedPageIndexes: [],
+      unaffectedPageIndexes: [],
+    }
+    const durationMs = typeof event.durationMs === "number" && Number.isFinite(event.durationMs)
+      ? event.durationMs
+      : 0
+    current.count += 1
+    current.totalMs += durationMs
+    current.maxMs = current.maxMs == null ? durationMs : Math.max(current.maxMs, durationMs)
+    if (typeof event.pageIndex === "number") {
+      if (!current.pageIndexes.includes(event.pageIndex)) current.pageIndexes.push(event.pageIndex)
+      if (event.unaffectedPage === true) {
+        if (!current.unaffectedPageIndexes.includes(event.pageIndex)) current.unaffectedPageIndexes.push(event.pageIndex)
+      } else if (event.active === true) {
+        if (!current.affectedPageIndexes.includes(event.pageIndex)) current.affectedPageIndexes.push(event.pageIndex)
+      }
+    }
+    acc[component] = current
+    return acc
+  }, {})
+}
+
 function summarizeTypingInputPhases(keystrokes) {
   const phases = ["same-line", "wrap-boundary", "after-wrap"]
   return phases.reduce((acc, phase) => {
@@ -563,6 +593,8 @@ function summarizePerfEvents(perfEvents) {
   const flowdocIslandStructuralGuardEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-structural-guard")
   const flowdocIslandBlurHandoffEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-blur-handoff")
   const flowdocStructuralTransactionEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-transaction")
+  const flowdocStructuralAttributionEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-attribution")
+  const flowdocStructuralRenderAttributionEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-render-attribution")
   const flowdocStructuralPaginationScheduleEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-pagination-schedule")
   const inlineEditStructuralRefocusEvents = perfEvents.filter((event) => event.kind === "inline-edit-structural-refocus")
   const optimisticIslandVisibleEvents = perfEvents.filter((event) => event.kind === "enter-key-to-optimistic-island-visible")
@@ -580,6 +612,22 @@ function summarizePerfEvents(perfEvents) {
     acc[key] = (acc[key] ?? 0) + 1
     return acc
   }, {})
+  const structuralAttributionEventsByAction = flowdocStructuralAttributionEvents.reduce((acc, event) => {
+    const key = `${event.operation ?? "unknown"}:${event.action ?? "unknown"}`
+    acc[key] = (acc[key] ?? 0) + 1
+    return acc
+  }, {})
+  const structuralRenderComponentSummary = summarizeComponentRenderEvents(flowdocStructuralRenderAttributionEvents)
+  const structuralRenderPageViewEvents = flowdocStructuralRenderAttributionEvents.filter((event) => event.componentName === "PageView" || event.source === "PageView")
+  const structuralRenderMemoMissEvents = flowdocStructuralRenderAttributionEvents.filter((event) => event.action === "memo-miss")
+  const structuralRenderScopeEvents = flowdocStructuralRenderAttributionEvents.filter((event) => event.action === "render-scope")
+  const structuralRenderedPageIndexes = [...new Set(structuralRenderPageViewEvents
+    .map((event) => event.pageIndex)
+    .filter((value) => typeof value === "number"))]
+  const structuralUnaffectedRenderedPageIndexes = [...new Set(structuralRenderPageViewEvents
+    .filter((event) => event.unaffectedPage === true)
+    .map((event) => event.pageIndex)
+    .filter((value) => typeof value === "number"))]
   const structuralPaginationScheduleEventsByAction = flowdocStructuralPaginationScheduleEvents.reduce((acc, event) => {
     const action = event.action ?? "unknown"
     acc[action] = (acc[action] ?? 0) + 1
@@ -662,6 +710,59 @@ function summarizePerfEvents(perfEvents) {
         total: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "total")),
         events: flowdocStructuralTransactionEvents,
       },
+      structuralAttribution: {
+        count: flowdocStructuralAttributionEvents.length,
+        byAction: structuralAttributionEventsByAction,
+        keydownSplit: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.operation === "split" && event.action === "keydown-total" && event.active !== false)),
+        keydownMerge: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.operation === "merge" && event.action === "keydown-total" && event.active !== false)),
+        currentTextResolve: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "current-text-resolve")),
+        caretResolve: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "caret-resolve")),
+        draftSplitTextResolve: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "draft-split-text-resolve")),
+        replaceDraftText: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "replace-draft-text")),
+        normalize: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "normalize")),
+        assertDocument: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "assert-document")),
+        pushDoc: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "push-doc")),
+        pushPrevalidatedDoc: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "push-prevalidated-doc")),
+        reducerTotal: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "reducer-total")),
+        dispatch: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "dispatch")),
+        inlineEditSessionSetup: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "inline-edit-session-setup")),
+        textSessionSetup: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "text-session-setup")),
+        islandOverrideSetup: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "island-override-setup")),
+        boundarySafeMetadata: summarizeDurations(flowdocStructuralAttributionEvents.filter((event) => event.action === "boundary-safe-metadata")),
+        reducerPrecomputedSplitFastPathCount: flowdocStructuralAttributionEvents.filter((event) => event.action === "reducer-precomputed-split-fast-path").length,
+        reducerPrecomputedMergeFastPathCount: flowdocStructuralAttributionEvents.filter((event) => event.action === "reducer-precomputed-merge-fast-path").length,
+        reducerSplitFallbackCount: flowdocStructuralAttributionEvents.filter((event) => event.action === "reducer-split-fallback-operation").length,
+        reducerMergeFallbackCount: flowdocStructuralAttributionEvents.filter((event) => event.action === "reducer-merge-fallback-operation").length,
+        boundarySafeEvents: flowdocStructuralAttributionEvents.filter((event) => event.boundarySafeMode === true),
+        events: flowdocStructuralAttributionEvents,
+      },
+      structuralRender: {
+        count: flowdocStructuralRenderAttributionEvents.length,
+        componentRenderCountsDuringStructuralTransition: Object.fromEntries(
+          Object.entries(structuralRenderComponentSummary).map(([component, summary]) => [component, summary.count]),
+        ),
+        componentRenderMs: structuralRenderComponentSummary,
+        pagesRenderedDuringStructuralTransition: structuralRenderedPageIndexes.length,
+        renderedPageIndexes: structuralRenderedPageIndexes,
+        unaffectedPagesRenderedCount: structuralUnaffectedRenderedPageIndexes.length,
+        unaffectedPageIndexes: structuralUnaffectedRenderedPageIndexes,
+        memoMissCount: structuralRenderMemoMissEvents.length,
+        memoMissByReason: structuralRenderMemoMissEvents.reduce((acc, event) => {
+          const reason = event.renderReason ?? "unknown"
+          acc[reason] = (acc[reason] ?? 0) + 1
+          return acc
+        }, {}),
+        affectedPageCount: Math.max(0, ...structuralRenderScopeEvents
+          .map((event) => event.affectedPageCount)
+          .filter((value) => typeof value === "number")),
+        totalPageCount: Math.max(0, ...structuralRenderScopeEvents
+          .map((event) => event.totalPageCount)
+          .filter((value) => typeof value === "number")),
+        fragmentsRenderedDuringStructuralTransition: structuralRenderPageViewEvents.reduce((sum, event) => (
+          sum + (typeof event.fragmentCount === "number" ? event.fragmentCount : 0)
+        ), 0),
+        events: flowdocStructuralRenderAttributionEvents,
+      },
       structuralPaginationSchedule: {
         count: flowdocStructuralPaginationScheduleEvents.length,
         scheduledCount: structuralPaginationScheduleEventsByAction.scheduled ?? 0,
@@ -703,6 +804,8 @@ function summarizePerfEvents(perfEvents) {
       ...summarizeDurations(editorActionDispatchEvents),
       byCommand: editorActionDispatchByCommand,
     },
+    browserPreviewPagination: summarizeDurations(browserPreviewPaginationEvents),
+    rawBrowserPreviewPaginationEvents: browserPreviewPaginationEvents,
     editorCanvasCommit: summarizeDurations(canvasCommitEvents),
   }
 }
@@ -1139,6 +1242,56 @@ async function waitForWysiwygPerfEvent(page, kind, timeoutMs = READY_TIMEOUT_MS)
   } catch {
     return false
   }
+}
+
+async function startStructuralLongTaskCapture(page) {
+  await page.evaluate(() => {
+    const existingObserver = window.__flowDocStructuralLongTaskObserver
+    if (existingObserver && typeof existingObserver.disconnect === "function") {
+      existingObserver.disconnect()
+    }
+    window.__flowDocStructuralProbeStartedAt = performance.now()
+    window.__flowDocStructuralLongTasks = []
+    try {
+      const observer = new PerformanceObserver((list) => {
+        const tasks = window.__flowDocStructuralLongTasks ?? []
+        for (const entry of list.getEntries()) {
+          tasks.push({
+            name: entry.name,
+            startTime: entry.startTime,
+            duration: entry.duration,
+          })
+        }
+        window.__flowDocStructuralLongTasks = tasks
+      })
+      observer.observe({ entryTypes: ["longtask"] })
+      window.__flowDocStructuralLongTaskObserver = observer
+    } catch {
+      window.__flowDocStructuralLongTaskObserver = null
+    }
+  })
+}
+
+async function readStructuralLongTaskSummary(page) {
+  return await page.evaluate(() => {
+    const startedAt = window.__flowDocStructuralProbeStartedAt
+    const tasks = Array.isArray(window.__flowDocStructuralLongTasks)
+      ? window.__flowDocStructuralLongTasks
+      : []
+    const firstWindowTasks = typeof startedAt === "number"
+      ? tasks.filter((task) => task.startTime >= startedAt && task.startTime <= startedAt + 1000)
+      : tasks
+    const totalBlockingMs = firstWindowTasks.reduce((sum, task) => (
+      sum + Math.max(0, task.duration - 50)
+    ), 0)
+    return {
+      supported: window.__flowDocStructuralLongTaskObserver != null,
+      count: firstWindowTasks.length,
+      longestMs: firstWindowTasks.reduce((max, task) => Math.max(max, task.duration), 0) || null,
+      totalBlockingMs,
+      tasks: firstWindowTasks.slice(0, 10),
+    }
+  })
 }
 
 async function waitForEditorActionDispatch(page, commandType, timeoutMs = READY_TIMEOUT_MS) {
@@ -3283,6 +3436,10 @@ async function waitForNodeFragmentPresent(page, nodeId, timeoutMs = 5000) {
 async function pressEnterForOptimisticRefocus(page, previousNodeId) {
   const startedAt = await page.evaluate(() => performance.now())
   await page.keyboard.press("Enter")
+  const keyPressReturnedAt = await page.evaluate(() => performance.now())
+  const firstRafAt = await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => resolve(performance.now()))
+  }))
   let island = await waitForActiveFlowdocDraftIsland(page, previousNodeId, 10000)
   if (!island.nodeId) {
     const fallbackNodeId = await page.evaluate((previousNodeId) => {
@@ -3302,6 +3459,8 @@ async function pressEnterForOptimisticRefocus(page, previousNodeId) {
     newNodeId: island.nodeId,
     island,
     enterStartedAt: startedAt,
+    enterKeyPressDurationMs: keyPressReturnedAt - startedAt,
+    firstRafMs: firstRafAt - startedAt,
     enterToObservedIslandMs: endedAt - startedAt,
   }
 }
@@ -3381,8 +3540,10 @@ async function runStructuralRefocusSafetyProbe(page) {
   }
   await waitForDoubleAnimationFrame(page)
   await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+  await startStructuralLongTaskCapture(page)
 
   const steps = []
+  let preservedPerfEvents = []
   let latestNodeId = targetNodeId
   let typedBeforeSettle = null
   let undoSafety = null
@@ -3453,6 +3614,7 @@ async function runStructuralRefocusSafetyProbe(page) {
     const splitFragmentPresent = await page.evaluate((nodeId) => (
       document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`).length > 0
     ), latestNodeId)
+    preservedPerfEvents = preservedPerfEvents.concat(await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? []))
     await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
     const backspaceStartedAt = await page.evaluate(() => performance.now())
     await page.keyboard.press("Backspace")
@@ -3539,6 +3701,7 @@ async function runStructuralRefocusSafetyProbe(page) {
       step.newNodeId,
       structuralNextNodeId,
     )
+    preservedPerfEvents = preservedPerfEvents.concat(await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? []))
     await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
     const backspaceStartedAt = await page.evaluate(() => performance.now())
     await page.keyboard.down("Backspace")
@@ -3746,6 +3909,7 @@ async function runStructuralRefocusSafetyProbe(page) {
       const splitFragmentPresent = await page.evaluate((nodeId) => (
         document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`).length > 0
       ), latestNodeId)
+      preservedPerfEvents = preservedPerfEvents.concat(await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? []))
       await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
       const backspaceStartedAt = await page.evaluate(() => performance.now())
       await page.keyboard.press("Backspace")
@@ -3820,7 +3984,8 @@ async function runStructuralRefocusSafetyProbe(page) {
     steps[0]?.newNodeId ?? latestNodeId,
     structuralNextNodeId,
   )
-  const perfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
+  const longTaskSummary = await readStructuralLongTaskSummary(page)
+  const perfEvents = preservedPerfEvents.concat(await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? []))
   const perfSummary = summarizePerfEvents(perfEvents)
   const structural = perfSummary.flowdocIsland.structuralRefocus
   const structuralEdit = perfSummary.flowdocIsland.structuralEdit
@@ -4038,6 +4203,7 @@ async function runStructuralRefocusSafetyProbe(page) {
       staleSettleIgnoredCount: structural.staleSettleIgnoredCount,
       structuralGuardDroppedCount: perfSummary.flowdocIsland.structuralGuard.droppedCount,
     },
+    longTasks: longTaskSummary,
     structuralExpectedSplit,
     structuralRegression,
     screenshots,
@@ -4061,6 +4227,238 @@ function orderBetween(docState, firstNodeId, lastNodeId) {
 
 function pushUxError(errors, condition, message) {
   if (!condition) errors.push(message)
+}
+
+function maxDuration(summary) {
+  return typeof summary?.maxMs === "number" && Number.isFinite(summary.maxMs)
+    ? summary.maxMs
+    : null
+}
+
+function countDuration(summary) {
+  return typeof summary?.count === "number" ? summary.count : 0
+}
+
+function maxEventNumber(events, field) {
+  const values = events
+    .map((event) => event?.[field])
+    .filter((value) => typeof value === "number" && Number.isFinite(value))
+  return values.length ? Math.max(...values) : null
+}
+
+function firstEventValue(events, field) {
+  for (const event of events) {
+    const value = event?.[field]
+    if (value !== undefined && value !== null) return value
+  }
+  return null
+}
+
+function summarizePaginationStartDelay(scheduleEvents, browserPaginationEvents) {
+  const scheduled = scheduleEvents.find((event) => event.action === "scheduled")
+  const pagination = browserPaginationEvents[0] ?? null
+  if (!scheduled || !pagination) return null
+  const delay = pagination.startedAt - scheduled.startedAt
+  return Number.isFinite(delay) ? Math.max(0, delay) : null
+}
+
+function chooseLargestPhase(timings) {
+  const candidates = Object.entries(timings)
+    .filter(([key, value]) => key.endsWith("Ms") && typeof value === "number" && Number.isFinite(value))
+    .sort((a, b) => b[1] - a[1])
+  if (candidates.length === 0) return { largestPhase: null, largestPhaseMs: null }
+  const [largestPhase, largestPhaseMs] = candidates[0]
+  return { largestPhase, largestPhaseMs }
+}
+
+function buildStructuralPerformanceAttribution({
+  probeResult,
+  structuralRegression,
+  uxVerification,
+  consoleNodeNotFoundErrorCount,
+  consoleErrors,
+  pageErrors,
+  probeDocument,
+}) {
+  if (!probeResult.structuralRefocusSafety) return null
+  const perfSummary = probeResult.perfEvents ?? {}
+  const island = perfSummary.flowdocIsland ?? {}
+  const structuralTransaction = island.structuralTransaction ?? {}
+  const structuralAttribution = island.structuralAttribution ?? {}
+  const structuralRender = island.structuralRender ?? {}
+  const structuralRefocus = island.structuralRefocus ?? {}
+  const structuralPaginationSchedule = island.structuralPaginationSchedule ?? {}
+  const structuralEdit = island.structuralEdit ?? {}
+  const structuralGuard = island.structuralGuard ?? {}
+  const latency = probeResult.structuralLatency ?? {}
+  const safety = probeResult.structuralRefocusSafety
+  const firstStep = safety.steps?.[0] ?? null
+  const mode = probeResult.action?.mode ?? PROBE_MODE
+  const file = reportFilePath(probeDocument?.path)
+  const splitText = probeResult.action?.structuralMidSplitText ?? null
+  const targetNodeId = probeResult.targetNodeId
+  const nextNodeId = probeResult.action?.structuralNextNodeId ?? null
+  const newNodeId = firstStep?.newNodeId ??
+    safety.backspaceAfterDispatchSafety?.newNodeId ??
+    safety.backspaceRapidSafety?.newNodeId ??
+    null
+  const splitStoredDocument = safety.backspaceAfterDispatchSafety?.splitStoredDocument ??
+    safety.backspaceRapidSafety?.splitStoredDocument ??
+    structuralRegression?.storedDocument ??
+    null
+  const browserPaginationEvents = perfSummary.rawBrowserPreviewPaginationEvents ?? []
+  const scheduleEvents = structuralPaginationSchedule.events ?? []
+  const attributionEvents = structuralAttribution.events ?? []
+  const transactionEvents = structuralTransaction.events ?? []
+  const optimisticEvents = transactionEvents.filter((event) => event.action === "optimistic-pagination")
+  const splitOptimisticEvents = optimisticEvents.filter((event) => event.operation === "split")
+  const mergeOptimisticEvents = optimisticEvents.filter((event) => event.operation === "merge")
+  const boundarySafeEvents = structuralAttribution.boundarySafeEvents ?? []
+  const firstBoundarySafeEvent = boundarySafeEvents[0] ?? optimisticEvents.find((event) => event.optimisticMode === "boundary-safe") ?? null
+  const correctnessErrors = []
+  if (uxVerification?.errors?.length) correctnessErrors.push(...uxVerification.errors)
+  if (consoleNodeNotFoundErrorCount > 0) correctnessErrors.push("node-not-found console error detected")
+  if (consoleErrors.length > 0) correctnessErrors.push("browser console errors detected")
+  if (pageErrors.length > 0) correctnessErrors.push("browser page errors detected")
+
+  const timings = {
+    enterHandlerMs: maxDuration(structuralAttribution.keydownSplit) ?? latency.keydownSplitHandlerMaxMs ?? firstStep?.enterKeyPressDurationMs ?? null,
+    backspaceHandlerMs: maxDuration(structuralAttribution.keydownMerge) ?? latency.keydownMergeHandlerMaxMs ?? null,
+    draftResolveMs: maxDuration(structuralAttribution.draftSplitTextResolve) ?? latency.draftTextResolveMaxMs ?? null,
+    caretResolveMs: maxDuration(structuralAttribution.caretResolve),
+    currentTextResolveMs: maxDuration(structuralAttribution.currentTextResolve),
+    replaceDraftTextMs: maxDuration(structuralAttribution.replaceDraftText),
+    splitOperationMs: maxDuration(structuralTransaction.splitOperation),
+    mergeOperationMs: maxDuration(structuralTransaction.mergeOperation),
+    documentOperationTotalMs: maxDuration(structuralTransaction.total),
+    normalizeMs: maxDuration(structuralAttribution.normalize),
+    assertDocumentMs: maxDuration(structuralAttribution.assertDocument),
+    pushDocMs: maxDuration(structuralAttribution.pushDoc),
+    pushPrevalidatedDocMs: maxDuration(structuralAttribution.pushPrevalidatedDoc),
+    optimisticPaginationMs: maxDuration(structuralTransaction.optimisticPagination),
+    optimisticSplitRefocusMs: summarizeDurations(splitOptimisticEvents).maxMs,
+    optimisticMergeRefocusMs: summarizeDurations(mergeOptimisticEvents).maxMs,
+    flushSyncMs: maxDuration(structuralTransaction.flushSyncTransition),
+    dispatchMs: maxDuration(structuralAttribution.dispatch) ?? maxDuration(perfSummary.editorActionDispatch),
+    reducerMs: maxDuration(structuralAttribution.reducerTotal),
+    islandOverrideSetupMs: maxDuration(structuralAttribution.islandOverrideSetup),
+    textSessionSetupMs: maxDuration(structuralAttribution.textSessionSetup),
+    structuralTransitionCommitMs: maxDuration(structuralTransaction.flushSyncTransition),
+    firstRafMs: firstStep?.firstRafMs ?? null,
+    firstIslandPaintMs: latency.activeIslandPaintMaxMs ?? firstStep?.enterToObservedIslandMs ?? null,
+    sourceParagraphUpdatedMs: latency.sourceParagraphClearedMs ??
+      (safety.backspaceAfterDispatchSafety?.splitFrame?.sourceImmediatelyCleared === true ||
+      safety.backspaceRapidSafety?.splitFrame?.sourceImmediatelyCleared === true
+        ? 0
+        : null),
+    duplicateTextGoneMs: structuralRegression?.duplicateTextDetected === false ? 0 : null,
+    caretVisibleMs: latency.newCaretPaintMaxMs ?? null,
+    pageBreakSuppressionVisibleMs: structuralRegression?.coverBreakSuppressedDuringActiveIsland === true ? 0 : null,
+    fullPaginationScheduledMs: maxDuration(structuralPaginationSchedule.scheduled),
+    fullPaginationStartDelayMs: summarizePaginationStartDelay(scheduleEvents, browserPaginationEvents),
+    fullPaginationComputeMs: maxDuration(perfSummary.browserPreviewPagination),
+    fullPaginationSettledMs: latency.fullSettleMaxMs ?? null,
+    pagesRenderedDuringStructuralTransition: structuralRender.pagesRenderedDuringStructuralTransition ?? null,
+    totalPageCount: structuralRender.totalPageCount ?? null,
+    affectedPageCount: structuralRender.affectedPageCount ?? null,
+    unaffectedPagesRenderedCount: structuralRender.unaffectedPagesRenderedCount ?? null,
+    fragmentsRenderedDuringStructuralTransition: structuralRender.fragmentsRenderedDuringStructuralTransition ?? null,
+  }
+  const largest = chooseLargestPhase(timings)
+  const validationMode = countDuration(structuralAttribution.pushPrevalidatedDoc) > 0 &&
+    countDuration(structuralAttribution.pushDoc) > 0
+    ? "mixed"
+    : countDuration(structuralAttribution.pushPrevalidatedDoc) > 0
+      ? "prevalidated"
+      : countDuration(structuralAttribution.pushDoc) > 0
+        ? "full"
+        : null
+  const fullSettleBlocksFirstPaint = typeof timings.fullPaginationSettledMs === "number" &&
+    typeof timings.firstIslandPaintMs === "number" &&
+    timings.fullPaginationSettledMs <= timings.firstIslandPaintMs
+  const notes = []
+  if (timings.flushSyncMs != null && timings.optimisticPaginationMs != null && timings.flushSyncMs > timings.optimisticPaginationMs) {
+    notes.push("flushSync/React transition exceeds optimistic pagination")
+  }
+  if (timings.fullPaginationSettledMs != null && timings.firstIslandPaintMs != null && timings.fullPaginationSettledMs > timings.firstIslandPaintMs) {
+    notes.push("full pagination settles after first island paint")
+  }
+  if ((structuralAttribution.reducerPrecomputedSplitFastPathCount ?? 0) > 0 || (structuralAttribution.reducerPrecomputedMergeFastPathCount ?? 0) > 0) {
+    notes.push("reducer precomputed structural fast path was used")
+  }
+  if ((structuralAttribution.reducerSplitFallbackCount ?? 0) > 0 || (structuralAttribution.reducerMergeFallbackCount ?? 0) > 0) {
+    notes.push("a reducer fallback recomputed a structural operation")
+  }
+
+  return {
+    mode,
+    file,
+    targetNodeId,
+    nextNodeId,
+    splitText,
+    passed: Boolean((!uxVerification || uxVerification.passed) && (!structuralRegression || structuralRegression.ok) && consoleNodeNotFoundErrorCount === 0 && consoleErrors.length === 0 && pageErrors.length === 0),
+    sampleCount: 1,
+    correctness: {
+      activeNodeMissingFromDocument: structuralRegression?.activeNodeMissingFromDocument ?? null,
+      ghostFragmentDetected: structuralRegression?.ghostFragmentDetected ?? null,
+      duplicateTextDetected: structuralRegression?.duplicateTextDetected ?? null,
+      invalidDocumentDetected: structuralRegression?.invalidDocumentDetected ?? null,
+      consoleNodeNotFoundErrorCount,
+      documentOrderAfterEnter: nextNodeId && newNodeId
+        ? orderBetween(splitStoredDocument, targetNodeId, nextNodeId)
+        : [],
+      documentOrderAfterBackspace: nextNodeId && (isEnterBackspaceProbeMode(mode) || isBackspaceRapidProbeMode(mode))
+        ? orderBetween(structuralRegression?.storedDocument, targetNodeId, nextNodeId)
+        : [],
+    },
+    timings: {
+      ...timings,
+      boundarySafeMode: firstBoundarySafeEvent
+        ? firstBoundarySafeEvent.optimisticMode === "boundary-safe" || firstBoundarySafeEvent.boundarySafeMode === true
+        : null,
+      optimisticFragmentCount: maxEventNumber(optimisticEvents, "optimisticFragmentCount") ?? maxEventNumber(optimisticEvents, "fragmentCount"),
+      affectedPageIndex: firstEventValue(boundarySafeEvents, "affectedPageIndex") ?? firstEventValue(optimisticEvents, "pageIndex"),
+      suppressedPageBreakNodeId: firstEventValue(boundarySafeEvents, "suppressedPageBreakNodeId"),
+      validationMode,
+      longTaskCount: probeResult.longTasks?.count ?? 0,
+      longestMainThreadTaskMs: probeResult.longTasks?.longestMs ?? null,
+      totalBlockingTimeApproxMs: probeResult.longTasks?.totalBlockingMs ?? null,
+    },
+    counters: {
+      splitOperationCount: countDuration(structuralTransaction.splitOperation),
+      mergeOperationCount: countDuration(structuralTransaction.mergeOperation),
+      reducerSplitFallbackCount: structuralAttribution.reducerSplitFallbackCount ?? 0,
+      reducerMergeFallbackCount: structuralAttribution.reducerMergeFallbackCount ?? 0,
+      reducerPrecomputedSplitFastPathCount: structuralAttribution.reducerPrecomputedSplitFastPathCount ?? 0,
+      reducerPrecomputedMergeFastPathCount: structuralAttribution.reducerPrecomputedMergeFastPathCount ?? 0,
+      scheduledPaginationCount: structuralPaginationSchedule.scheduledCount ?? 0,
+      completedPaginationCount: structuralPaginationSchedule.completedCount ?? 0,
+      supersededPaginationCount: structuralPaginationSchedule.supersededCount ?? 0,
+      ignoredStalePaginationCount: structuralRefocus.staleSettleIgnoredCount ?? 0,
+      structuralGuardAcceptedCount: structuralGuard.acceptedCount ?? 0,
+      structuralGuardDroppedCount: structuralGuard.droppedCount ?? 0,
+      longTaskCount: probeResult.longTasks?.count ?? 0,
+      structuralSplitEventCount: structuralEdit.splitParagraphCount ?? 0,
+      structuralMergeEventCount: structuralEdit.mergeParagraphCount ?? 0,
+      pagesRenderedDuringStructuralTransition: structuralRender.pagesRenderedDuringStructuralTransition ?? 0,
+      totalPageCount: structuralRender.totalPageCount ?? 0,
+      affectedPageCount: structuralRender.affectedPageCount ?? 0,
+      unaffectedPagesRenderedCount: structuralRender.unaffectedPagesRenderedCount ?? 0,
+    },
+    attribution: {
+      ...largest,
+      suspectedBottleneck: largest.largestPhase ?? null,
+      fullPaginationBlocksFirstPaint: fullSettleBlocksFirstPaint,
+      latestSettleApplied: (structuralPaginationSchedule.events ?? []).some((event) => event.latestSettleApplied === true),
+      componentRenderCountsDuringStructuralTransition: structuralRender.componentRenderCountsDuringStructuralTransition ?? {},
+      componentRenderMs: structuralRender.componentRenderMs ?? {},
+      renderedPageIndexes: structuralRender.renderedPageIndexes ?? [],
+      memoMissCount: structuralRender.memoMissCount ?? 0,
+      memoMissByReason: structuralRender.memoMissByReason ?? {},
+      notes,
+    },
+    errors: correctnessErrors,
+  }
 }
 
 function buildLongMockUxVerification({ probeResult, structuralRegression, consoleNodeNotFoundErrorCount, consoleErrors, pageErrors, probeDocument }) {
@@ -4282,6 +4680,15 @@ async function runProbe() {
       pageErrors,
       probeDocument,
     })
+    const performanceAttribution = buildStructuralPerformanceAttribution({
+      probeResult,
+      structuralRegression,
+      uxVerification,
+      consoleNodeNotFoundErrorCount: consoleNodeNotFoundErrors.length,
+      consoleErrors,
+      pageErrors,
+      probeDocument,
+    })
     const uxVerificationOk = !uxVerification || uxVerification.passed
     const report = {
       ok: consoleErrors.length === 0 && pageErrors.length === 0 && typingLayerOk && editExitOk && pointerHitTestOk && scrollAnchoringOk && blurHandoffOk && structuralRefocusSafetyOk && structuralRegressionOk && uxVerificationOk,
@@ -4304,7 +4711,9 @@ async function runProbe() {
       ...(probeResult.structuralRefocusSafety ? { structuralRefocusSafety: probeResult.structuralRefocusSafety } : {}),
       ...(structuralRegression ? { structuralRegression } : {}),
       ...(uxVerification ? { uxVerification } : {}),
+      ...(performanceAttribution ? { performanceAttribution } : {}),
       ...(probeResult.structuralLatency ? { structuralLatency: probeResult.structuralLatency } : {}),
+      ...(probeResult.longTasks ? { longTasks: probeResult.longTasks } : {}),
       ...(probeResult.typingInputPhases ? { typingInputPhases: probeResult.typingInputPhases } : {}),
       ...(probeResult.heldInput ? { heldInput: probeResult.heldInput } : {}),
       ...(probeResult.activeReflowHandoff ? { activeReflowHandoff: probeResult.activeReflowHandoff } : {}),

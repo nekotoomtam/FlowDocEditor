@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useRef, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react"
+import { Profiler, memo, useCallback, useRef, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ProfilerOnRenderCallback, type WheelEvent as ReactWheelEvent } from "react"
 import type { TextMeasurer } from "@/layout"
 import {
   resolveFragmentBoxLayoutPrimitives,
@@ -163,7 +163,7 @@ export type CanvasTableAction = "add-column" | "add-row" | "delete-column" | "de
 
 export interface ActiveOutOfCanvasStructuralIsland {
   nodeId: string
-  mode: "boundary-safe"
+  mode: "same-page" | "boundary-safe"
   fragment: PageFragment
   pageIndex: number
   suppressedPageBreakNodeId?: string | null
@@ -3761,6 +3761,16 @@ function pageHasSuppressedBoundarySafePageBreak(
   return pageHasAnyNodeFragment(page, suppressedPageBreakNodeId)
 }
 
+function pageIsAffectedByStructuralIsland(
+  page: PaginatedPage,
+  activeIsland: ActiveOutOfCanvasStructuralIsland | null | undefined,
+): boolean {
+  if (!activeIsland) return false
+  if (page.index === activeIsland.pageIndex) return true
+  if (activeIsland.mode !== "boundary-safe") return false
+  return pageHasAnyNodeFragment(page, activeIsland.suppressedPageBreakNodeId ?? null)
+}
+
 export function pageViewScopedEditPropsAffectPage(
   page: PaginatedPage,
   props: PageViewScopedEditProps,
@@ -3780,53 +3790,127 @@ export function pageViewScopedEditPropsAffectPage(
   return props.wysiwygTextPointerFragments.some((target) => target.fragment.pageIndex === page.index)
 }
 
+export function pageViewStructuralTransitionAffectsPage(
+  page: PaginatedPage,
+  props: PageViewScopedEditProps,
+): boolean {
+  if (!props.activeOutOfCanvasStructuralIsland) return false
+  return pageViewScopedEditPropsAffectPage(page, props)
+}
+
+function canIgnoreStructuralSnapshotChangeForUnrelatedPage(
+  prev: Readonly<PageViewProps>,
+  next: Readonly<PageViewProps>,
+): boolean {
+  if (!prev.activeOutOfCanvasStructuralIsland && !next.activeOutOfCanvasStructuralIsland) return false
+  return !pageViewStructuralTransitionAffectsPage(prev.page, prev) &&
+    !pageViewStructuralTransitionAffectsPage(next.page, next)
+}
+
+function recordStructuralPageMemoMiss(
+  prev: Readonly<PageViewProps>,
+  next: Readonly<PageViewProps>,
+  reason: string,
+): void {
+  const activeIsland = next.activeOutOfCanvasStructuralIsland ?? prev.activeOutOfCanvasStructuralIsland
+  if (!activeIsland) return
+  const page = next.page ?? prev.page
+  const affected = pageViewStructuralTransitionAffectsPage(prev.page, prev) ||
+    pageViewStructuralTransitionAffectsPage(next.page, next)
+  recordWysiwygPerfEvent(false, {
+    kind: "flowdoc-structural-render-attribution",
+    startedAt: startWysiwygPerfSpan(),
+    durationMs: 0,
+    nodeId: activeIsland.nodeId,
+    pageIndex: page.index,
+    affectedPageIndex: activeIsland.pageIndex,
+    componentName: "PageViewMemo",
+    source: "PageViewMemo",
+    action: "memo-miss",
+    renderReason: reason,
+    optimisticMode: activeIsland.mode,
+    active: affected,
+    unaffectedPage: !affected,
+  })
+}
+
 function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<PageViewProps>): boolean {
+  const ignoreStructuralSnapshotChange = canIgnoreStructuralSnapshotChangeForUnrelatedPage(prev, next)
   for (const key of Object.keys(prev) as Array<keyof PageViewProps>) {
+    if ((key === "doc" || key === "page") && ignoreStructuralSnapshotChange) continue
+    if (key === "isLayoutLoading" && ignoreStructuralSnapshotChange) continue
     if (PAGE_VIEW_TRANSIENT_PROP_KEYS.includes(key)) continue
     if (PAGE_VIEW_SCOPED_EDIT_PROP_KEYS.includes(key)) continue
-    if (prev[key] !== next[key]) return false
+    if (prev[key] !== next[key]) {
+      recordStructuralPageMemoMiss(prev, next, `prop:${String(key)}`)
+      return false
+    }
   }
 
   const scopedEditPropsChanged = PAGE_VIEW_SCOPED_EDIT_PROP_KEYS.some((key) => prev[key] !== next[key])
   if (scopedEditPropsChanged && (
     pageViewScopedEditPropsAffectPage(prev.page, prev) ||
     pageViewScopedEditPropsAffectPage(next.page, next)
-  )) return false
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "scoped-edit-props")
+    return false
+  }
 
   if (prev.resizeDrag !== next.resizeDrag && (
     resizeDragAffectsPage(prev.page, prev.resizeDrag) ||
     resizeDragAffectsPage(next.page, next.resizeDrag)
-  )) return false
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "resize-drag")
+    return false
+  }
 
   if (prev.minHeightDrag !== next.minHeightDrag && (
     minHeightDragAffectsPage(prev.page, prev.minHeightDrag) ||
     minHeightDragAffectsPage(next.page, next.minHeightDrag)
-  )) return false
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "min-height-drag")
+    return false
+  }
 
   if (prev.marginDrag !== next.marginDrag && (
     marginDragAffectsPage(prev.sectionIndex, prev.marginDrag) ||
     marginDragAffectsPage(next.sectionIndex, next.marginDrag)
-  )) return false
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "margin-drag")
+    return false
+  }
 
   if (prev.marginEditMode !== next.marginEditMode && (
     marginEditModeAffectsPage(prev.sectionIndex, prev.marginEditMode) ||
     marginEditModeAffectsPage(next.sectionIndex, next.marginEditMode)
-  )) return false
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "margin-edit-mode")
+    return false
+  }
 
   if (prev.headerFooterEditMode !== next.headerFooterEditMode && (
     headerFooterEditModeAffectsPage(prev.sectionIndex, prev.headerFooterEditMode) ||
     headerFooterEditModeAffectsPage(next.sectionIndex, next.headerFooterEditMode)
-  )) return false
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "header-footer-edit-mode")
+    return false
+  }
 
   if (prev.headerFooterReservedDrag !== next.headerFooterReservedDrag && (
     headerFooterReservedDragAffectsPage(prev.sectionIndex, prev.headerFooterReservedDrag) ||
     headerFooterReservedDragAffectsPage(next.sectionIndex, next.headerFooterReservedDrag)
-  )) return false
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "header-footer-reserved-drag")
+    return false
+  }
 
   if (prev.headerFooterZoneScroll !== next.headerFooterZoneScroll && (
     headerFooterZoneScrollAffectsPage(prev.sectionIndex, prev.headerFooterZoneScroll) ||
     headerFooterZoneScrollAffectsPage(next.sectionIndex, next.headerFooterZoneScroll)
-  )) return false
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "header-footer-zone-scroll")
+    return false
+  }
 
   return true
 }
@@ -3953,6 +4037,37 @@ function EditorCanvasPageSlot({
   ...pageViewProps
 }: EditorCanvasPageSlotProps) {
   const { page, pageKey, scale } = pageViewProps
+  const structuralIsland = pageViewProps.activeOutOfCanvasStructuralIsland
+  const structuralTraceActive = structuralIsland !== null
+  const pageAffectedByStructuralIsland = pageIsAffectedByStructuralIsland(page, structuralIsland)
+  const handlePageViewProfilerRender = useCallback<ProfilerOnRenderCallback>((
+    _id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    if (!structuralIsland) return
+    recordWysiwygPerfEvent(false, {
+      kind: "flowdoc-structural-render-attribution",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      nodeId: structuralIsland.nodeId,
+      pageIndex: page.index,
+      affectedPageIndex: structuralIsland.pageIndex,
+      fragmentCount: page.fragments.length,
+      componentName: "PageView",
+      source: "PageView",
+      action: phase,
+      optimisticMode: structuralIsland.mode,
+      active: pageAffectedByStructuralIsland,
+      unaffectedPage: !pageAffectedByStructuralIsland,
+    })
+  }, [page.fragments.length, page.index, pageAffectedByStructuralIsland, structuralIsland])
+  const pageView = <MemoizedPageView {...pageViewProps} />
 
   return (
     <div>
@@ -3965,7 +4080,11 @@ function EditorCanvasPageSlot({
         setPageFrameRef={setPageFrameRef}
         setPageOverlayRef={setPageOverlayRef}
       >
-        <MemoizedPageView {...pageViewProps} />
+        {structuralTraceActive ? (
+          <Profiler id={`page-view-${page.index}`} onRender={handlePageViewProfilerRender}>
+            {pageView}
+          </Profiler>
+        ) : pageView}
       </LazyPageFrame>
     </div>
   )
@@ -3975,12 +4094,31 @@ function areEditorCanvasPageSlotPropsEqual(
   prev: Readonly<EditorCanvasPageSlotProps>,
   next: Readonly<EditorCanvasPageSlotProps>,
 ): boolean {
-  if (prev.rendered !== next.rendered) return false
-  if (prev.page !== next.page) return false
-  if (prev.pageKey !== next.pageKey) return false
-  if (prev.scale !== next.scale) return false
-  if (prev.setPageFrameRef !== next.setPageFrameRef) return false
-  if (prev.setPageOverlayRef !== next.setPageOverlayRef) return false
+  if (prev.rendered !== next.rendered) {
+    recordStructuralPageMemoMiss(prev, next, "slot-rendered")
+    return false
+  }
+  const ignoreStructuralSnapshotChange = canIgnoreStructuralSnapshotChangeForUnrelatedPage(prev, next)
+  if (prev.page !== next.page && !ignoreStructuralSnapshotChange) {
+    recordStructuralPageMemoMiss(prev, next, "slot-page")
+    return false
+  }
+  if (prev.pageKey !== next.pageKey) {
+    recordStructuralPageMemoMiss(prev, next, "slot-page-key")
+    return false
+  }
+  if (prev.scale !== next.scale) {
+    recordStructuralPageMemoMiss(prev, next, "slot-scale")
+    return false
+  }
+  if (prev.setPageFrameRef !== next.setPageFrameRef) {
+    recordStructuralPageMemoMiss(prev, next, "slot-frame-ref")
+    return false
+  }
+  if (prev.setPageOverlayRef !== next.setPageOverlayRef) {
+    recordStructuralPageMemoMiss(prev, next, "slot-overlay-ref")
+    return false
+  }
   if (!prev.rendered && !next.rendered) return true
   return arePageViewPropsEqual(prev, next)
 }
@@ -4515,6 +4653,47 @@ export function EditorCanvas({
     wysiwygDraftVisualPreview,
     wysiwygTextPointerFragments,
   ])
+  const structuralRenderScope = useMemo(() => {
+    const activeIsland = activeOutOfCanvasStructuralIsland
+    if (!activeIsland) return null
+    const affectedPageIndexes: number[] = []
+    let totalPageCountForScope = 0
+    for (const section of sections) {
+      for (const page of section.pages) {
+        totalPageCountForScope += 1
+        if (pageIsAffectedByStructuralIsland(page, activeIsland)) {
+          affectedPageIndexes.push(page.index)
+        }
+      }
+    }
+    return {
+      nodeId: activeIsland.nodeId,
+      pageIndex: activeIsland.pageIndex,
+      affectedPageIndexes,
+      affectedPageCount: affectedPageIndexes.length,
+      totalPageCount: totalPageCountForScope,
+      mode: activeIsland.mode,
+    }
+  }, [activeOutOfCanvasStructuralIsland, sections])
+
+  useEffect(() => {
+    if (!structuralRenderScope) return
+    recordWysiwygPerfEvent(false, {
+      kind: "flowdoc-structural-render-attribution",
+      startedAt: startWysiwygPerfSpan(),
+      durationMs: 0,
+      nodeId: structuralRenderScope.nodeId,
+      pageIndex: structuralRenderScope.pageIndex,
+      pageIndexes: structuralRenderScope.affectedPageIndexes.join(","),
+      totalPageCount: structuralRenderScope.totalPageCount,
+      affectedPageCount: structuralRenderScope.affectedPageCount,
+      componentName: "EditorCanvas",
+      source: "EditorCanvas",
+      action: "render-scope",
+      optimisticMode: structuralRenderScope.mode,
+      active: true,
+    })
+  })
 
   useEffect(() => {
     setLazyVisiblePageKeys((current) => {

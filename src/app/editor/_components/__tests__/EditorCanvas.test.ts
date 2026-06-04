@@ -12,6 +12,7 @@ import {
   buildWysiwygTextPointerFragmentIndex,
   EditorCanvas,
   pageViewScopedEditPropsAffectPage,
+  pageViewStructuralTransitionAffectsPage,
   resolveInlineEditVisualOffsetY,
   shouldRenderLazyPageFrame,
   shouldSuppressStalePageBreakForActiveWysiwygIsland,
@@ -884,6 +885,22 @@ function renderCanvas(
   }))
 }
 
+function scopedEditProps(overrides: Partial<Parameters<typeof pageViewStructuralTransitionAffectsPage>[1]> = {}) {
+  return {
+    selectedNodeId: null,
+    selectionAnchorNodeId: null,
+    inlineEditNodeId: null,
+    inlineEditPageIndex: null,
+    wysiwygTextDraftNodeId: null,
+    wysiwygDraftVisualPreview: null,
+    suppressedCanvasTextNodeIds: new Set<string>(),
+    activeOutOfCanvasStructuralIsland: null,
+    wysiwygTableCellDraftVisualChromeByPageIndex: new Map<number, PageFragment[]>(),
+    wysiwygTextPointerFragments: [],
+    ...overrides,
+  }
+}
+
 function headerFooterHitArea(markup: string, zone: "header" | "footer"): string {
   return markup.match(new RegExp(`<rect[^>]*data-testid="header-footer-zone-hit-area"[^>]*data-zone="${zone}"[^>]*>`))?.[0] ?? ""
 }
@@ -1079,6 +1096,39 @@ describe("EditorCanvas page memoization", () => {
 
     expect(pageViewScopedEditPropsAffectPage(activePage, props)).toBe(true)
     expect(pageViewScopedEditPropsAffectPage(otherPage, props)).toBe(false)
+  })
+
+  it("scopes same-page structural island document changes to the affected page", () => {
+    const activePage = pageWithFragments(0, [textFragment("p2", "After split", 92)])
+    const otherPage = pageWithFragments(1, [textFragment("other-p", "Other", 72, { pageIndex: 1 })])
+    const props = scopedEditProps({
+      activeOutOfCanvasStructuralIsland: boundarySafeIsland("p2", {
+        mode: "same-page",
+        suppressedPageBreakNodeId: null,
+      }),
+    })
+
+    expect(pageViewStructuralTransitionAffectsPage(activePage, props)).toBe(true)
+    expect(pageViewStructuralTransitionAffectsPage(otherPage, props)).toBe(false)
+  })
+
+  it("keeps only the targeted boundary-safe page-break page in structural render scope", () => {
+    const sourcePage = pageWithFragments(0, [textFragment("p1", "Before split", 72)])
+    const suppressedBreakPage = pageWithFragments(1, [
+      pageBreakFragment("break", 112, { pageIndex: 1 }),
+    ])
+    const unrelatedBreakPage = pageWithFragments(2, [
+      pageBreakFragment("other-break", 112, { pageIndex: 2 }),
+    ])
+    const props = scopedEditProps({
+      activeOutOfCanvasStructuralIsland: boundarySafeIsland("p2", {
+        suppressedPageBreakNodeId: "break",
+      }),
+    })
+
+    expect(pageViewStructuralTransitionAffectsPage(sourcePage, props)).toBe(true)
+    expect(pageViewStructuralTransitionAffectsPage(suppressedBreakPage, props)).toBe(true)
+    expect(pageViewStructuralTransitionAffectsPage(unrelatedBreakPage, props)).toBe(false)
   })
 
   it("indexes WYSIWYG pointer fragments by paragraph node", () => {

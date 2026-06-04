@@ -22,7 +22,105 @@ Each entry should include:
 
 ---
 
+## 2026-06-04
+
+### Release 0.6.26 Structural Edit Performance Baseline
+
+Goal: Mark the accepted structural edit performance attribution and React
+render isolation work as the next project release-readiness baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.25` to `0.6.26`.
+- Updated the root lockfile version metadata and project version marker test to
+  assert the accepted `0.6.26` baseline.
+- Updated `docs/VERSIONING.md` with the structural edit performance baseline
+  and retained the persisted document/package schema version boundary.
+
+Files changed:
+
+- `package.json`
+- `package-lock.json`
+- `src/app/__tests__/projectVersion.test.ts`
+- `docs/VERSIONING.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `npm.cmd pkg get version`
+- `npm.cmd run test:app -- src/app/__tests__/projectVersion.test.ts`
+
+Notes:
+
+- No git tag was created; project versions remain release-readiness markers.
+- This patch does not change `DocumentNode.version`, FlowDoc package version,
+  storage package version, pagination semantics, undo/redo, export behavior, or
+  Flow Table behavior.
+
+---
+
 ## 2026-06-03
+
+### Task 9-10 Structural Edit Performance Attribution And Render Isolation
+
+Goal: Attribute and reduce long-mock structural Enter/Backspace latency without
+changing document operations, pagination semantics, renderers, persistence, or
+Flow Table behavior.
+
+Completed:
+
+- Added trace-gated structural attribution for keydown, draft/caret resolution,
+  split/merge operations, reducer fast paths, optimistic pagination, flushSync,
+  render commits, PageView memo misses, and long-task probe output.
+- Scoped structural PageView memoization so unrelated pages can keep their
+  existing page/doc snapshot while the active out-of-canvas island owns the
+  affected page.
+- Deferred non-critical left-rail document/outline selection updates until the
+  structural island has painted, and memoized the left rail shell.
+- Extended the smoothness probe report with component render counts, affected
+  page counts, unaffected page counts, memo-miss reasons, and structured Task 9
+  performance attribution.
+- Added focused canvas scope tests for same-page structural islands and
+  targeted boundary-safe page-break render scope.
+
+Files changed:
+
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/editorReducer.ts`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/shell/EditorLeftRail.tsx`
+- focused editor tests under `src/app/editor/_components/__tests__/`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `git diff --check`
+- Long-mock smokes for `enter-mid-split`, `enter-backspace-immediate`,
+  `enter-rapid`, and `backspace-rapid`.
+
+Observed:
+
+- Final `enter-mid-split` smoke passed with first island paint about `45.5ms`,
+  flushSync about `353.9ms`, and PageView rendering scoped to `1 / 119` pages
+  with `0` unaffected pages rendered during the structural transition.
+- Immediate Enter -> Backspace passed with split/merge reducer fallback counts
+  at `0`, stale settle superseded, and PageView rendering still scoped to
+  `1 / 119` pages.
+
+Notes:
+
+- Timing reports are still single-sample smoke outputs; repeat aggregation is a
+  follow-up if more stable medians are needed.
+- Full pagination settle remains slow but continues to happen after first
+  island paint.
+
+---
 
 ### Release 0.6.25 Structural Editing Gate
 

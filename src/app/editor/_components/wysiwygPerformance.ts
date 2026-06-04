@@ -32,6 +32,8 @@ export type WysiwygPerfEventKind =
   | "flowdoc-island-structural-edit"
   | "flowdoc-island-structural-guard"
   | "flowdoc-structural-transaction"
+  | "flowdoc-structural-attribution"
+  | "flowdoc-structural-render-attribution"
   | "flowdoc-structural-pagination-schedule"
   | "flowdoc-island-blur-handoff"
   | "inline-edit-structural-refocus"
@@ -103,6 +105,18 @@ export interface WysiwygPerfEvent {
   usedFullPaginationBeforeIsland?: boolean
   overflowedPage?: boolean
   optimisticMode?: "same-page" | "boundary-safe"
+  validationMode?: "full" | "prevalidated" | "mixed"
+  boundarySafeMode?: boolean
+  affectedPageIndex?: number | null
+  affectedPageCount?: number
+  totalPageCount?: number
+  unaffectedPage?: boolean
+  componentName?: string
+  renderReason?: string
+  optimisticFragmentCount?: number
+  suppressedPageBreakNodeId?: string | null
+  latestSettleApplied?: boolean
+  reducerPath?: string
 }
 
 export interface FlowDocPerfEvent {
