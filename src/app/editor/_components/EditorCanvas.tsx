@@ -16,14 +16,12 @@ import { canRemoveFlowTableColumn, canRemoveFlowTableRow, getTextRunParagraphTex
 import { tryResolveFlowTableGrid } from "@/document/flowTableGrid"
 import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode } from "@/schema"
 import type { DragSource } from "@/placement/types"
-import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag, MarginEditMode, HeaderFooterEditMode, HeaderFooterReservedDrag } from "./EditorShell"
+import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag, MarginEditMode, HeaderFooterEditMode, HeaderFooterReservedDrag } from "./editorInteractionTypes"
 import type { FragmentDrift } from "./comparePagination"
 import { getRowGeometry } from "@/placement/geometry"
-import {
-  buildWysiwygDraftParagraphLayout,
-  ParagraphTextSurface,
-  type WysiwygTextPointerFragmentTarget,
-} from "./ParagraphTextSurface"
+import { buildWysiwygDraftParagraphLayout } from "./wysiwygDraftParagraphLayout"
+import { ParagraphTextSurface } from "./ParagraphTextSurface"
+import type { WysiwygTextPointerFragmentTarget } from "./wysiwygTextSelectionState"
 import type { ParagraphTextSurfaceStructuralEditGuard } from "./structuralEdit/paragraphTextSurfaceFallbackBridge"
 import { getWysiwygFragmentTextRange, resolveCaretOffsetFromPointInFragment } from "./wysiwygCaretMapping"
 import {

@@ -2,7 +2,7 @@ import { getTextRunParagraphText, isTextRunOnlyParagraph } from "@/document"
 import type { TextMeasurer } from "@/layout"
 import type { PaginatedDocument, PageFragment, PaginatedLine } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
-import { buildWysiwygDraftParagraphLayout } from "./ParagraphTextSurface"
+import { buildWysiwygDraftParagraphLayout } from "./wysiwygDraftParagraphLayout"
 
 type FragmentLane = "fragments" | "headerFragments" | "footerFragments"
 

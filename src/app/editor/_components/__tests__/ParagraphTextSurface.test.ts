@@ -2,57 +2,71 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
+  ParagraphTextSurface,
+  WysiwygTextLayer,
+} from "../ParagraphTextSurface"
+import { resolveSelectionOverlayRectsInFragmentWithPerf } from "../WysiwygSelectionOverlayLayer"
+import {
+  resolveTrailingWhitespaceCaretOverlayInFragment,
+  resolveWysiwygCaretFollowScrollDelta,
+  shouldApplyWysiwygNativeHeightPreview,
+} from "../wysiwygCaretViewportState"
+import {
   absoluteInlineEditIndex,
-  areWysiwygDraftSyncPayloadsEqual,
-  areWysiwygImmediateDraftLayoutStatesEqual,
-  areWysiwygImmediateTextEchoStatesEqual,
   buildContinuationBackspaceInput,
   buildInlineEditSliceKey,
   buildSplitEditInput,
-  buildCachedWysiwygDraftParagraphLayout,
   focusElementWithoutScroll,
-  ParagraphTextSurface,
-  buildWysiwygDraftParagraphLayout,
-  buildWysiwygDraftParagraphLines,
-  createWysiwygDraftParagraphLayoutCache,
   getContinuationEditState,
   getInlineEditVisualMode,
+  hasWysiwygTextDraftChange,
   inlineEditTextareaCaretColor,
   inlineEditTextareaOutline,
   inlineEditTextareaTextColor,
-  hasWysiwygTextDraftChange,
   isWysiwygRichTextToolbarFocusTarget,
   isWysiwygTextSessionFocusTarget,
-  paragraphWithWysiwygFragmentRenderProps,
-  resolvePointerSelectionWheelScrollDelta,
   resolveInlineEditTextareaPointerPagePoint,
-  resolveWysiwygCaretFollowScrollDelta,
-  resolveWysiwygLiveTextEcho,
-  resolveSelectionOverlayRectsInFragmentWithPerf,
-  resolveTrailingWhitespaceCaretOverlayInFragment,
-  resolveWysiwygDraftSyncDelayMs,
-  shouldApplyWysiwygNativeHeightPreview,
-  resolveWysiwygTextPointerOffsetFromFragmentTargets,
-  resolveWysiwygPointerSelectionState,
-  resolveWysiwygWordSelectionRange,
   shouldUseInlineEditDocumentLayer,
   shouldUseInlineEditDocumentVisual,
+  shouldUseInlineEditSvgVisual,
   shouldUseNativeInlineEditEnter,
   shouldUseNativeTableCellBoundaryBackspace,
-  shouldUseInlineEditSvgVisual,
+  shouldUseWysiwygTextEngineLayer,
+} from "../inlineEditSurfaceState"
+import {
+  areWysiwygImmediateDraftLayoutStatesEqual,
+  areWysiwygImmediateTextEchoStatesEqual,
+  resolveWysiwygLiveTextEcho,
   shouldFlushWysiwygImmediateVisualState,
   shouldKeepWysiwygImmediateDraftLayout,
-  shouldUseWysiwygTextEngineLayer,
-  WysiwygTextLayer,
-} from "../ParagraphTextSurface"
+} from "../wysiwygImmediateVisualState"
+import {
+  resolvePointerSelectionWheelScrollDelta,
+  resolveWysiwygPointerSelectionState,
+  resolveWysiwygTextPointerOffsetFromFragmentTargets,
+  resolveWysiwygWordSelectionRange,
+} from "../wysiwygTextSelectionState"
+import {
+  areWysiwygDraftSyncPayloadsEqual,
+  resolveWysiwygDraftSyncDelayMs,
+} from "../wysiwygDraftSyncState"
+import {
+  buildCachedWysiwygDraftParagraphLayout,
+  buildWysiwygDraftParagraphLayout,
+  buildWysiwygDraftParagraphLines,
+  createWysiwygDraftParagraphLayoutCache,
+  paragraphWithWysiwygFragmentRenderProps,
+} from "../wysiwygDraftParagraphLayout"
 import {
   FlowdocDraftEditorIslandRoot,
-  resolveDraftIslandStructuralGuardUnlockReason,
-  shouldDropDraftIslandStructuralKeyForGuard,
   shouldQueueDraftIslandPageBoundaryReflow,
   shouldReportDraftIslandHeightPreview,
-  type DraftIslandStructuralEditGuard,
 } from "../FlowdocDraftEditorIslandRoot"
+import {
+  resolveDraftIslandStructuralGuardUnlockReason,
+  shouldDropDraftIslandStructuralKeyForGuard,
+  type DraftIslandStructuralEditGuard,
+} from "../flowdocDraftIslandStructuralGuard"
 import { createOptimisticMergeRefocusPaginated, createOptimisticSplitRefocusPaginated } from "../optimisticStructuralRefocus"
 import type { PageFragment, PaginatedDocument, PaginatedPage } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
