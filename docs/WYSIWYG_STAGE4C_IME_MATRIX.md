@@ -82,7 +82,8 @@ Not covered:
 Useful DevTools probes:
 
 ```js
-document.querySelectorAll('textarea[data-inline-edit-node-id]').length
+document.querySelectorAll('textarea[data-inline-edit-node-id][data-wysiwyg-input-bridge="true"]').length
+document.querySelectorAll('textarea[data-inline-edit-node-id]:not([data-wysiwyg-input-bridge="true"])').length
 document.querySelectorAll('[data-wysiwyg-input-bridge="true"]').length
 document.querySelectorAll('[data-testid="layout-error-badge"]').length
 document.activeElement === document.querySelector('[data-testid="editor-shell"]')
@@ -120,7 +121,7 @@ Steps:
 Expected:
 
 - One hidden `data-wysiwyg-input-bridge="true"` exists.
-- `textarea[data-inline-edit-node-id]` count is `0`.
+- Non-bridge `textarea[data-inline-edit-node-id]` count is `0`.
 - No layout error badge.
 - Visible text remains SVG/document-rendered.
 

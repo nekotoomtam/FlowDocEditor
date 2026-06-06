@@ -1,4 +1,10 @@
 import type { PaginatedDocument, PaginationProfile } from "@/pagination"
+import {
+  getMetricDefinition,
+  getReportSchemaVersion,
+  getTimingAnchorVersion,
+} from "./runtime/editorPerformanceRuntime"
+import type { EditorPerformanceMetricDefinition } from "./runtime/editorPerformanceRuntime"
 
 export type WysiwygPerfEventKind =
   | "inline-edit-draft-update"
@@ -33,6 +39,9 @@ export type WysiwygPerfEventKind =
   | "flowdoc-island-structural-guard"
   | "flowdoc-structural-transaction"
   | "flowdoc-structural-attribution"
+  | "flowdoc-structural-panel-release"
+  | "flowdoc-preview-settle-runtime"
+  | "flowdoc-wysiwyg-draft-runtime"
   | "flowdoc-structural-render-attribution"
   | "flowdoc-structural-pagination-schedule"
   | "flowdoc-island-blur-handoff"
@@ -109,13 +118,34 @@ export interface WysiwygPerfEvent {
   boundarySafeMode?: boolean
   affectedPageIndex?: number | null
   affectedPageCount?: number
+  canvasViewportAffectedPageCount?: number
+  canvasViewportAffectedPages?: string
+  canvasViewportSuppressedPageBreakCount?: number
+  canvasViewportUnrelatedPageBreakSuppressedCount?: number
   totalPageCount?: number
   unaffectedPage?: boolean
   componentName?: string
   renderReason?: string
+  comparatorCount?: number
+  derivedValueCount?: number
   optimisticFragmentCount?: number
   suppressedPageBreakNodeId?: string | null
   latestSettleApplied?: boolean
+  previewSettlePhase?: string
+  previewSettleApplyDecision?: string | null
+  previewSettleLatestAppliedGeneration?: number | null
+  wysiwygDraftSessionBeginCount?: number
+  wysiwygDraftSessionActiveCount?: number
+  wysiwygDraftSessionCommitCount?: number
+  wysiwygDraftSessionCancelCount?: number
+  wysiwygDraftSessionAbortCount?: number
+  wysiwygDraftCompositionStartCount?: number
+  wysiwygDraftCompositionEndCount?: number
+  wysiwygDraftStaleSessionIgnoredCount?: number
+  wysiwygDraftCurrentGeneration?: number
+  wysiwygDraftCurrentPhase?: string
+  wysiwygDraftCurrentNodeId?: string | null
+  wysiwygDraftSource?: string | null
   reducerPath?: string
 }
 
@@ -124,6 +154,20 @@ export interface FlowDocPerfEvent {
   startMs?: number
   durationMs?: number
   detail?: Record<string, unknown>
+}
+
+export function getWysiwygPerformanceReportSchemaVersion(): string {
+  return getReportSchemaVersion()
+}
+
+export function getWysiwygPerformanceTimingAnchorVersion(): string {
+  return getTimingAnchorVersion()
+}
+
+export function getWysiwygPerformanceMetricDefinition(
+  name: string,
+): EditorPerformanceMetricDefinition | null {
+  return getMetricDefinition(name)
 }
 
 declare global {
@@ -143,7 +187,7 @@ declare global {
   }
 }
 
-const MAX_WYSIWYG_PERF_EVENTS = 600
+const MAX_WYSIWYG_PERF_EVENTS = 2000
 const WYSIWYG_PERF_TRACE_QUERY_PARAM = "flowdocWysiwygPerfTrace"
 const WYSIWYG_PERF_TRACE_STORAGE_KEY = "flowdoc.wysiwygPerfTrace"
 const PAGINATION_PROFILE_QUERY_PARAM = "flowdocProfilePagination"

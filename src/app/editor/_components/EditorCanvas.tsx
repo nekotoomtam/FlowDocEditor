@@ -1,6 +1,6 @@
 "use client"
 
-import { Profiler, memo, useCallback, useRef, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ProfilerOnRenderCallback, type WheelEvent as ReactWheelEvent } from "react"
+import { Profiler, memo, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ProfilerOnRenderCallback, type WheelEvent as ReactWheelEvent } from "react"
 import type { TextMeasurer } from "@/layout"
 import {
   resolveFragmentBoxLayoutPrimitives,
@@ -24,6 +24,7 @@ import {
   ParagraphTextSurface,
   type WysiwygTextPointerFragmentTarget,
 } from "./ParagraphTextSurface"
+import type { ParagraphTextSurfaceStructuralEditGuard } from "./structuralEdit/paragraphTextSurfaceFallbackBridge"
 import { getWysiwygFragmentTextRange, resolveCaretOffsetFromPointInFragment } from "./wysiwygCaretMapping"
 import {
   classifyWysiwygTextReflow,
@@ -45,7 +46,21 @@ import { resolveActiveInlineEditPageIndex } from "./editorPageFollow"
 import { buildSelectionContext, type SelectionContextItem } from "./selectionContext"
 import type { WysiwygTextInputKey } from "./useWysiwygTextSession"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
-import { recordWysiwygPerfEvent, startWysiwygPerfSpan } from "./wysiwygPerformance"
+import { recordWysiwygPerfEvent, startWysiwygPerfSpan, type WysiwygPerfEvent } from "./wysiwygPerformance"
+import {
+  canvasViewportPageHasAnyNodeFragmentBridge,
+  canvasViewportPageHasNodeFragmentBridge,
+  createCanvasViewportMetricsBridge,
+  createCanvasViewportRenderScopePerfFields,
+  getCanvasViewportStructuralRenderScopeBridge,
+  pageHasSuppressedBoundarySafePageBreakBridge,
+  pageIsAffectedByStructuralIslandBridge,
+  pageViewScopedEditPropsAffectPageBridge,
+  pageViewStructuralTransitionAffectsPageBridge,
+  shouldRenderLazyPageFrameBridge,
+  shouldSuppressStalePageBreakForActiveWysiwygIslandBridge,
+  type CanvasViewportBridgeStructuralIsland,
+} from "./canvasViewportBridge"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -161,13 +176,7 @@ const CANVAS_PATH_LABELS: Record<SelectionContextItem["type"], string> = {
 
 export type CanvasTableAction = "add-column" | "add-row" | "delete-column" | "delete-row" | "delete-table"
 
-export interface ActiveOutOfCanvasStructuralIsland {
-  nodeId: string
-  mode: "same-page" | "boundary-safe"
-  fragment: PageFragment
-  pageIndex: number
-  suppressedPageBreakNodeId?: string | null
-}
+export type ActiveOutOfCanvasStructuralIsland = CanvasViewportBridgeStructuralIsland
 
 function fragmentSliceIdentity(fragment: PageFragment): string {
   return [
@@ -1084,31 +1093,11 @@ export function shouldSuppressStalePageBreakForActiveWysiwygIsland(input: {
   activeInlineEditDisplayFragment: PageFragment | null
   activeOutOfCanvasStructuralIsland?: ActiveOutOfCanvasStructuralIsland | null
 }): boolean {
-  const { fragment } = input
-  if (fragment.nodeType !== "page-break") return false
-
-  if (
-    input.activeInlineEditIsPlainNativeParagraph &&
-    input.activeInlineEditDisplayFragment != null &&
-    fragment.pageIndex === input.activeInlineEditDisplayFragment.pageIndex &&
-    fragment.y >= input.activeInlineEditDisplayFragment.y
-  ) {
-    return true
-  }
-
-  const activeIsland = input.activeOutOfCanvasStructuralIsland
-  if (!activeIsland || activeIsland.mode !== "boundary-safe") return false
-  if (fragment.pageIndex !== activeIsland.pageIndex) return false
-
-  if (activeIsland.suppressedPageBreakNodeId) {
-    return fragment.nodeId === activeIsland.suppressedPageBreakNodeId
-  }
-
-  const fallbackBottomY = activeIsland.fragment.y + Math.max(
-    activeIsland.fragment.height + PAGE_BREAK_MARKER_HEIGHT * 2,
-    BOUNDARY_SAFE_PAGE_BREAK_SUPPRESSION_FALLBACK_RANGE_PT,
-  )
-  return fragment.y >= activeIsland.fragment.y && fragment.y <= fallbackBottomY
+  return shouldSuppressStalePageBreakForActiveWysiwygIslandBridge({
+    ...input,
+    fallbackRangePt: BOUNDARY_SAFE_PAGE_BREAK_SUPPRESSION_FALLBACK_RANGE_PT,
+    pageBreakMarkerHeight: PAGE_BREAK_MARKER_HEIGHT,
+  })
 }
 
 function fragmentClipPathRect(fragment: PageFragment, page: PaginatedPage, scale: number): {
@@ -1619,6 +1608,7 @@ function ZoneFragments({
   onInlineEditEnd,
   onSplitParagraph,
   onMergeParagraph,
+  onCanStartStructuralEdit,
   onExitListItem,
   onChangeListItemLevel,
   onBackspaceListItemAtStart,
@@ -1660,6 +1650,7 @@ function ZoneFragments({
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph: (nodeId: string, text?: string) => void
+  onCanStartStructuralEdit?: ParagraphTextSurfaceStructuralEditGuard
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -1792,6 +1783,7 @@ function ZoneFragments({
             onEndEdit={onInlineEditEnd}
             onSplitParagraph={onSplitParagraph}
             onMergeParagraph={onMergeParagraph}
+            onCanStartStructuralEdit={onCanStartStructuralEdit}
             onExitListItem={onExitListItem}
             onChangeListItemLevel={onChangeListItemLevel}
             onBackspaceListItemAtStart={onBackspaceListItemAtStart}
@@ -2228,7 +2220,7 @@ function DropHighlight({ doc, drag, fragments, scale, contentBox }: {
 
 function PageView({
   page, doc, drag, scale, selectedNodeId, selectionAnchorNodeId, isLayoutLoading, inlineEditVisualFresh,
-  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
+  inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onCanStartStructuralEdit, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
   pageKey, textMeasurer, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction,
   resizeDrag, onResizeStart, onTableColumnResizeStart, minHeightDrag, onMinHeightResizeStart,
   sectionIndex, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, headerFooterZoneScroll, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onHeaderFooterZoneScroll, onHeaderFooterZoneScrollTo, onMarginResizeStart, showTextSegments, showDrift, driftMap, wysiwygInlineEditEnabled,
@@ -2265,6 +2257,7 @@ function PageView({
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph: (nodeId: string, text?: string) => void
+  onCanStartStructuralEdit?: ParagraphTextSurfaceStructuralEditGuard
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -2460,6 +2453,7 @@ function PageView({
     activeInlineEditSourceFragment?.nodeType === "paragraph" &&
     !tableCellIds.has(activeInlineEditSourceFragment.parentNodeId ?? "") &&
     !flowStackParagraphIds.has(activeInlineEditSourceFragment.nodeId) &&
+    !isParagraphInsideRowStack(doc, activeInlineEditSourceFragment.nodeId) &&
     (
       !activeInlineEditSourceFragment.parentNodeId ||
       nodeById.get(activeInlineEditSourceFragment.parentNodeId)?.type !== "flow-stack"
@@ -2933,6 +2927,7 @@ function PageView({
             onEndEdit={onInlineEditEnd}
             onSplitParagraph={onSplitParagraph}
             onMergeParagraph={onMergeParagraph}
+            onCanStartStructuralEdit={onCanStartStructuralEdit}
             onExitListItem={onExitListItem}
             onChangeListItemLevel={onChangeListItemLevel}
             onBackspaceListItemAtStart={onBackspaceListItemAtStart}
@@ -3194,6 +3189,7 @@ function PageView({
           onInlineEditEnd={onInlineEditEnd}
           onSplitParagraph={onSplitParagraph}
           onMergeParagraph={onMergeParagraph}
+          onCanStartStructuralEdit={onCanStartStructuralEdit}
           onExitListItem={onExitListItem}
           onChangeListItemLevel={onChangeListItemLevel}
           onBackspaceListItemAtStart={onBackspaceListItemAtStart}
@@ -3244,6 +3240,7 @@ function PageView({
           onInlineEditEnd={onInlineEditEnd}
           onSplitParagraph={onSplitParagraph}
           onMergeParagraph={onMergeParagraph}
+          onCanStartStructuralEdit={onCanStartStructuralEdit}
           onExitListItem={onExitListItem}
           onChangeListItemLevel={onChangeListItemLevel}
           onBackspaceListItemAtStart={onBackspaceListItemAtStart}
@@ -3731,71 +3728,39 @@ function headerFooterZoneScrollAffectsPage(sectionIndex: number, scroll: HeaderF
 }
 
 function pageHasNodeFragment(page: PaginatedPage, nodeId: string | null): boolean {
-  if (!nodeId) return false
-  return [
-    ...page.fragments,
-    ...(page.headerFragments ?? []),
-    ...(page.footerFragments ?? []),
-  ].some((fragment) =>
-    fragment.nodeId === nodeId &&
-    fragment.nodeType === "paragraph"
-  )
+  return canvasViewportPageHasNodeFragmentBridge(page, nodeId)
 }
 
 function pageHasAnyNodeFragment(page: PaginatedPage, nodeId: string | null): boolean {
-  if (!nodeId) return false
-  return [
-    ...page.fragments,
-    ...(page.headerFragments ?? []),
-    ...(page.footerFragments ?? []),
-  ].some((fragment) => fragment.nodeId === nodeId)
+  return canvasViewportPageHasAnyNodeFragmentBridge(page, nodeId)
 }
 
 function pageHasSuppressedBoundarySafePageBreak(
   page: PaginatedPage,
   activeIsland: ActiveOutOfCanvasStructuralIsland | null | undefined,
 ): boolean {
-  if (!activeIsland) return false
-  if (page.index === activeIsland.pageIndex) return true
-  const suppressedPageBreakNodeId = activeIsland.suppressedPageBreakNodeId ?? null
-  return pageHasAnyNodeFragment(page, suppressedPageBreakNodeId)
+  return pageHasSuppressedBoundarySafePageBreakBridge(page, activeIsland)
 }
 
 function pageIsAffectedByStructuralIsland(
   page: PaginatedPage,
   activeIsland: ActiveOutOfCanvasStructuralIsland | null | undefined,
 ): boolean {
-  if (!activeIsland) return false
-  if (page.index === activeIsland.pageIndex) return true
-  if (activeIsland.mode !== "boundary-safe") return false
-  return pageHasAnyNodeFragment(page, activeIsland.suppressedPageBreakNodeId ?? null)
+  return pageIsAffectedByStructuralIslandBridge(page, activeIsland)
 }
 
 export function pageViewScopedEditPropsAffectPage(
   page: PaginatedPage,
   props: PageViewScopedEditProps,
 ): boolean {
-  if (pageHasAnyNodeFragment(page, props.selectedNodeId)) return true
-  if (pageHasAnyNodeFragment(page, props.selectionAnchorNodeId)) return true
-  if (pageHasNodeFragment(page, props.inlineEditNodeId)) return true
-  if (pageHasNodeFragment(page, props.wysiwygTextDraftNodeId)) return true
-  for (const nodeId of props.suppressedCanvasTextNodeIds ?? EMPTY_SUPPRESSED_NODE_IDS) {
-    if (pageHasNodeFragment(page, nodeId)) return true
-  }
-  if (props.inlineEditPageIndex === page.index && props.inlineEditNodeId !== null) return true
-  if (pageHasSuppressedBoundarySafePageBreak(page, props.activeOutOfCanvasStructuralIsland)) return true
-  if (props.wysiwygDraftVisualPreview?.fragmentsByPageIndex.has(page.index)) return true
-  if (props.wysiwygDraftVisualPreview?.caretPageIndex === page.index) return true
-  if (props.wysiwygTableCellDraftVisualChromeByPageIndex.has(page.index)) return true
-  return props.wysiwygTextPointerFragments.some((target) => target.fragment.pageIndex === page.index)
+  return pageViewScopedEditPropsAffectPageBridge(page, props)
 }
 
 export function pageViewStructuralTransitionAffectsPage(
   page: PaginatedPage,
   props: PageViewScopedEditProps,
 ): boolean {
-  if (!props.activeOutOfCanvasStructuralIsland) return false
-  return pageViewScopedEditPropsAffectPage(page, props)
+  return pageViewStructuralTransitionAffectsPageBridge(page, props)
 }
 
 function canIgnoreStructuralSnapshotChangeForUnrelatedPage(
@@ -3834,7 +3799,42 @@ function recordStructuralPageMemoMiss(
   })
 }
 
+function recordStructuralPageComparatorTiming(
+  prev: Readonly<PageViewProps>,
+  next: Readonly<PageViewProps>,
+  componentName: string,
+  startedAt: number,
+  reason: string,
+): void {
+  const activeIsland = next.activeOutOfCanvasStructuralIsland ?? prev.activeOutOfCanvasStructuralIsland
+  if (!activeIsland) return
+  const page = next.page ?? prev.page
+  const affected = pageViewStructuralTransitionAffectsPage(prev.page, prev) ||
+    pageViewStructuralTransitionAffectsPage(next.page, next)
+  recordWysiwygPerfEvent(false, {
+    kind: "flowdoc-structural-render-attribution",
+    startedAt,
+    durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
+    nodeId: activeIsland.nodeId,
+    pageIndex: page.index,
+    affectedPageIndex: activeIsland.pageIndex,
+    componentName,
+    source: componentName,
+    action: "memo-comparator",
+    renderReason: reason,
+    optimisticMode: activeIsland.mode,
+    comparatorCount: 1,
+    active: affected,
+    unaffectedPage: !affected,
+  })
+}
+
 function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<PageViewProps>): boolean {
+  const comparatorStartedAt = startWysiwygPerfSpan()
+  const finishComparator = (equal: boolean, reason: string): boolean => {
+    recordStructuralPageComparatorTiming(prev, next, "PageViewMemo", comparatorStartedAt, reason)
+    return equal
+  }
   const ignoreStructuralSnapshotChange = canIgnoreStructuralSnapshotChangeForUnrelatedPage(prev, next)
   for (const key of Object.keys(prev) as Array<keyof PageViewProps>) {
     if ((key === "doc" || key === "page") && ignoreStructuralSnapshotChange) continue
@@ -3842,8 +3842,9 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     if (PAGE_VIEW_TRANSIENT_PROP_KEYS.includes(key)) continue
     if (PAGE_VIEW_SCOPED_EDIT_PROP_KEYS.includes(key)) continue
     if (prev[key] !== next[key]) {
-      recordStructuralPageMemoMiss(prev, next, `prop:${String(key)}`)
-      return false
+      const reason = `prop:${String(key)}`
+      recordStructuralPageMemoMiss(prev, next, reason)
+      return finishComparator(false, reason)
     }
   }
 
@@ -3853,7 +3854,7 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     pageViewScopedEditPropsAffectPage(next.page, next)
   )) {
     recordStructuralPageMemoMiss(prev, next, "scoped-edit-props")
-    return false
+    return finishComparator(false, "scoped-edit-props")
   }
 
   if (prev.resizeDrag !== next.resizeDrag && (
@@ -3861,7 +3862,7 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     resizeDragAffectsPage(next.page, next.resizeDrag)
   )) {
     recordStructuralPageMemoMiss(prev, next, "resize-drag")
-    return false
+    return finishComparator(false, "resize-drag")
   }
 
   if (prev.minHeightDrag !== next.minHeightDrag && (
@@ -3869,7 +3870,7 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     minHeightDragAffectsPage(next.page, next.minHeightDrag)
   )) {
     recordStructuralPageMemoMiss(prev, next, "min-height-drag")
-    return false
+    return finishComparator(false, "min-height-drag")
   }
 
   if (prev.marginDrag !== next.marginDrag && (
@@ -3877,7 +3878,7 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     marginDragAffectsPage(next.sectionIndex, next.marginDrag)
   )) {
     recordStructuralPageMemoMiss(prev, next, "margin-drag")
-    return false
+    return finishComparator(false, "margin-drag")
   }
 
   if (prev.marginEditMode !== next.marginEditMode && (
@@ -3885,7 +3886,7 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     marginEditModeAffectsPage(next.sectionIndex, next.marginEditMode)
   )) {
     recordStructuralPageMemoMiss(prev, next, "margin-edit-mode")
-    return false
+    return finishComparator(false, "margin-edit-mode")
   }
 
   if (prev.headerFooterEditMode !== next.headerFooterEditMode && (
@@ -3893,7 +3894,7 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     headerFooterEditModeAffectsPage(next.sectionIndex, next.headerFooterEditMode)
   )) {
     recordStructuralPageMemoMiss(prev, next, "header-footer-edit-mode")
-    return false
+    return finishComparator(false, "header-footer-edit-mode")
   }
 
   if (prev.headerFooterReservedDrag !== next.headerFooterReservedDrag && (
@@ -3901,7 +3902,7 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     headerFooterReservedDragAffectsPage(next.sectionIndex, next.headerFooterReservedDrag)
   )) {
     recordStructuralPageMemoMiss(prev, next, "header-footer-reserved-drag")
-    return false
+    return finishComparator(false, "header-footer-reserved-drag")
   }
 
   if (prev.headerFooterZoneScroll !== next.headerFooterZoneScroll && (
@@ -3909,10 +3910,10 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     headerFooterZoneScrollAffectsPage(next.sectionIndex, next.headerFooterZoneScroll)
   )) {
     recordStructuralPageMemoMiss(prev, next, "header-footer-zone-scroll")
-    return false
+    return finishComparator(false, "header-footer-zone-scroll")
   }
 
-  return true
+  return finishComparator(true, "equal")
 }
 
 const MemoizedPageView = memo(PageView, arePageViewPropsEqual)
@@ -3933,8 +3934,7 @@ export function shouldRenderLazyPageFrame(input: {
   visiblePageKeys: ReadonlySet<string>
   forcedPageKeys: ReadonlySet<string>
 }): boolean {
-  if (!input.lazyEnabled) return true
-  return input.visiblePageKeys.has(input.pageKey) || input.forcedPageKeys.has(input.pageKey)
+  return shouldRenderLazyPageFrameBridge(input)
 }
 
 function LazyPagePlaceholder({ page, scale }: { page: PaginatedPage; scale: number }) {
@@ -4094,33 +4094,38 @@ function areEditorCanvasPageSlotPropsEqual(
   prev: Readonly<EditorCanvasPageSlotProps>,
   next: Readonly<EditorCanvasPageSlotProps>,
 ): boolean {
+  const comparatorStartedAt = startWysiwygPerfSpan()
+  const finishComparator = (equal: boolean, reason: string): boolean => {
+    recordStructuralPageComparatorTiming(prev, next, "EditorCanvasPageSlotMemo", comparatorStartedAt, reason)
+    return equal
+  }
   if (prev.rendered !== next.rendered) {
     recordStructuralPageMemoMiss(prev, next, "slot-rendered")
-    return false
+    return finishComparator(false, "slot-rendered")
   }
   const ignoreStructuralSnapshotChange = canIgnoreStructuralSnapshotChangeForUnrelatedPage(prev, next)
   if (prev.page !== next.page && !ignoreStructuralSnapshotChange) {
     recordStructuralPageMemoMiss(prev, next, "slot-page")
-    return false
+    return finishComparator(false, "slot-page")
   }
   if (prev.pageKey !== next.pageKey) {
     recordStructuralPageMemoMiss(prev, next, "slot-page-key")
-    return false
+    return finishComparator(false, "slot-page-key")
   }
   if (prev.scale !== next.scale) {
     recordStructuralPageMemoMiss(prev, next, "slot-scale")
-    return false
+    return finishComparator(false, "slot-scale")
   }
   if (prev.setPageFrameRef !== next.setPageFrameRef) {
     recordStructuralPageMemoMiss(prev, next, "slot-frame-ref")
-    return false
+    return finishComparator(false, "slot-frame-ref")
   }
   if (prev.setPageOverlayRef !== next.setPageOverlayRef) {
     recordStructuralPageMemoMiss(prev, next, "slot-overlay-ref")
-    return false
+    return finishComparator(false, "slot-overlay-ref")
   }
-  if (!prev.rendered && !next.rendered) return true
-  return arePageViewPropsEqual(prev, next)
+  if (!prev.rendered && !next.rendered) return finishComparator(true, "slot-unrendered-equal")
+  return finishComparator(arePageViewPropsEqual(prev, next), "page-view-props")
 }
 
 const MemoizedEditorCanvasPageSlot = memo(EditorCanvasPageSlot, areEditorCanvasPageSlotPropsEqual)
@@ -4150,6 +4155,7 @@ interface Props {
   onInlineEditEnd: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph: (nodeId: string, text?: string) => void
+  onCanStartStructuralEdit?: ParagraphTextSurfaceStructuralEditGuard
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -4285,7 +4291,7 @@ export function buildWysiwygDraftVisualPreview(input: {
 export function EditorCanvas({
   paginated, doc, drag, resizeDrag, minHeightDrag, marginDrag, marginEditMode, headerFooterEditMode, headerFooterReservedDrag, scale, activePageIndex, selectedNodeId, selectionAnchorNodeId, isLayoutLoading,
   textMeasurer,
-  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
+  inlineEditVisualFresh, inlineEditNodeId, inlineEditCaretIndex, inlineEditPageIndex, inlineEditVisualLocked, onInlineEditStart, onInlineEditChange, onInlineEditCaretChange, onInlineEditUserInteraction, onInlineEditHeightChange, onInlineEditEnd, onSplitParagraph, onMergeParagraph, onCanStartStructuralEdit, onExitListItem, onChangeListItemLevel, onBackspaceListItemAtStart,
   setPageRef, setPageOverlayRef, onNodePointerDown, onBackgroundPointerDown, onSelectContextNode, onStartCloneDrag, onDeleteNode, onTableAction, onResizeStart, onTableColumnResizeStart, onMinHeightResizeStart, onMarginEditModeEnter, onMarginEditModeExit, onHeaderFooterEditModeEnter, onHeaderFooterEditModeExit, onHeaderFooterZonePointerDown, onHeaderFooterReservedResizeStart, onMarginResizeStart, onScaleChange,
   autoFitScale, showTextSegments, showDrift, driftMap,
   wysiwygInlineEditEnabled,
@@ -4318,6 +4324,7 @@ export function EditorCanvas({
   const stableOnInlineEditEnd = useStableEvent(onInlineEditEnd)
   const stableOnSplitParagraph = useStableEvent(onSplitParagraph)
   const stableOnMergeParagraph = useStableEvent(onMergeParagraph)
+  const stableOnCanStartStructuralEdit = useStableOptionalEvent(onCanStartStructuralEdit)
   const stableOnExitListItem = useStableOptionalEvent(onExitListItem)
   const stableOnChangeListItemLevel = useStableOptionalEvent(onChangeListItemLevel)
   const stableOnBackspaceListItemAtStart = useStableOptionalEvent(onBackspaceListItemAtStart)
@@ -4341,16 +4348,83 @@ export function EditorCanvas({
   const stableOnWysiwygRichTextShortcut = useStableOptionalEvent(onWysiwygRichTextShortcut)
   const stableOnWysiwygTextReflowDecision = useStableEvent(onWysiwygTextReflowDecision)
   const sections = Array.isArray(paginated.sections) ? paginated.sections : []
+  const structuralCanvasRenderAttributionActive = activeOutOfCanvasStructuralIsland !== null
+  const pushStructuralCanvasRenderAttributionEvent = (
+    action: string,
+    startedAt: number,
+    metadata: Partial<Omit<WysiwygPerfEvent, "kind" | "startedAt" | "durationMs" | "action">> = {},
+  ): void => {
+    const activeIsland = activeOutOfCanvasStructuralIsland
+    if (!activeIsland) return
+    const endedAt = startWysiwygPerfSpan()
+    recordWysiwygPerfEvent(false, {
+      kind: "flowdoc-structural-render-attribution",
+      startedAt,
+      durationMs: Math.max(0, endedAt - startedAt),
+      nodeId: activeIsland.nodeId,
+      pageIndex: activeIsland.pageIndex,
+      affectedPageIndex: activeIsland.pageIndex,
+      componentName: "EditorCanvas",
+      source: "EditorCanvas",
+      action,
+      optimisticMode: activeIsland.mode,
+      active: true,
+      derivedValueCount: 1,
+      ...metadata,
+    })
+  }
+  const captureStructuralCanvasRenderValue = <T,>(
+    action: string,
+    compute: () => T,
+    metadata: (value: T) => Partial<Omit<WysiwygPerfEvent, "kind" | "startedAt" | "durationMs" | "action">> = () => ({}),
+  ): T => {
+    if (!structuralCanvasRenderAttributionActive) return compute()
+    const startedAt = startWysiwygPerfSpan()
+    const value = compute()
+    pushStructuralCanvasRenderAttributionEvent(action, startedAt, metadata(value))
+    return value
+  }
+  useLayoutEffect(() => {
+    if (!activeOutOfCanvasStructuralIsland) return
+    const startedAt = startWysiwygPerfSpan()
+    recordWysiwygPerfEvent(false, {
+      kind: "flowdoc-structural-render-attribution",
+      startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
+      nodeId: activeOutOfCanvasStructuralIsland.nodeId,
+      pageIndex: activeOutOfCanvasStructuralIsland.pageIndex,
+      affectedPageIndex: activeOutOfCanvasStructuralIsland.pageIndex,
+      componentName: "EditorCanvas",
+      source: "EditorCanvas",
+      action: "canvas-layout-effect",
+      optimisticMode: activeOutOfCanvasStructuralIsland.mode,
+      active: true,
+    })
+  })
   const pageKeyEntries = useMemo(() =>
-    sections.flatMap((section, sectionIndex) =>
-      section.pages.map((page, pageArrayIndex) => ({
-        key: `${sectionIndex}-${pageArrayIndex}`,
-        pageIndex: page.index,
-      })),
+    captureStructuralCanvasRenderValue(
+      "canvas-derived:page-key-entries",
+      () => sections.flatMap((section, sectionIndex) =>
+        section.pages.map((page, pageArrayIndex) => ({
+          key: `${sectionIndex}-${pageArrayIndex}`,
+          pageIndex: page.index,
+        })),
+      ),
+      (entries) => ({
+        renderReason: "pageKeyEntries",
+        pageCount: entries.length,
+      }),
     ),
   [sections])
   const pageKeySignature = useMemo(() =>
-    pageKeyEntries.map((entry) => `${entry.key}:${entry.pageIndex}`).join("|"),
+    captureStructuralCanvasRenderValue(
+      "canvas-derived:page-key-signature",
+      () => pageKeyEntries.map((entry) => `${entry.key}:${entry.pageIndex}`).join("|"),
+      (signature) => ({
+        renderReason: "pageKeySignature",
+        textLength: signature.length,
+      }),
+    ),
   [pageKeyEntries])
   const allPageKeySet = useMemo(() =>
     new Set(pageKeyEntries.map((entry) => entry.key)),
@@ -4358,18 +4432,35 @@ export function EditorCanvas({
   const totalPageCount = pageKeyEntries.length
   const pageWidth = sections[0]?.pages[0]?.width ?? 595
   const scaledPageWidth = pageWidth * scale
-  const pageKeyByPageIndex = useMemo(() => {
-    const byPageIndex = new Map<number, string>()
-    for (const [sectionIndex, section] of sections.entries()) {
-      for (const [pageArrayIndex, page] of section.pages.entries()) {
-        byPageIndex.set(page.index, `${sectionIndex}-${pageArrayIndex}`)
-      }
-    }
-    return byPageIndex
-  }, [sections])
-  const wysiwygTextPointerFragmentIndex = useMemo(() =>
-    buildWysiwygTextPointerFragmentIndex(paginated, pageKeyByPageIndex),
-  [paginated, pageKeyByPageIndex])
+  const pageKeyByPageIndex = useMemo(() => (
+    captureStructuralCanvasRenderValue(
+      "canvas-derived:page-key-by-page-index",
+      () => {
+        const byPageIndex = new Map<number, string>()
+        for (const [sectionIndex, section] of sections.entries()) {
+          for (const [pageArrayIndex, page] of section.pages.entries()) {
+            byPageIndex.set(page.index, `${sectionIndex}-${pageArrayIndex}`)
+          }
+        }
+        return byPageIndex
+      },
+      (byPageIndex) => ({
+        renderReason: "pageKeyByPageIndex",
+        pageCount: byPageIndex.size,
+      }),
+    )
+  ), [sections])
+  const wysiwygTextPointerFragmentIndex = useMemo(() => (
+    captureStructuralCanvasRenderValue(
+      "canvas-derived:pointer-fragment-index",
+      () => buildWysiwygTextPointerFragmentIndex(paginated, pageKeyByPageIndex),
+      (index) => ({
+        renderReason: "buildWysiwygTextPointerFragmentIndex",
+        pointerTargetCount: index.targetsByNodeId.size,
+        fragmentCount: index.bodyParagraphFragmentCountByNodeId.size,
+      }),
+    )
+  ), [paginated, pageKeyByPageIndex])
   const shouldLazyRenderPages = typeof IntersectionObserver !== "undefined" && totalPageCount > LAZY_PAGE_RENDER_THRESHOLD
   const setPageFrameRef = useCallback((key: string, el: HTMLDivElement | null) => {
     const previous = pageFrameRefs.current.get(key)
@@ -4403,28 +4494,39 @@ export function EditorCanvas({
       isParagraphInsideTableCell(doc, wysiwygTextDraftNodeId),
     ),
   [doc, wysiwygTextDraftNodeId, wysiwygTextEngineEnabled])
-  const wysiwygDraftVisualPreview = useMemo(() => {
-    if (!wysiwygTextEngineEnabled) return null
-    if (!wysiwygTextDraftNodeId || wysiwygTextDraftText == null) return null
-    if (inlineEditNodeId !== wysiwygTextDraftNodeId) return null
-    const hasDraftTextChange = getEditableParagraphText(doc, wysiwygTextDraftNodeId) !== wysiwygTextDraftText
-    const hasDraftParagraphChange = Boolean(
-      wysiwygTextDraftParagraph &&
-      wysiwygTextDraftDirtyVersion > 0 &&
-      getTextRunParagraphText(wysiwygTextDraftParagraph) !== null,
+  const wysiwygDraftVisualPreview = useMemo(() => (
+    captureStructuralCanvasRenderValue(
+      "canvas-derived:draft-visual-preview",
+      () => {
+        if (!wysiwygTextEngineEnabled) return null
+        if (!wysiwygTextDraftNodeId || wysiwygTextDraftText == null) return null
+        if (inlineEditNodeId !== wysiwygTextDraftNodeId) return null
+        const hasDraftTextChange = getEditableParagraphText(doc, wysiwygTextDraftNodeId) !== wysiwygTextDraftText
+        const hasDraftParagraphChange = Boolean(
+          wysiwygTextDraftParagraph &&
+          wysiwygTextDraftDirtyVersion > 0 &&
+          getTextRunParagraphText(wysiwygTextDraftParagraph) !== null,
+        )
+        if (!hasDraftTextChange && !hasDraftParagraphChange) return null
+        return buildWysiwygDraftVisualPreview({
+          paginated,
+          doc,
+          nodeId: wysiwygTextDraftNodeId,
+          draftText: wysiwygTextDraftText,
+          draftParagraph: hasDraftParagraphChange ? wysiwygTextDraftParagraph ?? null : null,
+          caretOffset: wysiwygTextCaretOffset,
+          textMeasurer,
+          draftPaginationActive: wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive,
+        })
+      },
+      (preview) => ({
+        renderReason: "wysiwygDraftVisualPreview",
+        previewFragmentCount: preview?.fragments.length ?? 0,
+        previewPageCount: preview?.fragmentsByPageIndex.size ?? 0,
+        pageIndex: preview?.caretPageIndex ?? activeOutOfCanvasStructuralIsland?.pageIndex ?? null,
+      }),
     )
-    if (!hasDraftTextChange && !hasDraftParagraphChange) return null
-    return buildWysiwygDraftVisualPreview({
-      paginated,
-      doc,
-      nodeId: wysiwygTextDraftNodeId,
-      draftText: wysiwygTextDraftText,
-      draftParagraph: hasDraftParagraphChange ? wysiwygTextDraftParagraph ?? null : null,
-      caretOffset: wysiwygTextCaretOffset,
-      textMeasurer,
-      draftPaginationActive: wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive,
-    })
-  }, [
+  ), [
     doc,
     inlineEditNodeId,
     paginated,
@@ -4611,36 +4713,45 @@ export function EditorCanvas({
     wysiwygTextEngineEnabled,
   ])
 
-  const forcedPageKeys = useMemo(() => {
-    const keys = new Set<string>()
-    for (const entry of pageKeyEntries.slice(0, LAZY_PAGE_RENDER_INITIAL_COUNT)) {
-      keys.add(entry.key)
-    }
-    if (activePageIndex != null) {
-      const key = pageKeyByPageIndex.get(activePageIndex)
-      if (key) keys.add(key)
-    }
-    if (inlineEditPageIndex != null) {
-      const key = pageKeyByPageIndex.get(inlineEditPageIndex)
-      if (key) keys.add(key)
-    }
-    if (wysiwygDraftVisualPreview?.caretPageIndex != null) {
-      const key = pageKeyByPageIndex.get(wysiwygDraftVisualPreview.caretPageIndex)
-      if (key) keys.add(key)
-    }
-    if (activeOutOfCanvasStructuralIsland) {
-      const key = pageKeyByPageIndex.get(activeOutOfCanvasStructuralIsland.pageIndex)
-      if (key) keys.add(key)
-    }
-    if (resizeDrag?.pageKey) keys.add(resizeDrag.pageKey)
-    if (minHeightDrag?.pageKey) keys.add(minHeightDrag.pageKey)
-    if (marginDrag?.pageKey) keys.add(marginDrag.pageKey)
-    if (headerFooterReservedDrag?.pageKey) keys.add(headerFooterReservedDrag.pageKey)
-    for (const target of wysiwygTextPointerFragments) {
-      keys.add(target.pageKey)
-    }
-    return keys
-  }, [
+  const forcedPageKeys = useMemo(() => (
+    captureStructuralCanvasRenderValue(
+      "canvas-derived:forced-page-keys",
+      () => {
+        const keys = new Set<string>()
+        for (const entry of pageKeyEntries.slice(0, LAZY_PAGE_RENDER_INITIAL_COUNT)) {
+          keys.add(entry.key)
+        }
+        if (activePageIndex != null) {
+          const key = pageKeyByPageIndex.get(activePageIndex)
+          if (key) keys.add(key)
+        }
+        if (inlineEditPageIndex != null) {
+          const key = pageKeyByPageIndex.get(inlineEditPageIndex)
+          if (key) keys.add(key)
+        }
+        if (wysiwygDraftVisualPreview?.caretPageIndex != null) {
+          const key = pageKeyByPageIndex.get(wysiwygDraftVisualPreview.caretPageIndex)
+          if (key) keys.add(key)
+        }
+        if (activeOutOfCanvasStructuralIsland) {
+          const key = pageKeyByPageIndex.get(activeOutOfCanvasStructuralIsland.pageIndex)
+          if (key) keys.add(key)
+        }
+        if (resizeDrag?.pageKey) keys.add(resizeDrag.pageKey)
+        if (minHeightDrag?.pageKey) keys.add(minHeightDrag.pageKey)
+        if (marginDrag?.pageKey) keys.add(marginDrag.pageKey)
+        if (headerFooterReservedDrag?.pageKey) keys.add(headerFooterReservedDrag.pageKey)
+        for (const target of wysiwygTextPointerFragments) {
+          keys.add(target.pageKey)
+        }
+        return keys
+      },
+      (keys) => ({
+        renderReason: "forcedPageKeys",
+        pageCount: keys.size,
+      }),
+    )
+  ), [
     activePageIndex,
     activeOutOfCanvasStructuralIsland,
     headerFooterReservedDrag,
@@ -4653,31 +4764,26 @@ export function EditorCanvas({
     wysiwygDraftVisualPreview,
     wysiwygTextPointerFragments,
   ])
-  const structuralRenderScope = useMemo(() => {
-    const activeIsland = activeOutOfCanvasStructuralIsland
-    if (!activeIsland) return null
-    const affectedPageIndexes: number[] = []
-    let totalPageCountForScope = 0
-    for (const section of sections) {
-      for (const page of section.pages) {
-        totalPageCountForScope += 1
-        if (pageIsAffectedByStructuralIsland(page, activeIsland)) {
-          affectedPageIndexes.push(page.index)
-        }
-      }
-    }
-    return {
-      nodeId: activeIsland.nodeId,
-      pageIndex: activeIsland.pageIndex,
-      affectedPageIndexes,
-      affectedPageCount: affectedPageIndexes.length,
-      totalPageCount: totalPageCountForScope,
-      mode: activeIsland.mode,
-    }
-  }, [activeOutOfCanvasStructuralIsland, sections])
+  const structuralRenderScope = useMemo(() => (
+    captureStructuralCanvasRenderValue(
+      "canvas-derived:structural-render-scope",
+      () => {
+        const pages = sections.flatMap((section) => section.pages)
+        return getCanvasViewportStructuralRenderScopeBridge({
+          pages,
+          activeOutOfCanvasStructuralIsland,
+        })
+      },
+      (scope) => ({
+        renderReason: "structuralRenderScope",
+        ...createCanvasViewportRenderScopePerfFields(scope, totalPageCount),
+      }),
+    )
+  ), [activeOutOfCanvasStructuralIsland, sections, totalPageCount])
 
   useEffect(() => {
     if (!structuralRenderScope) return
+    const canvasViewportMetrics = createCanvasViewportMetricsBridge(structuralRenderScope)
     recordWysiwygPerfEvent(false, {
       kind: "flowdoc-structural-render-attribution",
       startedAt: startWysiwygPerfSpan(),
@@ -4687,6 +4793,10 @@ export function EditorCanvas({
       pageIndexes: structuralRenderScope.affectedPageIndexes.join(","),
       totalPageCount: structuralRenderScope.totalPageCount,
       affectedPageCount: structuralRenderScope.affectedPageCount,
+      canvasViewportAffectedPageCount: canvasViewportMetrics.canvasViewportAffectedPageCount,
+      canvasViewportAffectedPages: canvasViewportMetrics.canvasViewportAffectedPages.join(","),
+      canvasViewportSuppressedPageBreakCount: canvasViewportMetrics.canvasViewportSuppressedPageBreakCount,
+      canvasViewportUnrelatedPageBreakSuppressedCount: canvasViewportMetrics.canvasViewportUnrelatedPageBreakSuppressedCount,
       componentName: "EditorCanvas",
       source: "EditorCanvas",
       action: "render-scope",
@@ -4865,6 +4975,7 @@ export function EditorCanvas({
                   onInlineEditEnd={stableOnInlineEditEnd}
                   onSplitParagraph={stableOnSplitParagraph}
                   onMergeParagraph={stableOnMergeParagraph}
+                  onCanStartStructuralEdit={stableOnCanStartStructuralEdit}
                   onExitListItem={stableOnExitListItem}
                   onChangeListItemLevel={stableOnChangeListItemLevel}
                   onBackspaceListItemAtStart={stableOnBackspaceListItemAtStart}

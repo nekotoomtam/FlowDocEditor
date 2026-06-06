@@ -18,7 +18,14 @@ const LONG_MOCK_STRUCTURAL_NEXT_NODE_ID = "cover_break"
 const LONG_MOCK_STRUCTURAL_SPLIT_TEXT = "pagination"
 const LONG_MOCK_STRUCTURAL_STALE_TAIL_TEXT = "TOC"
 const SCENARIO_ID = "wysiwyg-stage3-boundary"
+const EDITOR_PERFORMANCE_REPORT_SCHEMA_VERSION = "editor-performance-report-v1"
+const EDITOR_PERFORMANCE_TIMING_ANCHOR_VERSION = "editor-performance-timing-anchors-v1"
 const PROBE_MODE = process.env.PROBE_MODE?.trim() || "typing"
+const PROBE_REPEAT = Math.max(1, Number(process.env.PROBE_REPEAT ?? 1))
+const PROBE_WARMUP = Math.max(0, Number(process.env.PROBE_WARMUP ?? 0))
+const PROBE_REPEAT_CHILD = process.env.PROBE_REPEAT_CHILD === "1"
+const PROBE_SAMPLE_INDEX = Number(process.env.PROBE_SAMPLE_INDEX ?? 0)
+const PROBE_SAMPLE_PHASE = process.env.PROBE_SAMPLE_PHASE?.trim() || "single"
 const NO_WAIT_BURST_PROBE_MODES = new Set(["held-repeat", "no-wait-burst"])
 const STRUCTURAL_REFOCUS_PROBE_MODES = new Set([
   "enter-rapid",
@@ -28,6 +35,7 @@ const STRUCTURAL_REFOCUS_PROBE_MODES = new Set([
   "enter-blur-before-settle",
   "enter-backspace-after-dispatch",
   "enter-backspace-immediate",
+  "enter-backspace-type-before-settle",
   "backspace-rapid",
 ])
 const DEFAULT_TYPE_BURST_LENGTH = PROBE_MODE === "mixed-pagination" ? 80 : (PROBE_MODE === "long-unbroken" || NO_WAIT_BURST_PROBE_MODES.has(PROBE_MODE)) ? 220 : STRUCTURAL_REFOCUS_PROBE_MODES.has(PROBE_MODE) ? 3 : 400
@@ -39,10 +47,15 @@ const STRUCTURAL_REFOCUS_ENTER_COUNT = Number(process.env.PROBE_STRUCTURAL_ENTER
 const STRUCTURAL_REFOCUS_BACKSPACE_COUNT = Number(process.env.PROBE_STRUCTURAL_BACKSPACE_COUNT ?? Math.max(2, TYPE_BURST_LENGTH))
 const STRUCTURAL_MID_SPLIT_REQUESTED = process.env.PROBE_ENTER_SPLIT_TEXT != null && process.env.PROBE_ENTER_SPLIT_TEXT.trim() !== ""
 const STRUCTURAL_MID_SPLIT_TEXT = process.env.PROBE_ENTER_SPLIT_TEXT?.trim() || "TOC"
-const STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS = (process.env.PROBE_ENTER_FRAME_DELAYS_MS?.trim() || "0,50,120,300,800,1800,4200")
+const DEFAULT_STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS = "0,50,120,300,800,1800,4200"
+const STRUCTURAL_MID_SPLIT_FRAME_DELAYS_SOURCE = process.env.PROBE_ENTER_FRAME_DELAYS_MS?.trim() || DEFAULT_STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS
+const STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS = STRUCTURAL_MID_SPLIT_FRAME_DELAYS_SOURCE
   .split(",")
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value >= 0)
+const DEFAULT_STRUCTURAL_MID_SPLIT_FRAME_WINDOW_MS = Math.max(0, ...DEFAULT_STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS.split(",").map((value) => Number(value.trim())).filter(Number.isFinite))
+const STRUCTURAL_MID_SPLIT_FRAME_WINDOW_MS = Math.max(0, ...STRUCTURAL_MID_SPLIT_FRAME_DELAYS_MS)
+const PROBE_USED_EXTENDED_FRAME_WINDOW = STRUCTURAL_MID_SPLIT_FRAME_WINDOW_MS > DEFAULT_STRUCTURAL_MID_SPLIT_FRAME_WINDOW_MS
 const TYPE_TEXT_SEQUENCE = Array.from(process.env.PROBE_TYPE_TEXT ?? "")
 const KEY_INPUT_PROBE_MODES = new Set(["typing", "space-repeat", "delete", "enter", "wrap-typing", "mixed-pagination", "long-unbroken", "held-repeat", "no-wait-burst"])
 const SCROLL_ANCHORING_PROBE_MODES = new Set(["scroll-anchoring"])
@@ -63,7 +76,8 @@ const HAS_TARGET_PAGE_INDEX = TARGET_PAGE_INDEX !== null && Number.isFinite(TARG
 const FRAME_BUDGET_MS = 16
 const JANK_BUDGET_MS = 100
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url))
+const scriptPath = fileURLToPath(import.meta.url)
+const scriptDir = path.dirname(scriptPath)
 const repoRoot = path.resolve(scriptDir, "..")
 const smokePort = Number(process.env.SMOKE_PORT ?? DEFAULT_PORT)
 const baseEditorUrl = process.env.SMOKE_BASE_URL ?? `http://localhost:${smokePort}/editor`
@@ -267,7 +281,9 @@ function isLongMockStructuralProbe() {
 }
 
 function isEnterBackspaceProbeMode(mode) {
-  return mode === "enter-backspace-after-dispatch" || mode === "enter-backspace-immediate"
+  return mode === "enter-backspace-after-dispatch" ||
+    mode === "enter-backspace-immediate" ||
+    mode === "enter-backspace-type-before-settle"
 }
 
 function isBackspaceRapidProbeMode(mode) {
@@ -378,6 +394,366 @@ function summarizeComponentRenderEvents(events) {
     acc[component] = current
     return acc
   }, {})
+}
+
+function summarizeGroupedDurations(events, getKey) {
+  const groups = events.reduce((acc, event) => {
+    const key = getKey(event) ?? "unknown"
+    if (!acc[key]) acc[key] = []
+    acc[key].push(event)
+    return acc
+  }, {})
+  return Object.fromEntries(
+    Object.entries(groups).map(([key, groupEvents]) => [key, summarizeDurations(groupEvents)]),
+  )
+}
+
+function summarizeComparatorEvents(events) {
+  const base = summarizeDurations(events)
+  return {
+    ...base,
+    comparatorCount: events.reduce((sum, event) => (
+      sum + (typeof event.comparatorCount === "number" ? event.comparatorCount : 1)
+    ), 0),
+    byComponent: summarizeGroupedDurations(events, (event) => event.componentName ?? event.source ?? "unknown"),
+    byReason: summarizeGroupedDurations(events, (event) => event.renderReason ?? "unknown"),
+  }
+}
+
+function isStructuralRenderDerivedEvent(event) {
+  const action = String(event.action ?? "")
+  return action.startsWith("shell-derived:") || action.startsWith("canvas-derived:")
+}
+
+function summarizeStructuralRenderAttributionEvents(events) {
+  const pageViewEvents = events.filter((event) => event.componentName === "PageView" || event.source === "PageView")
+  const memoMissEvents = events.filter((event) => event.action === "memo-miss")
+  const memoComparatorEvents = events.filter((event) => event.action === "memo-comparator")
+  const scopeEvents = events.filter((event) => event.action === "render-scope" || event.action === "canvas-derived:structural-render-scope")
+  const shellDerivedEvents = events.filter((event) => String(event.action ?? "").startsWith("shell-derived:"))
+  const canvasDerivedEvents = events.filter((event) => String(event.action ?? "").startsWith("canvas-derived:"))
+  const derivedEvents = shellDerivedEvents.concat(canvasDerivedEvents)
+  const layoutEffectEvents = events.filter((event) => event.action === "shell-layout-effect" || event.action === "canvas-layout-effect")
+  const profilerEvents = events.filter((event) => (
+    event.action !== "memo-miss" &&
+    event.action !== "memo-comparator" &&
+    event.action !== "render-scope" &&
+    event.action !== "shell-layout-effect" &&
+    event.action !== "canvas-layout-effect" &&
+    !isStructuralRenderDerivedEvent(event)
+  ))
+  const componentSummary = summarizeComponentRenderEvents(profilerEvents)
+  const renderedPageIndexes = [...new Set(pageViewEvents
+    .map((event) => event.pageIndex)
+    .filter((value) => typeof value === "number"))]
+  const unaffectedRenderedPageIndexes = [...new Set(pageViewEvents
+    .filter((event) => event.unaffectedPage === true)
+    .map((event) => event.pageIndex)
+    .filter((value) => typeof value === "number"))]
+  const maxScopeNumber = (field) => Math.max(0, ...scopeEvents
+    .map((event) => event[field])
+    .filter((value) => typeof value === "number"))
+  const canvasViewportAffectedPages = [...new Set(scopeEvents.flatMap((event) => {
+    const raw = event.canvasViewportAffectedPages ?? event.pageIndexes
+    if (Array.isArray(raw)) {
+      return raw.filter((value) => typeof value === "number")
+    }
+    if (typeof raw !== "string") return []
+    return raw
+      .split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isFinite(value))
+  }))]
+  return {
+    count: events.length,
+    componentRenderCountsDuringStructuralTransition: Object.fromEntries(
+      Object.entries(componentSummary).map(([component, summary]) => [component, summary.count]),
+    ),
+    componentRenderMs: componentSummary,
+    pagesRenderedDuringStructuralTransition: renderedPageIndexes.length,
+    renderedPageIndexes,
+    unaffectedPagesRenderedCount: unaffectedRenderedPageIndexes.length,
+    unaffectedPageIndexes: unaffectedRenderedPageIndexes,
+    memoMissCount: memoMissEvents.length,
+    memoMissByReason: memoMissEvents.reduce((acc, event) => {
+      const reason = event.renderReason ?? "unknown"
+      acc[reason] = (acc[reason] ?? 0) + 1
+      return acc
+    }, {}),
+    memoComparator: summarizeComparatorEvents(memoComparatorEvents),
+    shellDerived: {
+      ...summarizeDurations(shellDerivedEvents),
+      byAction: summarizeGroupedDurations(shellDerivedEvents, (event) => event.action ?? "unknown"),
+    },
+    canvasDerived: {
+      ...summarizeDurations(canvasDerivedEvents),
+      byAction: summarizeGroupedDurations(canvasDerivedEvents, (event) => event.action ?? "unknown"),
+    },
+    derived: {
+      ...summarizeDurations(derivedEvents),
+      byAction: summarizeGroupedDurations(derivedEvents, (event) => event.action ?? "unknown"),
+    },
+    layoutEffects: {
+      ...summarizeDurations(layoutEffectEvents),
+      byAction: summarizeGroupedDurations(layoutEffectEvents, (event) => event.action ?? "unknown"),
+    },
+    profilerActualDuration: {
+      ...summarizeDurations(profilerEvents),
+      byComponent: componentSummary,
+    },
+    affectedPageCount: maxScopeNumber("affectedPageCount"),
+    canvasViewportAffectedPageCount: maxScopeNumber("canvasViewportAffectedPageCount"),
+    canvasViewportAffectedPages,
+    canvasViewportSuppressedPageBreakCount: maxScopeNumber("canvasViewportSuppressedPageBreakCount"),
+    canvasViewportUnrelatedPageBreakSuppressedCount: maxScopeNumber("canvasViewportUnrelatedPageBreakSuppressedCount"),
+    totalPageCount: maxScopeNumber("totalPageCount"),
+    fragmentsRenderedDuringStructuralTransition: pageViewEvents.reduce((sum, event) => (
+      sum + (typeof event.fragmentCount === "number" ? event.fragmentCount : 0)
+    ), 0),
+    events,
+  }
+}
+
+function eventFallsWithinTimingWindows(event, windows) {
+  if (!windows.length) return false
+  const startedAt = typeof event.startedAt === "number" && Number.isFinite(event.startedAt)
+    ? event.startedAt
+    : null
+  const endedAt = eventEndAt(event)
+  const commitTime = typeof event.commitTime === "number" && Number.isFinite(event.commitTime)
+    ? event.commitTime
+    : null
+  return windows.some((window) => {
+    const startsInWindow = startedAt != null && startedAt >= window.start && startedAt <= window.end
+    const endsInWindow = endedAt != null && endedAt >= window.start && endedAt <= window.end
+    const commitsInWindow = commitTime != null && commitTime >= window.start && commitTime <= window.end
+    const spansWindow = startedAt != null && endedAt != null && startedAt <= window.start && endedAt >= window.end
+    return startsInWindow || endsInWindow || commitsInWindow || spansWindow
+  })
+}
+
+function eventsWithinTimingWindows(events, windows) {
+  if (!windows.length) return []
+  return events.filter((event) => eventFallsWithinTimingWindows(event, windows))
+}
+
+function timingWindowTotalMs(windows) {
+  return windows.reduce((sum, window) => (
+    sum + (typeof window.durationMs === "number" && Number.isFinite(window.durationMs) ? window.durationMs : 0)
+  ), 0)
+}
+
+function compactStructuralRenderSummary(summary) {
+  const { events: _events, ...compact } = summary
+  return compact
+}
+
+function structuralComponentTotalMs(summary, componentName) {
+  return summary.profilerActualDuration?.byComponent?.[componentName]?.totalMs ?? 0
+}
+
+function structuralComponentCount(summary, componentName) {
+  return summary.profilerActualDuration?.byComponent?.[componentName]?.count ?? 0
+}
+
+function buildStructuralFlushPhase({
+  name,
+  windows,
+  renderEvents,
+}) {
+  const summary = summarizeStructuralRenderAttributionEvents(eventsWithinTimingWindows(renderEvents, windows))
+  return {
+    name,
+    windowCount: windows.length,
+    windowTotalMs: timingWindowTotalMs(windows),
+    reactActualDurationMs: summary.profilerActualDuration?.totalMs ?? 0,
+    leftRailActualDurationMs: structuralComponentTotalMs(summary, "left-rail"),
+    editorCanvasActualDurationMs: structuralComponentTotalMs(summary, "EditorCanvas"),
+    pageViewActualDurationMs: structuralComponentTotalMs(summary, "PageView"),
+    rightRailPageActualDurationMs: structuralComponentTotalMs(summary, "right-rail-page"),
+    shellDerivedMs: summary.shellDerived?.totalMs ?? 0,
+    canvasDerivedMs: summary.canvasDerived?.totalMs ?? 0,
+    comparatorMs: summary.memoComparator?.totalMs ?? 0,
+    layoutEffectMs: summary.layoutEffects?.totalMs ?? 0,
+    pagesRenderedDuringStructuralTransition: summary.pagesRenderedDuringStructuralTransition,
+    unaffectedPagesRenderedCount: summary.unaffectedPagesRenderedCount,
+    componentRenderCountsDuringStructuralTransition: summary.componentRenderCountsDuringStructuralTransition,
+    componentRenderMs: summary.componentRenderMs,
+    windows,
+    renderSummary: compactStructuralRenderSummary(summary),
+  }
+}
+
+function buildStructuralFlushPhaseSummary(renderEvents, flushSyncWindows) {
+  const splitWindows = flushSyncWindows.filter((window) => window.operation === "split")
+  const mergeWindows = flushSyncWindows.filter((window) => window.operation === "merge")
+  const splitFlush = buildStructuralFlushPhase({
+    name: "split-flush",
+    windows: splitWindows,
+    renderEvents,
+  })
+  const mergeFlush = buildStructuralFlushPhase({
+    name: "merge-flush",
+    windows: mergeWindows,
+    renderEvents,
+  })
+  const leftRailSplitFlushThresholdMs = 5
+  const leftRailSplitFlushActualMs = splitFlush.leftRailActualDurationMs
+  return {
+    splitFlush,
+    mergeFlush,
+    deferredLeftRailReleaseRender: {
+      inferredFrom: "left-rail Profiler actualDuration inside merge structural flush windows after the structural paint defer gate releases",
+      operation: "merge",
+      eventCount: structuralComponentCount(mergeFlush.renderSummary, "left-rail"),
+      reactActualDurationMs: mergeFlush.leftRailActualDurationMs,
+      maxMs: mergeFlush.renderSummary.profilerActualDuration?.byComponent?.["left-rail"]?.maxMs ?? 0,
+    },
+    leftRailSplitFlushGuard: {
+      thresholdMs: leftRailSplitFlushThresholdMs,
+      actualMs: leftRailSplitFlushActualMs,
+      passed: leftRailSplitFlushActualMs <= leftRailSplitFlushThresholdMs,
+      reason: "EditorLeftRail should remain deferred during the Enter split structural flush first-paint window.",
+    },
+  }
+}
+
+function structuralRenderEventTime(event) {
+  if (typeof event.commitTime === "number" && Number.isFinite(event.commitTime)) return event.commitTime
+  const endedAt = eventEndAt(event)
+  if (typeof endedAt === "number" && Number.isFinite(endedAt)) return endedAt
+  return typeof event.startedAt === "number" && Number.isFinite(event.startedAt) ? event.startedAt : null
+}
+
+function isStructuralPanelRenderEvent(event) {
+  const componentName = String(event.componentName ?? event.source ?? "")
+  return componentName === "left-rail" ||
+    componentName === "top-toolbar" ||
+    componentName.startsWith("right-rail")
+}
+
+function summarizeStructuralPanelReleaseEvents({
+  panelReleaseEvents,
+  renderEvents,
+  flushSyncWindows,
+  firstPaintAt,
+}) {
+  const actionCounts = panelReleaseEvents.reduce((acc, event) => {
+    const action = event.action ?? "unknown"
+    acc[action] = (acc[action] ?? 0) + 1
+    return acc
+  }, {})
+  const applyStartEvents = panelReleaseEvents.filter((event) => event.action === "release-apply-start")
+  const liveDocRestoredEvents = panelReleaseEvents.filter((event) => event.action === "live-doc-restored")
+  const inputDuringDeferEvents = panelReleaseEvents.filter((event) => event.action === "input-during-defer")
+  const applyStartTimes = applyStartEvents
+    .map((event) => structuralRenderEventTime(event))
+    .filter((value) => typeof value === "number" && Number.isFinite(value))
+  const firstApplyStart = applyStartTimes.length ? Math.min(...applyStartTimes) : null
+  const liveDocRestoredTimes = liveDocRestoredEvents
+    .map((event) => eventEndAt(event))
+    .filter((value) => typeof value === "number" && Number.isFinite(value))
+  const lastLiveDocRestored = liveDocRestoredTimes.length ? Math.max(...liveDocRestoredTimes) : null
+  const panelRenderEvents = renderEvents.filter(isStructuralPanelRenderEvent)
+  const panelRenderInsideUrgentFlushEvents = eventsWithinTimingWindows(panelRenderEvents, flushSyncWindows)
+  const panelRenderAfterUrgentFlushEvents = panelRenderEvents.filter((event) => {
+    if (eventFallsWithinTimingWindows(event, flushSyncWindows)) return false
+    const eventTime = structuralRenderEventTime(event)
+    if (firstApplyStart == null || eventTime == null) return false
+    return eventTime >= firstApplyStart
+  })
+  const leftRailInsideUrgentFlushEvents = panelRenderInsideUrgentFlushEvents.filter((event) => (
+    event.componentName === "left-rail" || event.source === "left-rail"
+  ))
+  const leftRailAfterUrgentFlushEvents = panelRenderAfterUrgentFlushEvents.filter((event) => (
+    event.componentName === "left-rail" || event.source === "left-rail"
+  ))
+  const leftRailInsideUrgentSummary = summarizeDurations(leftRailInsideUrgentFlushEvents)
+  const leftRailAfterUrgentSummary = summarizeDurations(leftRailAfterUrgentFlushEvents)
+  const panelRenderInsideUrgentSummary = summarizeDurations(panelRenderInsideUrgentFlushEvents)
+  const panelRenderAfterUrgentSummary = summarizeDurations(panelRenderAfterUrgentFlushEvents)
+  const panelRenderInsideUrgentByComponent = summarizeComponentRenderEvents(panelRenderInsideUrgentFlushEvents)
+  const panelRenderAfterUrgentByComponent = summarizeComponentRenderEvents(panelRenderAfterUrgentFlushEvents)
+  const componentMs = (summary, componentName) => summary?.[componentName]?.totalMs ?? 0
+  const rightRailMs = (summary) => Object.entries(summary ?? {})
+    .filter(([componentName]) => componentName.startsWith("right-rail"))
+    .reduce((sum, [, value]) => sum + (value?.totalMs ?? 0), 0)
+  const inputDuringDeferredReleaseCount = inputDuringDeferEvents.filter((event) => {
+    if (firstPaintAt != null && event.startedAt < firstPaintAt) return false
+    if (lastLiveDocRestored != null && event.startedAt > lastLiveDocRestored) return false
+    return true
+  }).length
+  return {
+    count: panelReleaseEvents.length,
+    byAction: actionCounts,
+    panelDeferralBeginCount: actionCounts["defer-start"] ?? 0,
+    panelSnapshotActiveCount: actionCounts["defer-start"] ?? 0,
+    panelDeferralScheduledCount: actionCounts["release-scheduled"] ?? 0,
+    panelDeferralCancelCount: actionCounts["release-cancelled"] ?? 0,
+    panelDeferralReleaseStartedCount: actionCounts["release-apply-start"] ?? 0,
+    panelDeferralReleaseCompletedCount: actionCounts["live-doc-restored"] ?? 0,
+    stalePanelReleaseIgnoredCount: actionCounts["release-superseded"] ?? 0,
+    panelInputDuringDeferralCount: actionCounts["input-during-defer"] ?? 0,
+    scheduledCount: actionCounts["release-scheduled"] ?? 0,
+    cancelledCount: actionCounts["release-cancelled"] ?? 0,
+    supersededCount: actionCounts["release-superseded"] ?? 0,
+    delayedUrgentPaintCount: actionCounts["release-delayed-urgent-paint"] ?? 0,
+    delayedInputCount: actionCounts["release-delayed-input"] ?? 0,
+    inputDuringDeferCount: actionCounts["input-during-defer"] ?? 0,
+    applyStartCount: actionCounts["release-apply-start"] ?? 0,
+    liveDocRestoredCount: actionCounts["live-doc-restored"] ?? 0,
+    firstReleaseApplyStartedAt: firstApplyStart,
+    lastReleaseCompletedAt: lastLiveDocRestored,
+    scheduled: summarizeDurations(panelReleaseEvents.filter((event) => event.action === "release-scheduled")),
+    applyStart: summarizeDurations(applyStartEvents),
+    stateUpdateScheduled: summarizeDurations(panelReleaseEvents.filter((event) => event.action === "release-state-update-scheduled")),
+    liveDocRestored: summarizeDurations(liveDocRestoredEvents),
+    leftRailSnapshotActiveMs: liveDocRestoredEvents.reduce((max, event) => (
+      typeof event.durationMs === "number" && Number.isFinite(event.durationMs)
+        ? Math.max(max, event.durationMs)
+        : max
+    ), 0),
+    leftRailLiveDocRestoredMs: liveDocRestoredEvents.reduce((max, event) => (
+      typeof event.durationMs === "number" && Number.isFinite(event.durationMs)
+        ? Math.max(max, event.durationMs)
+        : max
+    ), 0),
+    deferredLeftRailReleaseRenderMs: leftRailAfterUrgentSummary.totalMs ?? 0,
+    deferredLeftRailReleaseRender: leftRailAfterUrgentSummary,
+    deferredLeftRailReleaseRanInsideUrgentStructuralFlush: (leftRailInsideUrgentSummary.totalMs ?? 0) > 5,
+    panelReleaseRanInsideUrgentStructuralFlush: (leftRailInsideUrgentSummary.totalMs ?? 0) > 5,
+    deferredReleaseStartedAfterFirstPaintMs: relativeTo(firstApplyStart, firstPaintAt),
+    deferredReleaseCompletedAfterFirstPaintMs: relativeTo(lastLiveDocRestored, firstPaintAt),
+    nextInputDuringDeferredReleaseCount: inputDuringDeferredReleaseCount,
+    panelSnapshotActiveMs: liveDocRestoredEvents.reduce((max, event) => (
+      typeof event.durationMs === "number" && Number.isFinite(event.durationMs)
+        ? Math.max(max, event.durationMs)
+        : max
+    ), 0),
+    panelLiveDocRestoredMs: liveDocRestoredEvents.reduce((max, event) => (
+      typeof event.durationMs === "number" && Number.isFinite(event.durationMs)
+        ? Math.max(max, event.durationMs)
+        : max
+    ), 0),
+    topToolbarRenderMsInsideUrgentFlush: componentMs(panelRenderInsideUrgentByComponent, "top-toolbar"),
+    rightRailRenderMsInsideUrgentFlush: rightRailMs(panelRenderInsideUrgentByComponent),
+    propertyPanelRenderMsInsideUrgentFlush: componentMs(panelRenderInsideUrgentByComponent, "right-rail-properties"),
+    pagePanelRenderMsInsideUrgentFlush: componentMs(panelRenderInsideUrgentByComponent, "right-rail-page"),
+    stylePanelRenderMsInsideUrgentFlush: componentMs(panelRenderInsideUrgentByComponent, "right-rail-style"),
+    totalPanelRenderMsInsideUrgentFlush: panelRenderInsideUrgentSummary.totalMs ?? 0,
+    totalPanelRenderMsAfterUrgentFlush: panelRenderAfterUrgentSummary.totalMs ?? 0,
+    panelRenderMsInsideUrgentFlush: panelRenderInsideUrgentSummary.totalMs ?? 0,
+    panelRenderMsAfterUrgentFlush: panelRenderAfterUrgentSummary.totalMs ?? 0,
+    panelRenderInsideUrgentFlush: {
+      ...panelRenderInsideUrgentSummary,
+      byComponent: panelRenderInsideUrgentByComponent,
+    },
+    panelRenderAfterUrgentFlush: {
+      ...panelRenderAfterUrgentSummary,
+      byComponent: panelRenderAfterUrgentByComponent,
+    },
+    events: panelReleaseEvents,
+  }
 }
 
 function summarizeTypingInputPhases(keystrokes) {
@@ -595,10 +971,14 @@ function summarizePerfEvents(perfEvents) {
   const flowdocStructuralTransactionEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-transaction")
   const flowdocStructuralAttributionEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-attribution")
   const flowdocStructuralRenderAttributionEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-render-attribution")
+  const flowdocStructuralPanelReleaseEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-panel-release")
+  const flowdocPreviewSettleRuntimeEvents = perfEvents.filter((event) => event.kind === "flowdoc-preview-settle-runtime")
+  const flowdocWysiwygDraftRuntimeEvents = perfEvents.filter((event) => event.kind === "flowdoc-wysiwyg-draft-runtime")
   const flowdocStructuralPaginationScheduleEvents = perfEvents.filter((event) => event.kind === "flowdoc-structural-pagination-schedule")
   const inlineEditStructuralRefocusEvents = perfEvents.filter((event) => event.kind === "inline-edit-structural-refocus")
   const optimisticIslandVisibleEvents = perfEvents.filter((event) => event.kind === "enter-key-to-optimistic-island-visible")
   const newCaretVisibleEvents = perfEvents.filter((event) => event.kind === "enter-key-to-new-caret-visible")
+  const firstStructuralIslandPaintAt = eventEndAt(optimisticIslandVisibleEvents[0])
   const structuralFullPaginationBeforeIslandEvents = perfEvents.filter((event) => event.kind === "structural-refocus-used-full-pagination-before-island")
   const optimisticRefocusStaleSettleIgnoredEvents = perfEvents.filter((event) => event.kind === "optimistic-refocus-stale-settle-ignored")
   const structuralSettledPaginationEvents = perfEvents.filter((event) => event.kind === "structural-refocus-settled-pagination")
@@ -612,27 +992,78 @@ function summarizePerfEvents(perfEvents) {
     acc[key] = (acc[key] ?? 0) + 1
     return acc
   }, {})
+  const structuralRuntimeEvents = flowdocStructuralTransactionEvents.filter((event) => (
+    String(event.action ?? "").startsWith("runtime-")
+  ))
+  const latestStructuralRuntimeEvent = structuralRuntimeEvents[structuralRuntimeEvents.length - 1] ?? null
+  const structuralRuntimeGuardDecisionEvents = structuralRuntimeEvents.filter((event) => (
+    event.action === "runtime-guard-allow" ||
+    event.action === "runtime-guard-guard" ||
+    event.action === "runtime-guard-ignore-composition"
+  ))
+  const repeatedEnterGuardedEvents = structuralRuntimeEvents.filter((event) => (
+    event.action === "runtime-guard-guard" &&
+    event.key === "Enter" &&
+    String(event.source ?? "").includes("repeated-enter")
+  ))
+  const repeatedBackspaceGuardedEvents = structuralRuntimeEvents.filter((event) => (
+    event.action === "runtime-guard-guard" &&
+    event.key === "Backspace" &&
+    (
+      String(event.source ?? "").includes("repeated-backspace") ||
+      String(event.source ?? "").includes("removed-node")
+    )
+  ))
   const structuralAttributionEventsByAction = flowdocStructuralAttributionEvents.reduce((acc, event) => {
     const key = `${event.operation ?? "unknown"}:${event.action ?? "unknown"}`
     acc[key] = (acc[key] ?? 0) + 1
     return acc
   }, {})
-  const structuralRenderComponentSummary = summarizeComponentRenderEvents(flowdocStructuralRenderAttributionEvents)
-  const structuralRenderPageViewEvents = flowdocStructuralRenderAttributionEvents.filter((event) => event.componentName === "PageView" || event.source === "PageView")
-  const structuralRenderMemoMissEvents = flowdocStructuralRenderAttributionEvents.filter((event) => event.action === "memo-miss")
-  const structuralRenderScopeEvents = flowdocStructuralRenderAttributionEvents.filter((event) => event.action === "render-scope")
-  const structuralRenderedPageIndexes = [...new Set(structuralRenderPageViewEvents
-    .map((event) => event.pageIndex)
-    .filter((value) => typeof value === "number"))]
-  const structuralUnaffectedRenderedPageIndexes = [...new Set(structuralRenderPageViewEvents
-    .filter((event) => event.unaffectedPage === true)
-    .map((event) => event.pageIndex)
-    .filter((value) => typeof value === "number"))]
+  const structuralFlushSyncWindows = flowdocStructuralTransactionEvents
+    .filter((event) => event.action === "flush-sync-transition" && event.active !== false)
+    .map((event) => ({
+      operation: event.operation ?? "unknown",
+      start: event.startedAt,
+      end: eventEndAt(event) ?? event.startedAt,
+      durationMs: event.durationMs,
+    }))
+    .filter((window) => (
+      typeof window.start === "number" &&
+      typeof window.end === "number" &&
+      Number.isFinite(window.start) &&
+      Number.isFinite(window.end)
+    ))
+  const structuralRenderSummary = summarizeStructuralRenderAttributionEvents(flowdocStructuralRenderAttributionEvents)
+  const structuralFlushSyncRenderSummary = summarizeStructuralRenderAttributionEvents(
+    flowdocStructuralRenderAttributionEvents.filter((event) => eventFallsWithinTimingWindows(event, structuralFlushSyncWindows)),
+  )
+  const structuralFlushPhaseSummary = buildStructuralFlushPhaseSummary(
+    flowdocStructuralRenderAttributionEvents,
+    structuralFlushSyncWindows,
+  )
+  const structuralPanelReleaseSummary = summarizeStructuralPanelReleaseEvents({
+    panelReleaseEvents: flowdocStructuralPanelReleaseEvents,
+    renderEvents: flowdocStructuralRenderAttributionEvents,
+    flushSyncWindows: structuralFlushSyncWindows,
+    firstPaintAt: firstStructuralIslandPaintAt,
+  })
   const structuralPaginationScheduleEventsByAction = flowdocStructuralPaginationScheduleEvents.reduce((acc, event) => {
     const action = event.action ?? "unknown"
     acc[action] = (acc[action] ?? 0) + 1
     return acc
   }, {})
+  const previewSettleRuntimeEventsByAction = flowdocPreviewSettleRuntimeEvents.reduce((acc, event) => {
+    const action = event.action ?? "unknown"
+    acc[action] = (acc[action] ?? 0) + 1
+    return acc
+  }, {})
+  const latestPreviewSettleRuntimeEvent = flowdocPreviewSettleRuntimeEvents[flowdocPreviewSettleRuntimeEvents.length - 1] ?? null
+  const wysiwygDraftRuntimeEventsByAction = flowdocWysiwygDraftRuntimeEvents.reduce((acc, event) => {
+    const action = event.action ?? "unknown"
+    acc[action] = (acc[action] ?? 0) + 1
+    return acc
+  }, {})
+  const latestWysiwygDraftRuntimeEvent = flowdocWysiwygDraftRuntimeEvents[flowdocWysiwygDraftRuntimeEvents.length - 1] ?? null
   const editorActionDispatchByCommand = editorActionDispatchEvents.reduce((acc, event) => {
     const commandType = event.commandType ?? "unknown"
     acc[commandType] = (acc[commandType] ?? 0) + 1
@@ -697,6 +1128,25 @@ function summarizePerfEvents(perfEvents) {
       structuralTransaction: {
         count: flowdocStructuralTransactionEvents.length,
         byAction: structuralTransactionEventsByAction,
+        runtime: {
+          structuralRuntimeGeneration: latestStructuralRuntimeEvent?.token ?? null,
+          structuralRuntimePhase: latestStructuralRuntimeEvent?.action ?? null,
+          structuralGuardDecisionCount: structuralRuntimeGuardDecisionEvents.length,
+          structuralGuardAllowCount: structuralRuntimeEvents.filter((event) => event.action === "runtime-guard-allow").length,
+          structuralGuardDropCount: structuralRuntimeEvents.filter((event) => event.action === "runtime-guard-guard").length,
+          structuralGuardCompositionIgnoredCount: structuralRuntimeEvents.filter((event) => event.action === "runtime-guard-ignore-composition").length,
+          staleStructuralUpdateIgnoredCount: structuralRuntimeEvents.filter((event) => event.action === "runtime-stale-ignored").length,
+          structuralTransactionAbortCount: structuralRuntimeEvents.filter((event) => event.action === "runtime-aborted").length,
+          structuralTransactionCompleteCount: structuralRuntimeEvents.filter((event) => event.action === "runtime-complete").length,
+          enterAfterSplitBackspaceAllowedCount: structuralRuntimeEvents.filter((event) => (
+            event.action === "runtime-guard-allow" &&
+            event.key === "Backspace" &&
+            event.source === "enter-after-split-backspace-allowed"
+          )).length,
+          repeatedEnterGuardedCount: repeatedEnterGuardedEvents.length,
+          repeatedBackspaceGuardedCount: repeatedBackspaceGuardedEvents.length,
+          events: structuralRuntimeEvents,
+        },
         draftTextResolve: summarizeDurations(flowdocStructuralTransactionEvents.filter((event) => event.action === "draft-text-resolve")),
         draftTextReplaceCount: flowdocStructuralTransactionEvents.filter((event) => (
           event.action === "draft-text-resolve" &&
@@ -737,31 +1187,45 @@ function summarizePerfEvents(perfEvents) {
         events: flowdocStructuralAttributionEvents,
       },
       structuralRender: {
-        count: flowdocStructuralRenderAttributionEvents.length,
-        componentRenderCountsDuringStructuralTransition: Object.fromEntries(
-          Object.entries(structuralRenderComponentSummary).map(([component, summary]) => [component, summary.count]),
-        ),
-        componentRenderMs: structuralRenderComponentSummary,
-        pagesRenderedDuringStructuralTransition: structuralRenderedPageIndexes.length,
-        renderedPageIndexes: structuralRenderedPageIndexes,
-        unaffectedPagesRenderedCount: structuralUnaffectedRenderedPageIndexes.length,
-        unaffectedPageIndexes: structuralUnaffectedRenderedPageIndexes,
-        memoMissCount: structuralRenderMemoMissEvents.length,
-        memoMissByReason: structuralRenderMemoMissEvents.reduce((acc, event) => {
-          const reason = event.renderReason ?? "unknown"
-          acc[reason] = (acc[reason] ?? 0) + 1
-          return acc
-        }, {}),
-        affectedPageCount: Math.max(0, ...structuralRenderScopeEvents
-          .map((event) => event.affectedPageCount)
-          .filter((value) => typeof value === "number")),
-        totalPageCount: Math.max(0, ...structuralRenderScopeEvents
-          .map((event) => event.totalPageCount)
-          .filter((value) => typeof value === "number")),
-        fragmentsRenderedDuringStructuralTransition: structuralRenderPageViewEvents.reduce((sum, event) => (
-          sum + (typeof event.fragmentCount === "number" ? event.fragmentCount : 0)
-        ), 0),
-        events: flowdocStructuralRenderAttributionEvents,
+        ...structuralRenderSummary,
+        flushSyncWindowCount: structuralFlushSyncWindows.length,
+        flushSyncWindows: structuralFlushSyncWindows,
+        flushSync: structuralFlushSyncRenderSummary,
+        flushSyncPhases: structuralFlushPhaseSummary,
+      },
+      structuralPanelRelease: structuralPanelReleaseSummary,
+      previewSettleRuntime: {
+        count: flowdocPreviewSettleRuntimeEvents.length,
+        byAction: previewSettleRuntimeEventsByAction,
+        previewSettleScheduledCount: previewSettleRuntimeEventsByAction["runtime-scheduled"] ?? 0,
+        previewSettleStartedCount: previewSettleRuntimeEventsByAction["runtime-started"] ?? 0,
+        previewSettleCompletedCount: previewSettleRuntimeEventsByAction["runtime-completed"] ?? 0,
+        previewSettleAppliedCount: previewSettleRuntimeEventsByAction["runtime-applied"] ?? 0,
+        previewSettleSupersededCount: previewSettleRuntimeEventsByAction["runtime-superseded"] ?? 0,
+        previewSettleIgnoredStaleCount: previewSettleRuntimeEventsByAction["runtime-ignored-stale"] ?? 0,
+        previewSettleFailedCount: previewSettleRuntimeEventsByAction["runtime-failed"] ?? 0,
+        previewSettleGeneration: latestPreviewSettleRuntimeEvent?.token ?? null,
+        previewSettleCurrentPhase: latestPreviewSettleRuntimeEvent?.previewSettlePhase ?? null,
+        previewSettleApplyDecision: latestPreviewSettleRuntimeEvent?.previewSettleApplyDecision ?? null,
+        previewSettleLatestAppliedGeneration: latestPreviewSettleRuntimeEvent?.previewSettleLatestAppliedGeneration ?? null,
+        events: flowdocPreviewSettleRuntimeEvents,
+      },
+      wysiwygDraftRuntime: {
+        count: flowdocWysiwygDraftRuntimeEvents.length,
+        byAction: wysiwygDraftRuntimeEventsByAction,
+        wysiwygDraftSessionBeginCount: latestWysiwygDraftRuntimeEvent?.wysiwygDraftSessionBeginCount ?? wysiwygDraftRuntimeEventsByAction["runtime-begin"] ?? 0,
+        wysiwygDraftSessionActiveCount: latestWysiwygDraftRuntimeEvent?.wysiwygDraftSessionActiveCount ?? wysiwygDraftRuntimeEventsByAction["runtime-active"] ?? 0,
+        wysiwygDraftSessionCommitCount: latestWysiwygDraftRuntimeEvent?.wysiwygDraftSessionCommitCount ?? wysiwygDraftRuntimeEventsByAction["runtime-committed"] ?? 0,
+        wysiwygDraftSessionCancelCount: latestWysiwygDraftRuntimeEvent?.wysiwygDraftSessionCancelCount ?? wysiwygDraftRuntimeEventsByAction["runtime-cancelled"] ?? 0,
+        wysiwygDraftSessionAbortCount: latestWysiwygDraftRuntimeEvent?.wysiwygDraftSessionAbortCount ?? wysiwygDraftRuntimeEventsByAction["runtime-aborted"] ?? 0,
+        wysiwygDraftCompositionStartCount: latestWysiwygDraftRuntimeEvent?.wysiwygDraftCompositionStartCount ?? wysiwygDraftRuntimeEventsByAction["runtime-composition-start"] ?? 0,
+        wysiwygDraftCompositionEndCount: latestWysiwygDraftRuntimeEvent?.wysiwygDraftCompositionEndCount ?? wysiwygDraftRuntimeEventsByAction["runtime-composition-end"] ?? 0,
+        wysiwygDraftStaleSessionIgnoredCount: latestWysiwygDraftRuntimeEvent?.wysiwygDraftStaleSessionIgnoredCount ?? wysiwygDraftRuntimeEventsByAction["runtime-stale-ignored"] ?? 0,
+        wysiwygDraftCurrentGeneration: latestWysiwygDraftRuntimeEvent?.wysiwygDraftCurrentGeneration ?? latestWysiwygDraftRuntimeEvent?.token ?? null,
+        wysiwygDraftCurrentPhase: latestWysiwygDraftRuntimeEvent?.wysiwygDraftCurrentPhase ?? null,
+        wysiwygDraftCurrentNodeId: latestWysiwygDraftRuntimeEvent?.wysiwygDraftCurrentNodeId ?? null,
+        wysiwygDraftSource: latestWysiwygDraftRuntimeEvent?.wysiwygDraftSource ?? latestWysiwygDraftRuntimeEvent?.source ?? null,
+        events: flowdocWysiwygDraftRuntimeEvents,
       },
       structuralPaginationSchedule: {
         count: flowdocStructuralPaginationScheduleEvents.length,
@@ -1242,6 +1706,29 @@ async function waitForWysiwygPerfEvent(page, kind, timeoutMs = READY_TIMEOUT_MS)
   } catch {
     return false
   }
+}
+
+async function waitForWysiwygPerfEventAction(page, kind, action, timeoutMs = READY_TIMEOUT_MS) {
+  try {
+    await page.waitForFunction(({ kind, action }) => (
+      (window.__flowDocWysiwygPerfEvents ?? []).some((event) => (
+        event.kind === kind &&
+        event.action === action
+      ))
+    ), { kind, action }, { timeout: timeoutMs })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function hasWysiwygPerfEventAction(page, kind, action) {
+  return await page.evaluate(({ kind, action }) => (
+    (window.__flowDocWysiwygPerfEvents ?? []).some((event) => (
+      event.kind === kind &&
+      event.action === action
+    ))
+  ), { kind, action })
 }
 
 async function startStructuralLongTaskCapture(page) {
@@ -3433,6 +3920,41 @@ async function waitForNodeFragmentPresent(page, nodeId, timeoutMs = 5000) {
   }
 }
 
+async function installStructuralTimingTrace(page) {
+  await page.evaluate(() => {
+    const previousCleanup = window.__flowDocStructuralProbeTimingTraceCleanup
+    if (typeof previousCleanup === "function") previousCleanup()
+    const trace = {
+      installedAt: performance.now(),
+      keydowns: [],
+    }
+    let sequence = 0
+    const onKeydown = (event) => {
+      if (event.key !== "Enter" && event.key !== "Backspace") return
+      const item = {
+        sequence,
+        key: event.key,
+        keydownStart: performance.now(),
+        firstRaf: null,
+      }
+      sequence += 1
+      trace.keydowns.push(item)
+      requestAnimationFrame(() => {
+        item.firstRaf = performance.now()
+      })
+    }
+    document.addEventListener("keydown", onKeydown, true)
+    window.__flowDocStructuralProbeTimingTrace = trace
+    window.__flowDocStructuralProbeTimingTraceCleanup = () => {
+      document.removeEventListener("keydown", onKeydown, true)
+    }
+  })
+}
+
+async function readStructuralTimingTrace(page) {
+  return await page.evaluate(() => window.__flowDocStructuralProbeTimingTrace ?? null)
+}
+
 async function pressEnterForOptimisticRefocus(page, previousNodeId) {
   const startedAt = await page.evaluate(() => performance.now())
   await page.keyboard.press("Enter")
@@ -3459,7 +3981,9 @@ async function pressEnterForOptimisticRefocus(page, previousNodeId) {
     newNodeId: island.nodeId,
     island,
     enterStartedAt: startedAt,
+    enterKeyPressReturnedAt: keyPressReturnedAt,
     enterKeyPressDurationMs: keyPressReturnedAt - startedAt,
+    firstRafAt,
     firstRafMs: firstRafAt - startedAt,
     enterToObservedIslandMs: endedAt - startedAt,
   }
@@ -3540,6 +4064,7 @@ async function runStructuralRefocusSafetyProbe(page) {
   }
   await waitForDoubleAnimationFrame(page)
   await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+  await installStructuralTimingTrace(page)
   await startStructuralLongTaskCapture(page)
 
   const steps = []
@@ -3594,6 +4119,7 @@ async function runStructuralRefocusSafetyProbe(page) {
       newNodeId: island.nodeId,
       island,
       enterStartedAt,
+      enterKeyPressReturnedAt,
       enterKeyPressDurationMs: enterKeyPressReturnedAt - enterStartedAt,
       enterToObservedIslandMs: island.readAt ? island.readAt - enterStartedAt : null,
     }
@@ -3627,6 +4153,35 @@ async function runStructuralRefocusSafetyProbe(page) {
       nextNodeId: structuralNextNodeId,
       staleTailText: structuralStaleTailText,
     })
+    if (PROBE_MODE === "enter-backspace-type-before-settle") {
+      const marker = "z"
+      const beforeFirstInput = await page.evaluate(() => performance.now())
+      await page.keyboard.type(marker)
+      const afterFirstInput = await page.evaluate(() => performance.now())
+      await waitForDoubleAnimationFrame(page)
+      const afterTypeIsland = await readActiveFlowdocDraftIsland(page)
+      const parentSyncObserved = await waitForWysiwygPerfEvent(page, "flowdoc-island-parent-sync", 2000)
+      await waitForDoubleAnimationFrame(page)
+      const afterSettleIsland = await readActiveFlowdocDraftIsland(page)
+      typedBeforeSettle = {
+        marker,
+        textLength: marker.length,
+        beforeFirstInputAt: beforeFirstInput,
+        afterFirstInputAt: afterFirstInput,
+        firstInputDurationMs: afterFirstInput - beforeFirstInput,
+        enterToFirstInputAcceptedMs: afterFirstInput - step.enterStartedAt,
+        backspaceToFirstInputAcceptedMs: afterFirstInput - backspaceStartedAt,
+        activeNodeAfterType: afterTypeIsland.nodeId,
+        activeNodeAfterSettle: afterSettleIsland.nodeId,
+        parentSyncObserved,
+        settledObserved: null,
+        activeTextLengthAfterType: afterTypeIsland.textLength,
+        activeTextLengthAfterSettle: afterSettleIsland.textLength,
+        typedTextVisibleAfterType: afterTypeIsland.lineSignatures.join("").includes(marker),
+        typedTextVisibleAfterSettle: afterSettleIsland.lineSignatures.join("").includes(marker),
+        caretVisibleAfterSettle: afterSettleIsland.caretOffset != null,
+      }
+    }
     const backspacePerfEvents = await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? [])
     const mergeEvents = backspacePerfEvents.filter((event) => (
       event.kind === "flowdoc-island-structural-edit" &&
@@ -3820,6 +4375,7 @@ async function runStructuralRefocusSafetyProbe(page) {
       newNodeId: island.nodeId,
       island,
       enterStartedAt,
+      enterKeyPressReturnedAt,
       enterKeyPressDurationMs: enterKeyPressReturnedAt - enterStartedAt,
       enterToObservedIslandMs: island.readAt ? island.readAt - enterStartedAt : null,
     }
@@ -3863,6 +4419,7 @@ async function runStructuralRefocusSafetyProbe(page) {
       const marker = "zp0b"
       const text = marker.repeat(Math.max(1, Math.ceil(STRUCTURAL_REFOCUS_TYPE_LENGTH / marker.length)))
         .slice(0, STRUCTURAL_REFOCUS_TYPE_LENGTH)
+      const visibleNeedle = text.length < marker.length ? text : marker
       const firstInput = text.slice(0, 1)
       const remainingInput = text.slice(1)
       const beforeFirstInput = await page.evaluate(() => performance.now())
@@ -3877,8 +4434,10 @@ async function runStructuralRefocusSafetyProbe(page) {
       const afterSettleIsland = await readActiveFlowdocDraftIsland(page)
       const lineText = afterSettleIsland.lineSignatures.join("")
       typedBeforeSettle = {
-        marker,
+        marker: visibleNeedle,
         textLength: text.length,
+        beforeFirstInputAt: beforeFirstInput,
+        afterFirstInputAt: afterFirstInput,
         firstInputDurationMs: afterFirstInput - beforeFirstInput,
         enterToFirstInputAcceptedMs: afterFirstInput - step.enterStartedAt,
         activeNodeAfterType: afterTypeIsland.nodeId,
@@ -3887,8 +4446,8 @@ async function runStructuralRefocusSafetyProbe(page) {
         settledObserved,
         activeTextLengthAfterType: afterTypeIsland.textLength,
         activeTextLengthAfterSettle: afterSettleIsland.textLength,
-        typedTextVisibleAfterType: afterTypeIsland.lineSignatures.join("").includes(marker),
-        typedTextVisibleAfterSettle: lineText.includes(marker),
+        typedTextVisibleAfterType: afterTypeIsland.lineSignatures.join("").includes(visibleNeedle),
+        typedTextVisibleAfterSettle: lineText.includes(visibleNeedle),
         caretVisibleAfterSettle: afterSettleIsland.caretOffset != null,
       }
     } else if (PROBE_MODE === "enter-undo") {
@@ -3977,7 +4536,20 @@ async function runStructuralRefocusSafetyProbe(page) {
   }
 
   screenshots.afterAction = await captureProbeScreenshot(page, "structural-after-action")
-  await page.waitForTimeout(650)
+  let structuralPanelLiveDocRestoredObserved = await waitForWysiwygPerfEventAction(
+    page,
+    "flowdoc-structural-panel-release",
+    "live-doc-restored",
+    Math.min(READY_TIMEOUT_MS, 5000),
+  )
+  if (!structuralPanelLiveDocRestoredObserved) {
+    await page.waitForTimeout(650)
+    structuralPanelLiveDocRestoredObserved = await hasWysiwygPerfEventAction(
+      page,
+      "flowdoc-structural-panel-release",
+      "live-doc-restored",
+    )
+  }
   const storedStructuralDocument = await readStoredStructuralDocumentState(
     page,
     targetNodeId,
@@ -3986,6 +4558,11 @@ async function runStructuralRefocusSafetyProbe(page) {
   )
   const longTaskSummary = await readStructuralLongTaskSummary(page)
   const perfEvents = preservedPerfEvents.concat(await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? []))
+  const structuralTimingTrace = buildStructuralTimingTrace({
+    perfEvents,
+    steps,
+    browserTimingTrace: await readStructuralTimingTrace(page),
+  })
   const perfSummary = summarizePerfEvents(perfEvents)
   const structural = perfSummary.flowdocIsland.structuralRefocus
   const structuralEdit = perfSummary.flowdocIsland.structuralEdit
@@ -4102,7 +4679,16 @@ async function runStructuralRefocusSafetyProbe(page) {
               backspaceAfterDispatchSafety?.ghostNewFragmentVisible === false &&
               backspaceAfterDispatchSafety?.ghostNewTextVisible !== true &&
               backspaceAfterDispatchSafety?.sourceRestoredTail !== false &&
-              backspaceAfterDispatchSafety?.documentOrderAfterMergeOk !== false
+              backspaceAfterDispatchSafety?.documentOrderAfterMergeOk !== false &&
+              (
+                PROBE_MODE !== "enter-backspace-type-before-settle" ||
+                (
+                  typedBeforeSettle?.parentSyncObserved &&
+                  typedBeforeSettle?.typedTextVisibleAfterType &&
+                  typedBeforeSettle?.typedTextVisibleAfterSettle &&
+                  typedBeforeSettle?.activeNodeAfterSettle === latestNodeId
+                )
+              )
             )
           : isBackspaceRapidProbeMode(PROBE_MODE)
             ? Boolean(
@@ -4134,7 +4720,11 @@ async function runStructuralRefocusSafetyProbe(page) {
       mode: PROBE_MODE,
       burstLength: TYPE_BURST_LENGTH,
       structuralEnterCount: PROBE_MODE === "enter-rapid" ? STRUCTURAL_REFOCUS_ENTER_COUNT : 1,
-      structuralTypeLength: PROBE_MODE === "enter-type-before-settle" ? STRUCTURAL_REFOCUS_TYPE_LENGTH : 0,
+      structuralTypeLength: PROBE_MODE === "enter-type-before-settle"
+        ? STRUCTURAL_REFOCUS_TYPE_LENGTH
+        : PROBE_MODE === "enter-backspace-type-before-settle"
+          ? 1
+          : 0,
       structuralMidSplitText: (PROBE_MODE === "enter-mid-split" || PROBE_MODE === "enter-rapid" || isEnterBackspaceProbeMode(PROBE_MODE) || isBackspaceRapidProbeMode(PROBE_MODE)) ? structuralMidSplitText : null,
       structuralStaleTailText: (PROBE_MODE === "enter-mid-split" || PROBE_MODE === "enter-rapid" || isEnterBackspaceProbeMode(PROBE_MODE) || isBackspaceRapidProbeMode(PROBE_MODE)) ? structuralStaleTailText : null,
       structuralNextNodeId: (PROBE_MODE === "enter-mid-split" || PROBE_MODE === "enter-rapid" || isEnterBackspaceProbeMode(PROBE_MODE) || isBackspaceRapidProbeMode(PROBE_MODE)) ? structuralNextNodeId : null,
@@ -4142,9 +4732,9 @@ async function runStructuralRefocusSafetyProbe(page) {
     },
     paintLatencyMs: {
       p50: null,
-      p95: optimisticVisibleMs,
-      p99: optimisticVisibleMs,
-      max: structural.optimisticIslandVisible.maxMs,
+      p95: structuralTimingTrace.metrics.firstIslandPaintMs ?? optimisticVisibleMs,
+      p99: structuralTimingTrace.metrics.firstIslandPaintMs ?? optimisticVisibleMs,
+      max: structuralTimingTrace.metrics.firstIslandPaintMs ?? structural.optimisticIslandVisible.maxMs,
     },
     keystrokeTotalMs: {
       p50: null,
@@ -4175,6 +4765,7 @@ async function runStructuralRefocusSafetyProbe(page) {
       optimisticRefocusStaleSettleIgnoredCount: structural.staleSettleIgnoredCount,
       structuralRefocusUsedFullPaginationBeforeIsland: fullPaginationBeforeIsland,
       typedBeforeSettle,
+      structuralPanelLiveDocRestoredObserved,
       midSplit,
       undoSafety,
       blurSafety,
@@ -4191,18 +4782,20 @@ async function runStructuralRefocusSafetyProbe(page) {
       paragraphResolveMaxMs: structuralTransaction.paragraphResolve.maxMs,
       optimisticPaginationMaxMs: structuralTransaction.optimisticPagination.maxMs,
       reducerDispatchCommitMaxMs: perfSummary.editorActionDispatch.maxMs,
-      flushSyncTransitionMaxMs: structuralTransaction.flushSyncTransition.maxMs,
+      flushSyncTransitionMaxMs: structuralTimingTrace.metrics.flushSyncMs ?? structuralTransaction.flushSyncTransition.maxMs,
       totalTransactionMaxMs: structuralTransaction.total.maxMs,
-      activeIslandPaintMaxMs: structural.optimisticIslandVisible.maxMs,
-      newCaretPaintMaxMs: structural.newCaretVisible.maxMs,
+      firstRafMs: structuralTimingTrace.metrics.firstRafMs,
+      activeIslandPaintMaxMs: structuralTimingTrace.metrics.firstIslandPaintMs ?? structural.optimisticIslandVisible.maxMs,
+      newCaretPaintMaxMs: structuralTimingTrace.metrics.caretVisibleMs ?? structural.newCaretVisible.maxMs,
       sourceParagraphClearedMs: midSplit?.sourceParagraphClearedMs ?? null,
-      fullSettleMaxMs: structural.settledPagination.maxMs,
+      fullSettleMaxMs: structuralTimingTrace.metrics.fullPaginationSettledMs ?? structural.settledPagination.maxMs,
       paginationScheduledCount: structuralPaginationSchedule.scheduledCount,
       paginationCompletedCount: structuralPaginationSchedule.completedCount,
       paginationSupersededCount: structuralPaginationSchedule.supersededCount,
       staleSettleIgnoredCount: structural.staleSettleIgnoredCount,
       structuralGuardDroppedCount: perfSummary.flowdocIsland.structuralGuard.droppedCount,
     },
+    structuralTimingTrace,
     longTasks: longTaskSummary,
     structuralExpectedSplit,
     structuralRegression,
@@ -4262,6 +4855,143 @@ function summarizePaginationStartDelay(scheduleEvents, browserPaginationEvents) 
   return Number.isFinite(delay) ? Math.max(0, delay) : null
 }
 
+function eventEndAt(event) {
+  if (!event || typeof event.startedAt !== "number" || typeof event.durationMs !== "number") return null
+  const endAt = event.startedAt + event.durationMs
+  return Number.isFinite(endAt) ? endAt : null
+}
+
+function relativeTo(value, anchor) {
+  return typeof value === "number" &&
+    typeof anchor === "number" &&
+    Number.isFinite(value) &&
+    Number.isFinite(anchor)
+    ? Math.max(0, value - anchor)
+    : null
+}
+
+function firstStructuralEvent(events, predicate) {
+  return events.find((event) => event && predicate(event)) ?? null
+}
+
+function buildStructuralTimingTrace({ perfEvents, steps, browserTimingTrace }) {
+  const firstStep = steps[0] ?? null
+  const browserKeydownTraces = Array.isArray(browserTimingTrace?.keydowns)
+    ? browserTimingTrace.keydowns
+    : []
+  const enterKeydownTrace = browserKeydownTraces
+    .find((event) => event.key === "Enter") ?? null
+  const backspaceKeydownTrace = browserKeydownTraces
+    .find((event) => event.key === "Backspace") ?? null
+  const keydownStart = enterKeydownTrace?.keydownStart ?? firstStep?.enterStartedAt ?? null
+  const keydownEnd = firstStep?.enterKeyPressReturnedAt ??
+    (typeof firstStep?.enterStartedAt === "number" && typeof firstStep?.enterKeyPressDurationMs === "number"
+      ? firstStep.enterStartedAt + firstStep.enterKeyPressDurationMs
+      : null)
+  const firstRaf = enterKeydownTrace?.firstRaf ?? firstStep?.firstRafAt ?? null
+  const flushSyncEvent = firstStructuralEvent(perfEvents, (event) => (
+    event.kind === "flowdoc-structural-transaction" &&
+    event.action === "flush-sync-transition" &&
+    event.operation === "split" &&
+    event.active !== false
+  ))
+  const islandVisibleEvent = firstStructuralEvent(perfEvents, (event) => (
+    event.kind === "enter-key-to-optimistic-island-visible" &&
+    event.active !== false
+  ))
+  const caretVisibleEvent = firstStructuralEvent(perfEvents, (event) => (
+    event.kind === "enter-key-to-new-caret-visible" &&
+    event.active !== false
+  ))
+  const browserPaginationEvent = firstStructuralEvent(perfEvents, (event) => (
+    event.kind === "browser-preview-pagination"
+  ))
+  const settledPaginationEvent = firstStructuralEvent(perfEvents, (event) => (
+    event.kind === "structural-refocus-settled-pagination" &&
+    event.active !== false
+  ))
+  const keydownAttributionEvent = firstStructuralEvent(perfEvents, (event) => (
+    event.kind === "flowdoc-structural-attribution" &&
+    event.operation === "split" &&
+    event.action === "keydown-total" &&
+    event.active !== false
+  ))
+  const flushSyncStart = flushSyncEvent?.startedAt ?? null
+  const flushSyncEnd = eventEndAt(flushSyncEvent)
+  const islandDomVisible = eventEndAt(islandVisibleEvent)
+  const caretVisible = eventEndAt(caretVisibleEvent)
+  const fullPaginationStart = browserPaginationEvent?.startedAt ?? null
+  const fullPaginationEnd = eventEndAt(browserPaginationEvent) ?? eventEndAt(settledPaginationEvent)
+  const fullPaginationSettled = eventEndAt(settledPaginationEvent) ?? fullPaginationEnd
+  const enterHandlerMs = typeof keydownAttributionEvent?.durationMs === "number"
+    ? keydownAttributionEvent.durationMs
+    : firstStep?.enterKeyPressDurationMs ?? null
+  const firstIslandPaintMs = relativeTo(islandDomVisible, keydownStart)
+  const firstRafMs = relativeTo(firstRaf, keydownStart)
+  const firstBackspaceRafMs = relativeTo(backspaceKeydownTrace?.firstRaf ?? null, backspaceKeydownTrace?.keydownStart ?? null)
+  const fullPaginationSettledMs = relativeTo(fullPaginationSettled, keydownStart)
+  const enterHandlerGreaterThanFirstIslandPaint = typeof enterHandlerMs === "number" &&
+    typeof firstIslandPaintMs === "number" &&
+    enterHandlerMs > firstIslandPaintMs
+
+  return {
+    anchors: {
+      keydownStart,
+      flushSyncStart,
+      flushSyncEnd,
+      keydownEnd,
+      firstRaf,
+      islandDomVisible,
+      caretVisible,
+      fullPaginationStart,
+      fullPaginationEnd,
+      backspaceKeydownStart: backspaceKeydownTrace?.keydownStart ?? null,
+      backspaceFirstRaf: backspaceKeydownTrace?.firstRaf ?? null,
+    },
+    relativeToKeydownStartMs: {
+      keydownStart: relativeTo(keydownStart, keydownStart),
+      flushSyncStart: relativeTo(flushSyncStart, keydownStart),
+      flushSyncEnd: relativeTo(flushSyncEnd, keydownStart),
+      keydownEnd: relativeTo(keydownEnd, keydownStart),
+      firstRaf: firstRafMs,
+      islandDomVisible: firstIslandPaintMs,
+      caretVisible: relativeTo(caretVisible, keydownStart),
+      fullPaginationStart: relativeTo(fullPaginationStart, keydownStart),
+      fullPaginationEnd: relativeTo(fullPaginationEnd, keydownStart),
+      backspaceKeydownStart: relativeTo(backspaceKeydownTrace?.keydownStart ?? null, keydownStart),
+      backspaceFirstRaf: relativeTo(backspaceKeydownTrace?.firstRaf ?? null, keydownStart),
+    },
+    metrics: {
+      enterHandlerMs,
+      flushSyncMs: typeof flushSyncEvent?.durationMs === "number" ? flushSyncEvent.durationMs : null,
+      firstRafMs,
+      firstBackspaceRafMs,
+      firstIslandPaintMs,
+      caretVisibleMs: relativeTo(caretVisible, keydownStart),
+      fullPaginationSettledMs,
+    },
+    sourceEvents: {
+      keydownStart: enterKeydownTrace ? "browser-keydown-listener" : "playwright-before-keyboard-press",
+      keydownEnd: firstStep?.enterKeyPressReturnedAt ? "playwright-keyboard-press-returned" : null,
+      firstRaf: enterKeydownTrace?.firstRaf ? "browser-keydown-requestAnimationFrame" : firstStep?.firstRafAt ? "post-keypress-requestAnimationFrame" : null,
+      islandDomVisible: islandVisibleEvent ? "enter-key-to-optimistic-island-visible" : null,
+      caretVisible: caretVisibleEvent ? "enter-key-to-new-caret-visible" : null,
+      fullPaginationStart: browserPaginationEvent ? "browser-preview-pagination.startedAt" : null,
+      fullPaginationEnd: browserPaginationEvent ? "browser-preview-pagination.end" : settledPaginationEvent ? "structural-refocus-settled-pagination.end" : null,
+      backspaceKeydownStart: backspaceKeydownTrace ? "browser-keydown-listener" : null,
+      backspaceFirstRaf: backspaceKeydownTrace?.firstRaf ? "browser-keydown-requestAnimationFrame" : null,
+    },
+    consistency: {
+      firstIslandPaintMeasuredFrom: "keydownStart",
+      firstIslandPaintMeasures: "island DOM visibility recorded by the draft island layout-effect event; it is not the full-pagination settle time",
+      enterHandlerGreaterThanFirstIslandPaint,
+      explanation: enterHandlerGreaterThanFirstIslandPaint
+        ? "The draft island DOM visibility event can be recorded during the synchronous keydown/flushSync commit before the Playwright key press returns; firstRaf is the first post-keydown paint opportunity."
+        : "Metric order is consistent for this sample.",
+    },
+  }
+}
+
 function chooseLargestPhase(timings) {
   const candidates = Object.entries(timings)
     .filter(([key, value]) => key.endsWith("Ms") && typeof value === "number" && Number.isFinite(value))
@@ -4269,6 +4999,35 @@ function chooseLargestPhase(timings) {
   if (candidates.length === 0) return { largestPhase: null, largestPhaseMs: null }
   const [largestPhase, largestPhaseMs] = candidates[0]
   return { largestPhase, largestPhaseMs }
+}
+
+function classifyBoundarySafeSuppressionObservation({
+  expected,
+  observed,
+  required = true,
+  activeWindowObserved = null,
+}) {
+  if (required === false) return "not-required"
+  if (!expected) return "not-applicable"
+  if (observed === true) return "suppressed"
+  if (observed === false) return "not-observed"
+  if (activeWindowObserved === false) return "not-observed"
+  return "unknown"
+}
+
+function buildProbeFrameWindowMetadata({
+  waitedForFullSettle,
+  waitedForBoundarySafeClear,
+}) {
+  return {
+    probeFrameWindowMs: STRUCTURAL_MID_SPLIT_FRAME_WINDOW_MS,
+    probeUsedExtendedFrameWindow: PROBE_USED_EXTENDED_FRAME_WINDOW,
+    probeExtendedFrameWindowReason: PROBE_USED_EXTENDED_FRAME_WINDOW
+      ? "configured PROBE_ENTER_FRAME_DELAYS_MS extended the frame sample window for slow full-pagination settle"
+      : null,
+    probeWaitedForFullSettle: waitedForFullSettle,
+    probeWaitedForBoundarySafeClear: waitedForBoundarySafeClear,
+  }
 }
 
 function buildStructuralPerformanceAttribution({
@@ -4286,12 +5045,23 @@ function buildStructuralPerformanceAttribution({
   const structuralTransaction = island.structuralTransaction ?? {}
   const structuralAttribution = island.structuralAttribution ?? {}
   const structuralRender = island.structuralRender ?? {}
+  const structuralFlushRender = structuralRender.flushSync ?? structuralRender
+  const structuralFlushPhases = structuralRender.flushSyncPhases ?? {}
+  const splitFlushPhase = structuralFlushPhases.splitFlush ?? {}
+  const mergeFlushPhase = structuralFlushPhases.mergeFlush ?? {}
+  const deferredLeftRailReleaseRender = structuralFlushPhases.deferredLeftRailReleaseRender ?? {}
+  const leftRailSplitFlushGuard = structuralFlushPhases.leftRailSplitFlushGuard ?? null
+  const structuralPanelRelease = island.structuralPanelRelease ?? {}
+  const previewSettleRuntime = island.previewSettleRuntime ?? {}
+  const wysiwygDraftRuntime = island.wysiwygDraftRuntime ?? {}
   const structuralRefocus = island.structuralRefocus ?? {}
   const structuralPaginationSchedule = island.structuralPaginationSchedule ?? {}
   const structuralEdit = island.structuralEdit ?? {}
   const structuralGuard = island.structuralGuard ?? {}
+  const structuralRuntime = structuralTransaction.runtime ?? {}
   const latency = probeResult.structuralLatency ?? {}
   const safety = probeResult.structuralRefocusSafety
+  const typedBeforeSettle = safety.typedBeforeSettle ?? null
   const firstStep = safety.steps?.[0] ?? null
   const mode = probeResult.action?.mode ?? PROBE_MODE
   const file = reportFilePath(probeDocument?.path)
@@ -4310,19 +5080,48 @@ function buildStructuralPerformanceAttribution({
   const scheduleEvents = structuralPaginationSchedule.events ?? []
   const attributionEvents = structuralAttribution.events ?? []
   const transactionEvents = structuralTransaction.events ?? []
+  const timingTrace = probeResult.structuralTimingTrace ?? null
+  const traceMetrics = timingTrace?.metrics ?? {}
   const optimisticEvents = transactionEvents.filter((event) => event.action === "optimistic-pagination")
   const splitOptimisticEvents = optimisticEvents.filter((event) => event.operation === "split")
   const mergeOptimisticEvents = optimisticEvents.filter((event) => event.operation === "merge")
   const boundarySafeEvents = structuralAttribution.boundarySafeEvents ?? []
   const firstBoundarySafeEvent = boundarySafeEvents[0] ?? optimisticEvents.find((event) => event.optimisticMode === "boundary-safe") ?? null
+  const firstInputStartAt = typeof typedBeforeSettle?.beforeFirstInputAt === "number" ? typedBeforeSettle.beforeFirstInputAt : null
+  const firstInputEndAt = typeof typedBeforeSettle?.afterFirstInputAt === "number" ? typedBeforeSettle.afterFirstInputAt : null
+  const firstInputDurationMs = typeof typedBeforeSettle?.firstInputDurationMs === "number" ? typedBeforeSettle.firstInputDurationMs : null
+  const firstReleaseApplyStartedAt = typeof structuralPanelRelease.firstReleaseApplyStartedAt === "number"
+    ? structuralPanelRelease.firstReleaseApplyStartedAt
+    : null
+  const deferredReleaseRenderMs = typeof structuralPanelRelease.deferredLeftRailReleaseRenderMs === "number"
+    ? structuralPanelRelease.deferredLeftRailReleaseRenderMs
+    : 0
+  const deferredReleaseRenderEndAt = firstReleaseApplyStartedAt == null
+    ? null
+    : firstReleaseApplyStartedAt + deferredReleaseRenderMs
+  const inputOverlapsDeferredRelease = firstInputStartAt != null &&
+    firstInputEndAt != null &&
+    firstReleaseApplyStartedAt != null &&
+    deferredReleaseRenderEndAt != null &&
+    firstInputStartAt <= deferredReleaseRenderEndAt &&
+    firstInputEndAt >= firstReleaseApplyStartedAt
+  const deferredReleaseBlockedInputLikely = typedBeforeSettle
+    ? Boolean(inputOverlapsDeferredRelease && (firstInputDurationMs ?? 0) > 50)
+    : null
   const correctnessErrors = []
   if (uxVerification?.errors?.length) correctnessErrors.push(...uxVerification.errors)
   if (consoleNodeNotFoundErrorCount > 0) correctnessErrors.push("node-not-found console error detected")
   if (consoleErrors.length > 0) correctnessErrors.push("browser console errors detected")
   if (pageErrors.length > 0) correctnessErrors.push("browser page errors detected")
+  if (leftRailSplitFlushGuard?.passed === false) {
+    correctnessErrors.push(`left-rail split flush guard failed: ${leftRailSplitFlushGuard.actualMs}ms > ${leftRailSplitFlushGuard.thresholdMs}ms`)
+  }
+  if (safety.structuralPanelLiveDocRestoredObserved === false) {
+    correctnessErrors.push("structural panel live document restore was not observed")
+  }
 
   const timings = {
-    enterHandlerMs: maxDuration(structuralAttribution.keydownSplit) ?? latency.keydownSplitHandlerMaxMs ?? firstStep?.enterKeyPressDurationMs ?? null,
+    enterHandlerMs: traceMetrics.enterHandlerMs ?? maxDuration(structuralAttribution.keydownSplit) ?? latency.keydownSplitHandlerMaxMs ?? firstStep?.enterKeyPressDurationMs ?? null,
     backspaceHandlerMs: maxDuration(structuralAttribution.keydownMerge) ?? latency.keydownMergeHandlerMaxMs ?? null,
     draftResolveMs: maxDuration(structuralAttribution.draftSplitTextResolve) ?? latency.draftTextResolveMaxMs ?? null,
     caretResolveMs: maxDuration(structuralAttribution.caretResolve),
@@ -4338,32 +5137,221 @@ function buildStructuralPerformanceAttribution({
     optimisticPaginationMs: maxDuration(structuralTransaction.optimisticPagination),
     optimisticSplitRefocusMs: summarizeDurations(splitOptimisticEvents).maxMs,
     optimisticMergeRefocusMs: summarizeDurations(mergeOptimisticEvents).maxMs,
-    flushSyncMs: maxDuration(structuralTransaction.flushSyncTransition),
+    flushSyncMs: traceMetrics.flushSyncMs ?? maxDuration(structuralTransaction.flushSyncTransition),
     dispatchMs: maxDuration(structuralAttribution.dispatch) ?? maxDuration(perfSummary.editorActionDispatch),
     reducerMs: maxDuration(structuralAttribution.reducerTotal),
     islandOverrideSetupMs: maxDuration(structuralAttribution.islandOverrideSetup),
     textSessionSetupMs: maxDuration(structuralAttribution.textSessionSetup),
     structuralTransitionCommitMs: maxDuration(structuralTransaction.flushSyncTransition),
-    firstRafMs: firstStep?.firstRafMs ?? null,
-    firstIslandPaintMs: latency.activeIslandPaintMaxMs ?? firstStep?.enterToObservedIslandMs ?? null,
+    firstRafMs: traceMetrics.firstRafMs ?? latency.firstRafMs ?? firstStep?.firstRafMs ?? null,
+    firstBackspaceRafMs: traceMetrics.firstBackspaceRafMs ?? null,
+    firstIslandPaintMs: traceMetrics.firstIslandPaintMs ?? latency.activeIslandPaintMaxMs ?? firstStep?.enterToObservedIslandMs ?? null,
     sourceParagraphUpdatedMs: latency.sourceParagraphClearedMs ??
       (safety.backspaceAfterDispatchSafety?.splitFrame?.sourceImmediatelyCleared === true ||
       safety.backspaceRapidSafety?.splitFrame?.sourceImmediatelyCleared === true
         ? 0
         : null),
     duplicateTextGoneMs: structuralRegression?.duplicateTextDetected === false ? 0 : null,
-    caretVisibleMs: latency.newCaretPaintMaxMs ?? null,
+    caretVisibleMs: traceMetrics.caretVisibleMs ?? latency.newCaretPaintMaxMs ?? null,
     pageBreakSuppressionVisibleMs: structuralRegression?.coverBreakSuppressedDuringActiveIsland === true ? 0 : null,
     fullPaginationScheduledMs: maxDuration(structuralPaginationSchedule.scheduled),
     fullPaginationStartDelayMs: summarizePaginationStartDelay(scheduleEvents, browserPaginationEvents),
     fullPaginationComputeMs: maxDuration(perfSummary.browserPreviewPagination),
-    fullPaginationSettledMs: latency.fullSettleMaxMs ?? null,
+    fullPaginationSettledMs: traceMetrics.fullPaginationSettledMs ?? latency.fullSettleMaxMs ?? null,
     pagesRenderedDuringStructuralTransition: structuralRender.pagesRenderedDuringStructuralTransition ?? null,
     totalPageCount: structuralRender.totalPageCount ?? null,
     affectedPageCount: structuralRender.affectedPageCount ?? null,
+    canvasViewportAffectedPageCount: structuralRender.canvasViewportAffectedPageCount ?? null,
+    canvasViewportSuppressedPageBreakCount: structuralRender.canvasViewportSuppressedPageBreakCount ?? null,
+    canvasViewportUnrelatedPageBreakSuppressedCount: structuralRender.canvasViewportUnrelatedPageBreakSuppressedCount ?? null,
     unaffectedPagesRenderedCount: structuralRender.unaffectedPagesRenderedCount ?? null,
     fragmentsRenderedDuringStructuralTransition: structuralRender.fragmentsRenderedDuringStructuralTransition ?? null,
   }
+  const comparatorByComponent = structuralFlushRender.memoComparator?.byComponent ?? {}
+  const profilerActualByComponent = structuralFlushRender.profilerActualDuration?.byComponent ?? {}
+  const shellDerivedMs = structuralFlushRender.shellDerived?.totalMs ?? 0
+  const canvasDerivedMs = structuralFlushRender.canvasDerived?.totalMs ?? 0
+  const pageViewComparatorMs = comparatorByComponent.PageViewMemo?.totalMs ?? 0
+  const pageSlotComparatorMs = comparatorByComponent.EditorCanvasPageSlotMemo?.totalMs ?? 0
+  const totalComparatorMs = structuralFlushRender.memoComparator?.totalMs ?? 0
+  const reactActualDurationMs = structuralFlushRender.profilerActualDuration?.totalMs ?? 0
+  const layoutEffectMs = structuralFlushRender.layoutEffects?.totalMs ?? 0
+  const attributedRenderMs = shellDerivedMs + canvasDerivedMs + totalComparatorMs + reactActualDurationMs + layoutEffectMs
+  const flushSyncWindows = structuralRender.flushSyncWindows ?? []
+  const flushSyncWindowTotalMs = flushSyncWindows.reduce((sum, window) => (
+    sum + (typeof window.durationMs === "number" && Number.isFinite(window.durationMs) ? window.durationMs : 0)
+  ), 0)
+  const splitFlushSyncWindowMs = flushSyncWindows
+    .filter((window) => window.operation === "split")
+    .reduce((sum, window) => sum + (typeof window.durationMs === "number" && Number.isFinite(window.durationMs) ? window.durationMs : 0), 0)
+  const mergeFlushSyncWindowMs = flushSyncWindows
+    .filter((window) => window.operation === "merge")
+    .reduce((sum, window) => sum + (typeof window.durationMs === "number" && Number.isFinite(window.durationMs) ? window.durationMs : 0), 0)
+  const unattributedFlushSyncMs = flushSyncWindowTotalMs > 0
+    ? Math.max(0, flushSyncWindowTotalMs - attributedRenderMs)
+    : typeof timings.flushSyncMs === "number"
+      ? Math.max(0, timings.flushSyncMs - attributedRenderMs)
+      : null
+  const flushSyncRenderBreakdown = {
+    shellDerivedMs,
+    shellDerivedByAction: structuralFlushRender.shellDerived?.byAction ?? {},
+    canvasDerivedMs,
+    canvasDerivedByAction: structuralFlushRender.canvasDerived?.byAction ?? {},
+    pageViewComparatorMs,
+    pageSlotComparatorMs,
+    totalComparatorMs,
+    comparatorCount: structuralFlushRender.memoComparator?.comparatorCount ?? 0,
+    comparatorByComponent,
+    comparatorByReason: structuralFlushRender.memoComparator?.byReason ?? {},
+    reactActualDurationMs,
+    reactActualDurationByComponent: profilerActualByComponent,
+    editorCanvasActualDurationMs: profilerActualByComponent.EditorCanvas?.totalMs ?? 0,
+    pageViewActualDurationMs: profilerActualByComponent.PageView?.totalMs ?? 0,
+    shellSubtreeActualDurationMs: Object.entries(profilerActualByComponent)
+      .filter(([component]) => component !== "EditorCanvas" && component !== "PageView")
+      .reduce((sum, [, summary]) => sum + (summary?.totalMs ?? 0), 0),
+    layoutEffectMs,
+    layoutEffectByAction: structuralFlushRender.layoutEffects?.byAction ?? {},
+    reducerDispatchMs: timings.dispatchMs,
+    reducerMs: timings.reducerMs,
+    islandDomVisibleMs: timings.firstIslandPaintMs,
+    caretVisibleMs: timings.caretVisibleMs,
+    firstRafMs: timings.firstRafMs,
+    attributedRenderMs,
+    unattributedFlushSyncMs,
+    flushSyncWindowTotalMs,
+    splitFlushSyncWindowMs,
+    mergeFlushSyncWindowMs,
+    splitReactActualDurationMs: splitFlushPhase.reactActualDurationMs ?? 0,
+    mergeReactActualDurationMs: mergeFlushPhase.reactActualDurationMs ?? 0,
+    splitLeftRailActualDurationMs: splitFlushPhase.leftRailActualDurationMs ?? 0,
+    mergeLeftRailActualDurationMs: mergeFlushPhase.leftRailActualDurationMs ?? 0,
+    deferredLeftRailReleaseScheduledMs: structuralPanelRelease.scheduled?.maxMs ?? null,
+    deferredLeftRailReleaseStartedMs: structuralPanelRelease.applyStart?.maxMs ?? null,
+    deferredLeftRailReleaseRenderMs: structuralPanelRelease.deferredLeftRailReleaseRenderMs ??
+      deferredLeftRailReleaseRender.reactActualDurationMs ??
+      0,
+    deferredLeftRailReleaseAppliedMs: structuralPanelRelease.liveDocRestored?.maxMs ?? null,
+    deferredLeftRailReleaseCancelledCount: structuralPanelRelease.cancelledCount ?? 0,
+    deferredLeftRailReleaseSupersededCount: structuralPanelRelease.supersededCount ?? 0,
+    deferredReleaseCancelledCount: structuralPanelRelease.cancelledCount ?? 0,
+    deferredReleaseSupersededCount: structuralPanelRelease.supersededCount ?? 0,
+    deferredLeftRailReleaseRanInsideUrgentStructuralFlush: structuralPanelRelease.deferredLeftRailReleaseRanInsideUrgentStructuralFlush === true,
+    deferredReleaseBlockedInputLikely,
+    deferredReleaseStartedAfterFirstPaintMs: structuralPanelRelease.deferredReleaseStartedAfterFirstPaintMs ?? null,
+    deferredReleaseCompletedAfterFirstPaintMs: structuralPanelRelease.deferredReleaseCompletedAfterFirstPaintMs ?? null,
+    leftRailSnapshotActiveMs: structuralPanelRelease.leftRailSnapshotActiveMs ?? null,
+    leftRailLiveDocRestoredMs: structuralPanelRelease.leftRailLiveDocRestoredMs ?? null,
+    topToolbarRenderMsInsideUrgentFlush: structuralPanelRelease.topToolbarRenderMsInsideUrgentFlush ?? 0,
+    rightRailRenderMsInsideUrgentFlush: structuralPanelRelease.rightRailRenderMsInsideUrgentFlush ?? 0,
+    propertyPanelRenderMsInsideUrgentFlush: structuralPanelRelease.propertyPanelRenderMsInsideUrgentFlush ?? 0,
+    pagePanelRenderMsInsideUrgentFlush: structuralPanelRelease.pagePanelRenderMsInsideUrgentFlush ?? 0,
+    stylePanelRenderMsInsideUrgentFlush: structuralPanelRelease.stylePanelRenderMsInsideUrgentFlush ?? 0,
+    totalPanelRenderMsInsideUrgentFlush: structuralPanelRelease.totalPanelRenderMsInsideUrgentFlush ?? 0,
+    totalPanelRenderMsAfterUrgentFlush: structuralPanelRelease.totalPanelRenderMsAfterUrgentFlush ?? 0,
+    panelRenderMsInsideUrgentFlush: structuralPanelRelease.panelRenderMsInsideUrgentFlush ?? 0,
+    panelRenderMsAfterUrgentFlush: structuralPanelRelease.panelRenderMsAfterUrgentFlush ?? 0,
+    nextInputDuringDeferredReleaseCount: structuralPanelRelease.nextInputDuringDeferredReleaseCount ?? 0,
+    panelDeferralBeginCount: structuralPanelRelease.panelDeferralBeginCount ?? 0,
+    panelSnapshotActiveCount: structuralPanelRelease.panelSnapshotActiveCount ?? 0,
+    panelDeferralScheduledCount: structuralPanelRelease.panelDeferralScheduledCount ?? structuralPanelRelease.scheduledCount ?? 0,
+    panelDeferralCancelCount: structuralPanelRelease.panelDeferralCancelCount ?? structuralPanelRelease.cancelledCount ?? 0,
+    panelDeferralReleaseStartedCount: structuralPanelRelease.panelDeferralReleaseStartedCount ?? structuralPanelRelease.applyStartCount ?? 0,
+    panelDeferralReleaseCompletedCount: structuralPanelRelease.panelDeferralReleaseCompletedCount ?? structuralPanelRelease.liveDocRestoredCount ?? 0,
+    stalePanelReleaseIgnoredCount: structuralPanelRelease.stalePanelReleaseIgnoredCount ?? structuralPanelRelease.supersededCount ?? 0,
+    panelInputDuringDeferralCount: structuralPanelRelease.panelInputDuringDeferralCount ?? structuralPanelRelease.inputDuringDeferCount ?? 0,
+    panelSnapshotActiveMs: structuralPanelRelease.panelSnapshotActiveMs ?? structuralPanelRelease.leftRailSnapshotActiveMs ?? null,
+    panelLiveDocRestoredMs: structuralPanelRelease.panelLiveDocRestoredMs ?? structuralPanelRelease.leftRailLiveDocRestoredMs ?? null,
+    firstBackspaceRafMs: timings.firstBackspaceRafMs,
+    leftRailSplitFlushGuard,
+    structuralFlushPhases,
+    structuralPanelRelease,
+    flushSyncWindowCount: structuralRender.flushSyncWindowCount ?? 0,
+    flushSyncWindows,
+    pagesRenderedInFlushSyncWindow: structuralFlushRender.pagesRenderedDuringStructuralTransition ?? null,
+    unaffectedPagesRenderedInFlushSyncWindow: structuralFlushRender.unaffectedPagesRenderedCount ?? null,
+  }
+  const renderBucketLargest = chooseLargestPhase({
+    shellDerivedMs,
+    canvasDerivedMs,
+    totalComparatorMs,
+    reactActualDurationMs,
+    layoutEffectMs,
+    unattributedFlushSyncMs,
+  })
+  Object.assign(timings, {
+    shellDerivedMs,
+    canvasDerivedMs,
+    totalComparatorMs,
+    pageViewComparatorMs,
+    pageSlotComparatorMs,
+    reactActualDurationMs,
+    layoutEffectMs,
+    attributedRenderMs,
+    unattributedFlushSyncMs,
+    flushSyncWindowTotalMs,
+    splitFlushSyncWindowMs,
+    mergeFlushSyncWindowMs,
+    splitReactActualDurationMs: splitFlushPhase.reactActualDurationMs ?? 0,
+    mergeReactActualDurationMs: mergeFlushPhase.reactActualDurationMs ?? 0,
+    splitLeftRailActualDurationMs: splitFlushPhase.leftRailActualDurationMs ?? 0,
+    mergeLeftRailActualDurationMs: mergeFlushPhase.leftRailActualDurationMs ?? 0,
+    deferredLeftRailReleaseScheduledMs: structuralPanelRelease.scheduled?.maxMs ?? null,
+    deferredLeftRailReleaseStartedMs: structuralPanelRelease.applyStart?.maxMs ?? null,
+    deferredLeftRailReleaseRenderMs: structuralPanelRelease.deferredLeftRailReleaseRenderMs ??
+      deferredLeftRailReleaseRender.reactActualDurationMs ??
+      0,
+    deferredLeftRailReleaseAppliedMs: structuralPanelRelease.liveDocRestored?.maxMs ?? null,
+    deferredLeftRailReleaseCancelledCount: structuralPanelRelease.cancelledCount ?? 0,
+    deferredLeftRailReleaseSupersededCount: structuralPanelRelease.supersededCount ?? 0,
+    deferredReleaseCancelledCount: structuralPanelRelease.cancelledCount ?? 0,
+    deferredReleaseSupersededCount: structuralPanelRelease.supersededCount ?? 0,
+    deferredLeftRailReleaseRanInsideUrgentStructuralFlush: structuralPanelRelease.deferredLeftRailReleaseRanInsideUrgentStructuralFlush === true,
+    deferredReleaseBlockedInputLikely,
+    deferredReleaseStartedAfterFirstPaintMs: structuralPanelRelease.deferredReleaseStartedAfterFirstPaintMs ?? null,
+    deferredReleaseCompletedAfterFirstPaintMs: structuralPanelRelease.deferredReleaseCompletedAfterFirstPaintMs ?? null,
+    leftRailSnapshotActiveMs: structuralPanelRelease.leftRailSnapshotActiveMs ?? null,
+    leftRailLiveDocRestoredMs: structuralPanelRelease.leftRailLiveDocRestoredMs ?? null,
+    topToolbarRenderMsInsideUrgentFlush: structuralPanelRelease.topToolbarRenderMsInsideUrgentFlush ?? 0,
+    rightRailRenderMsInsideUrgentFlush: structuralPanelRelease.rightRailRenderMsInsideUrgentFlush ?? 0,
+    propertyPanelRenderMsInsideUrgentFlush: structuralPanelRelease.propertyPanelRenderMsInsideUrgentFlush ?? 0,
+    pagePanelRenderMsInsideUrgentFlush: structuralPanelRelease.pagePanelRenderMsInsideUrgentFlush ?? 0,
+    stylePanelRenderMsInsideUrgentFlush: structuralPanelRelease.stylePanelRenderMsInsideUrgentFlush ?? 0,
+    totalPanelRenderMsInsideUrgentFlush: structuralPanelRelease.totalPanelRenderMsInsideUrgentFlush ?? 0,
+    totalPanelRenderMsAfterUrgentFlush: structuralPanelRelease.totalPanelRenderMsAfterUrgentFlush ?? 0,
+    panelRenderMsInsideUrgentFlush: structuralPanelRelease.panelRenderMsInsideUrgentFlush ?? 0,
+    panelRenderMsAfterUrgentFlush: structuralPanelRelease.panelRenderMsAfterUrgentFlush ?? 0,
+    nextInputDuringDeferredReleaseCount: structuralPanelRelease.nextInputDuringDeferredReleaseCount ?? 0,
+    panelDeferralBeginCount: structuralPanelRelease.panelDeferralBeginCount ?? 0,
+    panelSnapshotActiveCount: structuralPanelRelease.panelSnapshotActiveCount ?? 0,
+    panelDeferralScheduledCount: structuralPanelRelease.panelDeferralScheduledCount ?? structuralPanelRelease.scheduledCount ?? 0,
+    panelDeferralCancelCount: structuralPanelRelease.panelDeferralCancelCount ?? structuralPanelRelease.cancelledCount ?? 0,
+    panelDeferralReleaseStartedCount: structuralPanelRelease.panelDeferralReleaseStartedCount ?? structuralPanelRelease.applyStartCount ?? 0,
+    panelDeferralReleaseCompletedCount: structuralPanelRelease.panelDeferralReleaseCompletedCount ?? structuralPanelRelease.liveDocRestoredCount ?? 0,
+    stalePanelReleaseIgnoredCount: structuralPanelRelease.stalePanelReleaseIgnoredCount ?? structuralPanelRelease.supersededCount ?? 0,
+    panelInputDuringDeferralCount: structuralPanelRelease.panelInputDuringDeferralCount ?? structuralPanelRelease.inputDuringDeferCount ?? 0,
+    panelSnapshotActiveMs: structuralPanelRelease.panelSnapshotActiveMs ?? structuralPanelRelease.leftRailSnapshotActiveMs ?? null,
+    panelLiveDocRestoredMs: structuralPanelRelease.panelLiveDocRestoredMs ?? structuralPanelRelease.leftRailLiveDocRestoredMs ?? null,
+    leftRailSplitFlushGuardMs: leftRailSplitFlushGuard?.actualMs ?? null,
+  })
+  const recommendedTask11B = (() => {
+    switch (renderBucketLargest.largestPhase) {
+      case "shellDerivedMs":
+        return "Isolate or memoize the largest EditorShell derived structural value without moving island setup outside the atomic structural transition."
+      case "canvasDerivedMs":
+        return "Isolate the EditorCanvas parent derived values for the active structural page, keeping full pagination settle deferred."
+      case "totalComparatorMs":
+        return "Reduce structural memo comparator fan-out or comparator work while preserving unaffected page render suppression."
+      case "reactActualDurationMs":
+        return "Split or memoize the dominant Profiler component render path shown in reactActualDurationByComponent."
+      case "layoutEffectMs":
+        return "Move non-visual structural layout-effect work behind first paint while keeping island/caret visibility effects synchronous."
+      case "unattributedFlushSyncMs":
+        return "Capture a browser Performance trace around the flushSync window before changing behavior; current app-level buckets do not explain most of the time."
+      default:
+        return "No dominant render bucket was identified; keep Task 11B investigative unless repeated clean probes show a stable bucket."
+    }
+  })()
   const largest = chooseLargestPhase(timings)
   const validationMode = countDuration(structuralAttribution.pushPrevalidatedDoc) > 0 &&
     countDuration(structuralAttribution.pushDoc) > 0
@@ -4376,6 +5364,40 @@ function buildStructuralPerformanceAttribution({
   const fullSettleBlocksFirstPaint = typeof timings.fullPaginationSettledMs === "number" &&
     typeof timings.firstIslandPaintMs === "number" &&
     timings.fullPaginationSettledMs <= timings.firstIslandPaintMs
+  const boundarySafeSuppressionExpected = Boolean(
+    nextNodeId &&
+    (
+      firstBoundarySafeEvent ||
+      structuralRegression?.coverBreakSuppressedDuringActiveIsland != null ||
+      structuralRegression?.coverBreakMarkerReturnedAfterSuppression != null
+    ),
+  )
+  const boundarySafeSuppressionObserved = structuralRegression?.coverBreakSuppressedDuringActiveIsland === true
+    ? true
+    : structuralRegression?.coverBreakSuppressedDuringActiveIsland === false
+      ? false
+      : null
+  const boundarySafeSuppressionObservation = classifyBoundarySafeSuppressionObservation({
+    expected: boundarySafeSuppressionExpected,
+    observed: boundarySafeSuppressionObserved,
+    activeWindowObserved: safety.midSplit?.activeNewParagraphInIsland ?? null,
+  })
+  const probeFrameWindow = buildProbeFrameWindowMetadata({
+    waitedForFullSettle: (structuralRegression?.completedPaginationCount ?? structuralPaginationSchedule.completedCount ?? 0) > 0,
+    waitedForBoundarySafeClear: structuralRegression?.coverBreakMarkerReturnedAfterSuppression ?? null,
+  })
+  const firstIslandPaintAnchor = timings.firstIslandPaintMs == null
+    ? "unknown"
+    : "keydown-start"
+  const timingAnchorFields = {
+    timingAnchorVersion: EDITOR_PERFORMANCE_TIMING_ANCHOR_VERSION,
+    firstIslandPaintAnchor,
+  }
+  const timingAnchorTimings = {
+    keydownToFirstIslandPaintMs: timings.firstIslandPaintMs,
+    keydownToFirstRafMs: timings.firstRafMs,
+    keydownToFlushEndMs: timings.flushSyncMs,
+  }
   const notes = []
   if (timings.flushSyncMs != null && timings.optimisticPaginationMs != null && timings.flushSyncMs > timings.optimisticPaginationMs) {
     notes.push("flushSync/React transition exceeds optimistic pagination")
@@ -4391,13 +5413,20 @@ function buildStructuralPerformanceAttribution({
   }
 
   return {
+    schemaVersion: EDITOR_PERFORMANCE_REPORT_SCHEMA_VERSION,
     mode,
     file,
     targetNodeId,
     nextNodeId,
     splitText,
-    passed: Boolean((!uxVerification || uxVerification.passed) && (!structuralRegression || structuralRegression.ok) && consoleNodeNotFoundErrorCount === 0 && consoleErrors.length === 0 && pageErrors.length === 0),
+    passed: Boolean((!uxVerification || uxVerification.passed) && (!structuralRegression || structuralRegression.ok) && correctnessErrors.length === 0),
     sampleCount: 1,
+    boundarySafeSuppressionObservation,
+    boundarySafeSuppressionExpected,
+    boundarySafeSuppressionObserved,
+    ...probeFrameWindow,
+    ...timingAnchorFields,
+    ...timingAnchorTimings,
     correctness: {
       activeNodeMissingFromDocument: structuralRegression?.activeNodeMissingFromDocument ?? null,
       ghostFragmentDetected: structuralRegression?.ghostFragmentDetected ?? null,
@@ -4413,6 +5442,7 @@ function buildStructuralPerformanceAttribution({
     },
     timings: {
       ...timings,
+      ...timingAnchorTimings,
       boundarySafeMode: firstBoundarySafeEvent
         ? firstBoundarySafeEvent.optimisticMode === "boundary-safe" || firstBoundarySafeEvent.boundarySafeMode === true
         : null,
@@ -4435,26 +5465,170 @@ function buildStructuralPerformanceAttribution({
       completedPaginationCount: structuralPaginationSchedule.completedCount ?? 0,
       supersededPaginationCount: structuralPaginationSchedule.supersededCount ?? 0,
       ignoredStalePaginationCount: structuralRefocus.staleSettleIgnoredCount ?? 0,
+      previewSettleScheduledCount: previewSettleRuntime.previewSettleScheduledCount ?? 0,
+      previewSettleStartedCount: previewSettleRuntime.previewSettleStartedCount ?? 0,
+      previewSettleCompletedCount: previewSettleRuntime.previewSettleCompletedCount ?? 0,
+      previewSettleAppliedCount: previewSettleRuntime.previewSettleAppliedCount ?? 0,
+      previewSettleSupersededCount: previewSettleRuntime.previewSettleSupersededCount ?? 0,
+      previewSettleIgnoredStaleCount: previewSettleRuntime.previewSettleIgnoredStaleCount ?? 0,
+      previewSettleFailedCount: previewSettleRuntime.previewSettleFailedCount ?? 0,
+      previewSettleGeneration: previewSettleRuntime.previewSettleGeneration ?? null,
+      previewSettleCurrentPhase: previewSettleRuntime.previewSettleCurrentPhase ?? null,
+      previewSettleApplyDecision: previewSettleRuntime.previewSettleApplyDecision ?? null,
+      previewSettleLatestAppliedGeneration: previewSettleRuntime.previewSettleLatestAppliedGeneration ?? null,
+      wysiwygDraftSessionBeginCount: wysiwygDraftRuntime.wysiwygDraftSessionBeginCount ?? 0,
+      wysiwygDraftSessionActiveCount: wysiwygDraftRuntime.wysiwygDraftSessionActiveCount ?? 0,
+      wysiwygDraftSessionCommitCount: wysiwygDraftRuntime.wysiwygDraftSessionCommitCount ?? 0,
+      wysiwygDraftSessionCancelCount: wysiwygDraftRuntime.wysiwygDraftSessionCancelCount ?? 0,
+      wysiwygDraftSessionAbortCount: wysiwygDraftRuntime.wysiwygDraftSessionAbortCount ?? 0,
+      wysiwygDraftCompositionStartCount: wysiwygDraftRuntime.wysiwygDraftCompositionStartCount ?? 0,
+      wysiwygDraftCompositionEndCount: wysiwygDraftRuntime.wysiwygDraftCompositionEndCount ?? 0,
+      wysiwygDraftStaleSessionIgnoredCount: wysiwygDraftRuntime.wysiwygDraftStaleSessionIgnoredCount ?? 0,
+      wysiwygDraftCurrentGeneration: wysiwygDraftRuntime.wysiwygDraftCurrentGeneration ?? null,
+      wysiwygDraftCurrentPhase: wysiwygDraftRuntime.wysiwygDraftCurrentPhase ?? null,
+      wysiwygDraftCurrentNodeId: wysiwygDraftRuntime.wysiwygDraftCurrentNodeId ?? null,
+      wysiwygDraftSource: wysiwygDraftRuntime.wysiwygDraftSource ?? null,
       structuralGuardAcceptedCount: structuralGuard.acceptedCount ?? 0,
       structuralGuardDroppedCount: structuralGuard.droppedCount ?? 0,
+      structuralRuntimeGeneration: structuralRuntime.structuralRuntimeGeneration ?? null,
+      structuralRuntimePhase: structuralRuntime.structuralRuntimePhase ?? null,
+      structuralGuardDecisionCount: structuralRuntime.structuralGuardDecisionCount ?? 0,
+      structuralGuardAllowCount: structuralRuntime.structuralGuardAllowCount ?? 0,
+      structuralGuardDropCount: structuralRuntime.structuralGuardDropCount ?? 0,
+      structuralGuardCompositionIgnoredCount: structuralRuntime.structuralGuardCompositionIgnoredCount ?? 0,
+      staleStructuralUpdateIgnoredCount: structuralRuntime.staleStructuralUpdateIgnoredCount ?? 0,
+      structuralTransactionAbortCount: structuralRuntime.structuralTransactionAbortCount ?? 0,
+      structuralTransactionCompleteCount: structuralRuntime.structuralTransactionCompleteCount ?? 0,
+      enterAfterSplitBackspaceAllowedCount: structuralRuntime.enterAfterSplitBackspaceAllowedCount ?? 0,
+      repeatedEnterGuardedCount: structuralRuntime.repeatedEnterGuardedCount ?? 0,
+      repeatedBackspaceGuardedCount: structuralRuntime.repeatedBackspaceGuardedCount ?? 0,
+      deferredLeftRailReleaseCancelledCount: structuralPanelRelease.cancelledCount ?? 0,
+      deferredLeftRailReleaseSupersededCount: structuralPanelRelease.supersededCount ?? 0,
+      deferredLeftRailReleaseScheduledCount: structuralPanelRelease.scheduledCount ?? 0,
+      deferredLeftRailReleaseApplyStartCount: structuralPanelRelease.applyStartCount ?? 0,
+      deferredLeftRailReleaseLiveDocRestoredCount: structuralPanelRelease.liveDocRestoredCount ?? 0,
+      deferredReleaseDelayedInputCount: structuralPanelRelease.delayedInputCount ?? 0,
+      nextInputDuringDeferredReleaseCount: structuralPanelRelease.nextInputDuringDeferredReleaseCount ?? 0,
+      panelDeferralBeginCount: structuralPanelRelease.panelDeferralBeginCount ?? 0,
+      panelSnapshotActiveCount: structuralPanelRelease.panelSnapshotActiveCount ?? 0,
+      panelDeferralScheduledCount: structuralPanelRelease.panelDeferralScheduledCount ?? structuralPanelRelease.scheduledCount ?? 0,
+      panelDeferralCancelCount: structuralPanelRelease.panelDeferralCancelCount ?? structuralPanelRelease.cancelledCount ?? 0,
+      panelDeferralReleaseStartedCount: structuralPanelRelease.panelDeferralReleaseStartedCount ?? structuralPanelRelease.applyStartCount ?? 0,
+      panelDeferralReleaseCompletedCount: structuralPanelRelease.panelDeferralReleaseCompletedCount ?? structuralPanelRelease.liveDocRestoredCount ?? 0,
+      stalePanelReleaseIgnoredCount: structuralPanelRelease.stalePanelReleaseIgnoredCount ?? structuralPanelRelease.supersededCount ?? 0,
+      panelInputDuringDeferralCount: structuralPanelRelease.panelInputDuringDeferralCount ?? structuralPanelRelease.inputDuringDeferCount ?? 0,
       longTaskCount: probeResult.longTasks?.count ?? 0,
       structuralSplitEventCount: structuralEdit.splitParagraphCount ?? 0,
       structuralMergeEventCount: structuralEdit.mergeParagraphCount ?? 0,
       pagesRenderedDuringStructuralTransition: structuralRender.pagesRenderedDuringStructuralTransition ?? 0,
       totalPageCount: structuralRender.totalPageCount ?? 0,
       affectedPageCount: structuralRender.affectedPageCount ?? 0,
+      canvasViewportAffectedPageCount: structuralRender.canvasViewportAffectedPageCount ?? 0,
+      canvasViewportSuppressedPageBreakCount: structuralRender.canvasViewportSuppressedPageBreakCount ?? 0,
+      canvasViewportUnrelatedPageBreakSuppressedCount: structuralRender.canvasViewportUnrelatedPageBreakSuppressedCount ?? 0,
       unaffectedPagesRenderedCount: structuralRender.unaffectedPagesRenderedCount ?? 0,
     },
     attribution: {
       ...largest,
       suspectedBottleneck: largest.largestPhase ?? null,
       fullPaginationBlocksFirstPaint: fullSettleBlocksFirstPaint,
+      metricDefinitions: {
+        enterHandlerMs: "Duration of the app-recorded structural split keydown handler/transaction work.",
+        flushSyncMs: "Duration of the React flushSync structural transition event.",
+        flushSyncWindowTotalMs: "Total duration of structural flushSync windows included in render attribution; enter-backspace probes can include both split and merge windows while flushSyncMs remains the first Enter split metric.",
+        splitReactActualDurationMs: "React Profiler actualDuration attributed to render events inside split structural flushSync windows.",
+        mergeReactActualDurationMs: "React Profiler actualDuration attributed to render events inside merge structural flushSync windows.",
+        deferredLeftRailReleaseRenderMs: "Left rail React Profiler actualDuration after deferred panel release starts and outside urgent structural flushSync windows.",
+        deferredLeftRailReleaseRanInsideUrgentStructuralFlush: "True when left rail release render is still observed inside split/merge urgent structural flush windows.",
+        deferredReleaseBlockedInputLikely: "True only when an immediate typing probe's first input overlaps the approximate deferred release render window and the input duration exceeds 50ms; null when no immediate typing probe ran.",
+        deferredReleaseStartedAfterFirstPaintMs: "Time from draft island first paint to deferred panel release apply-start.",
+        deferredReleaseCompletedAfterFirstPaintMs: "Time from draft island first paint to the live panel document restore commit.",
+        deferredReleaseCancelledCount: "Count of scheduled structural panel releases cancelled before apply.",
+        deferredReleaseSupersededCount: "Count of structural panel release attempts dropped because a newer generation was active.",
+        leftRailSnapshotActiveMs: "Time from structural panel deferral start to the left rail live-doc restore commit.",
+        topToolbarRenderMsInsideUrgentFlush: "Top toolbar Profiler actualDuration inside urgent structural flushSync windows.",
+        rightRailRenderMsInsideUrgentFlush: "All right rail panel Profiler actualDuration inside urgent structural flushSync windows.",
+        propertyPanelRenderMsInsideUrgentFlush: "Right rail Properties panel Profiler actualDuration inside urgent structural flushSync windows.",
+        pagePanelRenderMsInsideUrgentFlush: "Right rail Page panel Profiler actualDuration inside urgent structural flushSync windows.",
+        stylePanelRenderMsInsideUrgentFlush: "Right rail Style panel Profiler actualDuration inside urgent structural flushSync windows.",
+        totalPanelRenderMsInsideUrgentFlush: "Top toolbar, left rail, and right rail panel Profiler actualDuration inside urgent structural flushSync windows.",
+        totalPanelRenderMsAfterUrgentFlush: "Top toolbar, left rail, and right rail panel Profiler actualDuration after deferred release starts outside urgent structural flushSync windows.",
+        panelRenderMsInsideUrgentFlush: "Top toolbar, left rail, and right rail Profiler actualDuration inside urgent structural flushSync windows.",
+        panelRenderMsAfterUrgentFlush: "Top toolbar, left rail, and right rail Profiler actualDuration after deferred panel release starts outside urgent structural flushSync windows.",
+        nextInputDuringDeferredReleaseCount: "Captured keydown/beforeinput count while a structural panel release remained deferred.",
+        firstRafMs: "Time from browser-observed keydownStart to the first requestAnimationFrame callback scheduled by the probe keydown listener.",
+        firstBackspaceRafMs: "Time from browser-observed Backspace keydownStart to the first requestAnimationFrame callback scheduled by the probe keydown listener.",
+        firstIslandPaintMs: "Time from browser-observed keydownStart to the draft island DOM-visible layout-effect event; this is before full pagination settle and may occur before Playwright keydownEnd.",
+        keydownToFirstIslandPaintMs: "Normalized alias for the keydown-start to first island paint timing anchor.",
+        keydownToFirstRafMs: "Normalized alias for the keydown-start to first requestAnimationFrame timing anchor.",
+        keydownToFlushEndMs: "Normalized keydown-start to structural flush end timing; uses the existing flushSync timing bucket when available.",
+        firstIslandPaintAnchor: "Anchor source for first island paint timing: keydown-start, post-commit, probe-observation, or unknown.",
+        fullPaginationSettledMs: "Time from browser-observed keydownStart to structural-refocus settled pagination completion.",
+        previewSettleScheduledCount: "PreviewSettleRuntime schedule count alias for browser preview settle lifecycle requests.",
+        previewSettleAppliedCount: "PreviewSettleRuntime applied count alias for latest-only browser preview settle commits.",
+        wysiwygDraftSessionBeginCount: "WysiwygDraftRuntime session begin count recorded from draft lifecycle metadata events.",
+        wysiwygDraftSessionActiveCount: "WysiwygDraftRuntime session active count recorded when Shell marks a draft session active.",
+        wysiwygDraftSessionCommitCount: "WysiwygDraftRuntime committed session count recorded after WYSIWYG finalize validation passes.",
+        wysiwygDraftSessionCancelCount: "WysiwygDraftRuntime cancelled session count recorded when Shell ends or replaces an active draft without commit.",
+        wysiwygDraftSessionAbortCount: "WysiwygDraftRuntime aborted session count recorded when a structural setup abort owns the active draft session.",
+        wysiwygDraftCompositionStartCount: "WysiwygDraftRuntime composition start count from local island composition metadata callbacks.",
+        wysiwygDraftCompositionEndCount: "WysiwygDraftRuntime composition end count from local island composition metadata callbacks.",
+        wysiwygDraftStaleSessionIgnoredCount: "WysiwygDraftRuntime stale update count for ignored non-current session ids/generations.",
+        wysiwygDraftCurrentGeneration: "Latest WysiwygDraftRuntime generation observed by the probe.",
+        wysiwygDraftCurrentPhase: "Latest WysiwygDraftRuntime phase observed by the probe.",
+        wysiwygDraftCurrentNodeId: "Latest WysiwygDraftRuntime active node id observed by the probe, or null after terminal events.",
+        wysiwygDraftSource: "Latest WysiwygDraftRuntime session source observed by the probe.",
+        boundarySafeSuppressionObservation: "Boundary-safe page-break suppression classification: suppressed, not-observed, not-applicable, not-required, or unknown.",
+        probeFrameWindowMs: "Largest post-Enter frame delay sampled by the probe for mid-split visual state checks.",
+        probeUsedExtendedFrameWindow: "True when PROBE_ENTER_FRAME_DELAYS_MS extends beyond the default frame sample window.",
+      },
+      timingTrace,
+      metricConsistency: timingTrace?.consistency ?? null,
+      flushSyncRenderBreakdown,
+      structuralFlushPhases,
+      structuralPanelRelease,
+      previewSettleRuntime,
+      wysiwygDraftRuntime,
+      leftRailSplitFlushGuard,
+      flushSyncRenderSummary: {
+        flushSyncMs: timings.flushSyncMs,
+        flushSyncWindowTotalMs,
+        splitFlushSyncWindowMs,
+        mergeFlushSyncWindowMs,
+        splitReactActualDurationMs: splitFlushPhase.reactActualDurationMs ?? 0,
+        mergeReactActualDurationMs: mergeFlushPhase.reactActualDurationMs ?? 0,
+        deferredLeftRailReleaseRenderMs: structuralPanelRelease.deferredLeftRailReleaseRenderMs ??
+          deferredLeftRailReleaseRender.reactActualDurationMs ??
+          0,
+        deferredLeftRailReleaseRanInsideUrgentStructuralFlush: structuralPanelRelease.deferredLeftRailReleaseRanInsideUrgentStructuralFlush === true,
+        leftRailSplitFlushGuard,
+        structuralPanelRelease,
+        attributedRenderMs,
+        dominantBucket: renderBucketLargest.largestPhase,
+        dominantBucketMs: renderBucketLargest.largestPhaseMs,
+        recommendedTask11B,
+        conclusion: renderBucketLargest.largestPhase
+          ? `Largest measured structural flushSync bucket: ${renderBucketLargest.largestPhase}`
+          : "No measured structural flushSync bucket dominated this sample.",
+      },
       latestSettleApplied: (structuralPaginationSchedule.events ?? []).some((event) => event.latestSettleApplied === true),
       componentRenderCountsDuringStructuralTransition: structuralRender.componentRenderCountsDuringStructuralTransition ?? {},
       componentRenderMs: structuralRender.componentRenderMs ?? {},
       renderedPageIndexes: structuralRender.renderedPageIndexes ?? [],
       memoMissCount: structuralRender.memoMissCount ?? 0,
       memoMissByReason: structuralRender.memoMissByReason ?? {},
+      memoComparator: structuralFlushRender.memoComparator ?? {},
+      shellDerived: structuralFlushRender.shellDerived ?? {},
+      canvasDerived: structuralFlushRender.canvasDerived ?? {},
+      layoutEffects: structuralFlushRender.layoutEffects ?? {},
+      profilerActualDuration: structuralFlushRender.profilerActualDuration ?? {},
+      activeStructuralRender: {
+        memoComparator: structuralRender.memoComparator ?? {},
+        shellDerived: structuralRender.shellDerived ?? {},
+        canvasDerived: structuralRender.canvasDerived ?? {},
+        layoutEffects: structuralRender.layoutEffects ?? {},
+        profilerActualDuration: structuralRender.profilerActualDuration ?? {},
+      },
       notes,
     },
     errors: correctnessErrors,
@@ -4508,7 +5682,10 @@ function buildLongMockUxVerification({ probeResult, structuralRegression, consol
   const backspaceOrderOk = !isBackspaceMode || !nextNodeId
     ? true
     : documentOrderAfterBackspace.join("\u0000") === [targetNodeId, nextNodeId].join("\u0000")
-  const shouldExpectExactSplitText = mode === "enter-mid-split" || mode === "enter-rapid" || mode === "enter-backspace-immediate"
+  const shouldExpectExactSplitText = mode === "enter-mid-split" ||
+    mode === "enter-rapid" ||
+    mode === "enter-backspace-immediate" ||
+    mode === "enter-backspace-type-before-settle"
   const sourceBeforeOnlyOk = !shouldExpectExactSplitText ||
     (sourceTextAfterEnter === expectedBeforeText && sourceTextAfterEnter !== originalText)
   const newAfterOnlyOk = !shouldExpectExactSplitText ||
@@ -4589,7 +5766,259 @@ function buildLongMockUxVerification({ probeResult, structuralRegression, consol
   }
 }
 
+function summarizeNumericValues(values) {
+  const finiteValues = values.filter((value) => typeof value === "number" && Number.isFinite(value))
+    .sort((a, b) => a - b)
+  if (finiteValues.length === 0) {
+    return { count: 0, median: null, min: null, max: null, values: [] }
+  }
+  const middle = Math.floor(finiteValues.length / 2)
+  const median = finiteValues.length % 2 === 0
+    ? (finiteValues[middle - 1] + finiteValues[middle]) / 2
+    : finiteValues[middle]
+  return {
+    count: finiteValues.length,
+    median,
+    min: finiteValues[0],
+    max: finiteValues[finiteValues.length - 1],
+    values: finiteValues,
+  }
+}
+
+function pickStructuralSampleTimings(report) {
+  const timings = report.performanceAttribution?.timings ?? {}
+  return {
+    enterHandlerMs: timings.enterHandlerMs ?? null,
+    backspaceHandlerMs: timings.backspaceHandlerMs ?? null,
+    flushSyncMs: timings.flushSyncMs ?? null,
+    firstRafMs: timings.firstRafMs ?? null,
+    firstBackspaceRafMs: timings.firstBackspaceRafMs ?? null,
+    firstIslandPaintMs: timings.firstIslandPaintMs ?? null,
+    fullPaginationSettledMs: timings.fullPaginationSettledMs ?? null,
+    shellDerivedMs: timings.shellDerivedMs ?? null,
+    canvasDerivedMs: timings.canvasDerivedMs ?? null,
+    totalComparatorMs: timings.totalComparatorMs ?? null,
+    pageViewComparatorMs: timings.pageViewComparatorMs ?? null,
+    pageSlotComparatorMs: timings.pageSlotComparatorMs ?? null,
+    reactActualDurationMs: timings.reactActualDurationMs ?? null,
+    layoutEffectMs: timings.layoutEffectMs ?? null,
+    attributedRenderMs: timings.attributedRenderMs ?? null,
+    unattributedFlushSyncMs: timings.unattributedFlushSyncMs ?? null,
+    flushSyncWindowTotalMs: timings.flushSyncWindowTotalMs ?? null,
+    splitFlushSyncWindowMs: timings.splitFlushSyncWindowMs ?? null,
+    mergeFlushSyncWindowMs: timings.mergeFlushSyncWindowMs ?? null,
+    splitReactActualDurationMs: timings.splitReactActualDurationMs ?? null,
+    mergeReactActualDurationMs: timings.mergeReactActualDurationMs ?? null,
+    splitLeftRailActualDurationMs: timings.splitLeftRailActualDurationMs ?? null,
+    mergeLeftRailActualDurationMs: timings.mergeLeftRailActualDurationMs ?? null,
+    deferredLeftRailReleaseScheduledMs: timings.deferredLeftRailReleaseScheduledMs ?? null,
+    deferredLeftRailReleaseStartedMs: timings.deferredLeftRailReleaseStartedMs ?? null,
+    deferredLeftRailReleaseRenderMs: timings.deferredLeftRailReleaseRenderMs ?? null,
+    deferredLeftRailReleaseAppliedMs: timings.deferredLeftRailReleaseAppliedMs ?? null,
+    deferredLeftRailReleaseCancelledCount: timings.deferredLeftRailReleaseCancelledCount ?? null,
+    deferredLeftRailReleaseSupersededCount: timings.deferredLeftRailReleaseSupersededCount ?? null,
+    deferredReleaseCancelledCount: timings.deferredReleaseCancelledCount ?? null,
+    deferredReleaseSupersededCount: timings.deferredReleaseSupersededCount ?? null,
+    deferredLeftRailReleaseRanInsideUrgentStructuralFlush: timings.deferredLeftRailReleaseRanInsideUrgentStructuralFlush ?? null,
+    deferredReleaseBlockedInputLikely: timings.deferredReleaseBlockedInputLikely ?? null,
+    deferredReleaseStartedAfterFirstPaintMs: timings.deferredReleaseStartedAfterFirstPaintMs ?? null,
+    deferredReleaseCompletedAfterFirstPaintMs: timings.deferredReleaseCompletedAfterFirstPaintMs ?? null,
+    leftRailSnapshotActiveMs: timings.leftRailSnapshotActiveMs ?? null,
+    leftRailLiveDocRestoredMs: timings.leftRailLiveDocRestoredMs ?? null,
+    topToolbarRenderMsInsideUrgentFlush: timings.topToolbarRenderMsInsideUrgentFlush ?? null,
+    rightRailRenderMsInsideUrgentFlush: timings.rightRailRenderMsInsideUrgentFlush ?? null,
+    propertyPanelRenderMsInsideUrgentFlush: timings.propertyPanelRenderMsInsideUrgentFlush ?? null,
+    pagePanelRenderMsInsideUrgentFlush: timings.pagePanelRenderMsInsideUrgentFlush ?? null,
+    stylePanelRenderMsInsideUrgentFlush: timings.stylePanelRenderMsInsideUrgentFlush ?? null,
+    totalPanelRenderMsInsideUrgentFlush: timings.totalPanelRenderMsInsideUrgentFlush ?? null,
+    totalPanelRenderMsAfterUrgentFlush: timings.totalPanelRenderMsAfterUrgentFlush ?? null,
+    panelRenderMsInsideUrgentFlush: timings.panelRenderMsInsideUrgentFlush ?? null,
+    panelRenderMsAfterUrgentFlush: timings.panelRenderMsAfterUrgentFlush ?? null,
+    nextInputDuringDeferredReleaseCount: timings.nextInputDuringDeferredReleaseCount ?? null,
+    leftRailSplitFlushGuardMs: timings.leftRailSplitFlushGuardMs ?? null,
+    keydownToFirstIslandPaintMs: timings.keydownToFirstIslandPaintMs ?? null,
+    keydownToFirstRafMs: timings.keydownToFirstRafMs ?? null,
+    keydownToFlushEndMs: timings.keydownToFlushEndMs ?? null,
+    pagesRenderedDuringStructuralTransition: timings.pagesRenderedDuringStructuralTransition ?? null,
+    unaffectedPagesRenderedCount: timings.unaffectedPagesRenderedCount ?? null,
+  }
+}
+
+function buildRepeatedProbeReport(sampleReports) {
+  const measuredSamples = sampleReports.filter((sample) => !sample.warmup)
+  const metricKeys = [
+    "enterHandlerMs",
+    "backspaceHandlerMs",
+    "flushSyncMs",
+    "firstRafMs",
+    "firstIslandPaintMs",
+    "fullPaginationSettledMs",
+    "shellDerivedMs",
+    "canvasDerivedMs",
+    "totalComparatorMs",
+    "pageViewComparatorMs",
+    "pageSlotComparatorMs",
+    "reactActualDurationMs",
+    "layoutEffectMs",
+    "attributedRenderMs",
+    "unattributedFlushSyncMs",
+    "flushSyncWindowTotalMs",
+    "splitFlushSyncWindowMs",
+    "mergeFlushSyncWindowMs",
+    "splitReactActualDurationMs",
+    "mergeReactActualDurationMs",
+    "splitLeftRailActualDurationMs",
+    "mergeLeftRailActualDurationMs",
+    "deferredLeftRailReleaseScheduledMs",
+    "deferredLeftRailReleaseStartedMs",
+    "deferredLeftRailReleaseRenderMs",
+    "deferredLeftRailReleaseAppliedMs",
+    "deferredLeftRailReleaseCancelledCount",
+    "deferredLeftRailReleaseSupersededCount",
+    "deferredReleaseCancelledCount",
+    "deferredReleaseSupersededCount",
+    "deferredReleaseStartedAfterFirstPaintMs",
+    "deferredReleaseCompletedAfterFirstPaintMs",
+    "leftRailSnapshotActiveMs",
+    "leftRailLiveDocRestoredMs",
+    "topToolbarRenderMsInsideUrgentFlush",
+    "rightRailRenderMsInsideUrgentFlush",
+    "propertyPanelRenderMsInsideUrgentFlush",
+    "pagePanelRenderMsInsideUrgentFlush",
+    "stylePanelRenderMsInsideUrgentFlush",
+    "totalPanelRenderMsInsideUrgentFlush",
+    "totalPanelRenderMsAfterUrgentFlush",
+    "panelRenderMsInsideUrgentFlush",
+    "panelRenderMsAfterUrgentFlush",
+    "nextInputDuringDeferredReleaseCount",
+    "firstBackspaceRafMs",
+    "leftRailSplitFlushGuardMs",
+    "keydownToFirstIslandPaintMs",
+    "keydownToFirstRafMs",
+    "keydownToFlushEndMs",
+  ]
+  const metrics = Object.fromEntries(metricKeys.map((key) => [
+    key,
+    summarizeNumericValues(measuredSamples.map((sample) => sample.timings[key])),
+  ]))
+  const samples = sampleReports.map((sample) => ({
+    sampleIndex: sample.sampleIndex,
+    warmup: sample.warmup,
+    ok: sample.report.ok,
+    timings: sample.timings,
+    timingTrace: sample.report.performanceAttribution?.attribution?.timingTrace ?? sample.report.structuralTimingTrace ?? null,
+    metricConsistency: sample.report.performanceAttribution?.attribution?.metricConsistency ?? sample.report.structuralTimingTrace?.consistency ?? null,
+    flushSyncRenderBreakdown: sample.report.performanceAttribution?.attribution?.flushSyncRenderBreakdown ?? null,
+    flushSyncRenderSummary: sample.report.performanceAttribution?.attribution?.flushSyncRenderSummary ?? null,
+    structuralFlushPhases: sample.report.performanceAttribution?.attribution?.structuralFlushPhases ??
+      sample.report.performanceAttribution?.attribution?.flushSyncRenderBreakdown?.structuralFlushPhases ??
+      null,
+    structuralPanelRelease: sample.report.performanceAttribution?.attribution?.structuralPanelRelease ??
+      sample.report.performanceAttribution?.attribution?.flushSyncRenderBreakdown?.structuralPanelRelease ??
+      null,
+    leftRailSplitFlushGuard: sample.report.performanceAttribution?.attribution?.leftRailSplitFlushGuard ??
+      sample.report.performanceAttribution?.attribution?.flushSyncRenderBreakdown?.leftRailSplitFlushGuard ??
+      null,
+    correctness: sample.report.performanceAttribution?.correctness ?? null,
+    counters: sample.report.performanceAttribution?.counters ?? null,
+    errors: sample.report.performanceAttribution?.errors ?? sample.report.uxVerification?.errors ?? [],
+  }))
+  const measuredOk = measuredSamples.length === PROBE_REPEAT &&
+    measuredSamples.every((sample) => sample.report.ok === true)
+  const warmupOk = sampleReports.filter((sample) => sample.warmup)
+    .every((sample) => sample.report.ok === true)
+  const firstReport = sampleReports[0]?.report ?? {}
+  return {
+    performanceReportSchemaVersion: EDITOR_PERFORMANCE_REPORT_SCHEMA_VERSION,
+    ok: measuredOk && warmupOk,
+    probe: {
+      mode: PROBE_MODE,
+      repeat: PROBE_REPEAT,
+      warmup: PROBE_WARMUP,
+      measuredSampleCount: measuredSamples.length,
+      warmupSampleCount: sampleReports.length - measuredSamples.length,
+      nativeWrapVariant: NATIVE_WRAP_VARIANT,
+      targetNodeId: firstReport.probe?.targetNodeId ?? null,
+      flowDocFile: firstReport.probe?.flowDocFile ?? null,
+      readyTimeoutMs: READY_TIMEOUT_MS,
+      targetPageIndex: TARGET_PAGE_INDEX,
+    },
+    metricDefinitions: firstReport.performanceAttribution?.attribution?.metricDefinitions ?? null,
+    metrics,
+    samples,
+  }
+}
+
+async function runProbeChildSample({ sampleIndex, warmup }) {
+  const env = {
+    ...process.env,
+    PROBE_REPEAT: "1",
+    PROBE_WARMUP: "0",
+    PROBE_REPEAT_CHILD: "1",
+    PROBE_SAMPLE_INDEX: String(sampleIndex),
+    PROBE_SAMPLE_PHASE: warmup ? "warmup" : "measured",
+    SMOKE_BASE_URL: baseEditorUrl,
+  }
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptPath], {
+      cwd: repoRoot,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    })
+    let stdout = ""
+    let stderr = ""
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString() })
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString() })
+    child.on("error", reject)
+    child.on("exit", (code) => {
+      const jsonStart = stdout.indexOf("{")
+      if (jsonStart < 0) {
+        reject(new Error(`Probe sample ${sampleIndex} produced no JSON output${stderr ? `: ${stderr.trim()}` : ""}`))
+        return
+      }
+      try {
+        const report = JSON.parse(stdout.slice(jsonStart))
+        resolve({
+          sampleIndex,
+          warmup,
+          exitCode: code,
+          report,
+          timings: pickStructuralSampleTimings(report),
+          stderr: stderr.trim(),
+        })
+      } catch (error) {
+        reject(new Error(`Probe sample ${sampleIndex} JSON parse failed: ${error.message}${stderr ? `; stderr: ${stderr.trim()}` : ""}`))
+      }
+    })
+  })
+}
+
+async function runRepeatedProbe() {
+  const server = shouldStartServer ? startNextDevServer() : null
+  try {
+    if (server) await waitForServer(baseEditorUrl, server)
+    const totalSamples = PROBE_WARMUP + PROBE_REPEAT
+    const sampleReports = []
+    for (let index = 0; index < totalSamples; index += 1) {
+      const warmup = index < PROBE_WARMUP
+      const sample = await runProbeChildSample({ sampleIndex: index, warmup })
+      sampleReports.push(sample)
+    }
+    const report = buildRepeatedProbeReport(sampleReports)
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n")
+    if (!report.ok) process.exitCode = 1
+  } finally {
+    if (server) await stopServer(server)
+  }
+}
+
 async function runProbe() {
+  if (!PROBE_REPEAT_CHILD && (PROBE_REPEAT > 1 || PROBE_WARMUP > 0)) {
+    await runRepeatedProbe()
+    return
+  }
+
   const server = shouldStartServer ? startNextDevServer() : null
   if (server) await waitForServer(baseEditorUrl, server)
   const probeDocument = readProbeFlowDocFile()
@@ -4690,10 +6119,14 @@ async function runProbe() {
       probeDocument,
     })
     const uxVerificationOk = !uxVerification || uxVerification.passed
+    const performanceAttributionOk = !performanceAttribution || performanceAttribution.passed
     const report = {
-      ok: consoleErrors.length === 0 && pageErrors.length === 0 && typingLayerOk && editExitOk && pointerHitTestOk && scrollAnchoringOk && blurHandoffOk && structuralRefocusSafetyOk && structuralRegressionOk && uxVerificationOk,
+      performanceReportSchemaVersion: EDITOR_PERFORMANCE_REPORT_SCHEMA_VERSION,
+      ok: consoleErrors.length === 0 && pageErrors.length === 0 && typingLayerOk && editExitOk && pointerHitTestOk && scrollAnchoringOk && blurHandoffOk && structuralRefocusSafetyOk && structuralRegressionOk && uxVerificationOk && performanceAttributionOk,
       probe: {
         mode: PROBE_MODE,
+        sampleIndex: PROBE_SAMPLE_INDEX,
+        samplePhase: PROBE_SAMPLE_PHASE,
         nativeWrapVariant: NATIVE_WRAP_VARIANT,
         ...probeResult.action,
         targetNodeId: probeResult.targetNodeId,
@@ -4713,6 +6146,7 @@ async function runProbe() {
       ...(uxVerification ? { uxVerification } : {}),
       ...(performanceAttribution ? { performanceAttribution } : {}),
       ...(probeResult.structuralLatency ? { structuralLatency: probeResult.structuralLatency } : {}),
+      ...(probeResult.structuralTimingTrace ? { structuralTimingTrace: probeResult.structuralTimingTrace } : {}),
       ...(probeResult.longTasks ? { longTasks: probeResult.longTasks } : {}),
       ...(probeResult.typingInputPhases ? { typingInputPhases: probeResult.typingInputPhases } : {}),
       ...(probeResult.heldInput ? { heldInput: probeResult.heldInput } : {}),

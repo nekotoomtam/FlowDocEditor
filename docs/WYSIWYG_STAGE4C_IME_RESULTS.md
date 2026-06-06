@@ -54,10 +54,61 @@ Not covered:
 
 ## Commands Run
 
-The latest browser smoke runs used the already-running flagged local dev server
-at `http://localhost:4000/editor`. Starting an isolated smoke server without
-`SMOKE_BASE_URL` was blocked by the Next dev-server lock for this repo because
-that server was already active.
+The latest Task 30 automated recheck used a smoke-owned flagged dev server on
+port 4016 after the Task 29 page-boundary blocker was isolated and fixed.
+
+```powershell
+$env:SMOKE_PORT='4016'; $env:SMOKE_REPORT_PATH='reports/task30-wysiwyg-stage4c-bundled-chromium-port4016.json'; npm.cmd run --silent smoke:wysiwyg-stage4c
+```
+
+Result: `PASS`.
+
+Observed output included:
+
+- `browser.channel`: `bundled-chromium`.
+- `performanceTrace.draftUpdates`: `1`.
+- `performanceTrace.browserPreviewPaginations`: `1`.
+- `doubleClickSelection.selectionOverlay`: `visible`.
+- `clipboard.pasteMarker`: `S4C_AUTOMATED_PASTE`.
+- `clipboard.crlfMarker`: `S4C_AUTOMATED_CRLF`.
+- `clipboard.cutMarker`: `CUTME4C`.
+- `clipboard.pointerDragSelection`: `multiple-pages`.
+- `composition.compositionMarker`: `IME4Cทดสอบ`.
+- `stackParagraph.marker`: `STAGE4_STACK_MARKER`.
+- `stackParagraph.targetFragments`: `1`.
+- `stackParagraph.pointerFragments`: `1`.
+- `stackParagraph.rowHeight`: `612`.
+
+```powershell
+$env:SMOKE_PORT='4016'; $env:SMOKE_BROWSER_CHANNEL='chrome'; $env:SMOKE_REPORT_PATH='reports/task30-wysiwyg-stage4c-channel-chrome-port4016.json'; npm.cmd run --silent smoke:wysiwyg-stage4c
+```
+
+Result: `PASS`.
+
+Observed output matched the bundled Chromium run for the editor assertions. The
+run reported `browser.channel=chrome`, `draftUpdates=1`,
+`browserPreviewPaginations=1`, `rowHeight=612`, and one ignored browser
+`/favicon.ico` console message. No editor, API, layout, or page error was
+reported.
+
+```powershell
+$env:SMOKE_PORT='4016'; $env:SMOKE_BROWSER_CHANNEL='msedge'; $env:SMOKE_REPORT_PATH='reports/task30-wysiwyg-stage4c-channel-msedge-port4016.json'; npm.cmd run --silent smoke:wysiwyg-stage4c
+```
+
+Result: `PASS`.
+
+Observed output matched the bundled Chromium run for the editor assertions. The
+run reported `browser.channel=msedge`, `draftUpdates=1`,
+`browserPreviewPaginations=1`, `rowHeight=612`, and one ignored browser
+`/favicon.ico` console message. No editor, API, layout, or page error was
+reported.
+
+## Earlier Commands Run
+
+The earlier browser smoke runs below used the already-running flagged local dev
+server at `http://localhost:4000/editor`. Starting an isolated smoke server
+without `SMOKE_BASE_URL` was blocked by the Next dev-server lock for this repo
+because that server was already active.
 
 ```powershell
 $env:SMOKE_BASE_URL='http://localhost:4000/editor'; npm.cmd run smoke:wysiwyg-stage4c
@@ -133,6 +184,44 @@ Observed output included:
 | Windows Chrome 148, Thai IME | Synthetic composition PASS | UNKNOWN | UNKNOWN |
 | Windows Edge 148, Stage 4C+5 browser automation | PASS | UNKNOWN | RISK |
 | Windows Edge 148, Thai IME | Synthetic composition PASS | UNKNOWN | UNKNOWN |
+
+## Task 29 Post-Adapter Checkpoint - 2026-06-05
+
+After the `WysiwygDraftRuntime` Shell adapter extraction, a narrow Task 29
+follow-up rechecked the composition metadata bridge and attempted the Stage 4C
+automation gate again.
+
+PASS:
+
+- `WysiwygDraftRuntimeBridge` now has a focused stale/mismatched composition
+  regression test. Composition metadata changes for another node or stale
+  generation do not mark the current draft session as composing.
+- `npm.cmd run type-check` passed.
+- Focused runtime/IME guard suites passed.
+
+FAIL / BLOCKER:
+
+- Bundled Chromium Stage 4C automation did not reach PASS.
+- The existing port 4000 server was unflagged for this gate and exposed a
+  legacy textarea fallback, so it was stopped and the smoke-owned flagged server
+  on port 4016 was used.
+- The Stage 4C smoke script had selector drift after the out-of-canvas island
+  became the active text-engine surface. It now checks non-bridge inline
+  textarea fallbacks and island selection overlays instead of treating the
+  hidden textarea bridge as a legacy textarea.
+- After selector alignment and a minimal out-of-canvas island double-click word
+  selection patch, the smoke reached the clipboard page-boundary flow and then
+  failed on a target/downstream overlap:
+  `stage3-boundary-target` page 1 bottom `764.4133911132812` overlapped
+  `stage3-downstream-p1` top `758.4133911132812` by about 6 px.
+- Failure artifact:
+  `reports/task29-wysiwyg-stage4c-bundled-chromium-port4016.json`.
+
+UNKNOWN:
+
+- Chrome and Edge Stage 4C automation were not run after the bundled Chromium
+  blocker.
+- Real Windows Thai IME manual rows remain `UNKNOWN`.
 
 ## Review Terms
 

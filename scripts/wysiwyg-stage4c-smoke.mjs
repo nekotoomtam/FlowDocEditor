@@ -23,11 +23,13 @@ const smokeBrowser = getSmokeBrowserConfig({ headless })
 const platformShortcut = process.platform === "darwin" ? "Meta" : "Control"
 
 const targetFragmentSelector = `[data-testid="editor-fragment"][data-node-id="${TARGET_NODE_ID}"]`
+const targetLayerSelector = `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${TARGET_NODE_ID}"]`
 const bridgeSelector = `[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${TARGET_NODE_ID}"]`
 const stackTargetFragmentSelector = `[data-testid="editor-fragment"][data-node-id="${STACK_TARGET_NODE_ID}"]`
 const stackBridgeSelector = `[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${STACK_TARGET_NODE_ID}"]`
 const stackLayerSelector = `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${STACK_TARGET_NODE_ID}"]`
-const textareaSelector = "textarea[data-inline-edit-node-id]"
+const inlineTextareaFallbackSelector = 'textarea[data-inline-edit-node-id]:not([data-wysiwyg-input-bridge="true"])'
+const selectionOverlaySelector = '[data-wysiwyg-selection="true"], [data-wysiwyg-selection-overlay="true"] rect'
 const accessibilityStatusSelector = '[data-wysiwyg-accessibility-status="true"]'
 
 function assert(condition, message) {
@@ -176,14 +178,14 @@ async function expectNoLayoutError(page) {
   assert(await page.getByTestId("layout-error-badge").count() === 0, "layout error badge is visible")
 }
 
-async function expectNoTextarea(page) {
-  const textareaCount = await page.locator(textareaSelector).count()
-  assert(textareaCount === 0, `expected no inline textarea, found ${textareaCount}`)
+async function expectNoInlineTextareaFallback(page) {
+  const textareaCount = await page.locator(inlineTextareaFallbackSelector).count()
+  assert(textareaCount === 0, `expected no non-bridge inline textarea fallback, found ${textareaCount}`)
 }
 
 async function expectTextEngineBridge(page, selector = bridgeSelector) {
   await page.locator(selector).waitFor({ state: "attached", timeout: 10000 })
-  await expectNoTextarea(page)
+  await expectNoInlineTextareaFallback(page)
   await expectNoLayoutError(page)
 }
 
@@ -224,38 +226,112 @@ async function expectTargetFragmentCountAtLeast(page, minimumCount) {
 async function expectTargetFragmentsDoNotOverlap(page) {
   const overlaps = await page.evaluate((targetNodeId) => {
     const epsilon = 0.5
-    const fragments = Array.from(document.querySelectorAll('[data-testid="editor-fragment"]')).map((element) => {
+    const rectSnapshot = (rect) => ({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+    })
+    const compactAttrs = (element) => ({
+      nodeId: element.getAttribute("data-node-id") ?? element.getAttribute("data-inline-edit-node-id"),
+      nodeType: element.getAttribute("data-node-type") ?? "wysiwyg-text-engine-layer",
+      pageIndex: element.getAttribute("data-page-index"),
+      lineStart: element.getAttribute("data-line-start") ??
+        element.getAttribute("data-wysiwyg-island-surface-key")?.split(":")[2] ??
+        element.getAttribute("data-wysiwyg-island-surface-index"),
+      lineEnd: element.getAttribute("data-line-end") ??
+        element.getAttribute("data-wysiwyg-island-surface-key")?.split(":")[3],
+      canvasTextSuppressed: element.getAttribute("data-wysiwyg-out-of-canvas-island-suppressed"),
+      source: element.getAttribute("data-wysiwyg-text-engine-layer") === "true"
+        ? "wysiwyg-text-engine-layer"
+        : "editor-fragment",
+    })
+    const textContentRect = (element) => {
+      const textRects = Array.from(element.querySelectorAll("text"))
+        .filter((textElement) => {
+          const text = textElement.textContent?.trim() ?? ""
+          return text.length > 0 && text !== "paragraph"
+        })
+        .map((textElement) => textElement.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0)
+      if (textRects.length === 0) return null
+      return {
+        top: Math.min(...textRects.map((rect) => rect.top)),
+        bottom: Math.max(...textRects.map((rect) => rect.bottom)),
+        left: Math.min(...textRects.map((rect) => rect.left)),
+        right: Math.max(...textRects.map((rect) => rect.right)),
+      }
+    }
+    const combineRects = (rects) => {
+      const visibleRects = rects.filter((rect) => rect && rect.width > 0 && rect.height > 0)
+      if (visibleRects.length === 0) return null
+      return {
+        top: Math.min(...visibleRects.map((rect) => rect.top)),
+        bottom: Math.max(...visibleRects.map((rect) => rect.bottom)),
+        left: Math.min(...visibleRects.map((rect) => rect.left)),
+        right: Math.max(...visibleRects.map((rect) => rect.right)),
+      }
+    }
+    const targetLayerVisibleRect = (element) => combineRects([
+      element.querySelector('[data-wysiwyg-out-of-canvas-cover="true"]')?.getBoundingClientRect(),
+      element.querySelector('[data-wysiwyg-draft-editor-island-outline="true"]')?.getBoundingClientRect(),
+    ])
+    const editorFragments = Array.from(document.querySelectorAll('[data-testid="editor-fragment"]')).map((element) => {
       const rect = element.getBoundingClientRect()
       return {
-        nodeId: element.getAttribute("data-node-id"),
-        nodeType: element.getAttribute("data-node-type"),
-        pageIndex: element.getAttribute("data-page-index"),
-        lineStart: element.getAttribute("data-line-start"),
-        lineEnd: element.getAttribute("data-line-end"),
+        ...compactAttrs(element),
         top: rect.top,
         bottom: rect.bottom,
+        visibleRect: textContentRect(element) ?? rectSnapshot(rect),
       }
     })
+    const targetLayers = Array.from(document.querySelectorAll(
+      `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]`,
+    )).map((element) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        ...compactAttrs(element),
+        top: rect.top,
+        bottom: rect.bottom,
+        visibleRect: targetLayerVisibleRect(element) ?? rectSnapshot(rect),
+      }
+    })
+    const targetFragments = targetLayers.length > 0
+      ? targetLayers
+      : editorFragments.filter((fragment) => fragment.nodeId === targetNodeId)
+    const downstreamFragments = editorFragments.filter((fragment) => (
+      fragment.nodeType === "paragraph" &&
+      fragment.nodeId !== targetNodeId &&
+      fragment.canvasTextSuppressed !== "true"
+    ))
 
-    return fragments
-      .filter((fragment) => fragment.nodeId === targetNodeId && Number(fragment.lineStart ?? 0) > 0)
-      .flatMap((targetFragment) => fragments
+    return targetFragments
+      .filter((fragment) => Number(fragment.lineStart ?? 0) > 0)
+      .flatMap((targetFragment) => downstreamFragments
         .filter((fragment) => (
-          fragment.nodeType === "paragraph" &&
-          fragment.nodeId !== targetNodeId &&
           fragment.pageIndex === targetFragment.pageIndex &&
-          fragment.bottom > targetFragment.top + epsilon &&
-          fragment.top < targetFragment.bottom - epsilon
+          fragment.visibleRect.bottom > targetFragment.visibleRect.top + epsilon &&
+          fragment.visibleRect.top < targetFragment.visibleRect.bottom - epsilon
         ))
         .map((fragment) => ({
           target: {
             pageIndex: targetFragment.pageIndex,
             lineStart: targetFragment.lineStart,
             lineEnd: targetFragment.lineEnd,
-            top: targetFragment.top,
-            bottom: targetFragment.bottom,
+            top: targetFragment.visibleRect.top,
+            bottom: targetFragment.visibleRect.bottom,
+            source: targetFragment.source,
           },
-          overlap: fragment,
+          overlap: {
+            nodeId: fragment.nodeId,
+            nodeType: fragment.nodeType,
+            pageIndex: fragment.pageIndex,
+            lineStart: fragment.lineStart,
+            lineEnd: fragment.lineEnd,
+            top: fragment.visibleRect.top,
+            bottom: fragment.visibleRect.bottom,
+            source: fragment.source,
+          },
         })))
   }, TARGET_NODE_ID)
 
@@ -263,12 +339,15 @@ async function expectTargetFragmentsDoNotOverlap(page) {
 }
 
 async function expectTargetSelectionSpansMultiplePages(page) {
-  const selectedPages = await page.evaluate((targetNodeId) => (
-    Array.from(document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${targetNodeId}"]`))
-      .filter((fragment) => fragment.querySelector('[data-wysiwyg-selection="true"]'))
+  const selectedPages = await page.evaluate(({ targetNodeId, selector }) => (
+    [
+      ...Array.from(document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${targetNodeId}"]`)),
+      ...Array.from(document.querySelectorAll(`[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${targetNodeId}"]`)),
+    ]
+      .filter((surface) => surface.querySelector(selector))
       .map((fragment) => fragment.getAttribute("data-page-index"))
       .filter((pageIndex, index, all) => pageIndex !== null && all.indexOf(pageIndex) === index)
-  ), TARGET_NODE_ID)
+  ), { targetNodeId: TARGET_NODE_ID, selector: selectionOverlaySelector })
 
   assert(
     selectedPages.length >= 2,
@@ -282,6 +361,11 @@ async function dragTargetSelectionAcrossFragments(page) {
     await page.locator('[data-wysiwyg-text-engine-layer="true"]').first().getAttribute("data-wysiwyg-pointer-fragment-count") ?? 0,
   )
   assert(pointerFragmentCount >= 2, `expected at least two WYSIWYG pointer fragments, got ${pointerFragmentCount}`)
+  const firstTargetLayer = page.locator(targetLayerSelector).first()
+  if (await firstTargetLayer.count() > 0) {
+    await firstTargetLayer.scrollIntoViewIfNeeded()
+    await page.waitForTimeout(100)
+  }
   const points = await page.evaluate((targetNodeId) => {
     const textPoint = (fragment, preferLast) => {
       const candidates = Array.from(fragment.querySelectorAll("text"))
@@ -301,7 +385,9 @@ async function dragTargetSelectionAcrossFragments(page) {
           candidate.text.length > 0 &&
           candidate.text !== "paragraph" &&
           candidate.rect.width > 20 &&
-          candidate.rect.height > 8
+          candidate.rect.height > 8 &&
+          candidate.rect.top < window.innerHeight &&
+          candidate.rect.top + candidate.rect.height > 0
         ))
       const candidate = preferLast ? candidates[candidates.length - 1] : candidates[0]
       if (!candidate) return null
@@ -311,14 +397,19 @@ async function dragTargetSelectionAcrossFragments(page) {
       }
     }
 
-    const fragments = Array.from(document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${targetNodeId}"]`))
-      .map((fragment) => {
-        const rect = fragment.getBoundingClientRect()
-        const hitArea = fragment.querySelector('[data-wysiwyg-hit-area="true"]')
+    const interactiveSurfaces = Array.from(document.querySelectorAll(
+      `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]`,
+    ))
+    const fallbackFragments = Array.from(document.querySelectorAll(`[data-testid="editor-fragment"][data-node-id="${targetNodeId}"]`))
+    const surfaces = interactiveSurfaces.length > 0 ? interactiveSurfaces : fallbackFragments
+    const fragments = surfaces
+      .map((surface, surfaceIndex) => {
+        const rect = surface.getBoundingClientRect()
+        const hitArea = surface.querySelector('[data-wysiwyg-hit-area="true"]')
         const hitRect = hitArea?.getBoundingClientRect()
         return {
-          pageIndex: fragment.getAttribute("data-page-index"),
-          lineStart: Number(fragment.getAttribute("data-line-start") ?? 0),
+          pageIndex: surface.getAttribute("data-page-index"),
+          lineStart: Number(surface.getAttribute("data-line-start") ?? surface.getAttribute("data-wysiwyg-island-surface-index") ?? surfaceIndex),
           rect: {
             left: rect.left,
             top: rect.top,
@@ -331,8 +422,8 @@ async function dragTargetSelectionAcrossFragments(page) {
             width: hitRect.width,
             height: hitRect.height,
           } : null,
-          textStart: textPoint(fragment, false),
-          textEnd: textPoint(fragment, true),
+          textStart: textPoint(surface, false),
+          textEnd: textPoint(surface, true),
         }
       })
       .filter((fragment) => fragment.rect.width > 0 && fragment.rect.height > 0)
@@ -360,7 +451,7 @@ async function dragTargetSelectionAcrossFragments(page) {
   await page.mouse.down()
   await page.mouse.move(points.end.x, points.end.y, { steps: 12 })
   await page.mouse.up()
-  await page.waitForFunction(() => document.querySelectorAll('[data-wysiwyg-selection="true"]').length > 0, null, {
+  await page.waitForFunction((selector) => document.querySelectorAll(selector).length > 0, selectionOverlaySelector, {
     timeout: 5000,
   })
   await expectTargetSelectionSpansMultiplePages(page)
@@ -500,7 +591,7 @@ async function assertStage4StackParagraphFlow(page) {
   await expectBodyContains(page, STACK_MARKER, true)
   await expectTextEngineBridge(page, stackBridgeSelector)
   await page.waitForTimeout(800)
-  await expectNoTextarea(page)
+  await expectNoInlineTextareaFallback(page)
   await expectNoLayoutError(page)
 
   const after = await readStackGeometry(page)
@@ -599,7 +690,7 @@ async function assertStage4ClipboardFlow(page, context) {
   await expectTargetSelectionSpansMultiplePages(page)
   await expectAccessibilityStatusContains(page, "characters selected")
   await page.keyboard.press("End")
-  await page.waitForFunction(() => document.querySelectorAll('[data-wysiwyg-selection="true"]').length === 0)
+  await page.waitForFunction((selector) => document.querySelectorAll(selector).length === 0, selectionOverlaySelector)
   await expectAccessibilityStatusContains(page, "Caret at")
 
   await bridge.focus()
@@ -607,7 +698,7 @@ async function assertStage4ClipboardFlow(page, context) {
   for (let index = 0; index < cutMarker.length; index += 1) {
     await page.keyboard.press("Shift+ArrowLeft")
   }
-  await page.locator('[data-wysiwyg-selection="true"]').waitFor({ state: "attached", timeout: 5000 })
+  await page.locator(selectionOverlaySelector).first().waitFor({ state: "attached", timeout: 5000 })
 
   await page.keyboard.press(`${platformShortcut}+C`)
   await page.waitForFunction((expectedText) => navigator.clipboard.readText().then((text) => text === expectedText), cutMarker)
@@ -625,14 +716,14 @@ async function assertStage4ClipboardFlow(page, context) {
   await page.keyboard.press(`${platformShortcut}+Z`)
   await expectBodyContains(page, pasteMarker, false)
   await expectTargetFragmentCount(page, 1)
-  await expectNoTextarea(page)
+  await expectNoInlineTextareaFallback(page)
   await expectNoLayoutError(page)
 
   await page.keyboard.press(`${platformShortcut}+Y`)
   await expectBodyContains(page, pasteMarker, true)
   await expectBodyContains(page, cutMarker, false)
   await expectTargetFragmentCountAtLeast(page, 2)
-  await expectNoTextarea(page)
+  await expectNoInlineTextareaFallback(page)
   await expectNoLayoutError(page)
 
   return { pasteMarker, crlfMarker, cutMarker, pointerDragSelection: "multiple-pages" }
@@ -640,24 +731,29 @@ async function assertStage4ClipboardFlow(page, context) {
 
 async function assertStage4DoubleClickSelectionFlow(page) {
   await openStage4Scenario(page)
-  await page.locator(`${targetFragmentSelector} [data-wysiwyg-hit-area="true"]`).waitFor({ state: "attached", timeout: 10000 })
+  await page.locator(`${targetLayerSelector} [data-wysiwyg-hit-area="true"]`).first().waitFor({ state: "attached", timeout: 10000 })
   const point = await page.evaluate((targetNodeId) => {
-    const fragment = document.querySelector(`[data-testid="editor-fragment"][data-node-id="${targetNodeId}"]`)
-    if (!fragment) throw new Error("missing target fragment for double-click selection")
+    const surfaces = Array.from(document.querySelectorAll(
+      `[data-wysiwyg-text-engine-layer="true"][data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]`,
+    ))
+    if (surfaces.length === 0) throw new Error("missing target text-engine surface for double-click selection")
 
-    const textCandidate = Array.from(fragment.querySelectorAll("text"))
-      .map((element) => {
-        const rect = element.getBoundingClientRect()
-        return {
-          text: element.textContent?.trim() ?? "",
-          rect: {
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
-          },
-        }
-      })
+    const textCandidate = surfaces
+      .flatMap((surface) => (
+        Array.from(surface.querySelectorAll("text"))
+          .map((element) => {
+            const rect = element.getBoundingClientRect()
+            return {
+              text: element.textContent?.trim() ?? "",
+              rect: {
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
+              },
+            }
+          })
+      ))
       .find((candidate) => (
         candidate.text.length > 0 &&
         candidate.text !== "paragraph" &&
@@ -672,7 +768,7 @@ async function assertStage4DoubleClickSelectionFlow(page) {
     }
   }, TARGET_NODE_ID)
   await page.mouse.dblclick(point.x, point.y)
-  await page.locator('[data-wysiwyg-selection="true"]').waitFor({ state: "attached", timeout: 5000 })
+  await page.locator(selectionOverlaySelector).first().waitFor({ state: "attached", timeout: 5000 })
   await expectTextEngineBridge(page)
 
   return { selectionOverlay: "visible" }

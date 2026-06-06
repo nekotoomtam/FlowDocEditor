@@ -51,6 +51,7 @@ import { isParagraphInsideFlowStack } from "./wysiwygTextEligibility"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
 import { finishWysiwygPerfSpan, isWysiwygPerfTraceRuntimeEnabled, recordWysiwygPerfEvent, startWysiwygPerfSpan } from "./wysiwygPerformance"
 import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
+import type { ParagraphTextSurfaceStructuralEditGuard } from "./structuralEdit/paragraphTextSurfaceFallbackBridge"
 
 interface Props {
   fragment: PageFragment
@@ -80,6 +81,7 @@ interface Props {
   onEndEdit: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph: (nodeId: string, text?: string) => void
+  onCanStartStructuralEdit?: ParagraphTextSurfaceStructuralEditGuard
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -1531,6 +1533,7 @@ interface WysiwygTextLayerProps {
   onEndEdit?: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph?: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph?: (nodeId: string, text?: string) => void
+  onCanStartStructuralEdit?: ParagraphTextSurfaceStructuralEditGuard
   onExitListItem?: (nodeId: string, text?: string) => void
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
@@ -1545,6 +1548,17 @@ interface WysiwygTextLayerProps {
   suppressLiveTextEcho?: boolean
   relaxNativeEditClip?: boolean
   caretVisualMode?: WysiwygCaretVisualMode
+}
+
+function canStartParagraphTextSurfaceStructuralEdit(
+  guard: ParagraphTextSurfaceStructuralEditGuard | undefined,
+  input: Omit<Parameters<ParagraphTextSurfaceStructuralEditGuard>[0], "timestamp">,
+): boolean {
+  if (!guard) return true
+  return guard({
+    ...input,
+    timestamp: startWysiwygPerfSpan(),
+  })
 }
 
 function measureLiveEchoTextWidth(
@@ -1931,6 +1945,7 @@ export function WysiwygTextLayer({
   onEndEdit,
   onSplitParagraph,
   onMergeParagraph,
+  onCanStartStructuralEdit,
   onExitListItem,
   onChangeListItemLevel,
   onBackspaceListItemAtStart,
@@ -3293,6 +3308,22 @@ export function WysiwygTextLayer({
           current.caretOffset,
           current.selection ?? null,
         )
+        if (
+          structuralInput.action !== "exit-list" &&
+          !canStartParagraphTextSurfaceStructuralEdit(onCanStartStructuralEdit, {
+            key: "Enter",
+            operation: "split",
+            nodeId: fragment.nodeId,
+            caretIndex: structuralInput.splitIndex,
+            isComposing: event.isComposing,
+            hasActiveComposition: isComposingTextEngineRef.current,
+            currentActiveNodeId: fragment.nodeId,
+            expectedNodeExists: true,
+            source: "paragraph-text-surface:text-engine-list-enter",
+          })
+        ) {
+          return
+        }
         cancelScheduledDraftSyncFrame()
         pendingDraftSyncRef.current = null
         if (structuralInput.action === "exit-list") {
@@ -3340,6 +3371,22 @@ export function WysiwygTextLayer({
           (!selection || (selection.anchorOffset === 0 && selection.focusOffset === 0))
         if (isCollapsedAtStart && (isListItem || onMergeParagraph)) {
           event.preventDefault()
+          if (!canStartParagraphTextSurfaceStructuralEdit(onCanStartStructuralEdit, {
+            key: "Backspace",
+            operation: current.text.length === 0 ? "delete-empty" : "merge",
+            nodeId: fragment.nodeId,
+            caretIndex: 0,
+            isComposing: event.isComposing,
+            hasActiveComposition: isComposingTextEngineRef.current,
+            currentActiveNodeId: fragment.nodeId,
+            expectedNodeExists: true,
+            removedNodeStillExists: true,
+            source: isListItem
+              ? "paragraph-text-surface:text-engine-list-backspace"
+              : "paragraph-text-surface:text-engine-backspace",
+          })) {
+            return
+          }
           cancelScheduledDraftSyncFrame()
           pendingDraftSyncRef.current = null
           if (isListItem) {
@@ -3459,6 +3506,7 @@ export function WysiwygTextLayer({
     isCompositionBridgeInput,
     isListItem,
     onBackspaceListItemAtStart,
+    onCanStartStructuralEdit,
     onChangeListItemLevel,
     onEndEdit,
     onExitListItem,
@@ -3869,6 +3917,19 @@ export function WysiwygTextLayer({
               const selectionStart = textarea.selectionStart ?? textarea.value.length
               const selectionEnd = textarea.selectionEnd ?? selectionStart
               const input = buildSplitEditInput("", textarea.value, selectionStart, selectionEnd)
+              if (!canStartParagraphTextSurfaceStructuralEdit(onCanStartStructuralEdit, {
+                key: "Enter",
+                operation: "split",
+                nodeId: fragment.nodeId,
+                caretIndex: input.splitIndex,
+                isComposing: event.nativeEvent.isComposing,
+                hasActiveComposition: isComposingTextEngineRef.current,
+                currentActiveNodeId: fragment.nodeId,
+                expectedNodeExists: true,
+                source: "paragraph-text-surface:native-edit-layer-enter",
+              })) {
+                return
+              }
               draftStateRef.current = { text: input.text, caretOffset: input.splitIndex, selection: null }
               scheduleDraftSync({ text: input.text, caretOffset: input.splitIndex, selection: null }, { defer: false })
               if (isListItem && input.text.length === 0) {
@@ -3901,11 +3962,39 @@ export function WysiwygTextLayer({
             ) {
               if (isListItem) {
                 event.preventDefault()
+                if (!canStartParagraphTextSurfaceStructuralEdit(onCanStartStructuralEdit, {
+                  key: "Backspace",
+                  operation: textarea.value.length === 0 ? "delete-empty" : "merge",
+                  nodeId: fragment.nodeId,
+                  caretIndex: 0,
+                  isComposing: event.nativeEvent.isComposing,
+                  hasActiveComposition: isComposingTextEngineRef.current,
+                  currentActiveNodeId: fragment.nodeId,
+                  expectedNodeExists: true,
+                  removedNodeStillExists: true,
+                  source: "paragraph-text-surface:native-edit-layer-list-backspace",
+                })) {
+                  return
+                }
                 applyNativeTextareaDraft(textarea, { defer: false })
                 onBackspaceListItemAtStart?.(fragment.nodeId, textarea.value, 0)
                 return
               }
               event.preventDefault()
+              if (!canStartParagraphTextSurfaceStructuralEdit(onCanStartStructuralEdit, {
+                key: "Backspace",
+                operation: textarea.value.length === 0 ? "delete-empty" : "merge",
+                nodeId: fragment.nodeId,
+                caretIndex: 0,
+                isComposing: event.nativeEvent.isComposing,
+                hasActiveComposition: isComposingTextEngineRef.current,
+                currentActiveNodeId: fragment.nodeId,
+                expectedNodeExists: true,
+                removedNodeStillExists: true,
+                source: "paragraph-text-surface:native-edit-layer-backspace",
+              })) {
+                return
+              }
               applyNativeTextareaDraft(textarea, { defer: false })
               onMergeParagraph?.(fragment.nodeId, textarea.value)
             }
@@ -4115,6 +4204,7 @@ function areParagraphTextSurfacePropsEqual(prev: Props, next: Props): boolean {
     prev.onEndEdit === next.onEndEdit &&
     prev.onSplitParagraph === next.onSplitParagraph &&
     prev.onMergeParagraph === next.onMergeParagraph &&
+    prev.onCanStartStructuralEdit === next.onCanStartStructuralEdit &&
     prev.onExitListItem === next.onExitListItem &&
     prev.onChangeListItemLevel === next.onChangeListItemLevel &&
     prev.onBackspaceListItemAtStart === next.onBackspaceListItemAtStart &&
@@ -4151,6 +4241,7 @@ function ParagraphTextSurfaceImpl({
   onEndEdit,
   onSplitParagraph,
   onMergeParagraph,
+  onCanStartStructuralEdit,
   onExitListItem,
   onChangeListItemLevel,
   onBackspaceListItemAtStart,
@@ -4500,6 +4591,7 @@ function ParagraphTextSurfaceImpl({
           onEndEdit={onEndEdit}
           onSplitParagraph={onSplitParagraph}
           onMergeParagraph={isTableCellParagraph ? undefined : onMergeParagraph}
+          onCanStartStructuralEdit={onCanStartStructuralEdit}
           onExitListItem={onExitListItem}
           onChangeListItemLevel={onChangeListItemLevel}
           onBackspaceListItemAtStart={onBackspaceListItemAtStart}
@@ -4622,6 +4714,19 @@ function ParagraphTextSurfaceImpl({
                 const selectionStart = el.selectionStart ?? el.value.length
                 const selectionEnd = el.selectionEnd ?? selectionStart
                 const input = buildSplitEditInput(preText, el.value, selectionStart, selectionEnd, postText)
+                if (!canStartParagraphTextSurfaceStructuralEdit(onCanStartStructuralEdit, {
+                  key: "Enter",
+                  operation: "split",
+                  nodeId: fragment.nodeId,
+                  caretIndex: input.splitIndex,
+                  isComposing: event.nativeEvent.isComposing,
+                  hasActiveComposition: isComposing,
+                  currentActiveNodeId: fragment.nodeId,
+                  expectedNodeExists: paragraphNode !== null,
+                  source: "paragraph-text-surface:legacy-textarea-enter",
+                })) {
+                  return
+                }
                 onChange(fragment.nodeId, input.text, input.splitIndex)
                 onSplitParagraph(fragment.nodeId, input.splitIndex, input.text)
                 return
@@ -4650,6 +4755,20 @@ function ParagraphTextSurfaceImpl({
                 if (isListItem) {
                   event.preventDefault()
                   const snapshot = getInlineEditInputSnapshot(el, preText, postText)
+                  if (!canStartParagraphTextSurfaceStructuralEdit(onCanStartStructuralEdit, {
+                    key: "Backspace",
+                    operation: snapshot.text.length === 0 ? "delete-empty" : "merge",
+                    nodeId: fragment.nodeId,
+                    caretIndex: snapshot.caretOffset,
+                    isComposing: event.nativeEvent.isComposing,
+                    hasActiveComposition: isComposing,
+                    currentActiveNodeId: fragment.nodeId,
+                    expectedNodeExists: paragraphNode !== null,
+                    removedNodeStillExists: paragraphNode !== null,
+                    source: "paragraph-text-surface:legacy-textarea-list-backspace",
+                  })) {
+                    return
+                  }
                   onChange(fragment.nodeId, snapshot.text, snapshot.caretOffset)
                   onBackspaceListItemAtStart?.(fragment.nodeId, snapshot.text, snapshot.caretOffset)
                   return
@@ -4657,6 +4776,20 @@ function ParagraphTextSurfaceImpl({
                 if (shouldUseNativeTableCellBoundaryBackspace(isTableCellParagraph, preText)) return
                 event.preventDefault()
                 const text = preText + el.value + postText
+                if (!canStartParagraphTextSurfaceStructuralEdit(onCanStartStructuralEdit, {
+                  key: "Backspace",
+                  operation: text.length === 0 ? "delete-empty" : "merge",
+                  nodeId: fragment.nodeId,
+                  caretIndex: 0,
+                  isComposing: event.nativeEvent.isComposing,
+                  hasActiveComposition: isComposing,
+                  currentActiveNodeId: fragment.nodeId,
+                  expectedNodeExists: paragraphNode !== null,
+                  removedNodeStillExists: paragraphNode !== null,
+                  source: "paragraph-text-surface:legacy-textarea-backspace",
+                })) {
+                  return
+                }
                 onChange(fragment.nodeId, text, 0)
                 onMergeParagraph(fragment.nodeId, text)
               }

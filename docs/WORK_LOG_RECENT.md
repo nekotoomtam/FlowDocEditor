@@ -22,7 +22,3536 @@ Each entry should include:
 
 ---
 
+## 2026-06-06
+
+### Task 42 Draft Pagination Shell Executor
+
+Goal: Move only the draft-pagination output lane behind a callback-based Shell
+executor while keeping draft preview document construction, `paginatePreviewDoc`,
+validation, source resolution, source revision apply/reschedule/ignore
+decisions, inline page relocation/follow inputs, `flushSync`, document model,
+reducer semantics, renderer/export, persistence, FlowTable, typing, and
+IME/composition behavior unchanged.
+
+PASS:
+
+- Added `applyDraftPreviewShellMutation` to the Shell adapter.
+- The executor consumes an already-created `DraftPreviewShellMutationPlan` and
+  handles:
+  - `ignore` plans as no-op accepted plans.
+  - `reschedule` plans through a Shell-provided draft scheduler callback.
+  - `apply` plans through callback-only Shell effects for paginated ref writes,
+    optimistic layout writes, inline page relocation/follow, draft pagination
+    node state, `SET_PAGINATED` dispatch, and inline visual freshness marking.
+- Routed both non-apply and apply branches in `EditorShell.runDraftPagination`
+  through the executor after Shell creates and records the runtime guard plan.
+- Preserved the previous apply-side order: paginated ref write, optimistic
+  layout write, optional inline page relocation/follow, draft pagination node
+  state, reducer dispatch, then inline visual freshness.
+- Added focused adapter coverage for apply, reschedule, ignore, relocation and
+  follow flags, fallback visual freshness, and disabled optional callbacks.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- The draft-pagination output callbacks are now executed through the Shell
+  adapter instead of inline inside `EditorShell.runDraftPagination`.
+- Runtime guard decisions, source revision apply/reschedule/ignore decisions,
+  draft preview document construction, pagination output production, validation,
+  renderer/export, persistence, FlowTable, document model semantics,
+  `flushSync`, normal typing, and IME/composition behavior were not
+  intentionally changed.
+
+Files changed for Task 42:
+
+- `src/app/editor/_components/structuralEdit/previewSettleShellAdapter.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `SMOKE_BASE_URL=http://localhost:4000/editor`,
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`,
+  `PROBE_READY_TIMEOUT_MS=30000`
+
+Observed:
+
+- Focused adapter suite passed: 1 file, 25 tests.
+- Type-check passed.
+- PreviewSettle adapter/bridge/runtime suite passed: 3 files, 46 tests.
+- Runtime/editor regression suite passed: 5 files, 220 tests.
+- Long mock `enter-backspace-immediate` smoke finished with `ok=true` and
+  structural refocus safety `ok=true`.
+- Two earlier smoke attempts failed before behavior assertion because a Next
+  dev server was already running for this workspace at
+  `http://localhost:4000`; the passing smoke reused that server through
+  `SMOKE_BASE_URL`.
+
+Artifact hygiene:
+
+- Task 42 source review set is the draft-pagination executor, its focused
+  tests, and the `EditorShell.runDraftPagination` call sites.
+- Task 42 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 42 smoothness smoke was stdout-only in this run; no new Task 42
+  JSON report file was intentionally added.
+- Existing `reports/`, zip archives, `.codex-dev-server-*` logs, `debug.log`,
+  runtime folders, bridge files, and prior dirty source/docs remain prior-task
+  artifacts or review evidence and were not cleaned, staged, or committed.
+
+RISK:
+
+- This remains Shell-owned mutation execution through callbacks, not
+  runtime-owned draft pagination output commits.
+- `runDraftPagination` still owns source resolution, draft preview document
+  construction, source revision checks, validation, relocation/follow input
+  derivation, and reducer dispatch timing.
+- The preview-settle lanes now have callback executor coverage, but the next
+  larger move needs a design gate before shifting ownership out of Shell.
+
+Recommended Task 43:
+
+- Add a PreviewSettle ownership/design closure gate before larger moves. Audit
+  the executor coverage added in Tasks 38-42, define the next coordinator
+  boundary for draft/browser preview settle ownership, and list the minimal
+  runtime-owned state that can move without changing document model,
+  pagination, reducer semantics, renderers/export, persistence, FlowTable,
+  validation, `flushSync`, typing, or IME/composition behavior.
+
+### Task 41 Final Paginated Output Shell Executor
+
+Goal: Move only the final paginated-output browser preview apply-side Shell
+mutations behind a callback-based Shell executor while keeping runtime guard
+decisions, ignore handling, `finishWysiwygPerfSpan`, full pagination/worker/
+main-thread output production, validation, renderer/export, persistence,
+FlowTable, document model semantics, `flushSync`, typing, and IME/composition
+behavior unchanged.
+
+PASS:
+
+- Added `applyPaginatedOutputBrowserPreviewShellMutation` to the Shell adapter.
+- The executor consumes an already-created `apply`
+  `BrowserPreviewShellMutationPlan` with `mode === "paginated-output"` and uses
+  callback-only Shell effects for optimistic layout writes, paginated ref
+  writes, partial preview clearing, full/settling browser preview layout
+  updates, `SET_PAGINATED` dispatch, preview-settle applied marking, inline
+  visual freshness marking, and structural settle completion.
+- Kept `finishWysiwygPerfSpan`, `markPreviewSettleCompletedBridge`, runtime
+  apply decisions, ignored plan handling, full pagination/worker/main-thread
+  output production, and structural settle diagnostic payload construction in
+  `EditorShell`.
+- Preserved the previous Shell mutation order: ref/state writes, layout update,
+  dispatch, preview-settle applied marking, inline visual freshness, then
+  structural settle completion diagnostics.
+- Added focused adapter tests covering final output callbacks, full and
+  settling-blocking layout branches, inline visual freshness, structural settle
+  completion, disabled flags, and non-paginated-output plan rejection.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- The final paginated-output block in `EditorShell.commitPagination` now
+  delegates the same Shell-owned output mutations to the callback executor.
+- Actual runtime guard decisions, ignore handling, browser/main-thread/worker
+  pagination output production, validation, renderer/export, persistence,
+  FlowTable, document model semantics, `flushSync`, normal typing, and
+  IME/composition behavior were not intentionally changed.
+
+Files changed for Task 41:
+
+- `src/app/editor/_components/structuralEdit/previewSettleShellAdapter.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`,
+  `PROBE_READY_TIMEOUT_MS=30000`
+
+Observed:
+
+- Focused adapter suite passed: 1 file, 22 tests.
+- Type-check passed.
+- PreviewSettle adapter/bridge/runtime suite passed: 3 files, 43 tests.
+- Runtime/editor regression suite passed: 5 files, 220 tests.
+- Long mock `enter-backspace-immediate` smoke finished with `ok=true` and
+  structural refocus safety `ok=true`.
+
+Artifact hygiene:
+
+- Task 41 source review set is the final paginated-output executor, its focused
+  tests, and the `EditorShell.commitPagination` call site.
+- Task 41 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 41 smoothness smoke was stdout-only in this run; no new Task 41
+  JSON report file was intentionally added.
+- Existing `reports/`, zip archives, `.codex-dev-server-*` logs, `debug.log`,
+  runtime folders, bridge files, and prior dirty source/docs remain prior-task
+  artifacts or review evidence and were not cleaned, staged, or committed.
+
+RISK:
+
+- This remains Shell-owned mutation execution through callbacks, not
+  runtime-owned pagination output commits.
+- The browser-preview output lanes now have Shell executor coverage, but
+  runtime still does not own document/paginated output commits.
+- Draft-pagination output remains in `EditorShell` and is Enter/Backspace
+  sensitive because it owns inline page relocation/follow and draft visual
+  freshness.
+
+Recommended Task 42:
+
+- Move the draft-pagination output lane behind a callback-based Shell executor.
+  Keep draft preview document construction, `paginatePreviewDoc`, validation,
+  reschedule/ignore decisions, inline page relocation/follow inputs,
+  `flushSync`, document model, reducer semantics, renderer/export,
+  persistence, FlowTable, typing, and IME/composition behavior unchanged.
+
+### Task 40 Visual-Only Browser Preview Shell Executor
+
+Goal: Move only the visual-only browser preview fast-lane apply-side Shell
+mutations behind a callback-based Shell executor while keeping runtime guard
+decisions, ignore handling, visual-only pagination derivation, perf span
+recording, validation, renderer/export, persistence, FlowTable, document model
+semantics, `flushSync`, typing, and IME/composition behavior unchanged.
+
+PASS:
+
+- Added `applyVisualOnlyBrowserPreviewShellMutation` to the Shell adapter.
+- The executor consumes an already-created `apply`
+  `BrowserPreviewShellMutationPlan` with `mode === "visual-only"` and uses
+  callback-only Shell effects for optimistic layout writes, paginated ref
+  writes, partial preview clearing, full browser preview layout updates,
+  `SET_PAGINATED` dispatch, and preview-settle lifecycle marking.
+- Kept visual-only output derivation through `tryApplyVisualOnlyPaginatedUpdate`
+  in `EditorShell`.
+- Kept runtime apply decisions and ignored plan handling in `EditorShell`.
+- Kept `finishWysiwygPerfSpan` and visual-only perf metadata recording in
+  `EditorShell`.
+- Added focused adapter tests covering each visual-only callback flag, disabled
+  flags, and non-visual-only plan rejection.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- The visual-only browser preview block in `EditorShell` now delegates the same
+  Shell-owned output mutations to the callback executor.
+- Actual runtime guard decisions, ignore handling, visual-only output
+  derivation, perf span recording, validation, renderer/export, persistence,
+  FlowTable, document model semantics, `flushSync`, normal typing, and
+  IME/composition behavior were not intentionally changed.
+
+Files changed for Task 40:
+
+- `src/app/editor/_components/structuralEdit/previewSettleShellAdapter.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`,
+  `PROBE_READY_TIMEOUT_MS=30000`
+
+Observed:
+
+- Focused adapter suite passed: 1 file, 18 tests.
+- Type-check passed.
+- PreviewSettle adapter/bridge/runtime suite passed: 3 files, 39 tests.
+- Runtime/editor regression suite passed: 5 files, 220 tests.
+- Long mock `enter-backspace-immediate` smoke finished with `ok=true` and
+  structural refocus safety `ok=true`.
+
+Artifact hygiene:
+
+- Task 40 source review set is the visual-only executor, its focused tests, and
+  the visual-only `EditorShell` call site.
+- Task 40 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 40 smoothness smoke was stdout-only in this run; no new Task 40
+  JSON report file was intentionally added.
+- Existing `reports/`, zip archives, `.codex-dev-server-*` logs, `debug.log`,
+  runtime folders, bridge files, and prior dirty source/docs remain prior-task
+  artifacts or review evidence and were not cleaned, staged, or committed.
+
+RISK:
+
+- This remains Shell-owned mutation execution through callbacks, not
+  runtime-owned pagination output commits.
+- Final paginated-output and draft-pagination output lanes still execute
+  directly in `EditorShell`.
+- The final paginated-output lane is higher risk because it owns inline visual
+  freshness and structural settle completion.
+
+Recommended Task 41:
+
+- Move the final paginated-output browser preview lane behind a callback-based
+  Shell executor. Keep runtime apply decisions, ignored plan handling,
+  `finishWysiwygPerfSpan`, full pagination/worker/main-thread output
+  production, validation, renderer/export, persistence, FlowTable, document
+  model semantics, `flushSync`, typing, and IME/composition behavior unchanged.
+
+### Task 39 Partial Worker Preview Shell Executor
+
+Goal: Move only the partial worker preview apply-side Shell mutations behind a
+small callback-based Shell executor while keeping worker request/response
+ownership, request id matching, fallback behavior, runtime guard decisions,
+ignore handling, final paginated output commits, pagination, validation,
+paginated refs, reducer dispatch, renderer/export, persistence, FlowTable,
+document model semantics, `flushSync`, typing, and IME/composition behavior
+unchanged.
+
+PASS:
+
+- Added `applyPartialWorkerBrowserPreviewShellMutation` to the Shell adapter.
+- The executor consumes an already-created `apply`
+  `BrowserPreviewShellMutationPlan` with `mode === "partial-worker"` and uses
+  callback-only Shell effects for partial preview payload writes and partial
+  browser preview layout updates.
+- Kept worker response validation, request id matching, stale response ignore,
+  worker fallback, runtime apply decisions, and ignored plan handling in
+  `EditorShell`.
+- Kept the executor generic so the Shell adapter does not import or own
+  `PaginatedDocument`, React state types, worker APIs, reducer dispatch,
+  pagination, validation, renderer/export, persistence, FlowTable, or document
+  model behavior.
+- Added focused adapter tests covering partial payload write, partial layout
+  update, disabled flags, and non-partial plan rejection.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- The partial worker preview block in `EditorShell` now delegates the same
+  Shell-owned partial preview mutations to the callback executor.
+- Actual worker request/response ownership, runtime guard decisions, ignore
+  handling, fallback behavior, final output commits, pagination, validation,
+  paginated refs, `SET_PAGINATED`, reducer/history behavior, renderer/export,
+  persistence/package format, FlowTable, `flushSync`, normal typing, and
+  IME/composition behavior were not intentionally changed.
+
+Files changed for Task 39:
+
+- `src/app/editor/_components/structuralEdit/previewSettleShellAdapter.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`,
+  `PROBE_READY_TIMEOUT_MS=30000`
+
+Observed:
+
+- Focused adapter suite passed: 1 file, 15 tests.
+- Type-check passed.
+- PreviewSettle adapter/bridge/runtime suite passed: 3 files, 36 tests.
+- Runtime/editor regression suite passed: 5 files, 220 tests.
+- Long mock `enter-backspace-immediate` smoke finished with `ok=true` and
+  structural refocus safety `ok=true`.
+
+Artifact hygiene:
+
+- Task 39 source review set is the partial worker executor, its focused tests,
+  and the partial worker `EditorShell` call site.
+- Task 39 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 39 smoothness smoke was stdout-only in this run; no new Task 39
+  JSON report file was intentionally added.
+- Existing `reports/`, zip archives, `.codex-dev-server-*` logs, `debug.log`,
+  runtime folders, bridge files, and prior dirty source/docs remain prior-task
+  artifacts or review evidence and were not cleaned, staged, or committed.
+
+RISK:
+
+- This remains Shell-owned mutation execution through callbacks, not
+  runtime-owned pagination output commits.
+- Worker request/response mechanics and final output commits still execute in
+  `EditorShell`.
+- Visual-only, final paginated-output, and draft-pagination output lanes still
+  execute directly in `EditorShell`.
+
+Recommended Task 40:
+
+- Move the visual-only browser preview fast lane behind a callback-based Shell
+  executor. Keep runtime apply decisions, ignored plan handling, perf span
+  recording, paginated output ownership, reducer dispatch semantics, validation,
+  renderer/export, persistence, FlowTable, document model semantics,
+  `flushSync`, typing, and IME/composition behavior unchanged.
+
+### Task 38 Precomputed Browser Preview Shell Executor
+
+Goal: Move only the precomputed browser preview apply-side Shell mutations
+behind a small callback-based Shell executor while keeping runtime guard
+decisions, ignore handling, apply-plan creation, preview document construction,
+pagination, validation, worker behavior, paginated refs, reducer dispatch,
+renderer/export, persistence, FlowTable, document model semantics, `flushSync`,
+typing, and IME/composition behavior unchanged.
+
+PASS:
+
+- Added `applyPrecomputedBrowserPreviewShellMutation` to the Shell adapter.
+- The executor consumes an already-created `apply`
+  `BrowserPreviewShellMutationPlan` and uses callback-only Shell effects for:
+  optimistic layout write, partial preview clear, full browser preview layout
+  update, and preview-settle lifecycle marking.
+- Kept precomputed ignore handling in `EditorShell`.
+- Kept runtime apply decision and browser apply-plan creation visible before any
+  executor callback can mutate Shell state.
+- Kept the executor generic so the Shell adapter does not import or own
+  `DocumentNode`, `PaginatedDocument`, React state types, reducer dispatch,
+  validation, pagination, worker APIs, renderer/export, persistence, or
+  FlowTable behavior.
+- Added focused adapter tests covering optimistic layout write, partial preview
+  clear, full-layout update, lifecycle marking, disabled flags, and rejection of
+  non-precomputed plans.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- The precomputed browser preview apply block in `EditorShell` now delegates the
+  same Shell-owned mutations to the callback executor.
+- Actual guard decisions, ignore handling, runtime lifecycle APIs, preview
+  document construction, browser/main-thread pagination, worker calls,
+  validation, paginated refs, `SET_PAGINATED`, reducer/history behavior,
+  renderer/export, persistence/package format, FlowTable, `flushSync`, normal
+  typing, and IME/composition behavior were not intentionally changed.
+
+Files changed for Task 38:
+
+- `src/app/editor/_components/structuralEdit/previewSettleShellAdapter.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`,
+  `PROBE_READY_TIMEOUT_MS=30000`
+
+Observed:
+
+- Focused adapter suite passed: 1 file, 12 tests.
+- Type-check passed.
+- PreviewSettle adapter/bridge/runtime suite passed: 3 files, 33 tests.
+- Runtime/editor regression suite passed: 5 files, 220 tests.
+- Long mock `enter-backspace-immediate` smoke finished with `ok=true` and
+  structural refocus safety `ok=true`.
+
+Artifact hygiene:
+
+- Task 38 source review set is the precomputed executor, its focused tests, and
+  the precomputed `EditorShell` call site.
+- Task 38 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 38 smoothness smoke was stdout-only in this run; no new Task 38
+  JSON report file was intentionally added.
+- Existing `reports/`, zip archives, `.codex-dev-server-*` logs, `debug.log`,
+  runtime folders, bridge files, and prior dirty source/docs remain prior-task
+  artifacts or review evidence and were not cleaned, staged, or committed.
+
+RISK:
+
+- This is still Shell-owned mutation execution through callbacks, not
+  runtime-owned pagination output commits.
+- The executor only covers the precomputed browser preview lane. Visual-only,
+  partial-worker, final paginated-output, and draft-pagination output lanes
+  still execute directly in `EditorShell`.
+- Future executor moves must keep ignore handling and runtime guard decisions
+  explicit until each lane has dedicated tests.
+
+Recommended Task 39:
+
+- Move the partial worker preview lane behind a similarly small callback-based
+  Shell executor for `setPartialPreviewPaginated` and partial browser preview
+  layout updates only. Do not move final output commits, worker request/response
+  ownership, pagination, validation, reducer dispatch, or runtime semantics.
+
+### Task 37 PreviewSettle First Movement Design Gate
+
+Goal: Choose the first safe output lane for reducing `EditorShell` preview
+settle mutation responsibility, define the lane-by-lane movement plan, and keep
+the next implementation task narrow enough that generation, active-inline-node,
+draft-version, and latest-output guards remain explicit and testable.
+
+PASS:
+
+- Audited the current PreviewSettle ownership chain before moving code:
+  `PreviewSettleRuntime` owns request identity, generation, stale/cancel/
+  supersede decisions, active inline node checks, and draft-version freshness
+  decisions.
+- Confirmed `createBrowserPreviewSettleApplyPlan` remains the browser-preview
+  apply/ignore bridge between runtime decisions and Shell mutation plans.
+- Confirmed `previewSettleShellAdapter` owns only lane metadata, mutation step
+  flags, and diagnostics. It does not own React setters, refs, reducer dispatch,
+  preview document construction, pagination, validation, worker calls, or
+  runtime lifecycle mutation.
+- Mapped the active `EditorShell` output lanes:
+  draft pagination, precomputed browser preview, visual-only fast lane, partial
+  worker preview, and final paginated output commit.
+- Selected precomputed browser preview as the safest first implementation lane
+  because it is the smallest already-planned browser lane and does not write
+  `paginatedRef`, dispatch `SET_PAGINATED`, build preview documents, run
+  pagination, or change reducer/history semantics.
+
+Current evidence:
+
+- Runtime apply guard: `src/app/editor/_components/runtime/previewSettleRuntime.ts`
+  `decide`.
+- Browser apply plan bridge:
+  `src/app/editor/_components/structuralEdit/previewSettleBridge.ts`
+  `createBrowserPreviewSettleApplyPlan`.
+- Shell mutation metadata:
+  `src/app/editor/_components/structuralEdit/previewSettleShellAdapter.ts`
+  `createDraftPreviewShellMutationPlan` and
+  `createBrowserPreviewShellMutationPlan`.
+- Current Shell mutation owners:
+  `src/app/editor/_components/EditorShell.tsx` `runDraftPagination`,
+  precomputed browser preview block, visual-only block, `commitPagination`,
+  and partial worker block.
+
+Approved movement order:
+
+1. Task 38: precomputed browser preview Shell executor.
+2. Task 39: partial worker preview Shell executor.
+3. Task 40: visual-only browser preview Shell executor.
+4. Task 41: final paginated output Shell executor.
+5. Task 42: draft pagination Shell executor.
+6. Task 43+: design a larger coordinator only after the executor lanes are
+   stable and smoke-verified.
+
+Behavior changed:
+
+- No production behavior changed in Task 37.
+- No source code was changed.
+- No actual pagination output commit was moved.
+- No core pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, validation, FlowTable, `flushSync`, normal
+  typing, IME/composition behavior, preview document construction, worker
+  request mechanics, or WYSIWYG island behavior was changed.
+
+Files changed for Task 37:
+
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- Documentation and code evidence audit only.
+- `git diff --check`
+
+Artifact hygiene:
+
+- Task 37 is docs-only. No generated reports, zip archives, runtime folders, or
+  local server logs were intentionally added.
+- Existing `reports/`, zip archives, `.codex-dev-server-*` logs, `debug.log`,
+  runtime folders, bridge files, and prior dirty source/docs remain prior-task
+  artifacts or review evidence and were not cleaned, staged, or committed.
+- A narrow review/commit set for Task 37 should include only
+  `docs/WORK_LOG_RECENT.md` and `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+
+RISK:
+
+- Task 37 intentionally does not prove runtime behavior with a new test because
+  no source path changed.
+- The first real movement in Task 38 must keep the runtime apply decision and
+  Shell mutation plan creation visible before any executor callback mutates
+  Shell state.
+- The executor must use callback-only Shell effects so the adapter/runtime do
+  not gain document, pagination, reducer, worker, or renderer ownership.
+
+Recommended Task 38:
+
+- Add a tiny precomputed browser preview Shell executor that consumes an
+  `apply` `BrowserPreviewShellMutationPlan` plus Shell callbacks for
+  `optimisticLayoutRef`, `setPartialPreviewPaginated`,
+  `setBrowserPreviewLayout`, and preview-settle lifecycle marking. Keep
+  ignore handling, apply-plan creation, guard decisions, runtime calls,
+  document/paginated construction, validation, worker behavior, reducer
+  dispatch, and final output commits in `EditorShell`.
+
+## 2026-06-05
+
+### Task 36 PreviewSettle Shell Adapter Contract Stabilization
+
+Goal: Stabilize the Shell adapter contract with focused diagnostics and tests
+before moving any actual pagination output commits, while keeping preview
+document construction, browser/main-thread pagination, worker requests,
+validation, paginated refs, `optimisticLayoutRef`, inline edit page relocation,
+browser preview layout state, `SET_PAGINATED`, document model semantics,
+reducer/history behavior, renderer/export, persistence, validation, FlowTable
+behavior, `flushSync`, typing, and IME/composition behavior owned by
+`EditorShell`.
+
+PASS:
+
+- Added `PREVIEW_SETTLE_SHELL_ADAPTER_CONTRACT_VERSION` and
+  `summarizePreviewSettleShellMutationPlan` to the Shell adapter.
+- The summary is serializable and records stable contract diagnostics:
+  lane, action, steps, step count, source/mode/reason/generation/layout, and
+  key mutation flags.
+- Wired `EditorShell` to emit trace-gated
+  `preview-settle:shell-mutation-plan` diagnostics for draft apply/reschedule/
+  ignore plans and browser precomputed, visual-only, partial-worker, and final
+  paginated-output plans.
+- Added focused summary coverage proving the diagnostic contract and step order
+  remain stable without moving document or paginated mutation into the
+  runtime/bridge/adapter.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- Diagnostics are emitted only through existing perf trace plumbing.
+- The adapter still returns metadata/steps/flags only. It still does not own
+  document objects, paginated output, refs, React setters, dispatch, worker
+  calls, pagination, validation, or runtime lifecycle mutation.
+- No core pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, validation, FlowTable, `flushSync`, normal
+  typing, or IME/composition behavior was intentionally changed.
+
+Files changed for Task 36:
+
+- `src/app/editor/_components/structuralEdit/previewSettleShellAdapter.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`,
+  `PROBE_READY_TIMEOUT_MS=30000`
+
+Observed:
+
+- Focused adapter/PreviewSettle runtime suite passed: 3 files, 29 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 9 files, 297 tests.
+- Long mock `enter-backspace-immediate` smoke finished with `ok=true` and
+  structural refocus safety `ok=true`.
+
+Artifact hygiene:
+
+- Task 36 source review set is the Shell adapter summary/contract, adapter
+  tests, and trace-gated `EditorShell` diagnostic call sites listed above.
+- Task 36 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 36 smoothness smoke was stdout-only in this run; no new Task 36
+  JSON report file was intentionally added.
+- Existing `reports/` entries remain prior-task review evidence.
+- Existing zip archives, `.codex-dev-server-*` logs, `debug.log`, and other
+  generated local artifacts should not be committed unless a separate artifact
+  policy explicitly requests them.
+- The worktree still contains prior Task 17-35 dirty/untracked source, docs,
+  runtime folders, bridge files, reports, and local artifacts; a narrow commit
+  will require careful staging.
+
+RISK:
+
+- This is diagnostics/contract stabilization only. `EditorShell` still
+  executes every actual ref/setter/dispatch mutation.
+- The diagnostic summary is intentionally compact; deeper per-step payloads
+  remain out of scope until a concrete output lane is selected for movement.
+- A future commit movement should start with the smallest lane that does not
+  require document model, pagination, reducer, renderer/export, persistence, or
+  FlowTable changes.
+
+Recommended Task 37:
+
+- Choose the smallest candidate output lane for a first movement design. The
+  safest candidate is likely a precomputed/visual-only Shell adapter execution
+  helper because it already has explicit apply-plan and Shell-mutation-plan
+  contracts, but actual mutation should still move only after a short design
+  gate confirms latest-output guards remain explicit.
+
+### Task 35 PreviewSettle Shell Mutation Adapter
+
+Goal: Add a small Shell-side adapter that consumes draft/browser apply plans
+and centralizes Shell-owned mutation metadata, while keeping actual preview
+document construction, browser/main-thread pagination, worker requests,
+validation, paginated refs, `optimisticLayoutRef`, inline edit page relocation,
+browser preview layout state, `SET_PAGINATED`, document model semantics,
+reducer/history behavior, renderer/export, persistence, validation, FlowTable
+behavior, `flushSync`, typing, and IME/composition behavior owned by
+`EditorShell`.
+
+PASS:
+
+- Added `previewSettleShellAdapter.ts` as a pure Shell adapter layer over the
+  existing draft/browser apply plans.
+- Added draft mutation metadata for ignore, reschedule, and apply flows,
+  including inline page relocation/follow decisions, draft pagination node id,
+  visual-fresh version, and ordered Shell mutation steps.
+- Added browser mutation metadata for precomputed, visual-only, partial-worker,
+  and final paginated-output flows, including optimistic layout writes,
+  paginated ref writes, partial preview set/clear, browser preview layout mode,
+  dispatch, preview-settle lifecycle marking, inline visual freshness, and
+  structural settle completion flags.
+- Updated `EditorShell` to consume the Shell adapter plans before executing
+  Shell-owned mutations in the draft-pagination and browser-preview output
+  paths.
+- Added focused adapter tests proving the mutation step/flag mapping without
+  moving document or paginated mutation into the runtime/bridge.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- The adapter only returns metadata/steps/flags. It does not own document
+  objects, paginated output, refs, React setters, dispatch, worker calls,
+  pagination, validation, or runtime lifecycle mutation.
+- Existing `PreviewSettleRuntime` and draft apply-plan decisions remain the
+  source of truth for whether Shell may apply, ignore, or reschedule.
+- No core pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, validation, FlowTable, `flushSync`, normal
+  typing, or IME/composition behavior was intentionally changed.
+
+Files changed for Task 35:
+
+- `src/app/editor/_components/structuralEdit/previewSettleShellAdapter.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleShellAdapter.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`,
+  `PROBE_READY_TIMEOUT_MS=30000`
+
+Observed:
+
+- Focused adapter/PreviewSettle runtime suite passed: 3 files, 28 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 9 files, 296 tests.
+- First smoothness smoke attempt timed out waiting 15s for
+  `[data-testid="editor-shell"]`; no behavior assertion ran.
+- Rerun with `PROBE_READY_TIMEOUT_MS=30000` finished with `ok=true` and
+  structural refocus safety `ok=true`.
+
+Artifact hygiene:
+
+- Task 35 source review set is the new Shell adapter, adapter tests, and the
+  touched `EditorShell` draft/browser output call sites listed above.
+- Task 35 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 35 smoothness smoke was stdout-only in this run; no new Task 35
+  JSON report file was intentionally added.
+- Existing `reports/` entries remain prior-task review evidence.
+- Existing zip archives, `.codex-dev-server-*` logs, `debug.log`, and other
+  generated local artifacts should not be committed unless a separate artifact
+  policy explicitly requests them.
+- The worktree still contains prior Task 17-34 dirty/untracked source, docs,
+  runtime folders, bridge files, reports, and local artifacts; a narrow commit
+  will require careful staging.
+
+RISK:
+
+- This is still not runtime-owned pagination output commit. `EditorShell`
+  executes every actual ref/setter/dispatch mutation after consuming adapter
+  metadata.
+- The adapter centralizes mutation metadata, not mutation implementation.
+- A future move of actual output commits must preserve the same latest-output
+  guard sequence and should be covered by dedicated tests before touching
+  document/paginated ownership.
+
+Recommended Task 36:
+
+- Stabilize the Shell adapter contract with any missing focused tests or
+  diagnostics, then design the first tiny output-commit movement only if the
+  latest-document/generation/draft-version/active-node contract can remain
+  explicit and smoke-verified.
+
+### Task 34 Browser Preview Apply Plan Discipline
+
+Goal: Extend apply-plan discipline to the browser-preview settle output path
+before introducing a Shell adapter, while keeping actual preview document
+construction, browser/main-thread pagination, worker requests, validation,
+paginated refs, `optimisticLayoutRef`, inline edit page relocation,
+`SET_PAGINATED`, document model semantics, reducer/history behavior,
+renderer/export, persistence, validation, FlowTable behavior, `flushSync`,
+typing, and IME/composition behavior unchanged.
+
+PASS:
+
+- Added `BrowserPreviewSettleApplyPlan` and
+  `createBrowserPreviewSettleApplyPlan` to the PreviewSettle bridge.
+- The new plan wraps the existing `PreviewSettleRuntime` apply decision without
+  adding new semantics: runtime `apply` becomes plan `apply`; runtime
+  `ignore-stale`, `supersede`, and `cancel` become plan `ignore`.
+- Updated the browser-preview effect in `EditorShell` so precomputed browser
+  pagination, visual-only fast lane, debounce start, worker fallback, worker
+  response, and final `commitPagination` all consume the browser apply plan
+  before mutating preview output.
+- Added focused bridge tests proving `apply`, `ignore-stale`, `supersede`, and
+  `cancel` decision mapping without moving output mutation into the
+  bridge/runtime.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- Existing `PreviewSettleRuntime` decision reasons remain the source of truth.
+- Shell still owns preview document construction, worker request mechanics,
+  browser/main-thread pagination, validation, paginated refs,
+  `optimisticLayoutRef`, inline page follow, browser preview layout state, and
+  reducer dispatch.
+- No core pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, validation, FlowTable, `flushSync`, normal
+  typing, or IME/composition behavior was intentionally changed.
+
+Files changed for Task 34:
+
+- `src/app/editor/_components/structuralEdit/previewSettleBridge.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`
+
+Observed:
+
+- Focused PreviewSettle bridge/runtime suite passed: 2 files, 21 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 8 files, 289 tests.
+- Long mock `enter-backspace-immediate` smoothness smoke finished with
+  `ok=true` and structural refocus safety `ok=true`.
+
+Artifact hygiene:
+
+- Task 34 source review set is the PreviewSettle bridge, bridge tests, and the
+  touched `EditorShell` browser-preview apply/ignore call sites listed above.
+- Task 34 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 34 smoothness smoke was stdout-only in this run; no new Task 34
+  JSON report file was intentionally added.
+- Existing `reports/` entries remain prior-task review evidence.
+- Existing zip archives, `.codex-dev-server-*` logs, `debug.log`, and other
+  generated local artifacts should not be committed unless a separate artifact
+  policy explicitly requests them.
+- The worktree still contains prior Task 17-33 dirty/untracked source, docs,
+  runtime folders, bridge files, reports, and local artifacts; a narrow commit
+  will require careful staging.
+
+RISK:
+
+- This is still not runtime-owned pagination output commit. `EditorShell` owns
+  all actual mutations after the plan returns `apply`.
+- Browser-preview fast lanes now ask for the plan before mutating output, but
+  their actual mutation order remains Shell-owned.
+- The next extraction should keep the adapter as a Shell-side consumer of
+  apply plans, not a runtime mutation owner.
+
+Recommended Task 35:
+
+- Add a small Shell adapter that consumes draft/browser apply plans and central
+  Shell-owned mutation metadata, while keeping actual pagination output
+  commits in Shell until a later task explicitly accepts the move.
+
+### Task 33 Draft Pagination Apply Guard Plan
+
+Goal: Add a DOM-free draft-pagination apply guard/apply plan before moving any
+pagination output ownership, while keeping actual preview document construction,
+`paginatePreviewDoc`, `assertDocument`, paginated refs, `optimisticLayoutRef`,
+inline edit page relocation, `SET_PAGINATED`, document model semantics,
+reducer/history behavior, renderer/export, persistence, validation, FlowTable
+behavior, `flushSync`, typing, and IME/composition behavior unchanged.
+
+PASS:
+
+- Added `DraftPreviewPaginationApplyPlan` and
+  `createDraftPreviewPaginationApplyPlan` to the PreviewSettle bridge.
+- The new plan makes the post-pagination output decision explicit:
+  stale generation -> `ignore`, missing current source -> `ignore`, changed
+  draft revision -> `reschedule`, unchanged current revision -> `apply`.
+- Updated `EditorShell` so the draft-pagination runner asks the bridge for
+  the post-pagination apply plan before mutating paginated refs, optimistic
+  layout, inline page state, draft pagination node state, or dispatching
+  `SET_PAGINATED`.
+- Added focused bridge tests proving each apply-plan branch without moving
+  output mutation into the bridge/runtime.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- The previous inline stale generation guard and revision mismatch reschedule
+  behavior remains, but the decision is now represented as a typed plan.
+- Shell still owns preview document build, browser/main-thread pagination,
+  validation, all output mutations, inline page follow, and reducer dispatch.
+- No core pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, validation, FlowTable, `flushSync`, normal
+  typing, or IME/composition behavior was intentionally changed.
+
+Files changed for Task 33:
+
+- `src/app/editor/_components/structuralEdit/previewSettleBridge.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`
+
+Observed:
+
+- Focused PreviewSettle bridge/runtime suite passed: 2 files, 20 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 8 files, 288 tests.
+- Long mock `enter-backspace-immediate` smoothness smoke finished with
+  `ok=true` and structural refocus safety `ok=true`.
+
+Artifact hygiene:
+
+- Task 33 source review set is the bridge, bridge tests, and the touched
+  `EditorShell` post-pagination guard call site listed above.
+- Task 33 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 33 smoothness smoke was stdout-only in this run; no new Task 33
+  JSON report file was intentionally added.
+- Existing `reports/` entries remain prior-task review evidence.
+- Existing zip archives, `.codex-dev-server-*` logs, `debug.log`, and other
+  generated local artifacts should not be committed unless a separate artifact
+  policy explicitly requests them.
+- The worktree still contains prior Task 17-32 dirty/untracked source, docs,
+  runtime folders, bridge files, reports, and local artifacts; a narrow commit
+  will require careful staging.
+
+RISK:
+
+- This is intentionally still not a runtime-owned pagination output commit.
+  `EditorShell` owns all actual mutations after the plan returns `apply`.
+- The plan currently covers the draft-pagination output lane. Browser preview
+  settle output application still uses the existing PreviewSettleRuntime apply
+  decision path and Shell-owned commit logic.
+- Future migration should avoid moving output mutation until latest-document,
+  generation, draft-version, and active-inline-node contracts are covered in a
+  single apply boundary.
+
+Recommended Task 34:
+
+- Extend the same apply-plan discipline to the browser-preview settle output
+  path, or add a Shell adapter that consumes draft/browser apply plans, while
+  keeping actual pagination output commits in Shell until the combined latest
+  output contract is explicit and smoke-verified.
+
+### Task 32 Draft Pagination PreviewSettle Bridge
+
+Goal: Continue reducing `EditorShell` draft-pagination settle responsibility
+with a narrow DOM-free PreviewSettle bridge extraction, while keeping actual
+preview document construction, `paginatePreviewDoc`, `assertDocument`,
+`SET_PAGINATED`, `optimisticLayoutRef`, inline edit page relocation, document
+model semantics, reducer/history behavior, renderer/export, persistence,
+validation, FlowTable behavior, `flushSync`, typing, and IME behavior
+unchanged.
+
+PASS:
+
+- Added bridge-owned draft-pagination lifecycle/scheduler helpers for:
+  generation clearing, delay resolution, responsive node eligibility, schedule
+  plan creation, run gating, and latest-snapshot revision rescheduling.
+- Updated `EditorShell.scheduleWysiwygDraftPagination` to ask the bridge for
+  request metadata, generation, coalesced responsive timing, source, draft
+  version, timer/RAF choice, stale-run guard, and revision reschedule decision.
+- Updated draft-change and reflow-decision scheduling call sites to ask the
+  bridge for responsive node and delay decisions instead of calling WYSIWYG
+  reflow scheduling helpers directly.
+- Added focused bridge tests for responsive schedule creation, responsive
+  window reuse, settled schedule metadata, responsive node marking, clear
+  generation, delay bridging, run gating, and revision rescheduling.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- Shell still owns timers, `requestAnimationFrame`, `setTimeout`, current DOM
+  session state, preview document building, pagination, validation, paginated
+  refs, optimistic layout refs, inline page follow, and reducer dispatch.
+- No core pagination, document model, reducer semantics, renderers/export,
+  persistence/package format, validation, FlowTable, `flushSync`, normal
+  typing, or IME/composition behavior was intentionally changed.
+
+Files changed for Task 32:
+
+- `src/app/editor/_components/structuralEdit/previewSettleBridge.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/wysiwygReflow.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`
+
+Observed:
+
+- Focused PreviewSettle bridge/runtime suite passed: 2 files, 19 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 8 files, 287 tests.
+- Long mock `enter-backspace-immediate` smoothness smoke finished with
+  `ok=true`, structural refocus safety `ok=true`, and no console/page errors.
+
+Artifact hygiene:
+
+- Task 32 source review set is the bridge, bridge tests, and the touched
+  `EditorShell` scheduling call sites listed above.
+- Task 32 docs review set is `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- The Task 32 smoothness smoke was stdout-only in this run; no new Task 32
+  JSON report file was intentionally added.
+- Existing `reports/` entries remain prior-task review evidence. The Task 29
+  failed report is still historical blocker evidence, not a new Task 32
+  failure.
+- Existing zip archives, `.codex-dev-server-*` logs, `debug.log`, and other
+  generated local artifacts should not be committed unless a separate artifact
+  policy explicitly requests them.
+- The worktree still contains prior Task 17-31 dirty/untracked source, docs,
+  runtime folders, bridge files, reports, and local artifacts; a narrow commit
+  will require careful staging.
+
+RISK:
+
+- This is still a scheduler/lifecycle metadata extraction only. Real draft
+  pagination output application remains in `EditorShell`.
+- `EditorShell` still owns the actual preview document build, pagination call,
+  validation, stale output checks around latest snapshot content, paginated ref
+  writes, optimistic layout updates, inline page follow, and `SET_PAGINATED`.
+- Future movement should be designed around latest-doc-only output application
+  before moving any actual pagination results into a runtime boundary.
+
+Recommended Task 33:
+
+- Continue PreviewSettle work by extracting a DOM-free draft-pagination runner
+  apply plan or browser-preview apply guard, but keep actual pagination output
+  commits in Shell until the latest-document contract is explicit and covered
+  by focused tests plus smoothness smoke.
+
+### Task 31 PreviewSettleRuntime Schedule Context Bridge
+
+Goal: Continue reducing `EditorShell` preview-settle responsibility with a
+narrow DOM-free bridge extraction, while keeping browser pagination, worker
+requests, React state setters, `SET_PAGINATED`, document model semantics,
+reducer behavior, renderer/export, persistence, validation, FlowTable behavior,
+`flushSync`, and WYSIWYG DOM/input ownership unchanged.
+
+PASS:
+
+- Added PreviewSettle bridge helpers for:
+  active structural transaction filtering, structural preview grace remaining
+  time, browser preview debounce selection, and structural cleanup supersede
+  eligibility.
+- Updated the browser preview settle effect in `EditorShell` to ask the bridge
+  for those schedule-context decisions instead of keeping the branch logic
+  inline.
+- Added focused bridge coverage for terminal structural transaction filtering,
+  debounce selection, grace clamping, and cleanup supersede decisions.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- No pagination algorithm, document commit, reducer/history, worker request,
+  partial/full preview layout state, renderer/export, persistence, validation,
+  FlowTable, `flushSync`, typing, or IME behavior was moved or changed.
+
+Files changed for Task 31:
+
+- `src/app/editor/_components/structuralEdit/previewSettleBridge.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-backspace-immediate` smoothness smoke with
+  `FLOWDOC_PROBE_FILE=public/mock/flowdoc-long-mock.flowdoc.json`,
+  `PROBE_TARGET_NODE_ID=cover_note`,
+  `PROBE_ENTER_SPLIT_TEXT=pagination`
+
+Observed:
+
+- Focused PreviewSettle bridge/runtime suite passed: 2 files, 15 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 7 files, 235 tests.
+- Long mock `enter-backspace-immediate` smoothness smoke finished with
+  `ok=true`, structural refocus safety `ok=true`, and no console/page errors.
+
+Artifact hygiene:
+
+- No new smoke report or generated artifact was created for Task 31 before this
+  log entry.
+- Existing Task 17-30 dirty source/docs/reports and untracked generated
+  artifacts remain in the worktree and should be staged/pruned separately.
+
+RISK:
+
+- This is a small schedule-context extraction only. The browser preview effect
+  still owns timers, worker callbacks, main-thread pagination, partial/full
+  preview React state, `optimisticLayoutRef`, and `SET_PAGINATED`.
+- A full Task 31 verification pass should still include type-check and the
+  focused runtime/editor matrix after any additional PreviewSettle movement.
+
+Recommended Task 32:
+
+- Continue PreviewSettleRuntime with draft-pagination lifecycle/scheduler
+  extraction, still keeping actual document commits and pagination output
+  application in Shell until a stronger latest-doc-only contract is accepted.
+
+### Task 30 WYSIWYG Stage 4C Page-Boundary Closure
+
+Goal: Close the Task 29 Stage 4C page-boundary overlap blocker without changing
+core pagination, the document model, reducer semantics, renderer/export,
+persistence/package format, FlowTable behavior, validation, or `flushSync`.
+
+PASS:
+
+- Reproduced and classified the original 6 px page-boundary overlap as a smoke
+  measurement problem over suppressed `EditorCanvas` paragraph chrome.
+- Updated the Stage 4C overlap assertion to prefer visible
+  `data-wysiwyg-text-engine-layer` island surfaces and downstream visible text
+  rectangles, while still failing when the island cover/outline itself occludes
+  downstream visible text.
+- Added a 2 pt continuation-surface cover/outline clearance in
+  `FlowdocDraftEditorIslandRoot`; the pointer hit area remains full height so
+  cross-fragment selection remains reachable.
+- Fixed cross-page island pointer drag hit-testing under pointer capture by
+  resolving the island surface under the current pointer coordinates before
+  applying selection offsets.
+- Fixed hidden input bridge echo handling for Playwright `insertText` and
+  synthetic composition so immediate heavy input no longer creates duplicate
+  draft changes and composition no longer commits partial composing text.
+- Fixed the row-stack paragraph flow by excluding paragraphs inside row stacks
+  from the active plain-native paragraph suppression path.
+
+Behavior changed:
+
+- Stage 4C page-boundary WYSIWYG island visual chrome now leaves a small
+  clearance on continuation surfaces.
+- Out-of-canvas island pointer drag can select across continuation surfaces
+  even while the first SVG owns pointer capture.
+- Hidden bridge input ignores composing `insertCompositionText` events and
+  suppresses duplicate echo chunks after value-based insertions.
+- Row-stack paragraphs keep their canvas text visible instead of being
+  suppressed as an out-of-canvas island surface.
+
+Files changed for Task 30:
+
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+- `docs/WORK_LOG_RECENT.md`
+- `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `reports/task30-wysiwyg-stage4c-bundled-chromium-port4016.json`
+- `reports/task30-wysiwyg-stage4c-channel-chrome-port4016.json`
+- `reports/task30-wysiwyg-stage4c-channel-msedge-port4016.json`
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygDraftVisualPreview.test.ts src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/wysiwygTextEligibility.test.ts`
+- `node -c scripts/wysiwyg-stage4c-smoke.mjs`
+- `npm.cmd run --silent smoke:wysiwyg-stage4c` on bundled Chromium with
+  `SMOKE_PORT=4016`
+- `npm.cmd run --silent smoke:wysiwyg-stage4c` on installed Chrome with
+  `SMOKE_PORT=4016` and `SMOKE_BROWSER_CHANNEL=chrome`
+- `npm.cmd run --silent smoke:wysiwyg-stage4c` on installed Edge with
+  `SMOKE_PORT=4016` and `SMOKE_BROWSER_CHANNEL=msedge`
+
+Observed:
+
+- Type-check passed.
+- Focused app suite passed: 8 files, 250 tests.
+- Stage 4C bundled Chromium, Chrome, and Edge smokes passed.
+- Smoke reports recorded `draftUpdates=1`, `browserPreviewPaginations=1`,
+  visible double-click selection, clipboard markers, synthetic composition
+  marker `IME4Cทดสอบ`, one target fragment, one pointer fragment, and row-stack
+  row height `612`.
+
+Artifact hygiene:
+
+- Task 30 source/docs review set is the three implementation files and the
+  three docs listed above.
+- Useful Task 30 review reports are the three
+  `reports/task30-wysiwyg-stage4c-*.json` PASS reports listed above.
+- The Task 29 failure report remains useful historical evidence for the fixed
+  blocker and should be kept or clearly labeled if reports are pruned.
+- Existing Task 17-29 generated runtime folders, bridge files, reports, local
+  archives, dev-server logs, and `debug.log` remain dirty/untracked in the
+  worktree; they were not reviewed as Task 30 source changes.
+- Local archives and dev-server/debug logs should not be committed unless a
+  separate artifact policy says otherwise.
+
+RISK:
+
+- Real Windows Thai IME manual rows remain `UNKNOWN`; automation covers
+  synthetic composition only.
+- The overlap assertion now checks the visible island cover/outline line-box
+  surface instead of raw SVG/glyph DOMRect bounds to avoid font bbox false
+  positives. A future screenshot/pixel assertion would be a stronger visual
+  gate.
+- Current worktree still contains prior Task 17-29 changes in some of the same
+  files, so a narrow commit will require careful staging.
+
+Recommended Task 31:
+
+- Return to the runtime roadmap with `PreviewSettleRuntime` extraction or the
+  next accepted runtime-boundary task. Keep pagination, document model,
+  reducer semantics, renderer/export, persistence, validation, FlowTable
+  behavior, `flushSync`, and WYSIWYG DOM/input ownership out of scope unless a
+  separate design explicitly accepts the move.
+
+### Task 29 WYSIWYG IME / Adapter Follow-Up
+
+Goal: Recheck WYSIWYG composition behavior after the Task 28
+`WysiwygDraftRuntime` adapter extraction, record remaining Shell/runtime
+boundaries, and rerun the Stage 4C automation gate as far as possible without
+moving pagination, document commits, reducer semantics, DOM handling,
+export/render, persistence, validation, FlowTable behavior, or `flushSync`.
+
+PASS:
+
+- Added a focused bridge regression test proving stale or mismatched
+  composition changes do not mark the current tracked draft session as
+  composing.
+- Verified the current composition path:
+  `FlowdocDraftEditorIslandRoot` emits `onCompositionChange`,
+  `EditorShell.handleWysiwygDraftCompositionChange` forwards metadata to
+  `markCurrentTrackedWysiwygDraftRuntimeCompositionBridge`, and the bridge only
+  updates the current tracked session for the same node/generation.
+- Verified structural guards still ignore composition before Enter/Backspace
+  structural handling.
+- Restored out-of-canvas island double-click word selection with the existing
+  `resolveWysiwygWordSelectionRange` helper and the existing island
+  `applyPointerSelection` path.
+- Updated `scripts/wysiwyg-stage4c-smoke.mjs` to match the current
+  out-of-canvas island DOM:
+  hidden text-engine bridges may be `textarea` elements, so the smoke now checks
+  non-bridge inline textarea fallbacks; active hit areas and selection overlays
+  are read from `data-wysiwyg-text-engine-layer` island surfaces.
+
+FAIL / BLOCKER:
+
+- Bundled Chromium Stage 4C automation still failed after the selector
+  alignment and island double-click fix.
+- The smoke reached the clipboard page-boundary flow and failed because
+  `stage3-boundary-target` on page 1 overlapped `stage3-downstream-p1` by about
+  6 px (`target.bottom=764.4133911132812`,
+  `downstream.top=758.4133911132812`).
+- This is page-boundary/layout behavior and was intentionally not fixed in Task
+  29 because pagination/layout semantics are out of scope.
+- Chrome and Edge Stage 4C channel runs were not attempted after the bundled
+  Chromium blocker.
+- Real Windows Thai IME manual rows remain `UNKNOWN`.
+
+Files changed for Task 29:
+
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts`
+- `scripts/wysiwyg-stage4c-smoke.mjs`
+- `docs/WYSIWYG_STAGE4C_IME_MATRIX.md`
+- `docs/WYSIWYG_STAGE4C_IME_RESULTS.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task29-wysiwyg-stage4c-bundled-chromium-port4016.json`
+
+Behavior changed:
+
+- Out-of-canvas WYSIWYG V2 island double-click now selects a word using the
+  same word-boundary helper as `ParagraphTextSurface`.
+- No document model, pagination, reducer semantics, renderer/export,
+  persistence, validation, FlowTable, `flushSync`, commit orchestration,
+  typing, or IME composition semantics were changed.
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/structuralEdit/__tests__/paragraphTextSurfaceFallbackBridge.test.ts src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts src/app/editor/_components/__tests__/useWysiwygTextSession.test.ts src/app/editor/_components/__tests__/richTextDraftCommands.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygStage3StressScenarios.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `node -c scripts/wysiwyg-stage4c-smoke.mjs`
+- `npm.cmd run smoke:wysiwyg-stage4c` on bundled Chromium with
+  `SMOKE_PORT=4016`
+
+Observed:
+
+- Focused bridge suite passed: 1 file, 6 tests.
+- Focused runtime/IME guard matrix passed: 8 files, 190 tests.
+- Focused island/paragraph/runtime suite passed: 4 files, 137 tests.
+- Focused Stage 3/editor regression suite passed: 6 files, 229 tests.
+- Type-check passed.
+- Stage 4C bundled Chromium smoke failed with the page-boundary overlap blocker
+  recorded in `reports/task29-wysiwyg-stage4c-bundled-chromium-port4016.json`.
+
+Artifact hygiene:
+
+- Useful Task 29 review artifact:
+  `reports/task29-wysiwyg-stage4c-bundled-chromium-port4016.json` is a
+  structured failure report, not a PASS smoke report.
+- Earlier failed stdout-only smoke attempts were replaced by the structured
+  failure report.
+- Existing Task 17-28 reports remain useful historical review artifacts and
+  were not deleted.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- The unflagged dev server on port 4000 was stopped so the smoke-owned flagged
+  server could run on port 4016.
+
+Remaining risks:
+
+- Stage 4C automation is not PASS until the page-boundary overlap is isolated
+  and fixed.
+- Installed Chrome/Edge automation and real Windows Thai IME manual rows remain
+  unverified after this blocker.
+
+Recommended Task 30:
+
+- Isolate and fix the Stage 4C page-boundary overlap for
+  `stage3-boundary-target` vs `stage3-downstream-p1`, then rerun bundled
+  Chromium, installed Chrome, installed Edge Stage 4C automation, and finally
+  the real Windows Thai IME manual matrix.
+
+### Task 28 WysiwygDraftRuntime Shell Adapter Slimming
+
+Goal: Slim the Shell-facing `WysiwygDraftRuntime` adapter without changing
+draft runtime semantics, DOM handling, pagination, document model behavior,
+reducer behavior, export/render behavior, persistence, validation, FlowTable,
+`flushSync`, typing, or IME/composition behavior.
+
+Completed:
+
+- Added `wysiwygDraftRuntimeBridge.ts` under
+  `src/app/editor/_components/`.
+- Moved tracked draft-session runtime adaptation out of `EditorShell` for:
+  begin + mark active, current-session lookup, cancel, structural-transaction
+  abort, committing marker, committed marker + tracker clear, caret/text
+  metadata updates, and composition start/end markers.
+- Kept `EditorShell` as the owner of the runtime instance, event-to-perf
+  mapping, reducer dispatch, rich/plain draft state, commit document writes,
+  pagination scheduling, DOM/session callbacks, and `flushSync` boundaries.
+- Kept the existing Shell callback surface names for draft begin/cancel/current
+  lookup so call sites did not need a broad rewrite.
+- Added focused bridge tests for active tracking, cancel clearing, structural
+  abort matching, commit clearing, metadata updates, and composition updates.
+- Verified by search that `EditorShell` no longer calls
+  `wysiwygDraftRuntime.*` methods directly; remaining runtime ownership in
+  Shell is instance construction and perf-event metric snapshotting.
+
+Behavior changed:
+
+- No intended user-visible behavior change.
+- `WysiwygDraftRuntime` remains metadata-only. It still does not own draft
+  content, DOM event handling, pagination, document commits, reducer semantics,
+  export/render behavior, persistence, validation, FlowTable behavior, typing,
+  or IME behavior.
+
+Files changed for Task 28:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygDraftRuntimeBridge.ts`
+- `src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task28-enter-mid-split-existing4000.json`
+- `reports/task28-enter-backspace-immediate-existing4000.json`
+- `reports/task28-enter-type-before-settle-existing4000.json`
+- `reports/task28-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task28-enter-rapid-existing4000.json`
+- `reports/task28-backspace-rapid-existing4000.json`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPreparationPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/panelDeferralBridge.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/structuralEdit/__tests__/paragraphTextSurfaceFallbackBridge.test.ts src/app/editor/_components/__tests__/wysiwygDraftRuntimeBridge.test.ts src/app/editor/_components/__tests__/canvasViewportBridge.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid`
+- Long mock `backspace-rapid`
+
+Observed:
+
+- Focused WysiwygDraftRuntime bridge suite passed: 1 file, 5 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 16 files, 315 tests.
+- All six Task 28 long-mock smoke reports finished with `ok=true`.
+
+Artifact hygiene:
+
+- Task 28 source/docs review set:
+  `EditorShell.tsx`, `wysiwygDraftRuntimeBridge.ts`,
+  `wysiwygDraftRuntimeBridge.test.ts`,
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`, and
+  `docs/WORK_LOG_RECENT.md`.
+- Useful Task 28 review reports are the six
+  `reports/task28-*existing4000.json` files listed above.
+- Existing Task 17-27 reports remain useful historical review artifacts and
+  were not deleted.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- Existing dirty Task 17-27 source/docs/reports remain in the worktree and
+  should be reviewed or committed separately if a narrow commit is desired.
+
+Remaining risks:
+
+- `EditorShell` still owns draft commit orchestration, document writes, history,
+  rich/plain draft state, and draft pagination scheduling.
+- The bridge is intentionally metadata-only, so future tasks still need care if
+  moving any document-changing or DOM-facing responsibility.
+
+Recommended Task 29:
+
+- Run a WYSIWYG IME/manual verification and adapter follow-up pass. Keep it
+  narrow: verify composition behavior after the adapter extraction, record any
+  remaining Shell-owned WysiwygDraftRuntime boundaries, and avoid moving
+  pagination, document commits, reducer semantics, DOM handling, export/render,
+  persistence, validation, FlowTable behavior, or `flushSync` without a
+  separate accepted design.
+
+### Task 27 ParagraphTextSurface Fallback Decision
+
+Goal: Close the legacy/in-canvas `ParagraphTextSurface` structural fallback
+risk now that StructuralEditRuntime, panel deferral, preview settle, and canvas
+viewport bridge ownership is separated.
+
+Decision:
+
+- Chose guard-routing, not removal.
+- The fallback is not test-only and still exists for in-canvas/native textarea
+  compatibility paths, so removing it would be broader than this task.
+- Test-locking only would leave the documented bypass risk in place if the
+  fallback is reactivated.
+- The active out-of-canvas WYSIWYG V2 island flow remains unchanged and still
+  uses `FlowdocDraftEditorIslandRoot` with its existing runtime-backed guard.
+
+Completed:
+
+- Added `paragraphTextSurfaceFallbackBridge.ts` under
+  `src/app/editor/_components/structuralEdit/`.
+- Added a DOM-free `ParagraphTextSurfaceStructuralEditGuardInput` and bridge
+  helper that asks `StructuralEditRuntime.canStartStructuralEdit`.
+- The bridge marks guarded repeated keys as dropped through
+  `StructuralEditRuntime.markKeyRepeatDropped`.
+- Added `onCanStartStructuralEdit` callback wiring through `EditorShell` ->
+  `EditorCanvas` -> `ParagraphTextSurface`.
+- `EditorShell` supplies current/optimistic document node-existence metadata
+  before asking the runtime guard.
+- `ParagraphTextSurface` now asks the guard before legacy/in-canvas structural
+  Enter/Backspace callbacks in the text-engine input bridge, native edit layer,
+  and legacy textarea fallback.
+- DOM event handling remains local to `ParagraphTextSurface`.
+
+Behavior changed:
+
+- In-canvas/legacy `ParagraphTextSurface` structural Enter/Backspace can now be
+  blocked by `StructuralEditRuntime` guard decisions when a structural
+  transaction is already active.
+- Normal typing, rich text shortcuts, clipboard, list level Tab, native table
+  cell boundary Backspace, and IME/composition bypass behavior were preserved.
+- No pagination, document model, reducer semantics, renderer/export,
+  persistence, validation, FlowTable, panel deferral, preview settle, canvas
+  viewport, or `flushSync` behavior was changed.
+
+Files changed for Task 27:
+
+- `src/app/editor/_components/ParagraphTextSurface.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/structuralEdit/paragraphTextSurfaceFallbackBridge.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/paragraphTextSurfaceFallbackBridge.test.ts`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task27-enter-mid-split-existing4000.json`
+- `reports/task27-enter-backspace-immediate-existing4000.json`
+- `reports/task27-enter-type-before-settle-existing4000.json`
+- `reports/task27-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task27-enter-rapid-existing4000.json`
+- `reports/task27-backspace-rapid-existing4000.json`
+
+Line-count / project-change note:
+
+- New bridge helper: `paragraphTextSurfaceFallbackBridge.ts` 47 lines.
+- New bridge test: `paragraphTextSurfaceFallbackBridge.test.ts` 99 lines.
+- The worktree already contained prior Task 17-26C dirty changes, so review
+  should stay scoped to the Task 27 files above when preparing a narrow commit.
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/paragraphTextSurfaceFallbackBridge.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPreparationPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/panelDeferralBridge.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/structuralEdit/__tests__/paragraphTextSurfaceFallbackBridge.test.ts src/app/editor/_components/__tests__/canvasViewportBridge.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid`
+- Long mock `backspace-rapid`
+- `git diff --check`
+
+Observed:
+
+- Focused ParagraphTextSurface fallback bridge suite passed: 1 file, 4 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 15 files, 310 tests.
+- All six Task 27 long-mock smoke reports finished with `ok=true`,
+  `structuralRefocusSafety.ok=true`, `structuralRegression.ok=true`, and `0`
+  console/page errors.
+- No smoke report emitted a correctness failure flag.
+- `git diff --check` had no whitespace errors; only existing Windows LF/CRLF
+  warnings were printed.
+
+Artifact hygiene:
+
+- Task 27 source/docs review set:
+  `ParagraphTextSurface.tsx`, `EditorCanvas.tsx`, `EditorShell.tsx`,
+  `paragraphTextSurfaceFallbackBridge.ts`,
+  `paragraphTextSurfaceFallbackBridge.test.ts`,
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`, and
+  `docs/WORK_LOG_RECENT.md`.
+- Useful Task 27 review reports are the six
+  `reports/task27-*existing4000.json` files listed above.
+- Existing Task 17-26C reports remain useful historical review artifacts and
+  were not deleted.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- Existing dirty Task 17-26C source/docs/reports remain in the worktree and
+  should be reviewed or committed separately if a narrow commit is desired.
+
+Remaining risks:
+
+- `ParagraphTextSurface` still owns legacy DOM key handling; this task only
+  routes guard decisions and does not remove the fallback.
+- `EditorShell` still owns structural split/merge command dispatch, optimistic
+  refocus, runtime transaction lifecycle after acceptance, panel deferral, and
+  preview settle scheduling.
+
+Recommended Task 28:
+
+- Continue the WysiwygDraftRuntime/Shell adapter slimming work. Keep
+  ParagraphTextSurface DOM handling, island guard behavior, pagination,
+  document model, renderer/export, persistence, validation, FlowTable,
+  `flushSync`, typing, and IME/composition behavior out of scope unless a
+  separate design accepts the change.
+
+### Task 26C CanvasViewportBridge
+
+Goal: Extract a narrow CanvasViewportBridge for canvas viewport/page visibility
+payload wiring while preserving preview settle, panel deferral, reducer
+dispatch, `flushSync`, React state setters, DOM/session starts, pagination,
+document model semantics, renderer/export, persistence, validation, FlowTable
+behavior, typing, and IME/composition behavior.
+
+Completed:
+
+- Added `canvasViewportBridge.ts` under `src/app/editor/_components/`.
+- Moved CanvasViewportRuntime input adaptation out of `EditorCanvas` for:
+  active out-of-canvas structural island payloads, stale page-break suppression,
+  page fragment checks, page-scoped edit affect checks, structural transition
+  affect checks, lazy page-frame render decisions, structural render-scope
+  creation, and structural render-scope perf fields.
+- Kept the existing `EditorCanvas` exported helper names for compatibility with
+  existing tests and call sites:
+  `pageViewScopedEditPropsAffectPage`,
+  `pageViewStructuralTransitionAffectsPage`, and
+  `shouldRenderLazyPageFrame`.
+- Kept viewport/lazy-render semantics unchanged. `EditorCanvas` now asks the
+  bridge for CanvasViewportRuntime decisions instead of importing the runtime
+  directly.
+- Added focused bridge tests for structural-island adaptation, page-scoped
+  affect decisions, stale page-break suppression, lazy page rendering, render
+  scope creation, and perf metrics payloads.
+
+Behavior changed:
+
+- None intended.
+- No pagination, document model, reducer, renderer/export, persistence,
+  validation, FlowTable, preview settle, panel deferral, `flushSync`, typing,
+  or IME/composition behavior was changed.
+
+Files changed for Task 26C:
+
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/canvasViewportBridge.ts`
+- `src/app/editor/_components/__tests__/canvasViewportBridge.test.ts`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task26c-enter-mid-split-existing4000.json`
+- `reports/task26c-enter-backspace-immediate-existing4000.json`
+- `reports/task26c-enter-type-before-settle-existing4000.json`
+- `reports/task26c-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task26c-enter-rapid-existing4000.json`
+- `reports/task26c-backspace-rapid-existing4000.json`
+
+Line-count / project-change note:
+
+- Current `canvasViewportBridge.ts`: 168 lines.
+- Current `canvasViewportBridge.test.ts`: 151 lines.
+- Current `EditorCanvas.tsx`: 5027 lines.
+- The worktree already contained prior Task 17-26B dirty changes, so the
+  review set should be scoped by the Task 26C files above rather than the full
+  repository diff stat.
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/canvasViewportBridge.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPreparationPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/panelDeferralBridge.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/__tests__/canvasViewportBridge.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid`
+- Long mock `backspace-rapid`
+- `git diff --check`
+
+Observed:
+
+- Focused CanvasViewportBridge suite passed: 1 file, 3 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 14 files, 306 tests.
+- All six Task 26C long-mock smoke reports finished with `ok=true`,
+  `structuralRefocusSafety.ok=true`, `structuralRegression.ok=true`, and `0`
+  console/page errors.
+- No smoke report emitted a correctness failure flag.
+- `git diff --check` had no whitespace errors; only existing Windows LF/CRLF
+  warnings were printed.
+
+Artifact hygiene:
+
+- Task 26C source/docs review set:
+  `EditorCanvas.tsx`, `canvasViewportBridge.ts`,
+  `canvasViewportBridge.test.ts`, `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`,
+  and `docs/WORK_LOG_RECENT.md`.
+- Useful Task 26C review reports are the six
+  `reports/task26c-*existing4000.json` files listed above.
+- Existing Task 17-26B reports remain useful historical review artifacts and
+  were not deleted.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- Existing dirty Task 17-26B source/docs/reports remain in the worktree and
+  should be reviewed or committed separately if a narrow commit is desired.
+
+Remaining risks:
+
+- `EditorCanvas` still owns React state, refs, DOM refs, lazy-page visibility
+  sets, IntersectionObserver behavior, pointer/session handling, and render
+  event emission.
+- CanvasViewportBridge is intentionally a thin bridge over
+  `CanvasViewportRuntime`; it does not introduce new runtime semantics.
+
+Recommended Task 27:
+
+- Revisit the ParagraphTextSurface legacy structural fallback decision and
+  decide whether to remove, isolate, or test-lock it now that structural,
+  panel deferral, preview settle, and canvas viewport bridges are separated.
+
+### Task 26B PreviewSettleBridge
+
+Goal: Extract a narrow PreviewSettleBridge for preview settle request/cancel/
+apply payload wiring while preserving panel deferral, canvas viewport behavior,
+reducer dispatch, `flushSync`, React state setters, DOM/session starts,
+pagination, document model semantics, renderer/export, persistence,
+validation, FlowTable behavior, typing, and IME/composition behavior.
+
+Completed:
+
+- Added `previewSettleBridge.ts` under
+  `src/app/editor/_components/structuralEdit/`.
+- Moved preview settle schedule payload wiring out of `EditorShell`,
+  including settle kind selection, structural transaction metadata,
+  active inline node/draft version metadata, affected node ids, affected page
+  ids, and scheduled timestamp handoff.
+- Moved preview settle apply-decision payload wiring out of `EditorShell`,
+  including current structural generation, current active inline node, and
+  current draft version checks.
+- Moved direct PreviewSettleRuntime lifecycle calls behind bridge helpers for
+  start, complete, apply, ignore, supersede, cancel, invalidate, current
+  request, current generation, and structural transaction matching.
+- Kept the preview settle runtime instance, runtime event emission, worker
+  selection, debounce/timer behavior, browser pagination worker callbacks,
+  main-thread pagination fallback, paginated commit, React state setters,
+  reducer dispatch, optimistic structural settle ref clearing, structural
+  pagination attribution, panel deferral, canvas viewport behavior, and
+  `flushSync` in `EditorShell`.
+- Added focused bridge tests for schedule metadata, kind/affected-node
+  decisions, lifecycle marks, apply/ignore decision routing, supersede, and
+  invalidate.
+
+Behavior changed:
+
+- None intended.
+- `PreviewSettleRuntime` semantics were not changed.
+- Browser preview worker/main-thread pagination behavior was not changed.
+- Structural split/merge transaction lifecycle still goes through
+  `StructuralEditRuntime` and `useStructuralEditController`.
+- No panel deferral, canvas viewport, reducer, pagination, document model,
+  renderer/export, persistence, validation, FlowTable, `flushSync`,
+  IME/composition, or normal typing behavior was changed.
+
+Files changed for Task 26B:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/structuralEdit/previewSettleBridge.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task26b-enter-mid-split-existing4000.json`
+- `reports/task26b-enter-backspace-immediate-existing4000.json`
+- `reports/task26b-enter-type-before-settle-existing4000.json`
+- `reports/task26b-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task26b-enter-rapid-existing4000.json`
+- `reports/task26b-backspace-rapid-existing4000.json`
+
+Line-count / project-change report:
+
+- `EditorShell.tsx`: 7080 -> 7071 lines, net -9.
+- New bridge helper: `previewSettleBridge.ts` 189 lines.
+- New bridge test: `previewSettleBridge.test.ts` 177 lines.
+- Task-local source/test net by measured line count: +357
+  (-9 from Shell, +366 in new bridge/test files).
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPreparationPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/panelDeferralBridge.test.ts src/app/editor/_components/structuralEdit/__tests__/previewSettleBridge.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid`
+- Long mock `backspace-rapid`
+- `git diff --check`
+
+Observed:
+
+- Focused PreviewSettleBridge suite passed: 1 file, 3 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 12 files, 294 tests.
+- All six Task 26B long-mock smoke reports finished with `ok=true`,
+  `structuralRefocusSafety.ok=true`,
+  `structuralRegression.ok=true`, and `0` console/page errors.
+- Correctness flags stayed clean where reported:
+  `activeNodeMissingFromDocument=false`, `ghostFragmentDetected=false`,
+  `duplicateTextDetected=false`, and `invalidDocumentDetected=false`.
+- `enter-type-before-settle` still does not emit those specific
+  `uxVerification` booleans, but top-level `ok`, structural safety/regression,
+  and console/page error counts were clean.
+- `git diff --check` had no whitespace errors; only existing Windows LF/CRLF
+  warnings were printed.
+
+Artifact hygiene:
+
+- Task 26B source/docs review set:
+  `EditorShell.tsx`, `previewSettleBridge.ts`,
+  `previewSettleBridge.test.ts`, `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`,
+  and `docs/WORK_LOG_RECENT.md`.
+- Useful Task 26B review reports are the six
+  `reports/task26b-*existing4000.json` files listed above.
+- Existing Task 17-26A reports remain useful historical review artifacts and
+  were not deleted.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- Existing dirty Task 17-26A source/docs/reports remain in the worktree and
+  should be reviewed or committed separately if a narrow commit is desired.
+
+Remaining risks:
+
+- `EditorShell` still owns debounce/timer behavior, browser pagination worker
+  callbacks, main-thread pagination fallback, paginated commit, React state
+  transitions, event emission, reducer dispatch, and optimistic structural
+  settle ref clearing.
+- PreviewSettleBridge is intentionally a thin bridge over
+  `PreviewSettleRuntime`; it does not introduce new runtime semantics.
+
+Recommended Task 26C:
+
+- Extract a narrow CanvasViewportBridge only. Keep preview settle, panel
+  deferral, reducer dispatch, `flushSync`, React state setters, DOM/session
+  starts, pagination, document model, renderer/export, persistence,
+  validation, FlowTable behavior, typing, and IME/composition behavior out of
+  that task.
+
+### Task 26A PanelDeferralBridge
+
+Goal: Extract a narrow PanelDeferralBridge for panel deferral begin/release
+payload wiring while preserving structural edit lifecycle, reducer dispatch,
+`flushSync`, preview settle, canvas viewport behavior, pagination, document
+model semantics, renderer/export, persistence, validation, FlowTable behavior,
+DOM/session starts, typing, and IME/composition behavior.
+
+Completed:
+
+- Added `panelDeferralBridge.ts` under
+  `src/app/editor/_components/structuralEdit/`.
+- Moved panel release operation mapping out of `EditorShell`:
+  structural operation -> `PanelDeferralStructuralKind` and structural
+  operation -> `PanelDeferralReason`.
+- Moved panel deferral runtime payload wiring behind bridge helpers for begin,
+  schedule, cancel, abort, input quiet marking, release started, release
+  completed, urgent-flush completion, apply checks, urgent-flush blocking,
+  input-quiet checks, and transaction matching.
+- Moved local panel release object construction behind bridge helpers:
+  `DeferredStructuralPanelRelease`, `ScheduledStructuralPanelRelease`, and
+  `StructuralPanelReleaseApplying`.
+- Kept timers, `requestAnimationFrame`, `setTimeout`, `requestIdleCallback`,
+  React state setters, refs, event emission, preview settle cancellation,
+  structural transaction marking, `flushSync`, reducer dispatch, pagination,
+  and DOM/session starts in `EditorShell`.
+- Added focused bridge tests for begin metadata, schedule/cancel/input/start/
+  complete flow, fallback operation mapping, transaction matching, and abort.
+
+Behavior changed:
+
+- None intended.
+- `PanelDeferralRuntime` semantics were not changed.
+- Structural split/merge transaction lifecycle still goes through
+  `StructuralEditRuntime` and `useStructuralEditController`.
+- Panel snapshot/non-interactive selectors and structural generation guards
+  remain in `EditorShell`.
+- No preview settle, canvas viewport, reducer, pagination, document model,
+  renderer/export, persistence, validation, FlowTable, `flushSync`,
+  IME/composition, or normal typing behavior was changed.
+
+Files changed for Task 26A:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/structuralEdit/panelDeferralBridge.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/panelDeferralBridge.test.ts`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task26a-enter-mid-split-existing4000.json`
+- `reports/task26a-enter-backspace-immediate-existing4000.json`
+- `reports/task26a-enter-type-before-settle-existing4000.json`
+- `reports/task26a-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task26a-enter-rapid-existing4000.json`
+- `reports/task26a-backspace-rapid-existing4000.json`
+
+Line-count / project-change report:
+
+- `EditorShell.tsx`: 7173 -> 7080 lines, net -93.
+- New bridge helper: `panelDeferralBridge.ts` 242 lines.
+- New bridge test: `panelDeferralBridge.test.ts` 161 lines.
+- Task-local source/test net by measured line count: +310
+  (-93 from Shell, +403 in new bridge/test files).
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/panelDeferralBridge.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPreparationPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/panelDeferralBridge.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid`
+- Long mock `backspace-rapid`
+- `git diff --check`
+
+Observed:
+
+- Focused PanelDeferralBridge suite passed: 1 file, 3 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 11 files, 291 tests.
+- All six Task 26A long-mock smoke reports finished with `ok=true`,
+  `structuralRefocusSafety.ok=true`,
+  `structuralRegression.ok=true`, and `0` console/page errors.
+- Correctness flags stayed clean where reported:
+  `activeNodeMissingFromDocument=false`, `ghostFragmentDetected=false`,
+  `duplicateTextDetected=false`, and `invalidDocumentDetected=false`.
+- `enter-type-before-settle` still does not emit those specific
+  `uxVerification` booleans, but top-level `ok`, structural safety/regression,
+  and console/page error counts were clean.
+- `git diff --check` had no whitespace errors; only existing Windows LF/CRLF
+  warnings were printed.
+
+Artifact hygiene:
+
+- Task 26A source/docs review set:
+  `EditorShell.tsx`, `panelDeferralBridge.ts`,
+  `panelDeferralBridge.test.ts`, `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`,
+  and `docs/WORK_LOG_RECENT.md`.
+- Useful Task 26A review reports are the six
+  `reports/task26a-*existing4000.json` files listed above.
+- Existing Task 17-25 reports remain useful historical review artifacts and
+  were not deleted.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- Existing dirty Task 17-25 source/docs/reports remain in the worktree and
+  should be reviewed or committed separately if a narrow commit is desired.
+
+Remaining risks:
+
+- `EditorShell` still owns panel deferral scheduling timers, React state
+  transitions, event emission, structural transaction completion, preview
+  settle cancellation, and left-rail live-doc restoration timing.
+- PanelDeferralBridge is intentionally a thin bridge over
+  `PanelDeferralRuntime`; it does not introduce new runtime semantics.
+
+Recommended Task 26B:
+
+- Extract a narrow PreviewSettleBridge only. Keep canvas viewport, panel
+  deferral, reducer dispatch, `flushSync`, React state setters, DOM/session
+  starts, pagination, document model, renderer/export, persistence,
+  validation, FlowTable behavior, typing, and IME/composition behavior out of
+  that task.
+
+### Task 25 Structural Preparation Planner
+
+Goal: Extract a narrow, testable preparation planner for structural
+source/draft text resolution, paragraph eligibility, document operation result
+metadata, and optimistic pagination summary inputs without changing structural
+edit behavior.
+
+Completed:
+
+- Added `structuralEditPreparationPlans.ts` under
+  `src/app/editor/_components/structuralEdit/`.
+- Moved structural source/draft text resolution out of `EditorShell` into
+  `resolveStructuralSourceDocument`.
+- Added DOM-free paragraph eligibility classification in
+  `resolveStructuralParagraphEligibility`.
+- Added operation-result paragraph metadata resolution in
+  `resolveStructuralResultParagraph`.
+- Added `summarizeStructuralOptimisticPaginatedForPerf` so structural prep owns
+  the null-safe optimistic summary input used by split/merge attribution.
+- Wired the optimistic split/merge prep paths in `EditorShell` through the new
+  helper while leaving transaction begin/marking, `flushSync`, reducer
+  dispatch, React state setters, inline/text session starts, panel timing, and
+  preview settle scheduling in Shell.
+- Added focused helper tests for no-draft source resolution, unchanged draft
+  text, changed draft text, DOM-free eligibility, result paragraph metadata,
+  and null optimistic summary input.
+
+Behavior changed:
+
+- None intended.
+- The split/merge document operations still call the same document helpers:
+  `splitParagraphAtIndex` and `mergeParagraphWithPrevious`.
+- The structural transaction lifecycle still goes through
+  `StructuralEditRuntime` via `useStructuralEditController`.
+- No core pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, FlowTable behavior, validation, IME/composition
+  handling, normal typing behavior, panel timing, preview settle scheduling, or
+  `flushSync` behavior was changed.
+
+Files changed for Task 25:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/structuralEdit/structuralEditPreparationPlans.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/structuralEditPreparationPlans.test.ts`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task25-enter-mid-split-existing4000.json`
+- `reports/task25-enter-backspace-immediate-existing4000.json`
+- `reports/task25-enter-type-before-settle-existing4000.json`
+- `reports/task25-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task25-enter-rapid-existing4000.json`
+- `reports/task25-backspace-rapid-existing4000.json`
+
+Line-count / project-change report:
+
+- `EditorShell.tsx`: 7201 -> 7173 lines, net -28.
+- New preparation helper: `structuralEditPreparationPlans.ts` 155 lines.
+- New preparation test: `structuralEditPreparationPlans.test.ts` 131 lines.
+- Task-local source/test net by measured line count: +258
+  (-28 from Shell, +286 in new helper/test files).
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/structuralEditPreparationPlans.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPlans.test.ts src/app/editor/_components/structuralEdit/__tests__/structuralEditPreparationPlans.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid`
+- Long mock `backspace-rapid`
+
+Observed:
+
+- Focused preparation helper suite passed: 1 file, 4 tests.
+- Type-check passed.
+- Focused runtime/editor suite passed: 10 files, 288 tests.
+- All six Task 25 long-mock smoke reports finished with `ok=true`,
+  `structuralRefocusSafety.ok=true`,
+  `structuralRegression.ok=true`, and `0` console/page errors.
+- Correctness flags stayed clean where reported:
+  `activeNodeMissingFromDocument=false`, `ghostFragmentDetected=false`,
+  `duplicateTextDetected=false`, and `invalidDocumentDetected=false`.
+- `enter-type-before-settle` did not emit `uxVerification.passed`, but its
+  top-level `ok`, structural safety/regression checks, and console/page error
+  counts were clean.
+
+Artifact hygiene:
+
+- Task 25 source/docs review set:
+  `EditorShell.tsx`, the new preparation helper/test files,
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`, and
+  `docs/WORK_LOG_RECENT.md`.
+- Useful Task 25 review reports are the six
+  `reports/task25-*existing4000.json` files listed above.
+- Existing Task 17-24 reports remain useful historical review artifacts and
+  were not deleted.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- Existing dirty Task 17-24 source/docs/reports remain in the worktree and
+  should be reviewed or committed separately if a narrow commit is desired.
+
+Remaining risks:
+
+- `EditorShell` still owns the structural operation calls, optimistic
+  pagination creation, performance event emission, runtime begin/mark calls,
+  `flushSync`, reducer dispatch, and React state commits.
+- The preparation helper classifies current Shell-eligible plain text
+  paragraph paths only; it does not broaden structural support for FlowTable,
+  flow-stack, row-stack, rich paragraph, or fallback surface paths.
+
+Recommended Task 26A:
+
+- Extract a narrow PanelDeferralBridge only. Keep preview settle, canvas
+  viewport, reducer dispatch, `flushSync`, DOM/session starts, pagination,
+  document model, renderer/export, persistence, validation, and FlowTable
+  behavior out of that task.
+
+### Task 24 Structural Edit Bridge Hook / Controller
+
+Goal: Extract a narrow structural edit bridge/controller layer from
+`EditorShell` while preserving all existing structural Enter/Backspace
+behavior, reducer semantics, `flushSync`, pagination, panel timing, preview
+settle, draft runtime metadata, validation, render/export, persistence, and
+FlowTable behavior.
+
+Preflight / baseline:
+
+- Task 23 is present above with the legacy optimistic dispatch/rollback audit.
+- Known delayed optimistic dispatch symbols remain absent from current source:
+  `pendingOptimisticSplitDispatchRef`, `pendingOptimisticMergeDispatchRef`,
+  `flushPendingOptimisticSplitDispatch`,
+  `rollbackPendingOptimisticSplitRefocus`,
+  `cancelPendingOptimisticSplitDispatch`,
+  `cancelPendingOptimisticMergeDispatch`, and
+  `OPTIMISTIC_STRUCTURAL_DISPATCH_DELAY_MS` all had `sourceCount=0`.
+- No delayed `SPLIT_PARAGRAPH`/`MERGE_PARAGRAPH` dispatch path was found in the
+  optimistic structural path.
+- Task 23 line count baseline was documented: `EditorShell.tsx` 7231 -> 7231.
+- Latest Task 23 long-mock reports passed and remain available under
+  `reports/task23-*existing4000.json`.
+
+Completed:
+
+- Added `structuralEditBridgeTypes.ts` for the editor bridge boundary types:
+  split/merge transaction plan inputs, transaction identity, panel deferral
+  plan, draft session plan, and controller shape.
+- Added `structuralEditPlans.ts` pure helpers for:
+  `createSplitStructuralEditPlan`, `createMergeStructuralEditPlan`,
+  `createStructuralTransactionIdentity`,
+  `createStructuralPanelDeferralPlan`, and
+  `createStructuralDraftSessionPlan`.
+- Added `useStructuralEditController.ts` with a small controller/hook that
+  receives only `StructuralEditRuntime`, starts split/merge structural
+  transactions, marks committing, creates panel deferral plans, marks urgent
+  painting, and marks split/merge commit readiness.
+- Wired `EditorShell` split/merge bridge code through the controller for
+  runtime begin/mark metadata and through the plan helper for WYSIWYG draft
+  structural session metadata.
+- Added focused `structuralEditPlans.test.ts` coverage for split plan
+  metadata, merge plan metadata, panel/draft plan creation, and controller
+  runtime phase ordering.
+- Updated `docs/FRONTEND_RUNTIME_ARCHITECTURE.md` to mark Task 24 complete and
+  recommend Task 25.
+
+Responsibilities moved out of `EditorShell`:
+
+- Construction of accepted split/merge `BeginStructuralEditInput` payloads.
+- Construction of structural transaction id/generation identity objects.
+- Construction of structural panel deferral plan payloads for split/merge.
+- Construction of structural WYSIWYG draft session metadata payloads.
+- The small repeated runtime marking sequence for split/merge committed nodes
+  and ready-for-next-structural-key state.
+
+Intentionally stayed in `EditorShell`:
+
+- Actual document operations and validation-sensitive reducer dispatch.
+- The `flushSync` urgent React commit block.
+- WYSIWYG inline/text session start function calls.
+- React state setters for optimistic island override and refocus paint.
+- `pendingOptimisticSplitRefocusRef`,
+  `pendingOptimisticMergeRefocusRef`, `optimisticStructuralSettleRef`,
+  `optimisticLayoutRef`, preview grace refs, and active paginated refs.
+- Panel release timing/scheduling and preview settle scheduling.
+- DOM event handling, `FlowdocDraftEditorIslandRoot`, IME/composition logic,
+  normal typing behavior, and `ParagraphTextSurface` fallback behavior.
+- Core pagination, renderer/export, persistence/package format, document
+  model, reducer semantics, validation, and FlowTable behavior.
+
+Line-count / project-change report:
+
+- `EditorShell.tsx`: 7231 -> 7201 lines, net -30.
+- Bridge/controller source lines added:
+  `structuralEditBridgeTypes.ts` 69,
+  `structuralEditPlans.ts` 94,
+  `useStructuralEditController.ts` 76.
+- New structural bridge test lines added:
+  `structuralEditPlans.test.ts` 137.
+- Task-local source/test net by measured line count: +346
+  (-30 from Shell, +376 in new bridge/test files).
+- The extraction is intentionally small; it reduces Shell bridge duplication
+  without creating a giant host interface or moving React commit behavior.
+
+Behavior changed:
+
+- None intended.
+- No new runtime was added and `StructuralEditRuntime` semantics were not
+  changed.
+- No IME/composition behavior, normal typing, Enter/Backspace semantics,
+  pagination semantics, document model, reducer semantics, renderer/export,
+  persistence/package format, FlowTable behavior, `flushSync`, validation,
+  panel timing, preview settle scheduling, canvas viewport/page memo decision,
+  or probe/report field naming was changed.
+
+Files changed for Task 24:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/structuralEdit/structuralEditBridgeTypes.ts`
+- `src/app/editor/_components/structuralEdit/structuralEditPlans.ts`
+- `src/app/editor/_components/structuralEdit/useStructuralEditController.ts`
+- `src/app/editor/_components/structuralEdit/__tests__/structuralEditPlans.test.ts`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task24-enter-mid-split-existing4000.json`
+- `reports/task24-enter-backspace-immediate-existing4000.json`
+- `reports/task24-enter-type-before-settle-existing4000.json`
+- `reports/task24-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task24-enter-rapid-existing4000.json`
+- `reports/task24-backspace-rapid-existing4000.json`
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/structuralEdit/__tests__/structuralEditPlans.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- Type-check passed.
+- New structural bridge plan suite passed: 1 file, 3 tests.
+- Required unit/runtime/editor suite passed: 10 files, 298 tests.
+- All six Task 24 smoke reports finished with `ok=true`,
+  `performanceAttribution.passed=true`, `structuralRefocusSafety.ok=true`,
+  and `0` console/page errors.
+- Correctness flags stayed clean in all six reports:
+  `activeNodeMissingFromDocument=false`, `ghostFragmentDetected=false`,
+  `duplicateTextDetected=false`, and `invalidDocumentDetected=false`.
+- Enter-order probes reported `documentOrderAfterEnterOk=true` for
+  `enter-mid-split` and `enter-rapid`.
+- Backspace-order probes reported `documentOrderAfterBackspaceOk=true` for
+  `enter-backspace-immediate`, `enter-backspace-type-before-settle`, and
+  `backspace-rapid`.
+- All six reports include `editor-performance-report-v1`,
+  WysiwygDraftRuntime metric fields such as
+  `wysiwygDraftSessionBeginCount`, and structural guard/runtime counter
+  reporting.
+
+Artifact hygiene:
+
+- Task 24 source/docs review set:
+  `EditorShell.tsx`, the new `src/app/editor/_components/structuralEdit/`
+  files, `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`, and
+  `docs/WORK_LOG_RECENT.md`.
+- Useful Task 24 review reports are the six
+  `reports/task24-*existing4000.json` files listed above.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- Existing dirty Task 17-23 source/docs/reports remain in the worktree and
+  should be reviewed or committed separately if a narrow commit is desired.
+- Historical report files were not deleted or relabeled in this task.
+
+Remaining risks:
+
+- `EditorShell` still owns structural source text resolution, document
+  operation calls, optimistic pagination creation, performance event emission,
+  `flushSync`, reducer dispatch, and React state commits.
+- `ParagraphTextSurface` remains a legacy/in-canvas fallback risk if it is
+  intentionally reactivated without StructuralEditRuntime guard routing.
+- The controller is intentionally narrow; future extraction should avoid
+  expanding it into a large host/ref container.
+
+Recommended Task 25:
+
+- Extract a small structural preparation planner for source/draft text
+  resolution, paragraph eligibility, document operation result metadata, and
+  optimistic pagination summary inputs. Keep `flushSync`, reducer dispatch,
+  React state setters, DOM/session start functions, panel timing, preview
+  settle scheduling, document model semantics, renderer/export, persistence,
+  validation, and FlowTable behavior in their current owners.
+
+### Task 23 Legacy Optimistic Dispatch / Rollback Cleanup
+
+Goal: Audit and close the old delayed optimistic structural dispatch/rollback
+cleanup after Task 22, preserving Enter/Backspace correctness and avoiding any
+new runtime, feature, optimization, or behavior change.
+
+Preflight / baseline:
+
+- Task 22 was applied and documented: `EditorShell.tsx` went from 7373 to
+  7231 lines in Task 22.
+- Current Task 23 baseline `EditorShell.tsx` line count: 7231.
+- Runtime files are present for `StructuralEditRuntime`,
+  `PanelDeferralRuntime`, `PreviewSettleRuntime`, `CanvasViewportRuntime`,
+  `EditorPerformanceRuntime`, and `WysiwygDraftRuntime`.
+- Latest Task 22 long-mock reports are present under
+  `reports/task22-*existing4000.json`.
+- Existing smoke target `http://localhost:4000/editor` returned 200.
+
+Legacy symbol audit:
+
+| Symbol | Assignments | Reads/calls | Current V2 island reachable? | Enter split impact | Backspace merge impact | Undo/redo impact | Abort/failure cleanup impact | Classification |
+|---|---:|---:|---|---|---|---|---|---|
+| `pendingOptimisticSplitDispatchRef` | 0 | 0 | No | No | No | No | No | Removed in Task 22; no current source match |
+| `pendingOptimisticMergeDispatchRef` | 0 | 0 | No | No | No | No | No | Removed in Task 22; no current source match |
+| `flushPendingOptimisticSplitDispatch` | 0 | 0 | No | No | No | No | No | Removed in Task 22; no current source match |
+| `rollbackPendingOptimisticSplitRefocus` | 0 | 0 | No | No | No | No | No | Removed in Task 22; no current source match |
+| `cancelPendingOptimisticSplitDispatch` | 0 | 0 | No | No | No | No | No | Removed in Task 22; no current source match |
+| `cancelPendingOptimisticMergeDispatch` | 0 | 0 | No | No | No | No | No | Removed in Task 22; no current source match |
+| `OPTIMISTIC_STRUCTURAL_DISPATCH_DELAY_MS` | 0 | 0 | No | No | No | No | No | Removed in Task 22; no current source match |
+| pending optimistic dispatch naming | 0 current source matches | 0 current source matches | No | No | No | No | No | Historical docs only |
+| rollback pending split naming | 0 current source matches | 0 current source matches | No | No | No | No | No | Historical docs only |
+
+Completed:
+
+- Confirmed all known delayed optimistic dispatch/rollback symbols have
+  `sourceCount=0` under `src/app/editor/_components`.
+- Confirmed remaining matches are historical work-log text or Task 22 cleanup
+  notes, not current behavior paths.
+- Confirmed no delayed `SPLIT_PARAGRAPH` or `MERGE_PARAGRAPH` dispatch path
+  remains in the optimistic structural path. Current optimistic split/merge
+  dispatch occurs inside the structural `flushSync` bridge after
+  `StructuralEditRuntime.beginStructuralEdit`, panel deferral begin, and
+  draft session setup.
+- Confirmed fallback non-optimistic `SPLIT_PARAGRAPH`/`MERGE_PARAGRAPH`
+  dispatch paths remain immediate reducer dispatches, not delayed timer/RAF
+  pending-dispatch wrappers.
+- Confirmed current abort behavior remains runtime-backed through
+  `abortStructuralEditTransactionAndPanelDeferral`: aborts the structural
+  transaction, aborts the matching draft runtime session, cancels matching
+  preview settle request, cancels/aborts matching panel deferral, clears panel
+  release state, and avoids leaving panel freeze active for that transaction.
+- Updated `docs/FRONTEND_RUNTIME_ARCHITECTURE.md` to mark this cleanup audit as
+  Task 23 and move the structural bridge adapter recommendation to Task 24.
+
+Code changes:
+
+- No source code changes were needed in Task 23 because Task 22 had already
+  removed the proven-dead branch and all known symbols are absent from current
+  source.
+- No tests/imports needed adjustment.
+
+Kept / deferred:
+
+- Kept `pendingOptimisticSplitRefocusRef`,
+  `pendingOptimisticMergeRefocusRef`, `optimisticStructuralSettleRef`,
+  `optimisticLayoutRef`, and `abortStructuralEditTransactionAndPanelDeferral`.
+  These are active structural bridge, settle, optimistic layout, and
+  abort-cleanup state, not delayed pending-dispatch state.
+- Deferred any structural bridge extraction or broad rename churn to Task 24.
+
+Line-count / project-change report:
+
+- `EditorShell.tsx`: 7231 -> 7231 lines, net 0 in Task 23.
+- EditorShell did not decrease in Task 23 because Task 22 had already removed
+  the known dead delayed-dispatch code.
+- New runtime/helper files: none.
+- Task-local source code net change: 0.
+- Task-local docs changed: `docs/WORK_LOG_RECENT.md` and
+  `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- Generated review reports added: six `reports/task23-*existing4000.json`
+  files.
+
+Behavior changed:
+
+- None intended.
+- No IME/composition behavior, normal typing, Enter/Backspace semantics,
+  pagination semantics, document model, reducer semantics, renderer/export,
+  persistence/package format, FlowTable behavior, `flushSync`, validation,
+  panel timing, preview settle scheduling, canvas viewport/page memo decision,
+  or probe/report field naming was changed.
+
+Files changed for Task 23:
+
+- `docs/WORK_LOG_RECENT.md`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `reports/task23-enter-mid-split-existing4000.json`
+- `reports/task23-enter-backspace-immediate-existing4000.json`
+- `reports/task23-enter-type-before-settle-existing4000.json`
+- `reports/task23-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task23-enter-rapid-existing4000.json`
+- `reports/task23-backspace-rapid-existing4000.json`
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- Type-check passed.
+- Required unit/runtime/editor suite passed: 10 files, 298 tests.
+- All six Task 23 smoke reports finished with `ok=true`,
+  `performanceAttribution.passed=true`, `structuralRefocusSafety.ok=true`,
+  and `0` console/page errors.
+- Correctness flags stayed clean in all six reports:
+  `activeNodeMissingFromDocument=false`, `ghostFragmentDetected=false`,
+  `duplicateTextDetected=false`, and `invalidDocumentDetected=false`.
+- Enter-order probes reported `documentOrderAfterEnterOk=true` for
+  `enter-mid-split` and `enter-rapid`.
+- Backspace-order probes reported `documentOrderAfterBackspaceOk=true` for
+  `enter-backspace-immediate`, `enter-backspace-type-before-settle`, and
+  `backspace-rapid`.
+- All six reports include `editor-performance-report-v1` and
+  WysiwygDraftRuntime metric fields such as
+  `wysiwygDraftSessionBeginCount`.
+
+Artifact hygiene:
+
+- Task 23 source/docs review set is intentionally documentation-only:
+  `docs/WORK_LOG_RECENT.md` and `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`.
+- Useful Task 23 review reports are the six
+  `reports/task23-*existing4000.json` files listed above.
+- Generated logs/dev-server files and local archives should not be committed:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, and
+  local `FlowDocEditor_Task*.zip` files.
+- Existing dirty Task 17-22 source/docs/reports remain in the worktree and
+  should be reviewed or committed separately if a narrow commit is desired.
+- Historical report files were not deleted or relabeled in this task.
+
+Remaining risks:
+
+- This audit proves the delayed optimistic dispatch/rollback symbols are gone
+  from current source, not that all future fallback paths are safe to broaden.
+- `EditorShell` still owns a large active structural split/merge bridge.
+- `ParagraphTextSurface` remains a legacy/in-canvas fallback risk if it is
+  intentionally reactivated without StructuralEditRuntime guard routing.
+
+Recommended Task 24:
+
+- Extract a small behavior-preserving Structural Bridge Adapter for plain data
+  assembly and attribution around split/merge, without moving DOM handling,
+  reducer dispatch, `flushSync`, pagination, panel timing, preview settle,
+  document model, renderer/export, persistence/package format, FlowTable,
+  validation, active refocus refs, or WYSIWYG island behavior.
+
+### Task 22 EditorShell Slimming / Bridge Cleanup Gate
+
+Goal: Close the cleanup gate after Tasks 17-21 by reducing `EditorShell`
+responsibility only where the current tree proves legacy optimistic dispatch
+code is dead, while preserving editor behavior and all runtime ownership
+boundaries.
+
+Preflight / baseline:
+
+- `EditorShell.tsx` started at 7373 lines.
+- Runtime files from Tasks 15-21 were present, including
+  `StructuralEditRuntime`, `PanelDeferralRuntime`, `PreviewSettleRuntime`,
+  `CanvasViewportRuntime`, `EditorPerformanceRuntime`, and
+  `WysiwygDraftRuntime`.
+- Task 21 long-mock reports remained available under `reports/task21-*`.
+- Existing localhost smoke target `http://localhost:4000/editor` returned 200.
+
+Legacy optimistic dispatch audit:
+
+- `pendingOptimisticSplitDispatchRef`: removed. It had no assignment producer
+  in the current tree and was only read by the old Undo rollback and merge
+  flush fallback.
+- `pendingOptimisticMergeDispatchRef`: removed. It had no assignment producer
+  and was only cancelled/cleared.
+- `flushPendingOptimisticSplitDispatch`: removed. Current split dispatch runs
+  synchronously inside the structural `flushSync` path, so this helper had no
+  pending dispatch to flush.
+- `rollbackPendingOptimisticSplitRefocus` and
+  `rollbackPendingOptimisticSplitRefocusHandlerRef`: removed. They depended on
+  the unassigned split dispatch ref and were not reachable in the current
+  synchronous structural bridge.
+- `cancelPendingOptimisticSplitDispatch` and
+  `cancelPendingOptimisticMergeDispatch`: removed with their unmount cleanup
+  effects because the pending dispatch refs no longer exist.
+- `OPTIMISTIC_STRUCTURAL_DISPATCH_DELAY_MS`: removed. Only the constant
+  definition remained.
+- Active refocus state was kept: `pendingOptimisticSplitRefocusRef`,
+  `pendingOptimisticMergeRefocusRef`, `optimisticStructuralSettleRef`, and
+  optimistic layout refs still participate in current split/merge, settle, and
+  post-reducer refocus paths.
+
+Completed:
+
+- Removed the proven-dead deferred optimistic split/merge dispatch branch from
+  `EditorShell`.
+- Removed the no-op Undo rollback branch that could only run if the deleted
+  split dispatch ref had been populated.
+- Removed the no-op merge pre-flush call before optimistic merge.
+- Updated the frontend runtime architecture doc to stop listing removed
+  pending-dispatch symbols as current ownership items.
+- Added six Task 22 long-mock smoke reports for review.
+
+Line-count / ownership report:
+
+- `EditorShell.tsx`: 7373 -> 7231 lines, net -142.
+- New runtime/helper files: none.
+- Source lines added outside `EditorShell`: 0.
+- Runtime ownership direction unchanged: structural guard/runtime decisions
+  still live in `StructuralEditRuntime`; DOM event handling remains local to
+  the island/surfaces; reducer dispatch, `flushSync`, optimistic layout refs,
+  panel deferral handoff, preview settle handoff, and draft session handoff
+  remain in Shell.
+
+Behavior changed:
+
+- No behavior change intended. The removed branch had no assignment producer in
+  the current tree.
+- No core pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, FlowTable behavior, validation, `flushSync`,
+  panel timing, preview settle scheduling, canvas memo/report field naming,
+  WYSIWYG island implementation, normal typing, IME, Enter, or Backspace
+  behavior was intentionally changed.
+
+Files changed for Task 22:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task22-enter-mid-split-existing4000.json`
+- `reports/task22-enter-backspace-immediate-existing4000.json`
+- `reports/task22-enter-type-before-settle-existing4000.json`
+- `reports/task22-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task22-enter-rapid-existing4000.json`
+- `reports/task22-backspace-rapid-existing4000.json`
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- Type-check passed.
+- Required test suite passed: 10 files, 298 tests.
+- All six Task 22 smoke reports finished with `ok=true`,
+  `performanceAttribution.passed=true`, `structuralRefocusSafety.ok=true`,
+  and `0` console/page errors.
+- Correctness flags stayed clean in all six reports:
+  `activeNodeMissingFromDocument=false`, `ghostFragmentDetected=false`,
+  `duplicateTextDetected=false`, and `invalidDocumentDetected=false`.
+- Reports use `editor-performance-report-v1`.
+
+Artifact hygiene:
+
+- Task 22 source review set is intentionally narrow:
+  `EditorShell.tsx`, `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`,
+  `docs/WORK_LOG_RECENT.md`, and the six `reports/task22-*existing4000.json`
+  files.
+- Useful review artifacts: the six Task 22 reports listed above.
+- Existing dirty/untracked artifacts remain from earlier tasks or local tooling:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, local
+  ZIP archives, older historical reports, and Task 17-21 source/docs/reports.
+  They were not deleted or relabeled in this cleanup gate.
+
+Remaining risks:
+
+- This proves the deferred optimistic dispatch branch is dead in the current
+  tree, not that future fallback paths can skip runtime guard decisions.
+- `EditorShell` still owns the large structural split/merge bridge. Moving it
+  requires a separate adapter task with focused tests.
+- `ParagraphTextSurface` remains a legacy/in-canvas fallback risk if it is
+  intentionally reactivated without `StructuralEditRuntime` guard routing.
+
+Recommended Task 23:
+
+- Extract a small behavior-preserving Structural Bridge Adapter for plain data
+  assembly and attribution around split/merge, while keeping DOM handling,
+  reducer dispatch, `flushSync`, pagination, panel timing, preview settle,
+  document model, renderer/export, persistence, FlowTable, validation, and
+  active refocus refs in their current owners.
+
+### Task 21 WysiwygDraftRuntime Boundary / Skeleton Extraction
+
+Goal: Introduce a pure draft/session lifecycle runtime for active
+WYSIWYG draft metadata while preserving WYSIWYG editing behavior, IME
+semantics, structural Enter/Backspace behavior, pagination, render/export,
+document model, reducer semantics, persistence, FlowTable behavior,
+validation, `flushSync`, panel timing, preview settle scheduling, and canvas
+viewport decisions.
+
+Completed:
+
+- Added `WysiwygDraftRuntime` as a pure TypeScript runtime for draft session
+  id/generation, active node id, draft mode/phase, caret/selection metadata,
+  composition metadata, structural transaction metadata, stale-session checks,
+  abort/cancel/commit/complete bookkeeping, and draft lifecycle counters.
+- Kept DOM/input handling local. The runtime receives only plain data from
+  Shell/island callbacks and does not read textarea values, DOM nodes, React
+  refs, synthetic events, document state, reducers, pagination, or renderers.
+- Wired `EditorShell` metadata-only lifecycle calls for WYSIWYG session start,
+  draft caret/text metadata updates, finalize commit after validation passes,
+  generic session cancel, and structural setup abort cleanup.
+- Wired structural split/merge refocus sessions with
+  `structuralTransactionId` and `structuralGeneration` so draft metadata can
+  be associated with the active structural transaction without mutating
+  `StructuralEditRuntime`.
+- Added a local `FlowdocDraftEditorIslandRoot` composition metadata callback
+  from the hidden input bridge to Shell. This records composition start/end in
+  the draft runtime without changing IME input handling, preventDefault logic,
+  text mutation, or structural guard behavior.
+- Exposed WYSIWYG draft runtime metrics through `wysiwygPerformance.ts`,
+  `EditorPerformanceRuntime` metric definitions, and the smoothness probe
+  attribution counters/field descriptions.
+- Added unit coverage for begin/active/caret/text metadata, stale-session
+  ignored updates, composition lifecycle, commit, cancel, abort, supersede,
+  structural metadata, and metrics snapshots.
+
+Files changed for Task 21:
+
+- `src/app/editor/_components/runtime/wysiwygDraftTypes.ts`
+- `src/app/editor/_components/runtime/wysiwygDraftRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/runtime/editorPerformanceRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task21-enter-mid-split-existing4000.json`
+- `reports/task21-enter-backspace-immediate-existing4000.json`
+- `reports/task21-enter-type-before-settle-existing4000.json`
+- `reports/task21-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task21-enter-rapid-existing4000.json`
+- `reports/task21-backspace-rapid-existing4000.json`
+
+Behavior changed:
+
+- No document-editing behavior change intended. The runtime is a metadata
+  mirror around existing WYSIWYG session lifecycle and does not own text
+  editing, rich text commands, structural policy, reducer actions, pagination,
+  rendering, export, persistence, or FlowTable behavior.
+- The only active runtime callback added to the island is composition
+  metadata reporting; it does not block or transform IME input.
+
+Intentionally not changed:
+
+- `useWysiwygTextSession` and `richTextDraftSession` still own actual draft
+  text and rich paragraph editing implementation.
+- `EditorShell` still commits document replacement and schedules pagination.
+- `FlowdocDraftEditorIslandRoot` still owns local DOM input, clipboard,
+  beforeinput/key handling, selection, and structural key event handling.
+- `ParagraphTextSurface` fallback behavior was audited but not refactored.
+- No core pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, FlowTable, validation, `flushSync`, panel
+  deferral timing, preview settle scheduling, or canvas viewport memo decision
+  was changed.
+
+ParagraphTextSurface fallback audit:
+
+- Current WYSIWYG V2/native out-of-canvas island flow derives
+  `flowdocDraftEditorIslandConfig` in `EditorShell`, sets
+  `useOutOfCanvasWysiwygIsland`, passes `null` canvas draft props for that
+  active node, and renders `FlowdocDraftEditorIslandRoot` with
+  `structuralEditRuntime`.
+- Therefore the `ParagraphTextSurface` structural fallback is not the active
+  path for eligible current V2 native island editing.
+- `ParagraphTextSurface` still has in-canvas WYSIWYG/native textarea
+  structural callbacks that call `onSplitParagraph`/`onMergeParagraph`
+  directly without first asking `StructuralEditRuntime.canStartStructuralEdit`.
+- If that fallback is intentionally reactivated later, it remains a legacy
+  bypass risk and should be routed through `StructuralEditRuntime` using
+  DOM-free guard input before expanding its use.
+- No `ParagraphTextSurface` behavior change was made in Task 21 because the
+  bypass is not active in the current V2/native island flow and a broad
+  fallback refactor would exceed the skeleton boundary.
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/wysiwygDraftRuntime.test.ts src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- New runtime tests passed: 9 `WysiwygDraftRuntime` tests.
+- Full acceptance unit suite passed: 10 files, 298 tests.
+- All six Task 21 smoke reports finished with `ok=true`,
+  `performanceAttribution.passed=true`, `structuralRefocusSafety.ok=true`,
+  and `0` console/page errors.
+- Correctness remained stable in every accepted Task 21 report:
+  `activeNodeMissingFromDocument=false`, `ghostFragmentDetected=false`,
+  `duplicateTextDetected=false`, and `invalidDocumentDetected=false`.
+- Reports include `editor-performance-report-v1` and
+  `editor-performance-timing-anchors-v1`.
+- Reports include draft runtime attribution counters/fields such as
+  `wysiwygDraftSessionBeginCount` and `wysiwygDraftCurrentPhase`.
+
+Artifact hygiene:
+
+- Review source set for Task 21 is the runtime/test files, the Shell/island
+  metadata wiring, the performance facade/runtime/test changes, the probe
+  attribution patch, and docs.
+- Useful Task 21 review reports are the six
+  `reports/task21-*existing4000.json` files listed above.
+- Non-commit local artifacts remain from previous tasks or local tooling:
+  `.codex-dev-server-4000.*`, `.codex-dev-server-4001.*`, `debug.log`, local
+  ZIP archives, and older historical report files.
+- Existing dirty Task 17-20 source/docs/reports remain in the worktree and
+  should be reviewed or committed separately from Task 21 if a narrow commit is
+  desired.
+
+Remaining risks:
+
+- Real OS IME manual testing was not performed in this environment. Synthetic
+  composition lifecycle is covered by the pure runtime tests, and production
+  composition wiring is metadata-only.
+- `ParagraphTextSurface` legacy/in-canvas structural fallback still needs a
+  future guard-routing task before being treated as a supported active
+  structural path.
+- `EditorShell` still owns actual draft commit and pagination scheduling; this
+  task only introduced the runtime boundary.
+
+Recommended Task 22:
+
+- Continue with a narrow EditorShell slimming pass that moves draft lifecycle
+  adapter code behind a small Shell-facing API while keeping
+  `useWysiwygTextSession`, rich text draft commands, IME handling, structural
+  guard policy, pagination scheduling, render/export, persistence, and
+  document model behavior unchanged.
+
+### Task 20 EditorPerformanceRuntime Extraction
+
+Goal: Move performance/probe attribution schema, event/counter normalization,
+runtime metrics aggregation, report field ownership, page-break suppression
+semantics, frame-window semantics, and timing-anchor semantics into a dedicated
+pure performance runtime while preserving editor behavior.
+
+Completed:
+
+- Added `EditorPerformanceRuntime` types and runtime helpers for stable lanes,
+  event kinds, metric sources, field inventory, samples, counters, timings,
+  flags, report fields, legacy aliases, schema version, timing-anchor version,
+  boundary-safe suppression classification, frame-window metadata, runtime
+  metrics merging, and report normalization.
+- Kept `wysiwygPerformance.ts` as the app compatibility facade for existing
+  event recording APIs and added schema/metric-definition facade helpers.
+- Updated `scripts/wysiwyg-smoothness-probe.mjs` so JSON reports include
+  `editor-performance-report-v1`, boundary-safe suppression observation fields,
+  frame-window metadata, and normalized timing-anchor fields while keeping
+  browser DOM observation in the probe script.
+- Preserved existing legacy report fields including pagination counters,
+  deferred left-rail fields, page isolation counters, CanvasViewport aliases,
+  and existing timing buckets.
+- Updated the frontend runtime RFC to mark `EditorPerformanceRuntime` as
+  implemented and make `WysiwygDraftRuntime` the recommended next boundary.
+
+Files changed:
+
+- `src/app/editor/_components/runtime/editorPerformanceTypes.ts`
+- `src/app/editor/_components/runtime/editorPerformanceRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task20-enter-mid-split-default-existing4000.json`
+- `reports/task20-enter-backspace-immediate-existing4000.json`
+- `reports/task20-enter-type-before-settle-existing4000.json`
+- `reports/task20-enter-backspace-type-before-settle-existing4000.json`
+- `reports/task20-enter-rapid-existing4000.json`
+- `reports/task20-backspace-rapid-existing4000.json`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/runtime/__tests__/editorPerformanceRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- New runtime tests passed: 8 `EditorPerformanceRuntime` tests.
+- Full acceptance unit suite passed: 9 files, 288 tests.
+- All six Task 20 smoke reports finished with `ok=true`,
+  `performanceAttribution.passed=true`, and `0` console/page errors.
+- Each smoke report includes root and attribution schema
+  `editor-performance-report-v1` and timing anchor version
+  `editor-performance-timing-anchors-v1`.
+- Boundary-safe suppression semantics are explicit:
+  `suppressed` for mid-split, enter/backspace, backspace/type, enter-rapid,
+  and backspace-rapid; `not-applicable` for enter/type-before-settle.
+- Frame-window metadata recorded the default `probeFrameWindowMs=4200` and
+  `probeUsedExtendedFrameWindow=false` for accepted Task 20 reports.
+- Page isolation remained stable in every accepted report:
+  `affectedPageCount=1`, `canvasViewportAffectedPageCount=1`,
+  `pagesRenderedDuringStructuralTransition=1`, and
+  `unaffectedPagesRenderedCount=0`.
+
+Artifact hygiene:
+
+- Review source set: the three EditorPerformance runtime/test files,
+  `wysiwygPerformance.ts`, `wysiwygPerformance.test.ts`,
+  `scripts/wysiwyg-smoothness-probe.mjs`, and the two docs above.
+- Useful Task 20 reports: the six accepted `reports/task20-*existing4000.json`
+  files listed in Files changed.
+- Labeled failed/infrastructure artifacts kept for traceability, not commit:
+  `reports/task20-enter-mid-split-startup-exit.empty.json`,
+  `reports/task20-enter-mid-split-existing4000-goto-timeout.empty.json`, and
+  `reports/task20-enter-mid-split-port4018-next-lock.empty.json`.
+- Smoke runs used the already-running Next dev server at `localhost:4000`
+  because Next reported an existing dev-server lock for that workspace. The
+  accepted reports used `SMOKE_BASE_URL=http://localhost:4000/editor` and
+  `PROBE_READY_TIMEOUT_MS=60000`.
+- Non-commit local artifacts remain: `.codex-dev-server-4000.*`,
+  `.codex-dev-server-4001.*`, `debug.log`, local task ZIP archives, and
+  historical report archives.
+
+Notes / risks:
+
+- This was behavior-preserving. No rendering behavior, core pagination,
+  incremental pagination, document model, reducer semantics, renderer/export,
+  persistence/package format, FlowTable behavior, validation, `flushSync`,
+  WYSIWYG island behavior, structural edit semantics, panel deferral timing,
+  preview settle scheduling, or canvas viewport/page memo decisions were
+  intentionally changed.
+- Browser collection and DOM observation intentionally remain in
+  `scripts/wysiwyg-smoothness-probe.mjs`.
+- `EditorPerformanceRuntime` owns schema/normalization helpers; it does not own
+  runtime state in StructuralEdit, PanelDeferral, PreviewSettle, or
+  CanvasViewport.
+
+Recommended Task 21:
+
+- Extract `WysiwygDraftRuntime` next, limited to active draft/session/caret/
+  composition ownership and shell draft API shape, without changing IME,
+  normal typing, rich text style semantics, pagination, panel timing,
+  structural edit, or canvas viewport behavior.
+
+---
+
+### Task 19 CanvasViewportRuntime Boundary
+
+Goal: Extract page viewport/edit decision logic from `EditorCanvas` into a
+DOM-free `CanvasViewportRuntime` while preserving pagination behavior,
+document model, reducer semantics, renderer/export, persistence/package
+format, FlowTable behavior, validation, `flushSync`, structural edit semantics,
+panel timing, preview settle scheduling, and the WYSIWYG island contract.
+
+Completed:
+
+- Added `CanvasViewportRuntime` and viewport decision types for page-scoped
+  edit decisions, affected structural pages, boundary-safe page-break visual
+  suppression, render scope summaries, and CanvasViewport metric aliases.
+- Kept existing exported `EditorCanvas` helpers as compatibility wrappers:
+  `shouldSuppressStalePageBreakForActiveWysiwygIsland`,
+  `pageViewScopedEditPropsAffectPage`, and
+  `pageViewStructuralTransitionAffectsPage`.
+- Routed boundary-safe page-break suppression and structural render scope
+  decisions through the runtime using DOM-free inputs.
+- Preserved local DOM event handling, PageView memo boundaries, lazy page
+  forced-key behavior, immediate Enter -> Backspace behavior, IME/composition
+  behavior, normal typing behavior, and all existing smoke report fields.
+- Added CanvasViewport smoke/report aliases:
+  `canvasViewportAffectedPageCount`,
+  `canvasViewportAffectedPages`,
+  `canvasViewportSuppressedPageBreakCount`, and
+  `canvasViewportUnrelatedPageBreakSuppressedCount`.
+- Updated the frontend runtime RFC to mark the CanvasViewport boundary as
+  extracted for decision logic while leaving React memo/profiler side effects
+  in `EditorCanvas`.
+
+Files changed:
+
+- `src/app/editor/_components/runtime/canvasViewportTypes.ts`
+- `src/app/editor/_components/runtime/canvasViewportRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task19-enter-mid-split-extended.json`
+- `reports/task19-enter-backspace-immediate.json`
+- `reports/task19-enter-type-before-settle.json`
+- `reports/task19-enter-backspace-type-before-settle.json`
+- `reports/task19-enter-rapid-rerun.json`
+- `reports/task19-backspace-rapid.json`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/runtime/__tests__/canvasViewportRuntime.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/editorReducerRichText.test.ts`
+- Long mock `enter-mid-split` with
+  `PROBE_ENTER_FRAME_DELAYS_MS=0,50,120,300,800,1800,4200,7000`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8` and
+  `PROBE_READY_TIMEOUT_MS=30000`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- Targeted runtime/unit verification passed: 9 CanvasViewportRuntime tests,
+  79 EditorCanvas tests, 279 combined runtime/editor/performance/reducer tests,
+  and `type-check`.
+- All six passing Task 19 smoke reports finished with `ok=true`,
+  `structuralRefocusSafety.ok=true`, `structuralRegression.ok=true`,
+  `performanceAttribution.passed=true`, and `0` console/page errors. The
+  smoke modes that emit `uxVerification` reported `uxVerification.passed=true`;
+  `enter-type-before-settle` does not emit that object.
+- Each passing smoke preserved the legacy page isolation counters:
+  `affectedPageCount=1`, `pagesRenderedDuringStructuralTransition=1`,
+  `unaffectedPagesRenderedCount=0`, `totalPageCount=119`.
+- Each passing smoke also recorded the new CanvasViewport aliases:
+  `canvasViewportAffectedPageCount=1`,
+  `canvasViewportSuppressedPageBreakCount=0`, and
+  `canvasViewportUnrelatedPageBreakSuppressedCount=0`.
+
+Artifact hygiene:
+
+- Review source set: the three CanvasViewport runtime/test files,
+  `EditorCanvas.tsx`, `wysiwygPerformance.ts`,
+  `scripts/wysiwyg-smoothness-probe.mjs`, and the two docs above.
+- Useful review reports: the six `reports/task19-*` passing JSON files listed
+  in Files changed.
+- Labeled failed/infrastructure artifacts kept for traceability, not commit:
+  `reports/task19-enter-mid-split-default-window-failed.json`,
+  `reports/task19-enter-mid-split-default-window-rerun-failed.json`, and
+  `reports/task19-enter-rapid-startup-timeout.empty.json`.
+- The default-window mid-split reports failed only because the fixed frame
+  sample window ended at 4200 ms while this machine's full pagination settle
+  arrived after that; the extended-frame run passed without code change.
+- Non-commit local artifacts remain: `.codex-dev-server-4000.*`,
+  `.codex-dev-server-4001.*`, `debug.log`, local task ZIP archives, and
+  historical report archives.
+
+Notes / risks:
+
+- This was intended as behavior-preserving. No core pagination, document model,
+  reducer semantics, renderer/export, persistence/package format, FlowTable,
+  validation, `flushSync`, structural edit semantics, panel timing policy,
+  preview settle scheduling, or WYSIWYG island rewrite was intentionally
+  changed.
+- `EditorCanvas` still owns React memo comparators, profiler/perf event
+  emission, lazy page mounting, and DOM rendering.
+- The runtime currently owns pure decision helpers and metrics; it does not own
+  transaction state, pagination scheduling, or DOM event handling.
+
+Recommended Task 20:
+
+- Extract `EditorPerformanceRuntime` next, limited to structural render/probe
+  attribution helpers, comparator timing summaries, and report schema aliases,
+  while keeping editor behavior and page memo decisions unchanged.
+
+---
+
 ## 2026-06-04
+
+### Task 18 PreviewSettleRuntime Extraction
+
+Goal: Move browser preview settle request identity, generation, stale decision,
+and metrics ownership out of `EditorShell` into a dedicated pure runtime while
+preserving pagination behavior, scheduling semantics, structural edit behavior,
+panel timing policy, `flushSync`, validation, render/export, persistence,
+FlowTable, and document model behavior.
+
+Completed:
+
+- Added `PreviewSettleRuntime` and preview settle types as a DOM-free lifecycle
+  controller for request id, generation, phase, schedule/start/complete/apply,
+  stale ignore, supersede, cancel, fail, active inline node guard, draft version
+  guard, structural generation guard, and counters.
+- Added focused unit tests for schedule generation, latest apply, superseded
+  request safety, stale result blocking, structural generation mismatch, draft
+  version mismatch, cancelled/failed requests, and metrics snapshots.
+- Replaced `EditorShell`'s browser preview generation ref with runtime-owned
+  generation/request identity.
+- Routed browser preview start/commit, worker fallback, and worker response
+  stale checks through `PreviewSettleRuntime.getApplyDecision`.
+- Kept debounce timers, `requestAnimationFrame`/worker mechanics,
+  main-thread pagination calls, partial preview state, React state application,
+  `SET_PAGINATED`, and `optimisticLayoutRef` in `EditorShell`.
+- Cancelled matching preview settle requests when a structural transaction aborts.
+- Added quiet-by-default `flowdoc-preview-settle-runtime` perf events and probe
+  aliases while keeping existing pagination report fields stable.
+- Updated the frontend runtime RFC to reflect the Task 18 implementation
+  boundary.
+
+Files changed:
+
+- `src/app/editor/_components/runtime/previewSettleTypes.ts`
+- `src/app/editor/_components/runtime/previewSettleRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task18-enter-mid-split.json`
+- `reports/task18-enter-backspace-immediate.json`
+- `reports/task18-enter-type-before-settle.json`
+- `reports/task18-enter-backspace-type-before-settle.json`
+- `reports/task18-enter-rapid.json`
+- `reports/task18-backspace-rapid.json`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts src/app/editor/_components/runtime/__tests__/previewSettleRuntime.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run type-check`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle`
+- Long mock `enter-backspace-type-before-settle`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- All six Task 18 smoke reports finished with `ok=true`,
+  `structuralRefocusSafety.ok=true`, `activeNodeMissingFromDocument=false`,
+  `ghostFragmentDetected=false`, `duplicateTextDetected=false`,
+  `invalidDocumentDetected=false`, and `0` console/page errors.
+- `enter-mid-split`, `enter-rapid`, and `enter-type-before-settle` recorded one
+  preview settle schedule/start/complete/apply and latest settle applied.
+- `enter-backspace-immediate`, `enter-backspace-type-before-settle`, and
+  `backspace-rapid` recorded two preview settle schedules, one supersede, and
+  one latest apply, confirming stale split settle did not overwrite the newer
+  merge state.
+- Existing structural pagination fields remained available:
+  `scheduledPaginationCount`, `completedPaginationCount`,
+  `supersededPaginationCount`, `fullPagination*`, `latestSettleApplied`, and
+  `fullPaginationBlocksFirstPaint`.
+
+Notes / risks:
+
+- This was behavior-preserving. No core pagination, document model, reducer
+  semantics, renderer/export, persistence/package format, FlowTable behavior,
+  validation, structural edit semantics, panel timing policy, or `flushSync`
+  usage was intentionally changed.
+- `EditorShell` still owns settle scheduling side effects and preview state
+  application by design.
+- `optimisticStructuralSettleRef` and
+  `optimisticStructuralPreviewSettleGraceUntilRef` remain Shell metadata/timing
+  inputs for existing structural probes and debounce policy.
+- Draft pagination generation remains in the WYSIWYG draft lane and was not
+  moved in Task 18.
+- The Task 17.5 `ParagraphTextSurface` legacy/fallback guard routing risk is
+  unchanged and remains a later cleanup.
+
+Recommended Task 19:
+
+- Extract `CanvasViewportRuntime` next, limited to page-scoped render/visibility
+  decisions, affected-page rerender predicates, boundary-safe visual suppression
+  ownership, and focused `EditorCanvas` tests, without changing pagination,
+  document model, structural edit semantics, panel timing, validation,
+  render/export, persistence, FlowTable, or `flushSync`.
+
+---
+
+### Task 17.5 PanelDeferral Extraction Closure / ParagraphTextSurface Fallback Audit
+
+Goal: Close the remaining Task 17 acceptance gap by auditing whether
+`ParagraphTextSurface` can bypass `StructuralEditRuntime` in the current
+WYSIWYG V2/native island structural Enter/Backspace flow, and classify the
+dirty worktree artifacts before `PreviewSettleRuntime` extraction.
+
+Audit result:
+
+- Current WYSIWYG V2 plain-paragraph structural editing uses
+  `FlowdocDraftEditorIslandRoot` when `flowdocDraftEditorIslandConfig` is
+  present. In that path, `EditorShell` suppresses in-canvas
+  `ParagraphTextSurface` editing by passing `inlineEditNodeId` and WYSIWYG
+  draft props as `null` to `EditorCanvas`, then renders the island with
+  `structuralEditRuntime`.
+- `FlowdocDraftEditorIslandRoot` asks `StructuralEditRuntime` for
+  `canStartStructuralEdit` guard decisions before Enter split and Backspace
+  merge/delete-empty handling, and engages a runtime-backed structural
+  transaction before calling Shell split/merge callbacks.
+- `ParagraphTextSurface` still has direct fallback callbacks for structural
+  list Enter, native textarea Enter/Backspace, and legacy inline textarea
+  split/merge. Those fallback branches do not ask `StructuralEditRuntime`
+  directly.
+- No active WYSIWYG V2/native island plain-paragraph structural path was found
+  where `ParagraphTextSurface` can trigger Enter split or Backspace merge
+  without the island first asking `StructuralEditRuntime` for a guard decision.
+- The `ParagraphTextSurface` fallback is not test-only, but in the audited
+  flow it is a legacy/compat path for contexts where the out-of-canvas island
+  is not active. A broader fallback-runtime integration remains a follow-up,
+  not part of this closure task.
+
+Code change:
+
+- No behavior/code-path change was made. This task intentionally avoided core
+  pagination, document model, reducer semantics, renderers/export, persistence,
+  FlowTable, validation, `flushSync`, performance optimization, and WYSIWYG
+  island rewrites.
+
+Artifact hygiene:
+
+- Task 17 source/doc review set: `runtime/` structural and panel runtime files,
+  `EditorShell`, `FlowdocDraftEditorIslandRoot`, `EditorCanvas`, WYSIWYG
+  performance helpers/tests, `scripts/wysiwyg-smoothness-probe.mjs`, and the
+  active work-log/docs updates.
+- Useful generated review reports: `reports/task17-*.json`, all rerun with
+  `ok=true`, `structuralRefocusSafety.ok=true`, and no console/page errors.
+- Non-commit artifacts: `.codex-dev-server-4000.*`,
+  `.codex-dev-server-4001.*`, `debug.log`, and the local task ZIP archives.
+- Historical/stale reports under `reports/` were left in place for review
+  traceability; they should either remain an explicit evidence archive or be
+  pruned in a separate cleanup-only step.
+
+Recommended Task 18:
+
+- Extract `PreviewSettleRuntime` next, keeping it limited to browser preview
+  settle generation/state ownership and preserving document model, reducer,
+  pagination semantics, validation, render/export, persistence, FlowTable,
+  `flushSync`, and the already extracted structural/panel runtime contracts.
+
+---
+
+### Task 17 PanelDeferralRuntime Extraction
+
+Goal: Move structural panel snapshot/freeze/release scheduling ownership out of
+`EditorShell` into a dedicated pure runtime while preserving panel timing,
+`flushSync`, structural edit, pagination, document model, validation,
+renderers/export, persistence, FlowTable, and WYSIWYG island behavior.
+
+Completed:
+
+- Added `PanelDeferralRuntime` and panel deferral types as a DOM-free state
+  machine for begin, snapshot active, schedule/cancel/abort, input quiet,
+  release started/completed, urgent structural flush blocking, generation apply
+  checks, stale release counters, and live restore metrics.
+- Added focused unit coverage for normal release, superseded stale releases,
+  abort cleanup, input quiet delay, old Enter release after Backspace, and
+  urgent structural flush blocking.
+- Wired `EditorShell` to store panel deferral ids and ask the runtime for
+  snapshot activity, non-interactive release eligibility, urgent-flush blocking,
+  input quiet decisions, stale generation checks, release start, and live-doc
+  restore completion.
+- Removed Shell-owned panel urgent-paint and last-input refs; Shell still owns
+  `requestAnimationFrame`, `setTimeout`, `requestIdleCallback`, React
+  `startTransition`, and the existing timing constants.
+- Extended the smoothness probe with stable `panelDeferral*` attribution aliases
+  while preserving the existing `deferredLeftRail*` names.
+- Fixed a probe-only false negative by rechecking the `live-doc-restored` perf
+  event after the existing short grace wait when deferred panel restore arrives
+  just after the 5s observation window.
+
+Files changed:
+
+- `src/app/editor/_components/runtime/panelDeferralTypes.ts`
+- `src/app/editor/_components/runtime/panelDeferralRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task17-enter-mid-split.json`
+- `reports/task17-enter-backspace-immediate.json`
+- `reports/task17-enter-type-before-settle.json`
+- `reports/task17-enter-backspace-type-before-settle.json`
+- `reports/task17-enter-rapid.json`
+- `reports/task17-backspace-rapid.json`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts`
+- `npm.cmd run type-check`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle` with `PROBE_STRUCTURAL_TYPE_LENGTH=80`
+- Long mock `enter-backspace-type-before-settle` with
+  `PROBE_STRUCTURAL_TYPE_LENGTH=80`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- All six Task 17 smoke reports finished with `ok=true`, `safetyOk=true`, and
+  `0` console/page errors.
+- `enter-type-before-settle` recorded `80` panel input-during-deferral events,
+  `13` release schedules, and one release start/completion, confirming the
+  input quiet reschedule path stayed active.
+- `enter-backspace-immediate` and `enter-backspace-type-before-settle` recorded
+  split plus merge deferral begins while only the latest merge release completed,
+  matching the intended supersede behavior.
+
+Notes:
+
+- No structural document operations, reducer actions, pagination semantics,
+  `flushSync` sites, panel delay constants, validation, export/renderers,
+  persistence, or FlowTable behavior were intentionally changed.
+- Runtime completion remains tied to the existing panel live-doc-restored path,
+  not full browser pagination settle.
+
+---
+
+### Task 16 Structural Guard Runtime Coordination
+
+Goal: Move structural guard decision coordination and split/merge transaction
+ownership into `StructuralEditRuntime` while keeping document operations,
+reducer semantics, optimistic pagination, `flushSync`, panel timing policy,
+core pagination, document model, validation, FlowTable, export/renderers, and
+persistence unchanged.
+
+Completed:
+
+- Extended `StructuralEditRuntime` with DOM-free guard input/decision types and
+  guard/lifecycle APIs:
+  `canStartStructuralEdit`, `beginStructuralEdit`,
+  `markStructuralEditAccepted`, `markStructuralEditGuarded`,
+  `markKeyRepeatDropped`, `markNodeCommitted`, `markNodeRemoved`,
+  `markReadyForNextStructuralKey`, `isStructuralKeyAllowed`, and
+  `shouldGuardStructuralKey`.
+- Added runtime transaction bookkeeping for expected active node, committed
+  target/removed nodes, guard state, accepted key count, guarded/dropped key
+  count, composition ignored count, and last guarded reason.
+- Updated the out-of-canvas `FlowdocDraftEditorIslandRoot` structural Enter and
+  Backspace handlers to ask the runtime for guard decisions before mutating,
+  while keeping DOM event prevention and local timeout/unlock event compatibility
+  in the island.
+- Updated `EditorShell` split/merge paths to use `beginStructuralEdit` so Shell
+  reuses an island-started transaction instead of creating a second generation.
+- Marked split target commit/readiness and merge removed/active node commit
+  through the runtime after the existing `flushSync` setup succeeds.
+- Kept panel deferral generation aligned with the runtime transaction id and
+  generation from Task 15.
+- Extended the smoothness probe summary with runtime lifecycle/guard counters:
+  runtime generation/phase, guard decision/allow/drop/composition counts, stale
+  ignored count, abort/complete counts, Enter-after-split Backspace allow count,
+  repeated Enter guarded count, and repeated Backspace guarded count.
+
+Legacy refs audit:
+
+- `pendingOptimisticSplitDispatchRef`: safety fallback/dead-code candidate in
+  the current tree. It is still read by Undo rollback and
+  `flushPendingOptimisticSplitDispatch`, but no current assignment was found.
+- `pendingOptimisticMergeDispatchRef`: dead-code candidate in the current tree.
+  It is only cancelled/cleared; no current assignment was found.
+- `flushPendingOptimisticSplitDispatch`: safety fallback only. It is still
+  called before optimistic merge after split, but returns false unless the split
+  dispatch ref is populated.
+- `rollbackPendingOptimisticSplitRefocus`: safety fallback only. It protects
+  Undo against a pending split dispatch but currently depends on the unassigned
+  split dispatch ref.
+- `cancelPendingOptimisticSplitDispatch`: safety cleanup only.
+- `cancelPendingOptimisticMergeDispatch`: safety cleanup/dead-code candidate.
+- `OPTIMISTIC_STRUCTURAL_DISPATCH_DELAY_MS`: dead-code candidate; only the
+  constant definition was found.
+
+Files changed:
+
+- `src/app/editor/_components/runtime/structuralEditTypes.ts`
+- `src/app/editor/_components/runtime/structuralEditRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts`
+- `src/app/editor/_components/FlowdocDraftEditorIslandRoot.tsx`
+- `src/app/editor/_components/EditorShell.tsx`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts`
+- `npm.cmd run type-check`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+- `enter-type-before-settle`
+- `enter-backspace-type-before-settle`
+- `git diff --check -- ...`
+
+Notes:
+
+- No document operations, reducer actions, pagination semantics, `flushSync`
+  sites, WYSIWYG island rendering model, panel delay constants, validation,
+  export/renderers, persistence, or FlowTable behavior were intentionally
+  changed.
+- `ParagraphTextSurface` still routes structural split/merge through the
+  existing callbacks and relies on the Shell fallback begin path. Moving its
+  structural key decision into the runtime remains a follow-up.
+- Recommended next task: Task 17 `PanelDeferralRuntime`, extracting snapshot,
+  schedule/cancel, input quiet, stale generation, and live-doc restore
+  bookkeeping while preserving panel timing behavior.
+
+---
+
+### Task 15 StructuralEditRuntime Skeleton
+
+Goal: Extract a behavior-preserving structural edit runtime skeleton that owns
+structural transaction id, generation, phase, abort, and cleanup bookkeeping
+without moving split/merge implementation or changing pagination, document
+model, export, persistence, FlowTable, validation, panel scheduling policy, or
+`flushSync` usage.
+
+Completed:
+
+- Added `StructuralEditRuntime` as a pure TypeScript controller with
+  transaction begin, phase marker, stale identity guard, abort, complete, and
+  clear APIs.
+- Added explicit structural edit types for kind, phase, transaction identity,
+  transaction shape, and runtime events.
+- Wired `EditorShell` so optimistic split/merge create structural transaction
+  ids/generations before panel deferral and urgent paint.
+- Replaced the Shell-owned structural panel release generation ref with the
+  runtime transaction generation token.
+- Added stale generation checks to panel release scheduling/apply paths.
+- Added failure cleanup for optimistic setup failures after transaction begin:
+  abort the current structural transaction and clear matching panel deferral so
+  no stale panel freeze remains.
+- Marked urgent painted, panel release pending, complete, and clear from the
+  existing urgent paint and live-doc-restored paths.
+- Added quiet runtime instrumentation through the existing
+  `flowdoc-structural-transaction` event kind without changing the perf schema
+  or probe parser.
+
+Files changed:
+
+- `src/app/editor/_components/runtime/structuralEditTypes.ts`
+- `src/app/editor/_components/runtime/structuralEditRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts`
+- `npm.cmd run type-check`
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/structuralEditRuntime.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts src/app/editor/_components/__tests__/ParagraphTextSurface.test.ts src/app/editor/_components/__tests__/EditorCanvas.test.ts src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `PROBE_MODE=enter-mid-split` against
+  `public/mock/flowdoc-long-mock.flowdoc.json`
+- `PROBE_MODE=enter-backspace-immediate` against
+  `public/mock/flowdoc-long-mock.flowdoc.json`
+- `PROBE_MODE=enter-type-before-settle`
+- `PROBE_MODE=enter-backspace-type-before-settle`
+
+Notes:
+
+- Runtime completion is intentionally tied only to the existing panel
+  live-doc-restored path, not full browser pagination settle.
+- Split/merge document operations, reducer dispatch, optimistic pagination,
+  `flushSync`, FlowTable, renderer/export/persistence, and validation were
+  intentionally left in their current locations.
+- Recommended next task: Task 16, move structural guard coordination and
+  split/merge transaction ownership behind the runtime API while keeping the
+  document operations and reducer semantics unchanged.
+
+---
+
+### Task 14 Frontend Runtime Boundary RFC
+
+Goal: Produce a frontend runtime architecture plan for reducing
+`EditorShell` responsibility after Task 13 without moving production code,
+optimizing performance, changing editor behavior, changing core pagination,
+changing the document model, changing renderers/export/persistence, changing
+FlowTable, removing `flushSync`, or weakening validation.
+
+Completed:
+
+- Added `docs/FRONTEND_RUNTIME_ARCHITECTURE.md` as the Task 14 RFC.
+- Documented the current orchestration problem with evidence from
+  `EditorShell`, `EditorCanvas`, the WYSIWYG island/surface files,
+  `editorReducer`, `wysiwygPerformance`, the smoothness probe, and Task 13
+  reports.
+- Defined five priority lanes: urgent edit, affected preview, deferred panel,
+  background settle, and diagnostic.
+- Proposed six runtime boundaries:
+  `StructuralEditRuntime`, `WysiwygDraftRuntime`, `PreviewSettleRuntime`,
+  `CanvasViewportRuntime`, `PanelDeferralRuntime`, and
+  `EditorPerformanceRuntime`.
+- Added a current ownership inventory, structural edit transaction contract,
+  invariants, staged migration plan for Tasks 15-21, non-goals, and a
+  migration test/probe matrix.
+
+Files changed:
+
+- `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- Documentation diff review.
+- `git diff --check -- docs/FRONTEND_RUNTIME_ARCHITECTURE.md docs/WORK_LOG_RECENT.md`
+
+Notes:
+
+- This was an architecture/RFC-only task. No production code, tests, reports,
+  core pagination, document model, renderers/export, persistence, or FlowTable
+  behavior was changed.
+- Current Task 13 status remains: structural Enter/Backspace correctness passes,
+  immediate typing after Enter/Backspace passes, affected-page render isolation
+  is preserved, panel release is outside urgent structural flush, and stale
+  settle is superseded safely.
+- Runtime boundaries are needed because structural edit transaction state,
+  preview settle, panel deferral, WYSIWYG draft/session state, page-scope render
+  isolation, and performance attribution are still coupled inside
+  `EditorShell`.
+- Recommended next task: Task 15 `StructuralEditRuntime` skeleton, moving only
+  phase/generation/abort/pending transaction bookkeeping first with behavior
+  unchanged.
+
+---
+
+### Task 11A Structural FlushSync Render Attribution
+
+Goal: Attribute the structural Enter/Backspace `flushSync` render path without
+changing editor behavior, pagination, renderers, persistence, Flow Table, or
+document semantics.
+
+Completed:
+
+- Added trace-gated structural render attribution for EditorShell derived
+  values: active section lookup, preview doc resolution, data readiness, page
+  navigation, selection context, draft island config, active structural island,
+  and suppressed canvas text nodes.
+- Added EditorCanvas attribution for page key derivation, pointer fragment
+  indexing, draft visual preview, forced page keys, structural render scope,
+  PageView/PageSlot memo comparator counts/costs, and layout-effect markers.
+- Extended the smoothness probe report with
+  `flushSyncRenderBreakdown`, `flushSyncRenderSummary`,
+  `flushSyncWindowTotalMs`, split/merge window totals, and per-sample render
+  attribution summaries.
+- Increased the WYSIWYG perf event ring buffer to preserve structural
+  comparator/render attribution during long mock probes.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `PROBE_REPEAT=5`, `PROBE_WARMUP=1`, long-mock `enter-mid-split`
+- `PROBE_REPEAT=5`, `PROBE_WARMUP=1`, long-mock
+  `enter-backspace-immediate`
+
+Observed:
+
+- `reports/task11a-enter-mid-split-repeat5.json`: measured samples passed;
+  median `flushSyncMs` `522.2ms`, median `firstIslandPaintMs` `93.1ms`,
+  median `fullPaginationSettledMs` `2828.8ms`, and render scope stayed at
+  `1 / 119` pages with `0` unaffected pages rendered.
+- `reports/task11a-enter-backspace-immediate-repeat5.json`: measured samples
+  passed; median Enter `flushSyncMs` `532.0ms`, median combined
+  `flushSyncWindowTotalMs` `1101.2ms`, median split window `532.0ms`, median
+  merge window `566.4ms`, and render scope stayed at `1 / 119` pages with `0`
+  unaffected pages rendered.
+- In both probes the dominant measured flush-window bucket was React Profiler
+  `actualDuration`; shell derived work, canvas derived work, memo comparators,
+  and layout effects were small by comparison. Full pagination remained
+  deferred and did not block first island visibility.
+
+Notes:
+
+- `flushSyncMs` keeps the Task 10.5 definition as the first Enter split
+  `flushSync` duration. `flushSyncWindowTotalMs` is the Task 11A attribution
+  total and can include both split and merge windows.
+- Smallest safe Task 11B candidate: isolate or memoize the dominant React
+  Profiler component render path reported in `reactActualDurationByComponent`
+  while preserving atomic structural island/document correctness.
+
+---
+
+### Task 10.5 Structural Timing Calibration
+
+Goal: Calibrate structural Enter/Backspace performance metrics so handler,
+flush, first RAF, first island visibility, and full pagination settle timings
+use documented anchors and can be compared across repeated samples.
+
+Completed:
+
+- Added probe-only `PROBE_REPEAT` and `PROBE_WARMUP` support for repeated
+  structural benchmark runs with one shared dev server.
+- Added per-sample structural timing traces with browser-clock anchors for
+  `keydownStart`, `flushSyncStart`, `flushSyncEnd`, `keydownEnd`, `firstRaf`,
+  `islandDomVisible`, `caretVisible`, `fullPaginationStart`, and
+  `fullPaginationEnd`.
+- Documented that `firstIslandPaintMs` is measured from browser-observed
+  `keydownStart` to the draft island DOM-visible layout-effect event, not to
+  full pagination settle.
+- Kept the patch instrumentation-only: no editor behavior, pagination,
+  renderer, persistence, or Flow Table changes.
+
+Files changed:
+
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `PROBE_REPEAT=5`, `PROBE_WARMUP=1`, long-mock `enter-mid-split`
+- `PROBE_REPEAT=5`, `PROBE_WARMUP=1`, long-mock
+  `enter-backspace-immediate`
+
+Observed:
+
+- `enter-mid-split` measured samples passed with median `firstIslandPaintMs`
+  about `80.2ms`, min `63.9ms`, max `105.6ms`; median `enterHandlerMs` about
+  `485.1ms`; median full pagination settle about `2859.6ms`.
+- `enter-backspace-immediate` measured samples passed with median
+  `firstIslandPaintMs` about `95.0ms`, min `81.7ms`, max `103.6ms`; median
+  `enterHandlerMs` about `540.6ms`; full pagination settle did not apply
+  because the immediate merge superseded the split settle.
+- Both repeated probes kept PageView rendering scoped to `1 / 119` pages with
+  `0` unaffected pages rendered during the structural transition.
+
+Notes:
+
+- `enterHandlerMs` can exceed `firstIslandPaintMs` because the island
+  DOM-visible event is recorded during the synchronous keydown/`flushSync`
+  commit before Playwright's key press call returns. `firstRafMs` is the first
+  post-keydown RAF opportunity.
+
+---
 
 ### Release 0.6.26 Structural Edit Performance Baseline
 

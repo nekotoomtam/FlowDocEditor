@@ -1,6 +1,6 @@
 "use client"
 
-import { Profiler, useReducer, useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
+import { Profiler, memo, startTransition, useReducer, useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type PointerEvent, type ProfilerOnRenderCallback, type ReactNode } from "react"
 import { flushSync } from "react-dom"
 import { DocumentPrepareOverlay } from "@/app/_components/DocumentPrepareOverlay"
 import { collectPaginatedLayoutWarnings, LAYOUT_WARNINGS_BLOCKED_CODE, paginateDocument, resolveHeaderFooterHorizontalBox } from "@/pagination"
@@ -102,6 +102,7 @@ import {
   recordWysiwygPerfEvent,
   startWysiwygPerfSpan,
   summarizePaginatedForWysiwygPerf,
+  type WysiwygPerfEvent,
 } from "./wysiwygPerformance"
 import {
   buildWysiwygTextDraftPreviewDocument,
@@ -122,6 +123,7 @@ import {
   describeWysiwygTextSessionAccessibility,
   useWysiwygTextSession,
   type WysiwygTextInputKey,
+  type WysiwygTextSelection,
   WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
 import {
@@ -151,11 +153,7 @@ import {
 } from "./editorPageFollow"
 import {
   resolveWysiwygDraftPaginationSource,
-  resolveWysiwygDraftPaginationDelayMs,
-  resolveWysiwygLatestOnlyDraftPaginationDelayMs,
-  shouldScheduleResponsiveContainerDraftPagination,
   shouldPatchPlainParagraphBoundaryHeightPreview,
-  shouldUseWysiwygDraftPaginationFrame,
   type WysiwygDraftPaginationLatestSnapshot,
   type WysiwygTextReflowDecision,
 } from "./wysiwygReflow"
@@ -195,6 +193,110 @@ import {
   type DocumentPrepareHandoff,
   type DocumentPrepareStepId,
 } from "./documentLibrary"
+import {
+  createStructuralEditRuntime,
+  type StructuralEditRuntime,
+  type StructuralEditTransactionIdentity,
+} from "./runtime/structuralEditRuntime"
+import {
+  createPanelDeferralRuntime,
+  type PanelDeferralRuntime,
+} from "./runtime/panelDeferralRuntime"
+import {
+  createPreviewSettleRuntime,
+  type PreviewSettleRuntime,
+} from "./runtime/previewSettleRuntime"
+import {
+  createWysiwygDraftRuntime,
+  type WysiwygDraftRuntime,
+  type WysiwygDraftSession,
+  type WysiwygDraftSessionIdentity,
+  type WysiwygDraftSessionSource,
+} from "./runtime/wysiwygDraftRuntime"
+import {
+  abortTrackedWysiwygDraftRuntimeSessionForStructuralTransactionBridge,
+  beginTrackedWysiwygDraftRuntimeSessionBridge,
+  cancelCurrentTrackedWysiwygDraftRuntimeSessionBridge,
+  createWysiwygDraftRuntimeSessionIdentity,
+  getCurrentTrackedWysiwygDraftRuntimeSessionBridge,
+  markCurrentTrackedWysiwygDraftRuntimeCompositionBridge,
+  markTrackedWysiwygDraftRuntimeSessionCommittedBridge,
+  markTrackedWysiwygDraftRuntimeSessionCommittingBridge,
+  updateCurrentTrackedWysiwygDraftRuntimeMetadataBridge,
+} from "./wysiwygDraftRuntimeBridge"
+import { createStructuralDraftSessionPlan } from "./structuralEdit/structuralEditPlans"
+import {
+  abortStructuralPanelDeferralBridge,
+  beginStructuralPanelDeferralBridge,
+  cancelScheduledStructuralPanelReleaseBridge,
+  canApplyStructuralPanelReleaseBridge,
+  createScheduledStructuralPanelRelease,
+  createStructuralPanelReleaseApplying,
+  isStructuralPanelReleaseBlockedByUrgentFlushBridge,
+  markStructuralPanelInputDuringDeferralBridge,
+  markStructuralPanelReleaseCompletedBridge,
+  markStructuralPanelReleaseStartedBridge,
+  markStructuralPanelUrgentFlushCompleteBridge,
+  matchesApplyingStructuralPanelReleaseTransaction,
+  matchesScheduledStructuralPanelReleaseTransaction,
+  matchesStructuralPanelReleaseTransaction,
+  scheduleStructuralPanelReleaseBridge,
+  shouldDelayStructuralPanelReleaseForInputBridge,
+  type DeferredStructuralPanelRelease,
+  type ScheduledStructuralPanelRelease,
+  type StructuralPanelReleaseApplying,
+} from "./structuralEdit/panelDeferralBridge"
+import {
+  getCurrentPreviewSettleGenerationBridge,
+  getCurrentPreviewSettleRequestBridge,
+  getPreviewSettleApplyDecisionBridge,
+  invalidatePreviewSettleBridge,
+  markPreviewSettleAppliedBridge,
+  markPreviewSettleCancelledBridge,
+  markPreviewSettleCompletedBridge,
+  markPreviewSettleIgnoredBridge,
+  markPreviewSettleStartedBridge,
+  markPreviewSettleSupersededBridge,
+  matchesPreviewSettleStructuralTransaction,
+  createBrowserPreviewSettleApplyPlan,
+  createDraftPreviewPaginationApplyPlan,
+  createDraftPreviewPaginationSchedulePlan,
+  resolveActivePreviewSettleStructuralTransaction,
+  resolveDraftPreviewPaginationClearedGeneration,
+  resolveDraftPreviewPaginationDelayMsBridge,
+  resolveDraftPreviewPaginationResponsiveNodeId,
+  resolvePreviewSettleDebounceMs,
+  resolvePreviewSettleGraceRemainingMs,
+  schedulePreviewSettleBridge,
+  shouldRunDraftPreviewPagination,
+  shouldSupersedePreviewSettleOnCleanup,
+  type DraftPreviewPaginationRequest,
+  type StructuralPreviewSettleSnapshot,
+} from "./structuralEdit/previewSettleBridge"
+import {
+  applyDraftPreviewShellMutation,
+  applyPaginatedOutputBrowserPreviewShellMutation,
+  applyPartialWorkerBrowserPreviewShellMutation,
+  applyPrecomputedBrowserPreviewShellMutation,
+  applyVisualOnlyBrowserPreviewShellMutation,
+  createBrowserPreviewShellMutationPlan,
+  createDraftPreviewShellMutationPlan,
+  summarizePreviewSettleShellMutationPlan,
+  type BrowserPreviewShellMutationPlan,
+  type DraftPreviewShellMutationPlan,
+} from "./structuralEdit/previewSettleShellAdapter"
+import {
+  canStartParagraphTextSurfaceFallbackStructuralEditBridge,
+  type ParagraphTextSurfaceStructuralEditGuardInput,
+} from "./structuralEdit/paragraphTextSurfaceFallbackBridge"
+import {
+  resolveStructuralParagraphEligibility,
+  resolveStructuralResultParagraph,
+  resolveStructuralSourceDocument,
+  summarizeStructuralOptimisticPaginatedForPerf,
+} from "./structuralEdit/structuralEditPreparationPlans"
+import type { StructuralPanelDeferralPlan } from "./structuralEdit/structuralEditBridgeTypes"
+import { useStructuralEditController } from "./structuralEdit/useStructuralEditController"
 
 export type { DragState } from "./editorReducer"
 
@@ -252,29 +354,6 @@ interface PendingOptimisticMergeRefocus {
   prestarted: boolean
 }
 
-interface PendingOptimisticSplitDispatch {
-  newNodeId: string
-  frameId: number | null
-  timeoutId: number | null
-  dispatch: () => void
-  rollback?: {
-    sourceDoc: DocumentNode
-    sourcePaginated: PaginatedDocument
-    sourceNodeId: string
-    sourceParagraph: ParagraphNode
-    sourceText: string
-    sourceFragment: PageFragment
-    pageKey: string
-    splitIndex: number
-  }
-}
-
-interface PendingOptimisticMergeDispatch {
-  currentNodeId: string
-  timeoutId: number | null
-  dispatch: () => void
-}
-
 interface OptimisticStructuralRefocusPaint {
   nodeId: string
   startedAt: number
@@ -291,13 +370,11 @@ interface OptimisticStructuralIslandOverride {
   settleRemovedNodeId?: string
 }
 
-type WysiwygFinalizeMode = "settled-preview" | "responsive-preview"
+const STRUCTURAL_PANEL_RELEASE_MIN_DELAY_MS = 180
+const STRUCTURAL_PANEL_RELEASE_IDLE_TIMEOUT_MS = 1000
+const STRUCTURAL_PANEL_RELEASE_INPUT_QUIET_MS = 140
 
-interface WysiwygDraftPaginationRequest {
-  nodeId: string
-  requestedDelayMs: number
-  firstRequestedAtMs: number
-}
+type WysiwygFinalizeMode = "settled-preview" | "responsive-preview"
 
 interface PendingDragMove {
   clientX: number
@@ -430,7 +507,6 @@ const MAX_SCALE = 4
 const ZOOM_STEP = 0.25
 const OUTLINE_SELECTION_IDLE_TIMEOUT_MS = 1500
 const INLINE_EDIT_PREVIEW_DEBOUNCE_MS = 0
-const OPTIMISTIC_STRUCTURAL_DISPATCH_DELAY_MS = 0
 const OPTIMISTIC_STRUCTURAL_PREVIEW_SETTLE_DEBOUNCE_MS = 1500
 const BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES = 4
 // Keep hard reflow from settling between real key-repeat events; the local
@@ -832,39 +908,6 @@ function getParagraphFromDoc(doc: DocumentNode, nodeId: string) {
   return getEditableParagraphFromDocument(doc, nodeId)
 }
 
-function resolveStructuralSourceDoc(input: {
-  doc: DocumentNode
-  nodeId: string
-  text?: string
-}): {
-  doc: DocumentNode
-  textSupplied: boolean
-  textChanged: boolean
-  textResolved: boolean
-  currentTextResolveMs: number
-  replaceDraftTextMs: number
-} {
-  if (input.text === undefined) {
-    return { doc: input.doc, textSupplied: false, textChanged: false, textResolved: false, currentTextResolveMs: 0, replaceDraftTextMs: 0 }
-  }
-  const currentTextStartedAt = startWysiwygPerfSpan()
-  const currentText = getParagraphTextFromDoc(input.doc, input.nodeId)
-  const currentTextResolveMs = Math.max(0, startWysiwygPerfSpan() - currentTextStartedAt)
-  if (currentText === input.text) {
-    return { doc: input.doc, textSupplied: true, textChanged: false, textResolved: currentText !== null, currentTextResolveMs, replaceDraftTextMs: 0 }
-  }
-  const replaceStartedAt = startWysiwygPerfSpan()
-  const doc = replaceEditableParagraphTextInDocument(input.doc, input.nodeId, input.text)
-  return {
-    doc,
-    textSupplied: true,
-    textChanged: true,
-    textResolved: currentText !== null,
-    currentTextResolveMs,
-    replaceDraftTextMs: Math.max(0, startWysiwygPerfSpan() - replaceStartedAt),
-  }
-}
-
 function getLayoutChildIdsFromNode(node: unknown): string[] | null {
   if (!node || typeof node !== "object" || !("childIds" in node)) return null
   const childIds = (node as { childIds?: unknown }).childIds
@@ -1113,6 +1156,16 @@ function EditorSubtreePerfProfiler({
   )
 }
 
+const StructuralPaintDeferredSubtree = memo(function StructuralPaintDeferredSubtree({
+  children,
+}: {
+  defer: boolean
+  children: ReactNode
+}) {
+  // Keep non-critical rails on their previous tree while the structural island gets its first paint.
+  return <>{children}</>
+}, (_previousProps, nextProps) => nextProps.defer)
+
 function createBrowserPaginationWorker(): Worker | null {
   if (typeof Worker === "undefined") return null
   const startedAt = startWysiwygPerfSpan()
@@ -1237,6 +1290,477 @@ export default function EditorShell() {
   const isTemplateMode = mode === "template"
   const [optimisticStructuralRefocusPaint, setOptimisticStructuralRefocusPaint] = useState<OptimisticStructuralRefocusPaint | null>(null)
   const [optimisticStructuralIslandOverride, setOptimisticStructuralIslandOverride] = useState<OptimisticStructuralIslandOverride | null>(null)
+  const structuralEditRuntimeRef = useRef<StructuralEditRuntime | null>(null)
+  if (structuralEditRuntimeRef.current === null) {
+    structuralEditRuntimeRef.current = createStructuralEditRuntime({
+      now: startWysiwygPerfSpan,
+      onEvent: (event) => {
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-structural-transaction",
+          startedAt: event.startedAt,
+          durationMs: 0,
+          nodeId: event.targetNodeId ?? event.sourceNodeId,
+          previousNodeId: event.removedNodeId ?? null,
+          sourceNodeId: event.sourceNodeId,
+          expectedActiveNodeId: event.expectedActiveNodeId,
+          removedNodeId: event.removedNodeId,
+          source: event.source ?? "structural-edit-runtime",
+          action: event.phase ? `runtime-${event.phase}` : `runtime-${event.action}`,
+          operation: event.kind,
+          token: event.generation,
+          key: event.key,
+          active: event.action !== "stale-ignored" && event.action !== "cleared",
+        })
+      },
+    })
+  }
+  const structuralEditRuntime = structuralEditRuntimeRef.current
+  const structuralEditController = useStructuralEditController({
+    structuralRuntime: structuralEditRuntime,
+  })
+  const panelDeferralRuntimeRef = useRef<PanelDeferralRuntime | null>(null)
+  if (panelDeferralRuntimeRef.current === null) {
+    panelDeferralRuntimeRef.current = createPanelDeferralRuntime({
+      now: startWysiwygPerfSpan,
+    })
+  }
+  const panelDeferralRuntime = panelDeferralRuntimeRef.current
+  const previewSettleRuntimeRef = useRef<PreviewSettleRuntime | null>(null)
+  if (previewSettleRuntimeRef.current === null) {
+    previewSettleRuntimeRef.current = createPreviewSettleRuntime({
+      now: startWysiwygPerfSpan,
+      onEvent: (event) => {
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-preview-settle-runtime",
+          startedAt: event.startedAt,
+          durationMs: Math.max(0, event.durationMs ?? 0),
+          nodeId: event.activeInlineNodeId ?? undefined,
+          source: event.reason,
+          action: `runtime-${event.action}`,
+          operation: event.kind,
+          token: event.generation,
+          draftVersion: event.draftVersion,
+          active: event.action !== "ignored-stale" && event.action !== "superseded" && event.action !== "cancelled" && event.action !== "failed",
+          previewSettlePhase: event.phase,
+          previewSettleApplyDecision: event.applyDecision,
+          previewSettleLatestAppliedGeneration: event.latestAppliedGeneration,
+        })
+      },
+    })
+  }
+  const previewSettleRuntime = previewSettleRuntimeRef.current
+  const wysiwygDraftRuntimeRef = useRef<WysiwygDraftRuntime | null>(null)
+  if (wysiwygDraftRuntimeRef.current === null) {
+    wysiwygDraftRuntimeRef.current = createWysiwygDraftRuntime({
+      now: startWysiwygPerfSpan,
+      onEvent: (event) => {
+        const metrics = wysiwygDraftRuntimeRef.current?.getMetricsSnapshot()
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-wysiwyg-draft-runtime",
+          startedAt: event.startedAt,
+          durationMs: 0,
+          nodeId: event.nodeId ?? metrics?.wysiwygDraftCurrentNodeId ?? undefined,
+          source: event.source ?? metrics?.wysiwygDraftSource ?? "wysiwyg-draft-runtime",
+          action: `runtime-${event.action}`,
+          token: event.generation,
+          draftVersion: event.textVersion,
+          textLength: event.draftTextLength,
+          active: metrics?.wysiwygDraftCurrentNodeId != null,
+          wysiwygDraftSessionBeginCount: metrics?.wysiwygDraftSessionBeginCount,
+          wysiwygDraftSessionActiveCount: metrics?.wysiwygDraftSessionActiveCount,
+          wysiwygDraftSessionCommitCount: metrics?.wysiwygDraftSessionCommitCount,
+          wysiwygDraftSessionCancelCount: metrics?.wysiwygDraftSessionCancelCount,
+          wysiwygDraftSessionAbortCount: metrics?.wysiwygDraftSessionAbortCount,
+          wysiwygDraftCompositionStartCount: metrics?.wysiwygDraftCompositionStartCount,
+          wysiwygDraftCompositionEndCount: metrics?.wysiwygDraftCompositionEndCount,
+          wysiwygDraftStaleSessionIgnoredCount: metrics?.wysiwygDraftStaleSessionIgnoredCount,
+          wysiwygDraftCurrentGeneration: metrics?.wysiwygDraftCurrentGeneration,
+          wysiwygDraftCurrentPhase: metrics?.wysiwygDraftCurrentPhase,
+          wysiwygDraftCurrentNodeId: metrics?.wysiwygDraftCurrentNodeId,
+          wysiwygDraftSource: metrics?.wysiwygDraftSource,
+        })
+      },
+    })
+  }
+  const wysiwygDraftRuntime = wysiwygDraftRuntimeRef.current
+  const wysiwygDraftSessionIdentityRef = useRef<WysiwygDraftSessionIdentity | null>(null)
+  const getCurrentWysiwygDraftRuntimeSession = useCallback((nodeId?: string | null): WysiwygDraftSession | null => {
+    return getCurrentTrackedWysiwygDraftRuntimeSessionBridge(
+      wysiwygDraftRuntime,
+      wysiwygDraftSessionIdentityRef,
+      nodeId,
+    )
+  }, [wysiwygDraftRuntime])
+  const abortWysiwygDraftRuntimeSessionForStructuralTransaction = useCallback((
+    identity: StructuralEditTransactionIdentity,
+    reason: string,
+  ) => {
+    abortTrackedWysiwygDraftRuntimeSessionForStructuralTransactionBridge(
+      wysiwygDraftRuntime,
+      wysiwygDraftSessionIdentityRef,
+      identity,
+      reason,
+      startWysiwygPerfSpan(),
+    )
+  }, [wysiwygDraftRuntime])
+  const [deferredStructuralPanelRelease, setDeferredStructuralPanelRelease] = useState<DeferredStructuralPanelRelease | null>(null)
+  const deferredStructuralPanelReleaseRef = useRef<DeferredStructuralPanelRelease | null>(null)
+  const scheduledStructuralPanelReleaseRef = useRef<ScheduledStructuralPanelRelease | null>(null)
+  const structuralPanelReleaseApplyingRef = useRef<StructuralPanelReleaseApplying | null>(null)
+  useLayoutEffect(() => {
+    deferredStructuralPanelReleaseRef.current = deferredStructuralPanelRelease
+  }, [deferredStructuralPanelRelease])
+  const structuralShellRenderAttributionActive = isWysiwygPerfTraceRuntimeEnabled(WYSIWYG_PERF_TRACE_ENABLED) && Boolean(
+    optimisticStructuralIslandOverride || optimisticStructuralRefocusPaint,
+  )
+  const recordStructuralPanelReleaseEvent = useCallback((
+    action: string,
+    metadata: {
+      generation?: number
+      operation?: DeferredStructuralPanelRelease["operation"]
+      nodeId?: string | null
+      source?: string
+      startedAt?: number
+      durationMs?: number
+      active?: boolean
+    } = {},
+  ) => {
+    const startedAt = metadata.startedAt ?? startWysiwygPerfSpan()
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-panel-release",
+      startedAt,
+      durationMs: Math.max(0, metadata.durationMs ?? 0),
+      nodeId: metadata.nodeId ?? undefined,
+      source: metadata.source,
+      action,
+      operation: metadata.operation,
+      token: metadata.generation,
+      active: metadata.active,
+    })
+  }, [])
+  const cancelScheduledStructuralPanelRelease = useCallback((reason: string) => {
+    const scheduled = scheduledStructuralPanelReleaseRef.current
+    if (!scheduled) return false
+    if (scheduled.frameId !== null && typeof window !== "undefined") {
+      window.cancelAnimationFrame(scheduled.frameId)
+    }
+    if (scheduled.timeoutId !== null) {
+      window.clearTimeout(scheduled.timeoutId)
+    }
+    if (scheduled.idleId !== null && typeof window !== "undefined") {
+      const idleWindow = window as Window & { cancelIdleCallback?: (handle: number) => void }
+      idleWindow.cancelIdleCallback?.(scheduled.idleId)
+    }
+    scheduledStructuralPanelReleaseRef.current = null
+    cancelScheduledStructuralPanelReleaseBridge(panelDeferralRuntime, scheduled, reason)
+    recordStructuralPanelReleaseEvent("release-cancelled", {
+      generation: scheduled.generation,
+      source: reason,
+      startedAt: scheduled.scheduledAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - scheduled.scheduledAt),
+      active: false,
+    })
+    return true
+  }, [panelDeferralRuntime, recordStructuralPanelReleaseEvent])
+  const beginStructuralPanelReleaseDeferral = useCallback((plan: StructuralPanelDeferralPlan) => {
+    if (scheduledStructuralPanelReleaseRef.current) {
+      cancelScheduledStructuralPanelRelease(`${plan.reason}:superseded-by-new-structural-transition`)
+    }
+    const next = beginStructuralPanelDeferralBridge(panelDeferralRuntime, plan)
+    deferredStructuralPanelReleaseRef.current = next
+    setDeferredStructuralPanelRelease(next)
+    recordStructuralPanelReleaseEvent("defer-start", {
+      generation: next.generation,
+      operation: next.operation,
+      nodeId: next.nodeId,
+      source: next.reason,
+      startedAt: next.startedAt,
+      active: true,
+    })
+    return next.generation
+  }, [cancelScheduledStructuralPanelRelease, panelDeferralRuntime, recordStructuralPanelReleaseEvent])
+  const scheduleDeferredStructuralPanelRelease = useCallback((generation: number, reason: string) => {
+    const current = deferredStructuralPanelReleaseRef.current
+    if (!current || current.generation !== generation || !current.pending) {
+      recordStructuralPanelReleaseEvent("release-superseded", {
+        generation,
+        source: reason,
+        active: false,
+      })
+      return
+    }
+    if (!structuralEditRuntime.isCurrentGeneration(generation) || !panelDeferralRuntime.isCurrentGeneration(generation)) {
+      canApplyStructuralPanelReleaseBridge(panelDeferralRuntime, current)
+      recordStructuralPanelReleaseEvent("release-superseded", {
+        generation,
+        source: `${reason}:stale-structural-generation`,
+        active: false,
+      })
+      return
+    }
+    if (scheduledStructuralPanelReleaseRef.current) {
+      cancelScheduledStructuralPanelRelease(`${reason}:reschedule`)
+    }
+    const scheduledAt = startWysiwygPerfSpan()
+    const scheduled = createScheduledStructuralPanelRelease(current, {
+      reason,
+      scheduledAt,
+    })
+    if (!scheduleStructuralPanelReleaseBridge(panelDeferralRuntime, current, scheduledAt)) {
+      recordStructuralPanelReleaseEvent("release-superseded", {
+        generation,
+        operation: current.operation,
+        nodeId: current.nodeId,
+        source: `${reason}:stale-panel-deferral`,
+        startedAt: scheduledAt,
+        active: false,
+      })
+      return
+    }
+    const applyRelease = () => {
+      scheduledStructuralPanelReleaseRef.current = null
+      const latest = deferredStructuralPanelReleaseRef.current
+      if (!latest || latest.generation !== generation || !latest.pending) {
+        recordStructuralPanelReleaseEvent("release-superseded", {
+          generation,
+          source: reason,
+          startedAt: scheduledAt,
+          durationMs: Math.max(0, startWysiwygPerfSpan() - scheduledAt),
+          active: false,
+        })
+        return
+      }
+      if (!structuralEditRuntime.isCurrentGeneration(generation) || !panelDeferralRuntime.isCurrentGeneration(generation)) {
+        canApplyStructuralPanelReleaseBridge(panelDeferralRuntime, latest)
+        recordStructuralPanelReleaseEvent("release-superseded", {
+          generation,
+          operation: latest.operation,
+          nodeId: latest.nodeId,
+          source: `${reason}:stale-structural-generation`,
+          startedAt: scheduledAt,
+          durationMs: Math.max(0, startWysiwygPerfSpan() - scheduledAt),
+          active: false,
+        })
+        return
+      }
+      if (isStructuralPanelReleaseBlockedByUrgentFlushBridge(panelDeferralRuntime, latest)) {
+        recordStructuralPanelReleaseEvent("release-delayed-urgent-paint", {
+          generation,
+          operation: latest.operation,
+          nodeId: latest.nodeId,
+          source: reason,
+          startedAt: scheduledAt,
+          durationMs: Math.max(0, startWysiwygPerfSpan() - scheduledAt),
+          active: true,
+        })
+        scheduleDeferredStructuralPanelRelease(generation, `${reason}:urgent-paint-still-active`)
+        return
+      }
+      const now = startWysiwygPerfSpan()
+      const inputQuietDecision = shouldDelayStructuralPanelReleaseForInputBridge(
+        panelDeferralRuntime,
+        latest,
+        STRUCTURAL_PANEL_RELEASE_INPUT_QUIET_MS,
+        now,
+      )
+      if (inputQuietDecision.shouldDelay && inputQuietDecision.lastInputAt !== null) {
+        recordStructuralPanelReleaseEvent("release-delayed-input", {
+          generation,
+          operation: latest.operation,
+          nodeId: latest.nodeId,
+          source: reason,
+          startedAt: inputQuietDecision.lastInputAt,
+          durationMs: Math.max(0, inputQuietDecision.elapsedMs ?? 0),
+          active: true,
+        })
+        scheduleDeferredStructuralPanelRelease(generation, `${reason}:input-quiet-window`)
+        return
+      }
+      if (!canApplyStructuralPanelReleaseBridge(panelDeferralRuntime, latest)) {
+        recordStructuralPanelReleaseEvent("release-superseded", {
+          generation,
+          operation: latest.operation,
+          nodeId: latest.nodeId,
+          source: `${reason}:stale-panel-deferral`,
+          startedAt: scheduledAt,
+          durationMs: Math.max(0, startWysiwygPerfSpan() - scheduledAt),
+          active: false,
+        })
+        return
+      }
+      const applyStartedAt = startWysiwygPerfSpan()
+      markStructuralPanelReleaseStartedBridge(panelDeferralRuntime, latest, applyStartedAt)
+      structuralPanelReleaseApplyingRef.current = createStructuralPanelReleaseApplying(latest, {
+        scheduledAt,
+        applyStartedAt,
+      })
+      recordStructuralPanelReleaseEvent("release-apply-start", {
+        generation,
+        operation: latest.operation,
+        nodeId: latest.nodeId,
+        source: reason,
+        startedAt: scheduledAt,
+        durationMs: Math.max(0, applyStartedAt - scheduledAt),
+        active: true,
+      })
+      startTransition(() => {
+        setDeferredStructuralPanelRelease((active) => (
+          active?.generation === generation ? null : active
+        ))
+      })
+      recordStructuralPanelReleaseEvent("release-state-update-scheduled", {
+        generation,
+        operation: latest.operation,
+        nodeId: latest.nodeId,
+        source: reason,
+        startedAt: applyStartedAt,
+        active: true,
+      })
+    }
+    if (typeof window !== "undefined") {
+      scheduled.frameId = window.requestAnimationFrame(() => {
+        scheduled.timeoutId = window.setTimeout(() => {
+          scheduled.timeoutId = null
+          const idleWindow = window as Window & {
+            requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+          }
+          if (typeof idleWindow.requestIdleCallback === "function") {
+            scheduled.idleId = idleWindow.requestIdleCallback(applyRelease, {
+              timeout: STRUCTURAL_PANEL_RELEASE_IDLE_TIMEOUT_MS,
+            })
+            return
+          }
+          scheduled.timeoutId = window.setTimeout(applyRelease, 0)
+        }, STRUCTURAL_PANEL_RELEASE_MIN_DELAY_MS)
+      })
+    } else {
+      scheduled.timeoutId = setTimeout(applyRelease, 0)
+    }
+    scheduledStructuralPanelReleaseRef.current = scheduled
+    recordStructuralPanelReleaseEvent("release-scheduled", {
+      generation,
+      operation: current.operation,
+      nodeId: current.nodeId,
+      source: reason,
+      startedAt: scheduledAt,
+      active: true,
+    })
+  }, [cancelScheduledStructuralPanelRelease, panelDeferralRuntime, recordStructuralPanelReleaseEvent, structuralEditRuntime])
+  const abortStructuralEditTransactionAndPanelDeferral = useCallback((
+    identity: StructuralEditTransactionIdentity,
+    reason: string,
+  ) => {
+    structuralEditRuntime.abortTransaction(identity, reason)
+    abortWysiwygDraftRuntimeSessionForStructuralTransaction(identity, reason)
+    const previewSettleRequest = getCurrentPreviewSettleRequestBridge(previewSettleRuntime)
+    if (matchesPreviewSettleStructuralTransaction(previewSettleRequest, identity)) {
+      markPreviewSettleCancelledBridge(previewSettleRuntime, previewSettleRequest, `${reason}:abort-structural-transaction`)
+    }
+    const release = deferredStructuralPanelReleaseRef.current
+    if (!matchesStructuralPanelReleaseTransaction(release, identity)) {
+      return
+    }
+    const scheduled = scheduledStructuralPanelReleaseRef.current
+    if (matchesScheduledStructuralPanelReleaseTransaction(scheduled, identity)) {
+      cancelScheduledStructuralPanelRelease(`${reason}:abort-structural-transaction`)
+    }
+    deferredStructuralPanelReleaseRef.current = null
+    abortStructuralPanelDeferralBridge(panelDeferralRuntime, release, reason)
+    if (matchesApplyingStructuralPanelReleaseTransaction(structuralPanelReleaseApplyingRef.current, release)) {
+      structuralPanelReleaseApplyingRef.current = null
+    }
+    setDeferredStructuralPanelRelease((active) => (
+      active?.transactionId === identity.id && active.generation === identity.generation
+        ? null
+        : active
+    ))
+    recordStructuralPanelReleaseEvent("defer-aborted", {
+      generation: identity.generation,
+      operation: release.operation,
+      nodeId: release.nodeId,
+      source: reason,
+      startedAt: release.startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - release.startedAt),
+      active: false,
+    })
+  }, [abortWysiwygDraftRuntimeSessionForStructuralTransaction, cancelScheduledStructuralPanelRelease, panelDeferralRuntime, previewSettleRuntime, recordStructuralPanelReleaseEvent, structuralEditRuntime])
+  useEffect(() => () => {
+    cancelScheduledStructuralPanelRelease("unmount")
+  }, [cancelScheduledStructuralPanelRelease])
+  useEffect(() => {
+    if (deferredStructuralPanelRelease?.pending !== true || typeof window === "undefined") return
+    const markInputDuringPanelDeferral = () => {
+      const startedAt = startWysiwygPerfSpan()
+      const active = deferredStructuralPanelReleaseRef.current
+      if (active) {
+        markStructuralPanelInputDuringDeferralBridge(panelDeferralRuntime, active, startedAt)
+      }
+      recordStructuralPanelReleaseEvent("input-during-defer", {
+        generation: active?.generation,
+        operation: active?.operation,
+        nodeId: active?.nodeId,
+        source: "window-input-capture",
+        startedAt,
+        active: true,
+      })
+    }
+    window.addEventListener("keydown", markInputDuringPanelDeferral, true)
+    window.addEventListener("beforeinput", markInputDuringPanelDeferral, true)
+    return () => {
+      window.removeEventListener("keydown", markInputDuringPanelDeferral, true)
+      window.removeEventListener("beforeinput", markInputDuringPanelDeferral, true)
+    }
+  }, [deferredStructuralPanelRelease?.pending, panelDeferralRuntime, recordStructuralPanelReleaseEvent])
+  const pushStructuralShellRenderAttributionEvent = (
+    action: string,
+    startedAt: number,
+    metadata: Partial<Omit<WysiwygPerfEvent, "kind" | "startedAt" | "durationMs" | "action">> = {},
+  ): void => {
+    if (!structuralShellRenderAttributionActive) return
+    const activeIsland = optimisticStructuralIslandOverride
+    const endedAt = startWysiwygPerfSpan()
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-render-attribution",
+      startedAt,
+      durationMs: Math.max(0, endedAt - startedAt),
+      nodeId: activeIsland?.nodeId ?? optimisticStructuralRefocusPaint?.nodeId,
+      pageIndex: activeIsland?.fragment.pageIndex ?? null,
+      componentName: "EditorShell",
+      source: "EditorShell",
+      action,
+      optimisticMode: activeIsland?.mode,
+      active: true,
+      derivedValueCount: 1,
+      ...metadata,
+    })
+  }
+  const captureStructuralShellRenderValue = <T,>(
+    action: string,
+    compute: () => T,
+    metadata: (value: T) => Partial<Omit<WysiwygPerfEvent, "kind" | "startedAt" | "durationMs" | "action">> = () => ({}),
+  ): T => {
+    if (!structuralShellRenderAttributionActive) return compute()
+    const startedAt = startWysiwygPerfSpan()
+    const value = compute()
+    pushStructuralShellRenderAttributionEvent(action, startedAt, metadata(value))
+    return value
+  }
+  useLayoutEffect(() => {
+    if (!structuralShellRenderAttributionActive) return
+    const startedAt = startWysiwygPerfSpan()
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-structural-render-attribution",
+      startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
+      nodeId: optimisticStructuralIslandOverride?.nodeId ?? optimisticStructuralRefocusPaint?.nodeId,
+      pageIndex: optimisticStructuralIslandOverride?.fragment.pageIndex ?? null,
+      componentName: "EditorShell",
+      source: "EditorShell",
+      action: "shell-layout-effect",
+      optimisticMode: optimisticStructuralIslandOverride?.mode,
+      active: true,
+    })
+  })
   const selectedParagraphListContext = useMemo(() => (
     resolveParagraphListContext(state.doc, state.selectedNodeId)
   ), [state.doc, state.selectedNodeId])
@@ -1248,7 +1772,11 @@ export default function EditorShell() {
     activeListGroupId: activeOutlineListGroupId,
   }))
   const activeSectionIndex = useMemo(() => (
-    findSectionIndexForNode(state.doc, state.selectedNodeId)
+    captureStructuralShellRenderValue(
+      "shell-derived:active-section-index",
+      () => findSectionIndexForNode(state.doc, state.selectedNodeId),
+      () => ({ renderReason: "findSectionIndexForNode" }),
+    )
   ), [state.doc, state.selectedNodeId])
   useEffect(() => {
     if (optimisticStructuralIslandOverride) return
@@ -1302,10 +1830,17 @@ export default function EditorShell() {
   ), [dataSnapshot, isTemplateMode, packageFieldRegistry])
   const previewDoc = useMemo(() => {
     const startedAt = startWysiwygPerfSpan()
-    const nextPreviewDoc = resolvePreviewDoc(state.doc)
+    const nextPreviewDoc = captureStructuralShellRenderValue(
+      "shell-derived:resolve-preview-doc",
+      () => resolvePreviewDoc(state.doc),
+      () => ({ renderReason: "resolvePreviewDoc" }),
+    )
     finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:preview-doc-create", startedAt, {
       mode,
       documentId: nextPreviewDoc.document.id,
+    })
+    pushStructuralShellRenderAttributionEvent("shell-derived:preview-doc", startedAt, {
+      renderReason: "previewDoc",
     })
     return nextPreviewDoc
   }, [mode, resolvePreviewDoc, state.doc])
@@ -1320,11 +1855,20 @@ export default function EditorShell() {
     // The first mount marker intentionally captures only the initial shell commit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  const dataReadiness = useMemo(() => assessDocumentDataReadiness({
-    doc: state.doc,
-    registry: packageFieldRegistry,
-    snapshot: dataSnapshot,
-  }), [dataSnapshot, packageFieldRegistry, state.doc])
+  const dataReadiness = useMemo(() => (
+    captureStructuralShellRenderValue(
+      "shell-derived:data-readiness",
+      () => assessDocumentDataReadiness({
+        doc: state.doc,
+        registry: packageFieldRegistry,
+        snapshot: dataSnapshot,
+      }),
+      (readiness) => ({
+        renderReason: "assessDocumentDataReadiness",
+        fragmentCount: readiness.issues.length,
+      }),
+    )
+  ), [dataSnapshot, packageFieldRegistry, state.doc])
   const paginatePreviewDoc = useCallback((doc: DocumentNode) => (
     paginateDocument(resolvePreviewDoc(doc), editorTextMeasurer)
   ), [editorTextMeasurer, resolvePreviewDoc])
@@ -1334,10 +1878,7 @@ export default function EditorShell() {
   const pageOverlayRefs = useRef<Map<string, HTMLElement>>(new Map())
   const pendingOptimisticSplitRefocusRef = useRef<PendingOptimisticSplitRefocus | null>(null)
   const pendingOptimisticMergeRefocusRef = useRef<PendingOptimisticMergeRefocus | null>(null)
-  const pendingOptimisticSplitDispatchRef = useRef<PendingOptimisticSplitDispatch | null>(null)
-  const pendingOptimisticMergeDispatchRef = useRef<PendingOptimisticMergeDispatch | null>(null)
-  const rollbackPendingOptimisticSplitRefocusHandlerRef = useRef<((expectedNewNodeId: string) => boolean) | null>(null)
-  const optimisticStructuralSettleRef = useRef<PendingOptimisticSplitRefocus & { newNodeId: string } | null>(null)
+  const optimisticStructuralSettleRef = useRef<(PendingOptimisticSplitRefocus & StructuralPreviewSettleSnapshot) | null>(null)
   const optimisticStructuralPreviewSettleGraceUntilRef = useRef(0)
   const pendingBoundarySafeInlineEditEndRef = useRef<DeferredInlineEditEnd | null>(null)
   const pendingDragRef = useRef<PendingDrag | null>(null)
@@ -1463,7 +2004,7 @@ export default function EditorShell() {
   const wysiwygDraftPaginationGenerationRef = useRef(0)
   const wysiwygDraftPaginationSnapshotRevisionRef = useRef(0)
   const wysiwygLatestDraftPaginationSnapshotRef = useRef<WysiwygDraftPaginationLatestSnapshot | null>(null)
-  const wysiwygDraftPaginationRequestRef = useRef<WysiwygDraftPaginationRequest | null>(null)
+  const wysiwygDraftPaginationRequestRef = useRef<DraftPreviewPaginationRequest | null>(null)
 
   useLayoutEffect(() => { docRef.current = state.doc }, [state.doc])
   useEffect(() => { packageFieldRegistryRef.current = packageFieldRegistry }, [packageFieldRegistry])
@@ -1479,8 +2020,15 @@ export default function EditorShell() {
   }), [browserPreviewLayout, partialPreviewPaginated, state.paginated])
   const currentLeftRailOutlineDoc = isTemplateMode ? state.doc : previewDoc
   const currentLeftRailStyleDoc = state.doc
-  const deferLeftRailDocForStructuralPaint = optimisticStructuralRefocusPaint !== null
+  const panelDeferralSnapshotActive = panelDeferralRuntime.shouldUsePanelSnapshot()
+  const panelDeferralNonInteractive = panelDeferralRuntime.isPanelNonInteractive()
+  const deferLeftRailForStructuralPaint = optimisticStructuralRefocusPaint !== null ||
+    optimisticStructuralIslandOverride !== null ||
+    panelDeferralSnapshotActive
+  const deferNonCriticalPanelsForStructuralPaint = deferLeftRailForStructuralPaint || panelDeferralNonInteractive
+  const deferLeftRailDocForStructuralPaint = deferLeftRailForStructuralPaint
   const leftRailDocumentSnapshotRef = useRef<{ outlineDoc: DocumentNode; styleDoc: DocumentNode } | null>(null)
+  const previousDeferLeftRailForStructuralPaintRef = useRef(deferLeftRailForStructuralPaint)
   if (leftRailDocumentSnapshotRef.current === null) {
     leftRailDocumentSnapshotRef.current = {
       outlineDoc: currentLeftRailOutlineDoc,
@@ -1500,6 +2048,33 @@ export default function EditorShell() {
       styleDoc: currentLeftRailStyleDoc,
     }
   }, [currentLeftRailOutlineDoc, currentLeftRailStyleDoc, deferLeftRailDocForStructuralPaint])
+  useLayoutEffect(() => {
+    const wasDeferred = previousDeferLeftRailForStructuralPaintRef.current
+    if (wasDeferred && !deferLeftRailForStructuralPaint) {
+      const applying = structuralPanelReleaseApplyingRef.current
+      const restoredAt = startWysiwygPerfSpan()
+      if (applying) {
+        recordStructuralPanelReleaseEvent("live-doc-restored", {
+          generation: applying.generation,
+          operation: applying.operation,
+          nodeId: applying.nodeId,
+          source: "left-rail-live-doc-restored",
+          startedAt: applying.deferredStartedAt,
+          durationMs: Math.max(0, restoredAt - applying.deferredStartedAt),
+          active: false,
+        })
+        markStructuralPanelReleaseCompletedBridge(panelDeferralRuntime, applying, restoredAt)
+        const identity = {
+          id: applying.transactionId,
+          generation: applying.generation,
+        }
+        structuralEditRuntime.markComplete(identity)
+        structuralEditRuntime.clearIfCurrent(identity)
+      }
+      structuralPanelReleaseApplyingRef.current = null
+    }
+    previousDeferLeftRailForStructuralPaintRef.current = deferLeftRailForStructuralPaint
+  }, [deferLeftRailForStructuralPaint, panelDeferralRuntime, recordStructuralPanelReleaseEvent, structuralEditRuntime])
   useEffect(() => {
     if (!selectedStyleResource) return
     const exists = selectedStyleResource.kind === "paragraph-style"
@@ -1562,14 +2137,32 @@ export default function EditorShell() {
   useEffect(() => { inlineEditPageIndexRef.current = inlineEditPageIndex }, [inlineEditPageIndex])
   const inlineEditVisualLockedRef = useRef(inlineEditVisualLocked)
   useEffect(() => { inlineEditVisualLockedRef.current = inlineEditVisualLocked }, [inlineEditVisualLocked])
-  const editorPageNavigation = useMemo(() => buildEditorPageNavigationIndex(displayPaginated), [displayPaginated])
+  const editorPageNavigation = useMemo(() => (
+    captureStructuralShellRenderValue(
+      "shell-derived:page-navigation",
+      () => buildEditorPageNavigationIndex(displayPaginated),
+      (navigation) => ({
+        renderReason: "buildEditorPageNavigationIndex",
+        pageCount: navigation.pageItems.length,
+      }),
+    )
+  ), [displayPaginated])
   const editorPageItems = editorPageNavigation.pageItems
   const editorPageKeyByPageIndexRef = useRef<Map<number, string>>(editorPageNavigation.pageKeyByPageIndex)
   useEffect(() => { editorPageKeyByPageIndexRef.current = editorPageNavigation.pageKeyByPageIndex }, [editorPageNavigation])
   const selectedContextItems = useMemo(() => (
-    isTemplateMode
-      ? buildSelectionContext(state.doc, state.selectionAnchorNodeId ?? state.selectedNodeId)
-      : []
+    captureStructuralShellRenderValue(
+      "shell-derived:selection-context",
+      () => (
+        isTemplateMode
+          ? buildSelectionContext(state.doc, state.selectionAnchorNodeId ?? state.selectedNodeId)
+          : []
+      ),
+      (items) => ({
+        renderReason: "buildSelectionContext",
+        fragmentCount: items.length,
+      }),
+    )
   ), [isTemplateMode, state.doc, state.selectedNodeId, state.selectionAnchorNodeId])
   const selectedContextLabel = !isTemplateMode
     ? "Fill data"
@@ -1653,16 +2246,63 @@ export default function EditorShell() {
   const wysiwygTextSessionState = WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygTextSessionProjection.nodeId
     ? richWysiwygTextSessionProjection
     : plainWysiwygTextSessionState
+  const beginWysiwygDraftRuntimeSession = useCallback((input: {
+    nodeId: string
+    mode: WysiwygDraftSession["mode"]
+    source: WysiwygDraftSessionSource
+    initialTextLength?: number
+    caretIndex?: number | null
+    selection?: WysiwygTextSelection | null
+    textVersion?: number
+    structuralTransactionId?: string | null
+    structuralGeneration?: number | null
+  }): WysiwygDraftSession => {
+    return beginTrackedWysiwygDraftRuntimeSessionBridge(
+      wysiwygDraftRuntime,
+      wysiwygDraftSessionIdentityRef,
+      {
+        ...input,
+        timestamp: startWysiwygPerfSpan(),
+      },
+    )
+  }, [wysiwygDraftRuntime])
+  const cancelCurrentWysiwygDraftRuntimeSession = useCallback((reason: string) => {
+    cancelCurrentTrackedWysiwygDraftRuntimeSessionBridge(
+      wysiwygDraftRuntime,
+      wysiwygDraftSessionIdentityRef,
+      reason,
+      startWysiwygPerfSpan(),
+    )
+  }, [wysiwygDraftRuntime])
   const startWysiwygTextSession = useCallback((nodeId: string, caretOffset: number | null = null, pageIndex: number | null = null) => {
     if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED) {
       const started = startRichWysiwygDraftSession(nodeId, caretOffset, pageIndex)
-      if (started) endPlainWysiwygTextSession()
+      if (started) {
+        endPlainWysiwygTextSession()
+        beginWysiwygDraftRuntimeSession({
+          nodeId,
+          mode: "rich-text",
+          source: "flowdoc-draft-island",
+          initialTextLength: getParagraphTextFromDoc(docRef.current, nodeId)?.length,
+          caretIndex: caretOffset,
+        })
+      }
       return started
     }
     const started = startPlainWysiwygTextSession(nodeId, caretOffset, pageIndex)
-    if (started) endRichWysiwygDraftSession()
+    if (started) {
+      endRichWysiwygDraftSession()
+      beginWysiwygDraftRuntimeSession({
+        nodeId,
+        mode: "plain-text",
+        source: "flowdoc-draft-island",
+        initialTextLength: getParagraphTextFromDoc(docRef.current, nodeId)?.length,
+        caretIndex: caretOffset,
+      })
+    }
     return started
   }, [
+    beginWysiwygDraftRuntimeSession,
     endPlainWysiwygTextSession,
     endRichWysiwygDraftSession,
     startPlainWysiwygTextSession,
@@ -1691,9 +2331,10 @@ export default function EditorShell() {
     richWysiwygDraftSessionState.nodeId,
   ])
   const endWysiwygTextSession = useCallback(() => {
+    cancelCurrentWysiwygDraftRuntimeSession("end-wysiwyg-text-session")
     endPlainWysiwygTextSession()
     endRichWysiwygDraftSession()
-  }, [endPlainWysiwygTextSession, endRichWysiwygDraftSession])
+  }, [cancelCurrentWysiwygDraftRuntimeSession, endPlainWysiwygTextSession, endRichWysiwygDraftSession])
 
   const wysiwygTextAccessibilityStatus = useMemo(
     () => describeWysiwygTextSessionAccessibility(wysiwygTextSessionState),
@@ -1856,6 +2497,20 @@ export default function EditorShell() {
     }
   }, [])
 
+  const recordPreviewSettleShellMutationPlan = useCallback((
+    plan: DraftPreviewShellMutationPlan | BrowserPreviewShellMutationPlan,
+    detail: Record<string, unknown> = {},
+  ) => {
+    recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      name: "preview-settle:shell-mutation-plan",
+      startMs: startWysiwygPerfSpan(),
+      detail: {
+        ...summarizePreviewSettleShellMutationPlan(plan),
+        ...detail,
+      },
+    })
+  }, [])
+
   const clearWysiwygDraftPagination = useCallback(() => {
     if (wysiwygDraftPaginationDebounceRef.current) clearTimeout(wysiwygDraftPaginationDebounceRef.current)
     if (wysiwygDraftPaginationFrameRef.current !== null && typeof cancelAnimationFrame !== "undefined") {
@@ -1866,7 +2521,9 @@ export default function EditorShell() {
     wysiwygDraftPaginationDelayRef.current = null
     wysiwygDraftPaginationRequestRef.current = null
     wysiwygLatestDraftPaginationSnapshotRef.current = null
-    wysiwygDraftPaginationGenerationRef.current += 1
+    wysiwygDraftPaginationGenerationRef.current = resolveDraftPreviewPaginationClearedGeneration(
+      wysiwygDraftPaginationGenerationRef.current,
+    )
     setWysiwygDraftPaginationNodeId(null)
   }, [setWysiwygDraftPaginationNodeId])
   useEffect(() => () => {
@@ -1882,55 +2539,42 @@ export default function EditorShell() {
 
   const scheduleWysiwygDraftPagination = useCallback((nodeId: string, debounceMs = WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS) => {
     if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
-    const requestedDelayMs = Math.max(0, debounceMs)
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now()
-    const pendingRequest = wysiwygDraftPaginationRequestRef.current
-    const isResponsiveRequest = requestedDelayMs <= FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS
-    const canReuseResponsiveWindow = isResponsiveRequest &&
-      pendingRequest?.nodeId === nodeId &&
-      pendingRequest.requestedDelayMs <= FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS
-    const firstRequestedAtMs = canReuseResponsiveWindow
-      ? pendingRequest.firstRequestedAtMs
-      : nowMs
-    const scheduledDelayMs = resolveWysiwygLatestOnlyDraftPaginationDelayMs({
-      requestedDelayMs,
+    const schedulePlan = createDraftPreviewPaginationSchedulePlan({
+      nodeId,
+      requestedDelayMs: debounceMs,
+      pendingRequest: wysiwygDraftPaginationRequestRef.current,
+      latestSnapshot: wysiwygLatestDraftPaginationSnapshotRef.current,
+      session: wysiwygTextSessionStateRef.current,
+      nowMs,
+      currentGeneration: wysiwygDraftPaginationGenerationRef.current,
       responsiveDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
       quietWindowMs: WYSIWYG_RESPONSIVE_DRAFT_PAGINATION_QUIET_MS,
       maxLagMs: WYSIWYG_RESPONSIVE_DRAFT_PAGINATION_MAX_LAG_MS,
-      firstRequestedAtMs,
-      nowMs,
+      canUseAnimationFrame: typeof requestAnimationFrame !== "undefined",
     })
 
-    const request: WysiwygDraftPaginationRequest = {
-      nodeId,
-      requestedDelayMs,
-      firstRequestedAtMs,
-    }
-    wysiwygDraftPaginationRequestRef.current = request
-    wysiwygDraftPaginationDelayRef.current = scheduledDelayMs
-    const latestSnapshot = wysiwygLatestDraftPaginationSnapshotRef.current
-    const session = wysiwygTextSessionStateRef.current
-    const draftVersion = latestSnapshot?.nodeId === nodeId
-      ? latestSnapshot.revision
-      : session.nodeId === nodeId
-        ? session.dirtyVersion
-        : null
+    wysiwygDraftPaginationRequestRef.current = schedulePlan.request
+    wysiwygDraftPaginationDelayRef.current = schedulePlan.scheduledDelayMs
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "draft-pagination-schedule",
       startedAt: nowMs,
       durationMs: 0,
       nodeId,
-      draftVersion,
-      requestedDelayMs,
-      scheduledDelayMs,
-      firstRequestedAtMs,
-      source: isResponsiveRequest ? "responsive" : "settled",
+      draftVersion: schedulePlan.draftVersion,
+      requestedDelayMs: schedulePlan.requestedDelayMs,
+      scheduledDelayMs: schedulePlan.scheduledDelayMs,
+      firstRequestedAtMs: schedulePlan.firstRequestedAtMs,
+      source: schedulePlan.source,
     })
 
     const runDraftPagination = (generation: number) => {
-      if (generation !== wysiwygDraftPaginationGenerationRef.current) return
       const activeRequest = wysiwygDraftPaginationRequestRef.current
-      if (!activeRequest) return
+      if (!shouldRunDraftPreviewPagination({
+        scheduledGeneration: generation,
+        currentGeneration: wysiwygDraftPaginationGenerationRef.current,
+        hasActiveRequest: activeRequest !== null,
+      }) || !activeRequest) return
       const activeScheduledDelayMs = wysiwygDraftPaginationDelayRef.current
       wysiwygDraftPaginationDebounceRef.current = null
       wysiwygDraftPaginationFrameRef.current = null
@@ -1971,15 +2615,53 @@ export default function EditorShell() {
         richDraft: richDraftActive,
         ...summarizePaginatedForWysiwygPerf(paginated),
       })
-      if (generation !== wysiwygDraftPaginationGenerationRef.current) return
       const nextSource = resolveWysiwygDraftPaginationSource({
         nodeId: activeNodeId,
         session: wysiwygTextSessionStateRef.current,
         latestSnapshot: wysiwygLatestDraftPaginationSnapshotRef.current,
       })
-      if (!nextSource) return
-      if (nextSource.revision !== source.revision) {
-        scheduleWysiwygDraftPagination(activeNodeId, activeRequest.requestedDelayMs)
+      const applyPlan = createDraftPreviewPaginationApplyPlan({
+        nodeId: activeNodeId,
+        requestedDelayMs: activeRequest.requestedDelayMs,
+        scheduledGeneration: generation,
+        currentGeneration: wysiwygDraftPaginationGenerationRef.current,
+        sourceRevision: source.revision,
+        nextSourceRevision: nextSource?.revision ?? null,
+      })
+      if (applyPlan.action !== "apply") {
+        const shellMutationPlan = createDraftPreviewShellMutationPlan({
+          applyPlan,
+          nextPageIndex: null,
+          previousInlineEditPageIndex: inlineEditPageIndexRef.current,
+          isInlineEditVisualLocked: inlineEditVisualLockedRef.current,
+          draftPaginationNodeId: null,
+          markInlineEditVisualFreshVersion: inlineEditDraftVersionRef.current,
+        })
+        recordPreviewSettleShellMutationPlan(shellMutationPlan, {
+          source: "wysiwyg-draft",
+          token: generation,
+        })
+        applyDraftPreviewShellMutation({
+          plan: shellMutationPlan,
+          optimisticLayout: { doc: draftDoc, paginated },
+          paginated,
+          fallbackInlineEditVisualFreshVersion: inlineEditDraftVersionRef.current,
+          scheduleDraftPagination: scheduleWysiwygDraftPagination,
+          writePaginatedRef: (nextPaginated) => {
+            paginatedRef.current = nextPaginated
+          },
+          writeOptimisticLayout: (layout) => {
+            optimisticLayoutRef.current = layout
+          },
+          relocateInlineEditPage: (pageIndex) => {
+            inlineEditPageIndexRef.current = pageIndex
+            setInlineEditPageIndex(pageIndex)
+          },
+          followInlineEditPage: requestInlineEditPageFollow,
+          setDraftPaginationNodeId: setWysiwygDraftPaginationNodeId,
+          dispatchSetPaginated: (nextPaginated) => dispatch({ type: "SET_PAGINATED", paginated: nextPaginated }),
+          markInlineEditVisualFresh,
+        })
         return
       }
       const ranges = getWysiwygParagraphFragmentRanges(paginated, activeNodeId)
@@ -1989,28 +2671,48 @@ export default function EditorShell() {
         : findWysiwygPageIndexInFragmentRanges(ranges, source.caretOffset, {
           preferPreviousPageAtFragmentEnd: isTableCellParagraph,
         })
-      paginatedRef.current = paginated
-      optimisticLayoutRef.current = { doc: draftDoc, paginated }
-      if (shouldRelocateInlineEditPage({
-        nextPageIndex,
-        isVisualLocked: inlineEditVisualLockedRef.current,
-      })) {
-        const previousPageIndex = inlineEditPageIndexRef.current
-        inlineEditPageIndexRef.current = nextPageIndex!
-        setInlineEditPageIndex(nextPageIndex!)
-        if (shouldFollowInlineEditPageChange({ previousPageIndex, nextPageIndex: nextPageIndex! })) {
-          requestInlineEditPageFollow(nextPageIndex!)
-        }
-      }
       const currentFragmentCount = countWysiwygTextDraftFragments(paginated, activeNodeId)
-      setWysiwygDraftPaginationNodeId(shouldScheduleResponsiveContainerDraftPagination({
+      const draftPaginationNodeId = resolveDraftPreviewPaginationResponsiveNodeId({
+        nodeId: activeNodeId,
         isFlowStackParagraph: isParagraphInsideFlowStack(draftDoc, activeNodeId),
         isTableCellParagraph,
         draftPaginationActive: wysiwygDraftPaginationNodeIdRef.current === activeNodeId,
         currentFragmentCount,
-      }) ? activeNodeId : null)
-      dispatch({ type: "SET_PAGINATED", paginated })
-      markInlineEditVisualFresh(inlineEditDraftVersionRef.current)
+      })
+      const shellMutationPlan = createDraftPreviewShellMutationPlan({
+        applyPlan,
+        nextPageIndex,
+        previousInlineEditPageIndex: inlineEditPageIndexRef.current,
+        isInlineEditVisualLocked: inlineEditVisualLockedRef.current,
+        draftPaginationNodeId,
+        markInlineEditVisualFreshVersion: inlineEditDraftVersionRef.current,
+      })
+      recordPreviewSettleShellMutationPlan(shellMutationPlan, {
+        source: "wysiwyg-draft",
+        token: generation,
+      })
+      if (shellMutationPlan.action !== "apply") return
+      applyDraftPreviewShellMutation({
+        plan: shellMutationPlan,
+        optimisticLayout: { doc: draftDoc, paginated },
+        paginated,
+        fallbackInlineEditVisualFreshVersion: inlineEditDraftVersionRef.current,
+        scheduleDraftPagination: scheduleWysiwygDraftPagination,
+        writePaginatedRef: (nextPaginated) => {
+          paginatedRef.current = nextPaginated
+        },
+        writeOptimisticLayout: (layout) => {
+          optimisticLayoutRef.current = layout
+        },
+        relocateInlineEditPage: (pageIndex) => {
+          inlineEditPageIndexRef.current = pageIndex
+          setInlineEditPageIndex(pageIndex)
+        },
+        followInlineEditPage: requestInlineEditPageFollow,
+        setDraftPaginationNodeId: setWysiwygDraftPaginationNodeId,
+        dispatchSetPaginated: (nextPaginated) => dispatch({ type: "SET_PAGINATED", paginated: nextPaginated }),
+        markInlineEditVisualFresh,
+      })
     }
 
     if (wysiwygDraftPaginationDebounceRef.current) {
@@ -2022,22 +2724,19 @@ export default function EditorShell() {
       wysiwygDraftPaginationFrameRef.current = null
     }
 
-    const generation = ++wysiwygDraftPaginationGenerationRef.current
-    const useAnimationFrame = shouldUseWysiwygDraftPaginationFrame({
-      nextDelayMs: scheduledDelayMs,
-      responsiveDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
-      canUseAnimationFrame: typeof requestAnimationFrame !== "undefined",
-    })
-    if (useAnimationFrame) {
+    const generation = schedulePlan.generation
+    wysiwygDraftPaginationGenerationRef.current = generation
+    if (schedulePlan.useAnimationFrame) {
       wysiwygDraftPaginationFrameRef.current = requestAnimationFrame(() => runDraftPagination(generation))
       return
     }
 
-    wysiwygDraftPaginationDebounceRef.current = setTimeout(() => runDraftPagination(generation), scheduledDelayMs)
+    wysiwygDraftPaginationDebounceRef.current = setTimeout(() => runDraftPagination(generation), schedulePlan.scheduledDelayMs)
   }, [
     inlineEditDraftVersionRef,
     markInlineEditVisualFresh,
     paginatePreviewDoc,
+    recordPreviewSettleShellMutationPlan,
     requestInlineEditPageFollow,
     setInlineEditPageIndex,
     setWysiwygDraftPaginationNodeId,
@@ -2048,7 +2747,7 @@ export default function EditorShell() {
     const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
     const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
     setWysiwygDraftPaginationNodeId(nodeId)
-    scheduleWysiwygDraftPagination(nodeId, resolveWysiwygDraftPaginationDelayMs({
+    scheduleWysiwygDraftPagination(nodeId, resolveDraftPreviewPaginationDelayMsBridge({
       draftPaginationActive: true,
       isFlowStackParagraph,
       isTableCellParagraph,
@@ -2110,6 +2809,8 @@ export default function EditorShell() {
       const richSession = richWysiwygDraftSessionState
       if (WYSIWYG_TEXT_ENGINE_ENABLED && richSession.nodeId && richSession.draft) {
         const richDraft = richSession.draft
+        const draftRuntimeSession = getCurrentWysiwygDraftRuntimeSession(richSession.nodeId)
+        const draftRuntimeIdentity = createWysiwygDraftRuntimeSessionIdentity(draftRuntimeSession)
         const finalizeStartedAt = startWysiwygPerfSpan()
         const afterDoc = replaceEditableParagraphInDocument(docRef.current, richSession.nodeId, richDraft.paragraph)
         try {
@@ -2117,6 +2818,13 @@ export default function EditorShell() {
         } catch (error) {
           console.error("WYSIWYG rich text finalize produced invalid document:", error)
           return false
+        }
+        if (draftRuntimeIdentity) {
+          markTrackedWysiwygDraftRuntimeSessionCommittingBridge(
+            wysiwygDraftRuntime,
+            draftRuntimeIdentity,
+            startWysiwygPerfSpan(),
+          )
         }
         const draftText = getTextRunParagraphText(richDraft.paragraph) ?? ""
         const responsivePreviewMatchesDraft = useResponsivePreview &&
@@ -2134,6 +2842,14 @@ export default function EditorShell() {
           history,
           afterPaginated,
         })
+        if (draftRuntimeIdentity) {
+          markTrackedWysiwygDraftRuntimeSessionCommittedBridge(
+            wysiwygDraftRuntime,
+            wysiwygDraftSessionIdentityRef,
+            draftRuntimeIdentity,
+            startWysiwygPerfSpan(),
+          )
+        }
         clearWysiwygDraftPagination()
         endWysiwygTextSession()
         resetInlineEditStateForDocumentReplace()
@@ -2149,6 +2865,8 @@ export default function EditorShell() {
     }
     const session = wysiwygTextSessionStateRef.current
     if (!WYSIWYG_TEXT_ENGINE_ENABLED || !session.nodeId) return false
+    const draftRuntimeSession = getCurrentWysiwygDraftRuntimeSession(session.nodeId)
+    const draftRuntimeIdentity = createWysiwygDraftRuntimeSessionIdentity(draftRuntimeSession)
     const finalizeStartedAt = startWysiwygPerfSpan()
     const draftSource = resolveWysiwygDraftPaginationSource({
       nodeId: session.nodeId,
@@ -2163,6 +2881,13 @@ export default function EditorShell() {
     } catch (error) {
       console.error("WYSIWYG text finalize produced invalid document:", error)
       return false
+    }
+    if (draftRuntimeIdentity) {
+      markTrackedWysiwygDraftRuntimeSessionCommittingBridge(
+        wysiwygDraftRuntime,
+        draftRuntimeIdentity,
+        startWysiwygPerfSpan(),
+      )
     }
     const responsivePreviewMatchesDraft = useResponsivePreview &&
       optimisticLayoutRef.current?.doc &&
@@ -2180,6 +2905,14 @@ export default function EditorShell() {
       history,
       afterPaginated,
     })
+    if (draftRuntimeIdentity) {
+      markTrackedWysiwygDraftRuntimeSessionCommittedBridge(
+        wysiwygDraftRuntime,
+        wysiwygDraftSessionIdentityRef,
+        draftRuntimeIdentity,
+        startWysiwygPerfSpan(),
+      )
+    }
     clearWysiwygDraftPagination()
     endWysiwygTextSession()
     resetInlineEditStateForDocumentReplace()
@@ -2195,9 +2928,11 @@ export default function EditorShell() {
     clearWysiwygDraftPagination,
     consumeInlineEditHistory,
     endWysiwygTextSession,
+    getCurrentWysiwygDraftRuntimeSession,
     paginatePreviewDoc,
     resetInlineEditStateForDocumentReplace,
     richWysiwygDraftSessionState,
+    wysiwygDraftRuntime,
     wysiwygTextSessionState,
   ])
 
@@ -2445,6 +3180,18 @@ export default function EditorShell() {
       caretOffset: caretIndex,
       revision: nextSnapshotRevision,
     }
+    updateCurrentTrackedWysiwygDraftRuntimeMetadataBridge(
+      wysiwygDraftRuntime,
+      wysiwygDraftSessionIdentityRef,
+      {
+        nodeId,
+        caretIndex,
+        selection: nextSelection,
+        textVersion: nextSnapshotRevision,
+        draftTextLength: text.length,
+        timestamp: startWysiwygPerfSpan(),
+      },
+    )
     if (!textChanged) {
       const startedAt = startWysiwygPerfSpan()
       moveWysiwygTextCaret(caretIndex, nextSelection)
@@ -2474,19 +3221,21 @@ export default function EditorShell() {
       !isTableCellParagraph &&
       wysiwygPlainTextBoundaryDraftPaginationNodeIdRef.current === nodeId
     const currentFragmentCount = countWysiwygTextDraftFragments(paginatedRef.current, nodeId)
-    const useResponsiveDraftPagination = shouldScheduleResponsiveContainerDraftPagination({
+    const responsiveDraftPaginationNodeId = resolveDraftPreviewPaginationResponsiveNodeId({
+      nodeId,
       isFlowStackParagraph,
       isTableCellParagraph,
       draftPaginationActive,
       currentFragmentCount,
     })
+    const useResponsiveDraftPagination = responsiveDraftPaginationNodeId !== null
     if (useResponsiveDraftPagination || plainBoundaryDraftPaginationActive) {
-      if (useResponsiveDraftPagination) {
-        setWysiwygDraftPaginationNodeId(nodeId)
+      if (responsiveDraftPaginationNodeId) {
+        setWysiwygDraftPaginationNodeId(responsiveDraftPaginationNodeId)
       }
       const draftPaginationDelayMs = plainBoundaryDraftPaginationActive && !useResponsiveDraftPagination
         ? WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS
-        : resolveWysiwygDraftPaginationDelayMs({
+        : resolveDraftPreviewPaginationDelayMsBridge({
             draftPaginationActive: true,
             isFlowStackParagraph,
             isTableCellParagraph,
@@ -2501,12 +3250,25 @@ export default function EditorShell() {
     moveWysiwygTextCaret,
     scheduleWysiwygDraftPagination,
     setWysiwygDraftPaginationNodeId,
+    wysiwygDraftRuntime,
     wysiwygTextSessionState.caretOffset,
     wysiwygTextSessionState.draftText,
     wysiwygTextSessionState.nodeId,
     wysiwygTextSessionState.selection,
     wysiwygDraftPaginationNodeId,
   ])
+
+  const handleWysiwygDraftCompositionChange = useCallback((nodeId: string, isComposing: boolean) => {
+    markCurrentTrackedWysiwygDraftRuntimeCompositionBridge(
+      wysiwygDraftRuntime,
+      wysiwygDraftSessionIdentityRef,
+      {
+        nodeId,
+        isComposing,
+        timestamp: startWysiwygPerfSpan(),
+      },
+    )
+  }, [wysiwygDraftRuntime])
 
   const handleInlineEditHeightPreviewChange = useCallback((nodeId: string, height: number, pageIndex: number | null, reflow?: WysiwygTextReflowDecision) => {
     const key = `${nodeId}:${pageIndex ?? "null"}`
@@ -2560,13 +3322,14 @@ export default function EditorShell() {
       reflow.kind === "hard-page-boundary"
     const requestedDelayMs = isPlainParagraphBoundary
       ? WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS
-      : resolveWysiwygDraftPaginationDelayMs({
-      reflow,
-      isFlowStackParagraph,
-      isTableCellParagraph,
-      defaultDelayMs: WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS,
-      flowStackBoundaryDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
-    })
+      : resolveDraftPreviewPaginationDelayMsBridge({
+          reflow,
+          isFlowStackParagraph,
+          isTableCellParagraph,
+          draftPaginationActive: wysiwygDraftPaginationNodeIdRef.current === nodeId,
+          defaultDelayMs: WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS,
+          flowStackBoundaryDelayMs: FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+        })
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "table-cell-reflow-decision",
       startedAt: startWysiwygPerfSpan(),
@@ -2715,13 +3478,6 @@ export default function EditorShell() {
 
   const handleUndo = useCallback(() => {
     if (!isTemplateMode) return
-    const pendingSplitNodeId = pendingOptimisticSplitDispatchRef.current?.newNodeId ?? null
-    if (
-      pendingSplitNodeId &&
-      rollbackPendingOptimisticSplitRefocusHandlerRef.current?.(pendingSplitNodeId)
-    ) {
-      return
-    }
     const hadInlineEdit = finalizeInlineEditBeforeResponsiveAction()
     if (state.past.length === 0 && !hadInlineEdit) return
     dispatchEditorAction({ type: "UNDO" })
@@ -2792,11 +3548,7 @@ export default function EditorShell() {
     if (!WYSIWYG_TEXT_ENGINE_ENABLED) return null
     if (wysiwygTextSessionStateRef.current.nodeId !== nodeId) return null
     const doc = docRef.current
-    if (isParagraphInsideTableCell(doc, nodeId)) return null
-    if (isParagraphInsideFlowStack(doc, nodeId)) return null
-    if (isParagraphInsideRowStack(doc, nodeId)) return null
-    const paragraph = getParagraphFromDoc(doc, nodeId)
-    if (!paragraph || !isTextRunOnlyParagraph(paragraph)) return null
+    if (!resolveStructuralParagraphEligibility({ doc, nodeId }).eligible) return null
     const activeFragment = findWysiwygTextEngineFragment(displayPaginated, nodeId, inlineEditPageIndexRef.current)
       ?? findWysiwygTextEngineFragment(displayPaginated, nodeId, null)
     if (
@@ -2836,108 +3588,6 @@ export default function EditorShell() {
     editorPageNavigation.pageKeyByPageIndex,
   ])
 
-  const cancelPendingOptimisticSplitDispatch = useCallback((expectedNewNodeId?: string) => {
-    const pending = pendingOptimisticSplitDispatchRef.current
-    if (!pending || (expectedNewNodeId && pending.newNodeId !== expectedNewNodeId)) return false
-    if (pending.frameId !== null) window.cancelAnimationFrame(pending.frameId)
-    if (pending.timeoutId !== null) window.clearTimeout(pending.timeoutId)
-    pendingOptimisticSplitDispatchRef.current = null
-    return true
-  }, [])
-
-  const flushPendingOptimisticSplitDispatch = useCallback((expectedNewNodeId: string) => {
-    const pending = pendingOptimisticSplitDispatchRef.current
-    if (!pending || pending.newNodeId !== expectedNewNodeId) return false
-    cancelPendingOptimisticSplitDispatch(expectedNewNodeId)
-    pending.dispatch()
-    return true
-  }, [cancelPendingOptimisticSplitDispatch])
-
-  const rollbackPendingOptimisticSplitRefocus = useCallback((expectedNewNodeId: string): boolean => {
-    const pendingDispatch = pendingOptimisticSplitDispatchRef.current
-    const pendingRefocus = pendingOptimisticSplitRefocusRef.current
-    const rollback = pendingDispatch?.rollback
-    if (
-      !pendingDispatch ||
-      !pendingRefocus ||
-      pendingDispatch.newNodeId !== expectedNewNodeId ||
-      pendingRefocus.newNodeId !== expectedNewNodeId ||
-      !rollback
-    ) {
-      return false
-    }
-    cancelPendingOptimisticSplitDispatch(expectedNewNodeId)
-    pendingOptimisticSplitRefocusRef.current = null
-    optimisticStructuralSettleRef.current = null
-    paginatedRef.current = rollback.sourcePaginated
-    optimisticLayoutRef.current = { doc: rollback.sourceDoc, paginated: rollback.sourcePaginated }
-    suppressNextLayoutLoadingOverlayRef.current = true
-    let inlineStarted = false
-    let textSessionStarted = false
-    flushSync(() => {
-      inlineStarted = startInlineEditAfterOptimisticStructuralChange(
-        rollback.sourceNodeId,
-        rollback.splitIndex,
-        rollback.sourcePaginated,
-        rollback.sourceFragment.pageIndex,
-        rollback.sourceDoc,
-        rollback.sourceText,
-      )
-      textSessionStarted = startPlainWysiwygTextSessionFromText({
-        nodeId: rollback.sourceNodeId,
-        text: rollback.sourceText,
-        caretOffset: rollback.splitIndex,
-        pageIndex: rollback.sourceFragment.pageIndex,
-      })
-      if (!inlineStarted || !textSessionStarted) return
-      setOptimisticStructuralIslandOverride({
-        nodeId: rollback.sourceNodeId,
-        paragraph: rollback.sourceParagraph,
-        fragment: rollback.sourceFragment,
-        pageKey: rollback.pageKey,
-        pages: rollback.sourcePaginated.sections.flatMap((section) => section.pages),
-        mode: "same-page",
-      })
-    })
-    if (!inlineStarted || !textSessionStarted) return false
-    endRichWysiwygDraftSession()
-    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-      kind: "flowdoc-island-structural-edit",
-      startedAt: startWysiwygPerfSpan(),
-      durationMs: 0,
-      nodeId: rollback.sourceNodeId,
-      previousNodeId: expectedNewNodeId,
-      pageIndex: rollback.sourceFragment.pageIndex,
-      textLength: rollback.sourceText.length,
-      source: "optimistic-split-rollback",
-      action: "cancel-pending-split",
-      active: true,
-    })
-    return true
-  }, [
-    cancelPendingOptimisticSplitDispatch,
-    endRichWysiwygDraftSession,
-    startInlineEditAfterOptimisticStructuralChange,
-    startPlainWysiwygTextSessionFromText,
-  ])
-  rollbackPendingOptimisticSplitRefocusHandlerRef.current = rollbackPendingOptimisticSplitRefocus
-
-  useEffect(() => () => {
-    cancelPendingOptimisticSplitDispatch()
-  }, [cancelPendingOptimisticSplitDispatch])
-
-  const cancelPendingOptimisticMergeDispatch = useCallback((expectedCurrentNodeId?: string) => {
-    const pending = pendingOptimisticMergeDispatchRef.current
-    if (!pending || (expectedCurrentNodeId && pending.currentNodeId !== expectedCurrentNodeId)) return false
-    if (pending.timeoutId !== null) window.clearTimeout(pending.timeoutId)
-    pendingOptimisticMergeDispatchRef.current = null
-    return true
-  }, [])
-
-  useEffect(() => () => {
-    cancelPendingOptimisticMergeDispatch()
-  }, [cancelPendingOptimisticMergeDispatch])
-
   const startOptimisticSplitRefocusBeforeDispatch = useCallback((
     pending: PendingOptimisticSplitRefocus,
     splitIndex: number,
@@ -2946,7 +3596,7 @@ export default function EditorShell() {
   ): boolean => {
     const totalStartedAt = startWysiwygPerfSpan()
     const sourceStartedAt = startWysiwygPerfSpan()
-    const source = resolveStructuralSourceDoc({
+    const source = resolveStructuralSourceDocument({
       doc: docRef.current,
       nodeId: pending.sourceNodeId,
       text,
@@ -2997,10 +3647,13 @@ export default function EditorShell() {
     })
     if (result.newNodeId !== pending.newNodeId) return false
     const paragraphResolveStartedAt = startWysiwygPerfSpan()
-    const newText = getParagraphTextFromDoc(result.doc, pending.newNodeId)
-    if (newText == null) return false
-    const newParagraph = getParagraphFromDoc(result.doc, pending.newNodeId)
-    if (!newParagraph || !isTextRunOnlyParagraph(newParagraph)) return false
+    const resultParagraph = resolveStructuralResultParagraph({
+      doc: result.doc,
+      nodeId: pending.newNodeId,
+    })
+    if (!resultParagraph.resolved) return false
+    const newText = resultParagraph.text
+    const newParagraph = resultParagraph.paragraph
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", paragraphResolveStartedAt, {
       nodeId: pending.newNodeId,
       previousNodeId: pending.sourceNodeId,
@@ -3019,7 +3672,7 @@ export default function EditorShell() {
       sourceFragment: pending.sourceFragment,
       textMeasurer: editorTextMeasurer,
     })
-    const optimisticSummary = optimistic ? summarizePaginatedForWysiwygPerf(optimistic.paginated) : null
+    const optimisticSummary = summarizeStructuralOptimisticPaginatedForPerf(optimistic?.paginated ?? null)
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", optimisticStartedAt, {
       nodeId: pending.newNodeId,
       previousNodeId: pending.sourceNodeId,
@@ -3064,6 +3717,21 @@ export default function EditorShell() {
     let inlineStarted = false
     let textSessionStarted = false
     let splitDispatched = false
+    const structuralBridge = structuralEditController.beginSplit({
+      sourceNodeId: pending.sourceNodeId,
+      newNodeId: pending.newNodeId,
+      pageIndex: optimistic.newFragment.pageIndex,
+      suppressedPageBreakNodeId,
+      startedAt: pending.startedAt,
+    })
+    const structuralTransaction = structuralBridge.transaction
+    const structuralTransactionIdentity = structuralBridge.identity
+    const failAfterStructuralTransactionBegin = (reason: string) => {
+      abortStructuralEditTransactionAndPanelDeferral(structuralTransactionIdentity, reason)
+      return false
+    }
+    beginStructuralPanelReleaseDeferral(structuralBridge.panelDeferral)
+    structuralEditController.markUrgentPainting(structuralTransactionIdentity)
     const flushStartedAt = startWysiwygPerfSpan()
     flushSync(() => {
       const inlineSetupStartedAt = startWysiwygPerfSpan()
@@ -3091,6 +3759,14 @@ export default function EditorShell() {
         caretOffset: 0,
         pageIndex: optimistic.newFragment.pageIndex,
       })
+      if (textSessionStarted) {
+        beginWysiwygDraftRuntimeSession(createStructuralDraftSessionPlan({
+          transaction: structuralTransaction,
+          nodeId: pending.newNodeId,
+          textLength: newText.length,
+          caretIndex: 0,
+        }))
+      }
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", textSessionSetupStartedAt, {
         nodeId: pending.newNodeId,
         previousNodeId: pending.sourceNodeId,
@@ -3139,6 +3815,7 @@ export default function EditorShell() {
         suppressedPageBreakNodeId,
       })
       setOptimisticStructuralRefocusPaint({ nodeId: pending.newNodeId, startedAt: pending.startedAt })
+      structuralEditController.markSplitCommitted(structuralTransactionIdentity, pending.newNodeId)
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", islandOverrideStartedAt, {
         nodeId: pending.newNodeId,
         previousNodeId: pending.sourceNodeId,
@@ -3161,9 +3838,9 @@ export default function EditorShell() {
       active: inlineStarted && textSessionStarted && splitDispatched,
       optimisticMode: optimistic.mode,
     })
-    if (!inlineStarted) return false
-    if (!textSessionStarted) return false
-    if (!splitDispatched) return false
+    if (!inlineStarted) return failAfterStructuralTransactionBegin("split-inline-session-setup-failed")
+    if (!textSessionStarted) return failAfterStructuralTransactionBegin("split-text-session-setup-failed")
+    if (!splitDispatched) return failAfterStructuralTransactionBegin("split-dispatch-failed")
     endRichWysiwygDraftSession()
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "structural-refocus-used-full-pagination-before-island",
@@ -3194,12 +3871,16 @@ export default function EditorShell() {
     })
     return true
   }, [
+    abortStructuralEditTransactionAndPanelDeferral,
+    beginWysiwygDraftRuntimeSession,
+    beginStructuralPanelReleaseDeferral,
     editorTextMeasurer,
     editorPageNavigation.pageKeyByPageIndex,
     dispatchEditorAction,
     endRichWysiwygDraftSession,
     startInlineEditAfterOptimisticStructuralChange,
     startPlainWysiwygTextSessionFromText,
+    structuralEditController,
   ])
 
   const startOptimisticMergeRefocusBeforeDispatch = useCallback((
@@ -3211,7 +3892,7 @@ export default function EditorShell() {
     const totalStartedAt = startWysiwygPerfSpan()
     const baseDoc = sourceDocOverride ?? docRef.current
     const sourceStartedAt = startWysiwygPerfSpan()
-    const source = resolveStructuralSourceDoc({
+    const source = resolveStructuralSourceDocument({
       doc: baseDoc,
       nodeId,
       text,
@@ -3249,11 +3930,7 @@ export default function EditorShell() {
       })
     }
     const sourceDoc = source.doc
-    const currentParagraph = getParagraphFromDoc(sourceDoc, nodeId)
-    if (!currentParagraph || !isTextRunOnlyParagraph(currentParagraph)) return false
-    if (isParagraphInsideTableCell(sourceDoc, nodeId)) return false
-    if (isParagraphInsideFlowStack(sourceDoc, nodeId)) return false
-    if (isParagraphInsideRowStack(sourceDoc, nodeId)) return false
+    if (!resolveStructuralParagraphEligibility({ doc: sourceDoc, nodeId }).eligible) return false
 
     const mergeStartedAt = startWysiwygPerfSpan()
     const result = mergeParagraphWithPrevious(sourceDoc, nodeId)
@@ -3271,9 +3948,13 @@ export default function EditorShell() {
     if (isParagraphInsideRowStack(sourceDoc, result.prevNodeId)) return false
 
     const paragraphResolveStartedAt = startWysiwygPerfSpan()
-    const previousParagraph = getParagraphFromDoc(result.doc, result.prevNodeId)
-    const mergedText = getParagraphTextFromDoc(result.doc, result.prevNodeId)
-    if (!previousParagraph || !isTextRunOnlyParagraph(previousParagraph) || mergedText == null) return false
+    const resultParagraph = resolveStructuralResultParagraph({
+      doc: result.doc,
+      nodeId: result.prevNodeId,
+    })
+    if (!resultParagraph.resolved) return false
+    const previousParagraph = resultParagraph.paragraph
+    const mergedText = resultParagraph.text
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", paragraphResolveStartedAt, {
       nodeId: result.prevNodeId,
       previousNodeId: nodeId,
@@ -3317,7 +3998,7 @@ export default function EditorShell() {
       currentFragment,
       textMeasurer: editorTextMeasurer,
     })
-    const optimisticSummary = optimistic ? summarizePaginatedForWysiwygPerf(optimistic.paginated) : null
+    const optimisticSummary = summarizeStructuralOptimisticPaginatedForPerf(optimistic?.paginated ?? null)
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", optimisticStartedAt, {
       nodeId: result.prevNodeId,
       previousNodeId: nodeId,
@@ -3351,7 +4032,6 @@ export default function EditorShell() {
     const pageKey = editorPageNavigation.pageKeyByPageIndex.get(optimistic.mergedFragment.pageIndex) ?? null
     if (!pageKey) return false
 
-    cancelPendingOptimisticMergeDispatch()
     pendingOptimisticMergeRefocusRef.current = pending
     optimisticStructuralSettleRef.current = null
     optimisticStructuralPreviewSettleGraceUntilRef.current = startWysiwygPerfSpan() + OPTIMISTIC_STRUCTURAL_PREVIEW_SETTLE_DEBOUNCE_MS
@@ -3362,6 +4042,16 @@ export default function EditorShell() {
     let inlineStarted = false
     let textSessionStarted = false
     let mergeDispatched = false
+    const structuralBridge = structuralEditController.beginMerge({
+      currentNodeId: nodeId,
+      previousNodeId: result.prevNodeId,
+      pageIndex: optimistic.mergedFragment.pageIndex,
+      startedAt,
+    })
+    const structuralTransaction = structuralBridge.transaction
+    const structuralTransactionIdentity = structuralBridge.identity
+    beginStructuralPanelReleaseDeferral(structuralBridge.panelDeferral)
+    structuralEditController.markUrgentPainting(structuralTransactionIdentity)
     const flushStartedAt = startWysiwygPerfSpan()
     flushSync(() => {
       const inlineSetupStartedAt = startWysiwygPerfSpan()
@@ -3389,6 +4079,14 @@ export default function EditorShell() {
         caretOffset: result.caretIndex,
         pageIndex: optimistic.mergedFragment.pageIndex,
       })
+      if (textSessionStarted) {
+        beginWysiwygDraftRuntimeSession(createStructuralDraftSessionPlan({
+          transaction: structuralTransaction,
+          nodeId: result.prevNodeId,
+          textLength: mergedText.length,
+          caretIndex: result.caretIndex,
+        }))
+      }
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", textSessionSetupStartedAt, {
         nodeId: result.prevNodeId,
         previousNodeId: nodeId,
@@ -3436,6 +4134,10 @@ export default function EditorShell() {
         settleRemovedNodeId: nodeId,
       })
       setOptimisticStructuralRefocusPaint({ nodeId: result.prevNodeId, startedAt })
+      structuralEditController.markMergeCommitted(structuralTransactionIdentity, {
+        removedNodeId: nodeId,
+        committedNodeId: result.prevNodeId,
+      })
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", islandOverrideStartedAt, {
         nodeId: result.prevNodeId,
         previousNodeId: nodeId,
@@ -3458,6 +4160,14 @@ export default function EditorShell() {
       optimisticMode: optimistic.mode,
     })
     if (!inlineStarted || !textSessionStarted || !mergeDispatched) {
+      abortStructuralEditTransactionAndPanelDeferral(
+        structuralTransactionIdentity,
+        !inlineStarted
+          ? "merge-inline-session-setup-failed"
+          : !textSessionStarted
+          ? "merge-text-session-setup-failed"
+          : "merge-dispatch-failed",
+      )
       pendingOptimisticMergeRefocusRef.current = null
       optimisticStructuralSettleRef.current = previousStructuralSettle
       optimisticStructuralPreviewSettleGraceUntilRef.current = previousStructuralPreviewGraceUntil
@@ -3497,7 +4207,9 @@ export default function EditorShell() {
     })
     return true
   }, [
-    cancelPendingOptimisticMergeDispatch,
+    abortStructuralEditTransactionAndPanelDeferral,
+    beginWysiwygDraftRuntimeSession,
+    beginStructuralPanelReleaseDeferral,
     clearWysiwygDraftPagination,
     dispatchEditorAction,
     editorPageNavigation.pageKeyByPageIndex,
@@ -3507,6 +4219,7 @@ export default function EditorShell() {
     optimisticStructuralIslandOverride,
     startInlineEditAfterOptimisticStructuralChange,
     startPlainWysiwygTextSessionFromText,
+    structuralEditController,
   ])
 
   const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number, text?: string) => {
@@ -3562,9 +4275,6 @@ export default function EditorShell() {
       clearWysiwygDraftPagination()
       endWysiwygTextSession()
     }
-    if (pendingSplit?.newNodeId === nodeId) {
-      flushPendingOptimisticSplitDispatch(nodeId)
-    }
     if (canTryOptimisticMerge && startOptimisticMergeRefocusBeforeDispatch(nodeId, text, history, optimisticMergeSourceDoc)) {
       if (pendingSplit?.newNodeId === nodeId) {
         pendingOptimisticSplitRefocusRef.current = null
@@ -3578,7 +4288,6 @@ export default function EditorShell() {
     consumeInlineEditHistory,
     dispatchEditorAction,
     endWysiwygTextSession,
-    flushPendingOptimisticSplitDispatch,
     startOptimisticMergeRefocusBeforeDispatch,
   ])
 
@@ -3841,11 +4550,26 @@ export default function EditorShell() {
   const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const serverPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutVersionRef = useRef(0)
-  const browserPaginationGenerationRef = useRef(0)
   const browserPaginationWorkerRef = useRef<Worker | null>(null)
   const browserPaginationWorkerRequestIdRef = useRef(0)
   const precomputedBrowserPaginationRef = useRef<OptimisticLayoutSnapshot | null>(null)
   const optimisticLayoutRef = useRef<OptimisticLayoutSnapshot | null>(null)
+  const handleCanStartParagraphTextSurfaceStructuralEdit = useCallback((
+    input: ParagraphTextSurfaceStructuralEditGuardInput,
+  ): boolean => {
+    const currentDocContainsNode = getParagraphFromDoc(docRef.current, input.nodeId) !== null
+    const optimisticDoc = optimisticLayoutRef.current?.doc ?? null
+    const optimisticDocContainsNode = optimisticDoc
+      ? getParagraphFromDoc(optimisticDoc, input.nodeId) !== null
+      : false
+    const nodeExists = currentDocContainsNode || optimisticDocContainsNode
+    return canStartParagraphTextSurfaceFallbackStructuralEditBridge(structuralEditRuntime, {
+      ...input,
+      currentActiveNodeId: input.currentActiveNodeId ?? input.nodeId,
+      expectedNodeExists: nodeExists,
+      removedNodeStillExists: nodeExists,
+    })
+  }, [structuralEditRuntime])
   const optimisticLayoutWarnings = useMemo(() => collectPaginatedLayoutWarnings(state.paginated), [state.paginated])
   const serverLayoutCheckedForCurrentPreview = layoutStatus === "server-checked" && serverCheckedPreviewDoc === previewDoc
   const authoritativeLayoutWarnings = selectAuthoritativeLayoutWarnings({
@@ -3880,8 +4604,8 @@ export default function EditorShell() {
   const exportReadinessMessage = formatExportReadinessMessage(exportReadiness)
   const exportReadinessStatusReason = firstVisibleExportReadinessReason(exportReadiness.reasons)
   useEffect(() => {
-    browserPaginationGenerationRef.current += 1
-  }, [inlineEditNodeId])
+    invalidatePreviewSettleBridge(previewSettleRuntime, "inline-edit-node-changed")
+  }, [inlineEditNodeId, previewSettleRuntime])
   useEffect(() => () => {
     browserPaginationWorkerRef.current?.terminate()
     browserPaginationWorkerRef.current = null
@@ -4078,9 +4802,9 @@ export default function EditorShell() {
     })
     optimisticLayoutRef.current = { doc: previewDoc, paginated }
     setPartialPreviewPaginated(null)
-    setBrowserPreviewLayout(markEditorPreviewLayoutFull(browserPaginationGenerationRef.current))
+    setBrowserPreviewLayout(markEditorPreviewLayoutFull(getCurrentPreviewSettleGenerationBridge(previewSettleRuntime)))
     dispatch({ type: "SET_PAGINATED", paginated })
-  }, [editorTextMeasurer, inlineEditNodeId, previewDoc])
+  }, [editorTextMeasurer, inlineEditNodeId, previewDoc, previewSettleRuntime])
 
   // Full browser pagination — optimistic visual layout. During inline editing
   // this runs against previewDoc so draft text can split across pages before
@@ -4091,31 +4815,43 @@ export default function EditorShell() {
     // Use ref for debounce time so edit mode enter/exit doesn't re-trigger pagination.
     // Entering edit mode changes inlineEditNodeId but not previewDoc, so this
     // effect only reruns when the draft document or measurement inputs change.
-    const generation = ++browserPaginationGenerationRef.current
     setPartialPreviewPaginated(null)
     const inlineEditNodeIdAtSchedule = inlineEditNodeIdRef.current
     const inlineEditDraftVersionAtSchedule = inlineEditNodeIdAtSchedule
       ? inlineEditDraftVersionRef.current
       : null
     const structuralSettleAtSchedule = optimisticStructuralSettleRef.current
-    const structuralPreviewGraceRemainingMs = Math.max(
-      0,
-      optimisticStructuralPreviewSettleGraceUntilRef.current - startWysiwygPerfSpan(),
+    const activeStructuralTransactionAtSchedule = resolveActivePreviewSettleStructuralTransaction(
+      structuralEditRuntime.getCurrentTransaction(),
     )
-    const debounceMs = inlineEditNodeIdAtSchedule
-      ? structuralPreviewGraceRemainingMs > 0
-        ? structuralPreviewGraceRemainingMs
-        : structuralSettleAtSchedule?.newNodeId === inlineEditNodeIdAtSchedule
-        ? OPTIMISTIC_STRUCTURAL_PREVIEW_SETTLE_DEBOUNCE_MS
-        : INLINE_EDIT_PREVIEW_DEBOUNCE_MS
-      : 16
+    const effectStartedAt = startWysiwygPerfSpan()
+    const previewSettleRequest = schedulePreviewSettleBridge({
+      runtime: previewSettleRuntime,
+      activeStructuralTransaction: activeStructuralTransactionAtSchedule,
+      activeInlineNodeId: inlineEditNodeIdAtSchedule,
+      draftVersion: inlineEditDraftVersionAtSchedule,
+      structuralSettle: structuralSettleAtSchedule,
+      scheduledAt: effectStartedAt,
+    })
+    const generation = previewSettleRequest.generation
+    const structuralPreviewGraceRemainingMs = resolvePreviewSettleGraceRemainingMs({
+      graceUntil: optimisticStructuralPreviewSettleGraceUntilRef.current,
+      now: startWysiwygPerfSpan(),
+    })
+    const debounceMs = resolvePreviewSettleDebounceMs({
+      activeInlineNodeId: inlineEditNodeIdAtSchedule,
+      structuralSettleNewNodeId: structuralSettleAtSchedule?.newNodeId ?? null,
+      structuralPreviewGraceRemainingMs,
+      structuralDebounceMs: OPTIMISTIC_STRUCTURAL_PREVIEW_SETTLE_DEBOUNCE_MS,
+      inlineEditDebounceMs: INLINE_EDIT_PREVIEW_DEBOUNCE_MS,
+      idleDebounceMs: 16,
+    })
     const useBackgroundPagination = shouldUseBackgroundBrowserPagination({
       doc: previewDoc,
       canUseWorker: typeof Worker !== "undefined",
       inlineEditNodeId: inlineEditNodeIdAtSchedule,
       allowInlineEdit: structuralSettleAtSchedule?.newNodeId === inlineEditNodeIdAtSchedule,
     })
-    const effectStartedAt = startWysiwygPerfSpan()
     recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       name: "pre-pagination:browser-pagination-effect-start",
       startMs: effectStartedAt,
@@ -4129,15 +4865,100 @@ export default function EditorShell() {
         inlineEditNodeId: inlineEditNodeIdAtSchedule,
       },
     })
+    const getPreviewSettleApplyDecision = () => (
+      getPreviewSettleApplyDecisionBridge({
+        runtime: previewSettleRuntime,
+        request: previewSettleRequest,
+        activeStructuralTransaction: activeStructuralTransactionAtSchedule,
+        currentStructuralGeneration: structuralEditRuntime.getCurrentGeneration(),
+        currentActiveInlineNodeId: inlineEditNodeIdRef.current,
+        currentDraftVersion: inlineEditDraftVersionRef.current,
+      })
+    )
+    const getBrowserPreviewSettleApplyPlan = () => (
+      createBrowserPreviewSettleApplyPlan({
+        decision: getPreviewSettleApplyDecision(),
+        generation,
+        currentGeneration: getCurrentPreviewSettleGenerationBridge(previewSettleRuntime),
+        scheduledActiveInlineNodeId: inlineEditNodeIdAtSchedule,
+        currentActiveInlineNodeId: inlineEditNodeIdRef.current,
+        scheduledDraftVersion: inlineEditDraftVersionAtSchedule,
+        currentDraftVersion: inlineEditDraftVersionRef.current,
+      })
+    )
+    const getBrowserPreviewShellMutationPlan = (
+      applyPlan: ReturnType<typeof getBrowserPreviewSettleApplyPlan>,
+      mode: "precomputed" | "visual-only" | "partial-worker" | "paginated-output",
+      source: string,
+      hasStructuralSettleForInlineNode = false,
+    ) => createBrowserPreviewShellMutationPlan({
+      applyPlan,
+      mode,
+      source,
+      generation,
+      isTextMeasurerReady: isEditorTextMeasurerReady(editorTextMeasurerStatus),
+      hasStructuralSettleForInlineNode,
+    })
+    const recordOptimisticRefocusStaleSettleIgnored = (
+      reason: string,
+      source: string,
+      extra: Record<string, unknown> = {},
+    ) => {
+      const structuralSettle = optimisticStructuralSettleRef.current
+      if (!structuralSettle) return
+      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "optimistic-refocus-stale-settle-ignored", structuralSettle.startedAt, {
+        nodeId: structuralSettle.newNodeId,
+        previousNodeId: structuralSettle.sourceNodeId,
+        pageIndex: structuralSettle.sourceFragment.pageIndex,
+        source,
+        action: reason,
+        active: true,
+        latestSettleApplied: false,
+        ...extra,
+      })
+    }
+    const ignorePreviewSettle = (
+      plan: ReturnType<typeof getBrowserPreviewSettleApplyPlan> & { action: "ignore" },
+      source: string,
+      extra: Record<string, unknown> = {},
+    ) => {
+      markPreviewSettleIgnoredBridge(previewSettleRuntime, previewSettleRequest, plan.decision)
+      recordOptimisticRefocusStaleSettleIgnored(plan.reason, source, {
+        draftVersion: inlineEditDraftVersionAtSchedule,
+        previewSettleApplyDecision: plan.decision.type,
+        currentDraftVersion: plan.currentDraftVersion,
+        currentPreviewSettleGeneration: plan.currentGeneration,
+        ...extra,
+      })
+    }
     const precomputedPagination = precomputedBrowserPaginationRef.current
     if (precomputedPagination) {
       precomputedBrowserPaginationRef.current = null
       if (precomputedPagination.doc === previewDoc) {
-        optimisticLayoutRef.current = precomputedPagination
-        setPartialPreviewPaginated(null)
-        if (isEditorTextMeasurerReady(editorTextMeasurerStatus)) {
-          setBrowserPreviewLayout(markEditorPreviewLayoutFull(generation))
+        const applyPlan = getBrowserPreviewSettleApplyPlan()
+        const shellMutationPlan = getBrowserPreviewShellMutationPlan(applyPlan, "precomputed", "precomputed-browser-pagination")
+        recordPreviewSettleShellMutationPlan(shellMutationPlan, { token: generation })
+        if (shellMutationPlan.action === "ignore") {
+          if (applyPlan.action === "ignore") {
+            ignorePreviewSettle(applyPlan, shellMutationPlan.source)
+          }
+          return () => undefined
         }
+        applyPrecomputedBrowserPreviewShellMutation({
+          plan: shellMutationPlan,
+          optimisticLayout: precomputedPagination,
+          createFullBrowserPreviewLayout: markEditorPreviewLayoutFull,
+          writeOptimisticLayout: (layout) => {
+            optimisticLayoutRef.current = layout
+          },
+          clearPartialPreview: () => setPartialPreviewPaginated(null),
+          setBrowserPreviewLayout,
+          markPreviewSettleLifecycle: () => {
+            markPreviewSettleStartedBridge(previewSettleRuntime, previewSettleRequest)
+            markPreviewSettleCompletedBridge(previewSettleRuntime, previewSettleRequest)
+            markPreviewSettleAppliedBridge(previewSettleRuntime, previewSettleRequest)
+          },
+        })
         return () => undefined
       }
     }
@@ -4151,18 +4972,42 @@ export default function EditorShell() {
       nextPreviewDoc: previewDoc,
     })
     if (visualOnlyUpdate) {
+      const applyPlan = getBrowserPreviewSettleApplyPlan()
+      const shellMutationPlan = getBrowserPreviewShellMutationPlan(applyPlan, "visual-only", "visual-only-fast-lane")
+      recordPreviewSettleShellMutationPlan(shellMutationPlan, { token: generation })
+      if (shellMutationPlan.action === "ignore") {
+        if (applyPlan.action === "ignore") {
+          ignorePreviewSettle(applyPlan, shellMutationPlan.source)
+        }
+        return () => undefined
+      }
       const startedAt = startWysiwygPerfSpan()
-      optimisticLayoutRef.current = { doc: previewDoc, paginated: visualOnlyUpdate.paginated }
-      paginatedRef.current = visualOnlyUpdate.paginated
-      setPartialPreviewPaginated(null)
-      setBrowserPreviewLayout(markEditorPreviewLayoutFull(generation))
+      applyVisualOnlyBrowserPreviewShellMutation({
+        plan: shellMutationPlan,
+        optimisticLayout: { doc: previewDoc, paginated: visualOnlyUpdate.paginated },
+        paginated: visualOnlyUpdate.paginated,
+        createFullBrowserPreviewLayout: markEditorPreviewLayoutFull,
+        writeOptimisticLayout: (layout) => {
+          optimisticLayoutRef.current = layout
+        },
+        writePaginatedRef: (paginated) => {
+          paginatedRef.current = paginated
+        },
+        clearPartialPreview: () => setPartialPreviewPaginated(null),
+        setBrowserPreviewLayout,
+        dispatchSetPaginated: (paginated) => dispatch({ type: "SET_PAGINATED", paginated }),
+        markPreviewSettleLifecycle: () => {
+          markPreviewSettleStartedBridge(previewSettleRuntime, previewSettleRequest)
+          markPreviewSettleCompletedBridge(previewSettleRuntime, previewSettleRequest)
+          markPreviewSettleAppliedBridge(previewSettleRuntime, previewSettleRequest)
+        },
+      })
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
         source: "visual-only-fast-lane",
         commandType: pendingActionClassification?.action.type,
         layoutAffecting: false,
         ...summarizePaginatedForWysiwygPerf(visualOnlyUpdate.paginated),
       })
-      dispatch({ type: "SET_PAGINATED", paginated: visualOnlyUpdate.paginated })
       return () => undefined
     }
 
@@ -4207,24 +5052,6 @@ export default function EditorShell() {
         active: true,
       })
     }
-    const recordOptimisticRefocusStaleSettleIgnored = (
-      reason: string,
-      source: string,
-      extra: Record<string, unknown> = {},
-    ) => {
-      const structuralSettle = optimisticStructuralSettleRef.current
-      if (!structuralSettle) return
-      finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "optimistic-refocus-stale-settle-ignored", structuralSettle.startedAt, {
-        nodeId: structuralSettle.newNodeId,
-        previousNodeId: structuralSettle.sourceNodeId,
-        pageIndex: structuralSettle.sourceFragment.pageIndex,
-        source,
-        action: reason,
-        active: true,
-        latestSettleApplied: false,
-        ...extra,
-      })
-    }
     interactiveDebounceRef.current = setTimeout(() => {
       interactiveDebounceRef.current = null
       finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:browser-pagination-debounce-delay", scheduleStartedAt, {
@@ -4234,18 +5061,12 @@ export default function EditorShell() {
         measurerStatus: editorTextMeasurerStatus,
         fontReadyVersion,
       })
-      if (generation !== browserPaginationGenerationRef.current) {
-        recordOptimisticRefocusStaleSettleIgnored("generation-mismatch-before-start", "browser-preview-schedule", {
-          draftVersion: inlineEditDraftVersionAtSchedule,
-        })
+      const startPlan = getBrowserPreviewSettleApplyPlan()
+      if (startPlan.action === "ignore") {
+        ignorePreviewSettle(startPlan, "browser-preview-schedule")
         return
       }
-      if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) {
-        recordOptimisticRefocusStaleSettleIgnored("inline-edit-node-changed-before-start", "browser-preview-schedule", {
-          draftVersion: inlineEditDraftVersionAtSchedule,
-        })
-        return
-      }
+      markPreviewSettleStartedBridge(previewSettleRuntime, previewSettleRequest)
 
       const commitPagination = (
         paginated: PaginatedDocument,
@@ -4261,71 +5082,74 @@ export default function EditorShell() {
           ...extra,
           ...summarizePaginatedForWysiwygPerf(paginated),
         })
-        if (generation !== browserPaginationGenerationRef.current) {
-          recordOptimisticRefocusStaleSettleIgnored("generation-mismatch-at-commit", source, {
-            draftVersion: inlineEditDraftVersionAtSchedule,
-          })
-          return
-        }
-        if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) {
-          recordOptimisticRefocusStaleSettleIgnored("inline-edit-node-changed-at-commit", source, {
-            draftVersion: inlineEditDraftVersionAtSchedule,
-          })
-          return
-        }
-        if (
-          inlineEditNodeIdAtSchedule &&
-          inlineEditDraftVersionAtSchedule !== null &&
-          inlineEditDraftVersionRef.current > inlineEditDraftVersionAtSchedule
-        ) {
-          recordOptimisticRefocusStaleSettleIgnored("draft-version-advanced-at-commit", source, {
-            draftVersion: inlineEditDraftVersionAtSchedule,
-            currentDraftVersion: inlineEditDraftVersionRef.current,
-          })
-          return
-        }
-        optimisticLayoutRef.current = { doc: previewDoc, paginated }
-        paginatedRef.current = paginated
-        setPartialPreviewPaginated(null)
-        if (isEditorTextMeasurerReady(editorTextMeasurerStatus) || source === "document-preview-worker") {
-          setBrowserPreviewLayout(markEditorPreviewLayoutFull(generation))
-        } else {
-          setBrowserPreviewLayout(markEditorPreviewLayoutSettling(generation, { blocksCanvas: true }))
-        }
-        dispatch({ type: "SET_PAGINATED", paginated })
-        if (inlineEditDraftVersionAtSchedule !== null) {
-          markInlineEditVisualFresh(inlineEditDraftVersionAtSchedule)
-        }
+        markPreviewSettleCompletedBridge(previewSettleRuntime, previewSettleRequest)
+        const applyPlan = getBrowserPreviewSettleApplyPlan()
         const structuralSettle = optimisticStructuralSettleRef.current
-        if (structuralSettle && structuralSettle.newNodeId === inlineEditNodeIdAtSchedule) {
-          optimisticStructuralSettleRef.current = null
-          const settleCompletedAt = startWysiwygPerfSpan()
-          recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-            kind: "flowdoc-structural-pagination-schedule",
-            startedAt: structuralSettle.startedAt,
-            durationMs: Math.max(0, settleCompletedAt - structuralSettle.startedAt),
-            nodeId: structuralSettle.newNodeId,
-            previousNodeId: structuralSettle.sourceNodeId,
-            sourceNodeId: structuralSettle.sourceNodeId,
-            pageIndex: structuralSettle.sourceFragment.pageIndex,
-            action: "completed",
-            operation: "settle",
-            token: generation,
-            scheduledDelayMs: debounceMs,
-            source,
-            active: true,
-            latestSettleApplied: true,
-          })
-          finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "structural-refocus-settled-pagination", structuralSettle.startedAt, {
-            nodeId: structuralSettle.newNodeId,
-            previousNodeId: structuralSettle.sourceNodeId,
-            pageIndex: structuralSettle.sourceFragment.pageIndex,
-            source,
-            active: true,
-            latestSettleApplied: true,
-            ...summarizePaginatedForWysiwygPerf(paginated),
-          })
+        const shellMutationPlan = getBrowserPreviewShellMutationPlan(
+          applyPlan,
+          "paginated-output",
+          source,
+          Boolean(structuralSettle && structuralSettle.newNodeId === inlineEditNodeIdAtSchedule),
+        )
+        recordPreviewSettleShellMutationPlan(shellMutationPlan, { token: generation })
+        if (shellMutationPlan.action === "ignore") {
+          if (applyPlan.action === "ignore") {
+            ignorePreviewSettle(applyPlan, shellMutationPlan.source)
+          }
+          return
         }
+        applyPaginatedOutputBrowserPreviewShellMutation({
+          plan: shellMutationPlan,
+          optimisticLayout: { doc: previewDoc, paginated },
+          paginated,
+          inlineEditVisualFreshVersion: inlineEditDraftVersionAtSchedule,
+          createFullBrowserPreviewLayout: markEditorPreviewLayoutFull,
+          createSettlingBlockingBrowserPreviewLayout: (layoutGeneration) => markEditorPreviewLayoutSettling(layoutGeneration, { blocksCanvas: true }),
+          writeOptimisticLayout: (layout) => {
+            optimisticLayoutRef.current = layout
+          },
+          writePaginatedRef: (nextPaginated) => {
+            paginatedRef.current = nextPaginated
+          },
+          clearPartialPreview: () => setPartialPreviewPaginated(null),
+          setBrowserPreviewLayout,
+          dispatchSetPaginated: (nextPaginated) => dispatch({ type: "SET_PAGINATED", paginated: nextPaginated }),
+          markPreviewSettleLifecycle: () => {
+            markPreviewSettleAppliedBridge(previewSettleRuntime, previewSettleRequest)
+          },
+          markInlineEditVisualFresh,
+          completeStructuralSettle: structuralSettle
+            ? () => {
+                optimisticStructuralSettleRef.current = null
+                const settleCompletedAt = startWysiwygPerfSpan()
+                recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+                  kind: "flowdoc-structural-pagination-schedule",
+                  startedAt: structuralSettle.startedAt,
+                  durationMs: Math.max(0, settleCompletedAt - structuralSettle.startedAt),
+                  nodeId: structuralSettle.newNodeId,
+                  previousNodeId: structuralSettle.sourceNodeId,
+                  sourceNodeId: structuralSettle.sourceNodeId,
+                  pageIndex: structuralSettle.sourceFragment.pageIndex,
+                  action: "completed",
+                  operation: "settle",
+                  token: generation,
+                  scheduledDelayMs: debounceMs,
+                  source,
+                  active: true,
+                  latestSettleApplied: true,
+                })
+                finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "structural-refocus-settled-pagination", structuralSettle.startedAt, {
+                  nodeId: structuralSettle.newNodeId,
+                  previousNodeId: structuralSettle.sourceNodeId,
+                  pageIndex: structuralSettle.sourceFragment.pageIndex,
+                  source,
+                  active: true,
+                  latestSettleApplied: true,
+                  ...summarizePaginatedForWysiwygPerf(paginated),
+                })
+              }
+            : null,
+        })
       }
 
       const runMainThreadPagination = (source: string) => {
@@ -4344,16 +5168,9 @@ export default function EditorShell() {
 
           const fallbackToMainThread = (reason: string) => {
             if (requestSettled) return
-            if (generation !== browserPaginationGenerationRef.current) {
-              recordOptimisticRefocusStaleSettleIgnored("generation-mismatch-worker-fallback", "document-preview-worker-fallback", {
-                draftVersion: inlineEditDraftVersionAtSchedule,
-              })
-              return
-            }
-            if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) {
-              recordOptimisticRefocusStaleSettleIgnored("inline-edit-node-changed-worker-fallback", "document-preview-worker-fallback", {
-                draftVersion: inlineEditDraftVersionAtSchedule,
-              })
+            const fallbackPlan = getBrowserPreviewSettleApplyPlan()
+            if (fallbackPlan.action === "ignore") {
+              ignorePreviewSettle(fallbackPlan, "document-preview-worker-fallback")
               return
             }
             requestSettled = true
@@ -4373,7 +5190,7 @@ export default function EditorShell() {
                   activeRequestId: requestId,
                   responseRequestId: response.requestId,
                   activeGeneration: generation,
-                  currentGeneration: browserPaginationGenerationRef.current,
+                  currentGeneration: getCurrentPreviewSettleGenerationBridge(previewSettleRuntime),
                   responseType: response.type,
                   ...(response.type === "success" ? {
                     workerMeasurerStatus: response.measurerStatus,
@@ -4383,38 +5200,17 @@ export default function EditorShell() {
               })
               return
             }
-            if (generation !== browserPaginationGenerationRef.current) {
-              recordOptimisticRefocusStaleSettleIgnored("generation-mismatch-worker-response", "document-preview-worker", {
-                draftVersion: inlineEditDraftVersionAtSchedule,
-              })
+            const responsePlan = getBrowserPreviewSettleApplyPlan()
+            if (responsePlan.action === "ignore") {
+              ignorePreviewSettle(responsePlan, "document-preview-worker")
               recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
                 name: "pre-pagination:worker-response-ignored",
                 startMs: startWysiwygPerfSpan(),
                 detail: {
-                  reason: "generation-mismatch",
+                  reason: responsePlan.reason,
                   requestId,
                   responseGeneration: generation,
-                  currentGeneration: browserPaginationGenerationRef.current,
-                  responseType: response.type,
-                  ...(response.type === "success" ? {
-                    workerMeasurerStatus: response.measurerStatus,
-                    ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
-                  } : {}),
-                },
-              })
-              return
-            }
-            if (inlineEditNodeIdAtSchedule !== inlineEditNodeIdRef.current) {
-              recordOptimisticRefocusStaleSettleIgnored("inline-edit-node-changed-worker-response", "document-preview-worker", {
-                draftVersion: inlineEditDraftVersionAtSchedule,
-              })
-              recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-                name: "pre-pagination:worker-response-ignored",
-                startMs: startWysiwygPerfSpan(),
-                detail: {
-                  reason: "inline-edit-node-changed",
-                  requestId,
-                  generation,
+                  currentGeneration: getCurrentPreviewSettleGenerationBridge(previewSettleRuntime),
                   responseType: response.type,
                   ...(response.type === "success" ? {
                     workerMeasurerStatus: response.measurerStatus,
@@ -4426,12 +5222,29 @@ export default function EditorShell() {
             }
             if (requestSettled) return
             if (response.type === "partial") {
-              setPartialPreviewPaginated({
-                generation,
+              const partialShellMutationPlan = getBrowserPreviewShellMutationPlan(
+                responsePlan,
+                "partial-worker",
+                "document-preview-worker-partial",
+              )
+              recordPreviewSettleShellMutationPlan(partialShellMutationPlan, {
+                token: generation,
                 requestId,
-                paginated: response.paginated,
               })
-              setBrowserPreviewLayout(markEditorPreviewLayoutPartial(generation))
+              if (partialShellMutationPlan.action === "ignore") {
+                return
+              }
+              applyPartialWorkerBrowserPreviewShellMutation({
+                plan: partialShellMutationPlan,
+                partialPreview: {
+                  generation,
+                  requestId,
+                  paginated: response.paginated,
+                },
+                createPartialBrowserPreviewLayout: markEditorPreviewLayoutPartial,
+                setPartialPreview: setPartialPreviewPaginated,
+                setBrowserPreviewLayout,
+              })
               return
             }
             if (response.type === "error") {
@@ -4482,16 +5295,21 @@ export default function EditorShell() {
       if (interactiveDebounceRef.current) {
         clearTimeout(interactiveDebounceRef.current)
         interactiveDebounceRef.current = null
-        if (structuralSettleAtSchedule) {
+        const structuralSettleForCleanup = structuralSettleAtSchedule
+        if (shouldSupersedePreviewSettleOnCleanup({
+          hasPendingDebounce: true,
+          structuralSettle: structuralSettleForCleanup,
+        }) && structuralSettleForCleanup) {
           const supersededAt = startWysiwygPerfSpan()
+          markPreviewSettleSupersededBridge(previewSettleRuntime, previewSettleRequest, "browser-preview-effect-cleanup", supersededAt)
           recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
             kind: "flowdoc-structural-pagination-schedule",
             startedAt: scheduleStartedAt,
             durationMs: Math.max(0, supersededAt - scheduleStartedAt),
-            nodeId: structuralSettleAtSchedule.newNodeId,
-            previousNodeId: structuralSettleAtSchedule.sourceNodeId,
-            sourceNodeId: structuralSettleAtSchedule.sourceNodeId,
-            pageIndex: structuralSettleAtSchedule.sourceFragment.pageIndex,
+            nodeId: structuralSettleForCleanup.newNodeId,
+            previousNodeId: structuralSettleForCleanup.sourceNodeId,
+            sourceNodeId: structuralSettleForCleanup.sourceNodeId,
+            pageIndex: structuralSettleForCleanup.sourceFragment.pageIndex,
             action: "superseded",
             operation: "settle",
             token: generation,
@@ -4673,29 +5491,48 @@ export default function EditorShell() {
     else pageOverlayRefs.current.delete(key)
   }, [])
   const getPageOverlayElement = useCallback((key: string) => pageOverlayRefs.current.get(key) ?? null, [])
-  const flowdocDraftEditorIslandConfig = useMemo(() => {
-    if (!isTemplateMode || !WYSIWYG_TEXT_ENGINE_ENABLED) return null
-    const nodeId = wysiwygTextSessionState.nodeId
-    if (!nodeId || inlineEditNodeId !== nodeId) return null
-    if (optimisticStructuralIslandOverride?.nodeId === nodeId) {
-      return optimisticStructuralIslandOverride
-    }
-    if (isParagraphInsideTableCell(previewDoc, nodeId)) return null
-    if (isParagraphInsideFlowStack(previewDoc, nodeId)) return null
-    if (isParagraphInsideRowStack(previewDoc, nodeId)) return null
-    const paragraph = getParagraphFromDoc(previewDoc, nodeId)
-    if (!paragraph || !isTextRunOnlyParagraph(paragraph)) return null
-    const activeFragment = findWysiwygTextEngineFragment(displayPaginated, nodeId, inlineEditPageIndex)
-    const fragment = activeFragment?.continuesFrom
-      ? findWysiwygTextEngineFragment(displayPaginated, nodeId, null)
-      : activeFragment
-    if (!fragment || fragment.continuesFrom || fragment.nodeType !== "paragraph") return null
-    if (fragment.listMarker) return null
-    const pageKey = editorPageNavigation.pageKeyByPageIndex.get(fragment.pageIndex) ?? null
-    if (!pageKey) return null
-    const pages = displayPaginated.sections.flatMap((section) => section.pages)
-    return { nodeId, paragraph, fragment, pageKey, pages }
-  }, [
+  const flowdocDraftEditorIslandConfig = useMemo(() => (
+    captureStructuralShellRenderValue(
+      "shell-derived:draft-island-config",
+      () => {
+        if (!isTemplateMode || !WYSIWYG_TEXT_ENGINE_ENABLED) return null
+        const nodeId = wysiwygTextSessionState.nodeId
+        if (!nodeId || inlineEditNodeId !== nodeId) return null
+        if (optimisticStructuralIslandOverride?.nodeId === nodeId) {
+          return optimisticStructuralIslandOverride
+        }
+        if (isParagraphInsideTableCell(previewDoc, nodeId)) return null
+        if (isParagraphInsideFlowStack(previewDoc, nodeId)) return null
+        if (isParagraphInsideRowStack(previewDoc, nodeId)) return null
+        const paragraph = getParagraphFromDoc(previewDoc, nodeId)
+        if (!paragraph || !isTextRunOnlyParagraph(paragraph)) return null
+        const fragmentLookupStartedAt = startWysiwygPerfSpan()
+        const activeFragment = findWysiwygTextEngineFragment(displayPaginated, nodeId, inlineEditPageIndex)
+        const fragment = activeFragment?.continuesFrom
+          ? findWysiwygTextEngineFragment(displayPaginated, nodeId, null)
+          : activeFragment
+        pushStructuralShellRenderAttributionEvent("shell-derived:draft-island-active-fragment", fragmentLookupStartedAt, {
+          renderReason: "findWysiwygTextEngineFragment",
+          nodeId,
+          pageIndex: fragment?.pageIndex ?? activeFragment?.pageIndex ?? null,
+          currentFragmentCount: fragment ? 1 : 0,
+        })
+        if (!fragment || fragment.continuesFrom || fragment.nodeType !== "paragraph") return null
+        if (fragment.listMarker) return null
+        const pageKey = editorPageNavigation.pageKeyByPageIndex.get(fragment.pageIndex) ?? null
+        if (!pageKey) return null
+        const pages = displayPaginated.sections.flatMap((section) => section.pages)
+        return { nodeId, paragraph, fragment, pageKey, pages }
+      },
+      (config) => ({
+        renderReason: "flowdocDraftEditorIslandConfig",
+        nodeId: config?.nodeId ?? optimisticStructuralIslandOverride?.nodeId ?? optimisticStructuralRefocusPaint?.nodeId,
+        pageIndex: config?.fragment.pageIndex ?? optimisticStructuralIslandOverride?.fragment.pageIndex ?? null,
+        currentFragmentCount: config ? 1 : 0,
+        pageCount: config?.pages.length ?? 0,
+      }),
+    )
+  ), [
     displayPaginated,
     editorPageNavigation.pageKeyByPageIndex,
     inlineEditNodeId,
@@ -4706,34 +5543,54 @@ export default function EditorShell() {
     wysiwygTextSessionState.nodeId,
   ])
   const useOutOfCanvasWysiwygIsland = flowdocDraftEditorIslandConfig !== null
-  const activeOutOfCanvasStructuralIsland = useMemo<ActiveOutOfCanvasStructuralIsland | null>(() => {
-    const override = optimisticStructuralIslandOverride
-    if (!isTemplateMode || !useOutOfCanvasWysiwygIsland) return null
-    if (!override) return null
-    if (flowdocDraftEditorIslandConfig?.nodeId !== override.nodeId) return null
-    return {
-      nodeId: override.nodeId,
-      mode: override.mode,
-      fragment: override.fragment,
-      pageIndex: override.fragment.pageIndex,
-      suppressedPageBreakNodeId: override.suppressedPageBreakNodeId ?? null,
-    }
-  }, [
+  const activeOutOfCanvasStructuralIsland = useMemo<ActiveOutOfCanvasStructuralIsland | null>(() => (
+    captureStructuralShellRenderValue(
+      "shell-derived:active-structural-island",
+      () => {
+        const override = optimisticStructuralIslandOverride
+        if (!isTemplateMode || !useOutOfCanvasWysiwygIsland) return null
+        if (!override) return null
+        if (flowdocDraftEditorIslandConfig?.nodeId !== override.nodeId) return null
+        return {
+          nodeId: override.nodeId,
+          mode: override.mode,
+          fragment: override.fragment,
+          pageIndex: override.fragment.pageIndex,
+          suppressedPageBreakNodeId: override.suppressedPageBreakNodeId ?? null,
+        }
+      },
+      (island) => ({
+        renderReason: "activeOutOfCanvasStructuralIsland",
+        nodeId: island?.nodeId ?? optimisticStructuralIslandOverride?.nodeId ?? optimisticStructuralRefocusPaint?.nodeId,
+        pageIndex: island?.pageIndex ?? optimisticStructuralIslandOverride?.fragment.pageIndex ?? null,
+        suppressedPageBreakNodeId: island?.suppressedPageBreakNodeId ?? optimisticStructuralIslandOverride?.suppressedPageBreakNodeId ?? null,
+      }),
+    )
+  ), [
     flowdocDraftEditorIslandConfig?.nodeId,
     isTemplateMode,
     optimisticStructuralIslandOverride,
     useOutOfCanvasWysiwygIsland,
   ])
-  const suppressedCanvasTextNodeIds = useMemo(() => {
-    const ids = new Set<string>()
-    if (flowdocDraftEditorIslandConfig?.nodeId) {
-      ids.add(flowdocDraftEditorIslandConfig.nodeId)
-    }
-    if (optimisticStructuralIslandOverride?.settleRemovedNodeId) {
-      ids.add(optimisticStructuralIslandOverride.settleRemovedNodeId)
-    }
-    return ids
-  }, [
+  const suppressedCanvasTextNodeIds = useMemo(() => (
+    captureStructuralShellRenderValue(
+      "shell-derived:suppressed-canvas-text-node-ids",
+      () => {
+        const ids = new Set<string>()
+        if (flowdocDraftEditorIslandConfig?.nodeId) {
+          ids.add(flowdocDraftEditorIslandConfig.nodeId)
+        }
+        if (optimisticStructuralIslandOverride?.settleRemovedNodeId) {
+          ids.add(optimisticStructuralIslandOverride.settleRemovedNodeId)
+        }
+        return ids
+      },
+      (ids) => ({
+        renderReason: "suppressedCanvasTextNodeIds",
+        fragmentCount: ids.size,
+      }),
+    )
+  ), [
     flowdocDraftEditorIslandConfig?.nodeId,
     optimisticStructuralIslandOverride?.settleRemovedNodeId,
   ])
@@ -4741,7 +5598,18 @@ export default function EditorShell() {
     setOptimisticStructuralRefocusPaint((current) => (
       current?.nodeId === nodeId ? null : current
     ))
-  }, [])
+    const release = deferredStructuralPanelReleaseRef.current
+    if (release?.pending && release.nodeId === nodeId) {
+      const identity = {
+        id: release.transactionId,
+        generation: release.generation,
+      }
+      structuralEditRuntime.markUrgentPainted(identity)
+      structuralEditRuntime.markPanelReleasePending(identity)
+        markStructuralPanelUrgentFlushCompleteBridge(panelDeferralRuntime, release)
+      scheduleDeferredStructuralPanelRelease(release.generation, "structural-refocus-painted")
+    }
+  }, [panelDeferralRuntime, scheduleDeferredStructuralPanelRelease, structuralEditRuntime])
 
   useEffect(() => {
     const pending = pendingBoundarySafeInlineEditEndRef.current
@@ -5872,105 +6740,119 @@ export default function EditorShell() {
         {wysiwygTextAccessibilityStatus ?? ""}
       </div>
       {/* Toolbar */}
-      <EditorSubtreePerfProfiler enabled={wysiwygPerfTraceActive} id="top-toolbar">
-        <EditorToolbar
-          workflowMode={workflowMode}
-          workflowNavItems={workflowNavItems}
-          onActivateWorkflowMode={activateWorkflowMode}
-          fontFallback={fontFallback}
-          editorTextMeasurerStatus={editorTextMeasurerStatus}
-          layoutError={layoutError}
-          authoritativeLayoutWarnings={authoritativeLayoutWarnings}
-          layoutWarningSource={layoutWarningSource}
-          exportError={exportError}
-          exportReadinessStatusReason={exportReadinessStatusReason}
-          exportReadinessMessage={exportReadinessMessage}
-          exportFeedback={exportFeedback}
-          exportFeedbackElapsedMs={exportFeedbackElapsedMs}
-          documentIoStatus={documentIoStatus}
-          dragStatusLabel={state.drag ? `dragging ${describeDragSource(state.drag.source)} — Esc to cancel` : null}
-          isExporting={isExporting}
-          canExport={exportReadiness.canExport}
-          onExport={handleExport}
-          canUndo={isTemplateMode && state.past.length > 0}
-          canRedo={isTemplateMode && state.future.length > 0}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          showTextSegments={showTextSegments}
-          onToggleTextSegments={() => setShowTextSegments((value) => !value)}
-          showDrift={showDrift}
-          driftCount={driftReport?.driftCount ?? null}
-          driftTotalParagraphs={driftReport?.totalParagraphs ?? null}
-          onToggleDrift={() => setShowDrift((value) => !value)}
-          importRef={importRef}
-          onNewDocument={handleNewDocument}
-          onImportJson={handleImportJson}
-          onExportJson={handleExportJson}
-        >
-          {isTemplateMode && (
-            <>
-              <ListToolbar
-                doc={state.doc}
-                selectedNodeId={state.selectionAnchorNodeId ?? state.selectedNodeId}
-                editable={isTemplateMode}
-                onToggleListPreset={handleToggleListPreset}
-                onChangeListItemLevel={handleToolbarChangeListItemLevel}
-              />
-              <RichTextToolbar
-                doc={state.doc}
-                selectedNodeId={state.selectedNodeId}
-                draftParagraph={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
-                  richWysiwygDraftSessionState.nodeId === state.selectedNodeId
-                  ? richWysiwygDraftSessionState.draft?.paragraph ?? null
-                  : null}
-                pendingStyle={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
-                  richWysiwygDraftSessionState.nodeId === state.selectedNodeId
-                  ? richWysiwygDraftSessionState.draft?.pendingStyle ?? null
-                  : null}
-                textSelection={richTextToolbarSelection}
-                commandTextSelection={richTextToolbarLiveSelection}
-                editable={isTemplateMode}
-                onUpdateParagraphTextStyle={(nodeId, changes) => {
-                  if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
-                  const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
-                  const finalized = finalizeInlineEditBeforeAction()
-                  if (hadWysiwygTextSession && !finalized) return
-                  dispatchEditorAction({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })
-                }}
-                onUpdateTextRunStyleRange={(nodeId, start, end, changes) => {
-                  if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
-                  const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
-                  const finalized = finalizeInlineEditBeforeAction()
-                  if (hadWysiwygTextSession && !finalized) return
-                  dispatchEditorAction({ type: "UPDATE_TEXT_RUN_STYLE_RANGE", nodeId, start, end, changes })
-                }}
-              />
-            </>
-          )}
-        </EditorToolbar>
-      </EditorSubtreePerfProfiler>
+      <div
+        data-structural-panel-deferred={deferNonCriticalPanelsForStructuralPaint ? "true" : "false"}
+        style={{ pointerEvents: deferNonCriticalPanelsForStructuralPaint ? "none" : "auto" }}
+      >
+        <StructuralPaintDeferredSubtree defer={deferNonCriticalPanelsForStructuralPaint}>
+          <EditorSubtreePerfProfiler enabled={wysiwygPerfTraceActive} id="top-toolbar">
+            <EditorToolbar
+              workflowMode={workflowMode}
+              workflowNavItems={workflowNavItems}
+              onActivateWorkflowMode={activateWorkflowMode}
+              fontFallback={fontFallback}
+              editorTextMeasurerStatus={editorTextMeasurerStatus}
+              layoutError={layoutError}
+              authoritativeLayoutWarnings={authoritativeLayoutWarnings}
+              layoutWarningSource={layoutWarningSource}
+              exportError={exportError}
+              exportReadinessStatusReason={exportReadinessStatusReason}
+              exportReadinessMessage={exportReadinessMessage}
+              exportFeedback={exportFeedback}
+              exportFeedbackElapsedMs={exportFeedbackElapsedMs}
+              documentIoStatus={documentIoStatus}
+              dragStatusLabel={state.drag ? `dragging ${describeDragSource(state.drag.source)} — Esc to cancel` : null}
+              isExporting={isExporting}
+              canExport={exportReadiness.canExport}
+              onExport={handleExport}
+              canUndo={isTemplateMode && state.past.length > 0}
+              canRedo={isTemplateMode && state.future.length > 0}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              showTextSegments={showTextSegments}
+              onToggleTextSegments={() => setShowTextSegments((value) => !value)}
+              showDrift={showDrift}
+              driftCount={driftReport?.driftCount ?? null}
+              driftTotalParagraphs={driftReport?.totalParagraphs ?? null}
+              onToggleDrift={() => setShowDrift((value) => !value)}
+              importRef={importRef}
+              onNewDocument={handleNewDocument}
+              onImportJson={handleImportJson}
+              onExportJson={handleExportJson}
+            >
+              {isTemplateMode && (
+                <>
+                  <ListToolbar
+                    doc={state.doc}
+                    selectedNodeId={state.selectionAnchorNodeId ?? state.selectedNodeId}
+                    editable={isTemplateMode}
+                    onToggleListPreset={handleToggleListPreset}
+                    onChangeListItemLevel={handleToolbarChangeListItemLevel}
+                  />
+                  <RichTextToolbar
+                    doc={state.doc}
+                    selectedNodeId={state.selectedNodeId}
+                    draftParagraph={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+                      richWysiwygDraftSessionState.nodeId === state.selectedNodeId
+                      ? richWysiwygDraftSessionState.draft?.paragraph ?? null
+                      : null}
+                    pendingStyle={WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+                      richWysiwygDraftSessionState.nodeId === state.selectedNodeId
+                      ? richWysiwygDraftSessionState.draft?.pendingStyle ?? null
+                      : null}
+                    textSelection={richTextToolbarSelection}
+                    commandTextSelection={richTextToolbarLiveSelection}
+                    editable={isTemplateMode}
+                    onUpdateParagraphTextStyle={(nodeId, changes) => {
+                      if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
+                      const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
+                      const finalized = finalizeInlineEditBeforeAction()
+                      if (hadWysiwygTextSession && !finalized) return
+                      dispatchEditorAction({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })
+                    }}
+                    onUpdateTextRunStyleRange={(nodeId, start, end, changes) => {
+                      if (applyActiveRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return
+                      const hadWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId !== null
+                      const finalized = finalizeInlineEditBeforeAction()
+                      if (hadWysiwygTextSession && !finalized) return
+                      dispatchEditorAction({ type: "UPDATE_TEXT_RUN_STYLE_RANGE", nodeId, start, end, changes })
+                    }}
+                  />
+                </>
+              )}
+            </EditorToolbar>
+          </EditorSubtreePerfProfiler>
+        </StructuralPaintDeferredSubtree>
+      </div>
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <EditorSubtreePerfProfiler enabled={wysiwygPerfTraceActive} id="left-rail">
-          <EditorLeftRail
-            mode={leftRailMode}
-            outlineDoc={leftRailOutlineDoc}
-            styleDoc={leftRailStyleDoc}
-            selectedNodeId={outlineSelectionState.selectedNodeId}
-            selectedStyleResource={selectedStyleResource}
-            activeOutlineListGroupId={outlineSelectionState.activeListGroupId}
-            registry={packageFieldRegistry}
-            editable={isTemplateMode}
-            isDragging={!!state.drag}
-            addPaletteScope={headerFooterEditMode ? "headerFooter" : "document"}
-            onModeChange={setLeftRailMode}
-            onSelectNode={selectLeftRailNode}
-            onSelectOutlineListGroup={selectOutlineListGroup}
-            onSelectStyleResource={selectStyleResource}
-            onReorderBodyChild={reorderLeftRailBodyChild}
-            onDragStart={startPaletteDrag}
-          />
+          <div
+            data-structural-panel-deferred={deferLeftRailForStructuralPaint ? "true" : "false"}
+            style={{ display: "flex", flexShrink: 0, pointerEvents: deferLeftRailForStructuralPaint ? "none" : "auto" }}
+          >
+            <StructuralPaintDeferredSubtree defer={deferLeftRailForStructuralPaint}>
+              <EditorLeftRail
+                mode={leftRailMode}
+                outlineDoc={leftRailOutlineDoc}
+                styleDoc={leftRailStyleDoc}
+                selectedNodeId={outlineSelectionState.selectedNodeId}
+                selectedStyleResource={selectedStyleResource}
+                activeOutlineListGroupId={outlineSelectionState.activeListGroupId}
+                registry={packageFieldRegistry}
+                editable={isTemplateMode}
+                isDragging={!!state.drag}
+                addPaletteScope={headerFooterEditMode ? "headerFooter" : "document"}
+                onModeChange={setLeftRailMode}
+                onSelectNode={selectLeftRailNode}
+                onSelectOutlineListGroup={selectOutlineListGroup}
+                onSelectStyleResource={selectStyleResource}
+                onReorderBodyChild={reorderLeftRailBodyChild}
+                onDragStart={startPaletteDrag}
+              />
+            </StructuralPaintDeferredSubtree>
+          </div>
         </EditorSubtreePerfProfiler>
         <EditorCanvasColumn
           saveStatusLabel={localSaveStatusLabel}
@@ -6027,6 +6909,7 @@ export default function EditorShell() {
                 onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
                 onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
                 onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
+                onCanStartStructuralEdit={isTemplateMode ? handleCanStartParagraphTextSurfaceStructuralEdit : undefined}
                 onExitListItem={isTemplateMode ? handleExitListItem : () => undefined}
                 onChangeListItemLevel={isTemplateMode ? handleChangeListItemLevel : () => undefined}
                 onBackspaceListItemAtStart={isTemplateMode ? handleBackspaceListItemAtStart : () => undefined}
@@ -6102,6 +6985,8 @@ export default function EditorShell() {
               onSplitParagraph={handleSplitParagraph}
               onMergeParagraph={handleMergeParagraph}
               onRequestUndo={handleUndo}
+              onCompositionChange={handleWysiwygDraftCompositionChange}
+              structuralEditRuntime={structuralEditRuntime}
               structuralRefocusStartedAt={optimisticStructuralRefocusPaint?.nodeId === flowdocDraftEditorIslandConfig.nodeId
                 ? optimisticStructuralRefocusPaint.startedAt
                 : null}
@@ -6218,125 +7103,139 @@ export default function EditorShell() {
             </div>
           </div>
           {rightRailContentVisible && (
-            <div data-testid="editor-right-rail-content" style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              <EditorSubtreePerfProfiler enabled={wysiwygPerfTraceActive} id={`right-rail-${rightRailMode}`}>
-              {rightRailMode === "page" ? (
-                <div data-testid="editor-right-rail-page" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                  <PagePanel
-                    doc={state.doc}
-                    sectionIndex={activeSectionIndex}
-                    editable={isTemplateMode}
-                    onUpdateMargin={(sectionIndex, margin) => {
-                      if (!isTemplateMode) return
-                      dispatchEditorAction({ type: "UPDATE_MARGIN", sectionIndex, margin })
-                    }}
-                    onUpdateReservedZones={(sectionIndex, reserved, priority) => {
-                      if (!isTemplateMode) return
-                      dispatchEditorAction({ type: "UPDATE_RESERVED_ZONES", sectionIndex, reserved, priority })
-                    }}
-                    onToggleReservedZone={(sectionIndex, zone, enabled) => {
-                      if (!isTemplateMode) return
-                      dispatchEditorAction({
-                        type: enabled ? "ENSURE_HEADER_FOOTER_ZONE_VISIBLE" : "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY",
-                        sectionIndex,
-                        zone,
-                      })
-                    }}
-                    onUpdateHeaderFooterMode={(sectionIndex, mode) => {
-                      if (!isTemplateMode) return
-                      dispatchEditorAction({ type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE", sectionIndex, mode })
-                    }}
-                  />
-                </div>
-              ) : rightRailMode === "style" ? (
-                <div data-testid="editor-right-rail-style" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                  {selectedStyleResource?.kind === "paragraph-style" ? (
-                    <StyleDefinitionPanel
+            <div
+              data-testid="editor-right-rail-content"
+              data-structural-panel-deferred={deferNonCriticalPanelsForStructuralPaint ? "true" : "false"}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: 0,
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+                pointerEvents: deferNonCriticalPanelsForStructuralPaint ? "none" : "auto",
+              }}
+            >
+              <StructuralPaintDeferredSubtree defer={deferNonCriticalPanelsForStructuralPaint}>
+                <EditorSubtreePerfProfiler enabled={wysiwygPerfTraceActive} id={`right-rail-${rightRailMode}`}>
+                {rightRailMode === "page" ? (
+                  <div data-testid="editor-right-rail-page" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                    <PagePanel
                       doc={state.doc}
-                      selectedStyleId={selectedStyleResource.id}
+                      sectionIndex={activeSectionIndex}
                       editable={isTemplateMode}
-                      onPatchStyleDefinition={(styleId, patch) => {
+                      onUpdateMargin={(sectionIndex, margin) => {
                         if (!isTemplateMode) return
-                        finalizeInlineEditBeforeAction()
-                        dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_DEFINITION", styleId, patch })
+                        dispatchEditorAction({ type: "UPDATE_MARGIN", sectionIndex, margin })
                       }}
-                      onRenameStyleDefinition={(styleId, name) => {
+                      onUpdateReservedZones={(sectionIndex, reserved, priority) => {
                         if (!isTemplateMode) return
-                        finalizeInlineEditBeforeAction()
-                        dispatchEditorAction({ type: "RENAME_PARAGRAPH_STYLE_DEFINITION", styleId, name })
+                        dispatchEditorAction({ type: "UPDATE_RESERVED_ZONES", sectionIndex, reserved, priority })
+                      }}
+                      onToggleReservedZone={(sectionIndex, zone, enabled) => {
+                        if (!isTemplateMode) return
+                        dispatchEditorAction({
+                          type: enabled ? "ENSURE_HEADER_FOOTER_ZONE_VISIBLE" : "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY",
+                          sectionIndex,
+                          zone,
+                        })
+                      }}
+                      onUpdateHeaderFooterMode={(sectionIndex, mode) => {
+                        if (!isTemplateMode) return
+                        dispatchEditorAction({ type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE", sectionIndex, mode })
                       }}
                     />
-                  ) : (
-                    <ListResourceInspectorPanel
-                      doc={state.doc}
-                      selectedResource={selectedStyleResource}
-                    />
-                  )}
-                </div>
-              ) : rightRailMode === "properties" ? (
-                <div data-testid="editor-right-rail-properties" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                  {isTemplateMode ? (
-                    <PropertyPanel
-                      doc={state.doc}
-                      registry={packageFieldRegistry}
-                      selectedNodeId={state.selectedNodeId}
-                      selectionAnchorNodeId={state.selectionAnchorNodeId}
-                      onUpdateProps={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PROPS", nodeId, changes })}
-                      onUpdateText={(nodeId, text) => dispatchEditorAction({ type: "UPDATE_TEXT", nodeId, text })}
-                      onUpdateParagraphTextStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })}
-                      onApplyParagraphStylePreset={(nodeId, styleId) => dispatchEditorAction({ type: "APPLY_PARAGRAPH_STYLE_PRESET", nodeId, styleId })}
-                      onUpdateParagraphStyleBoxOverrides={(nodeId, changes) => dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX", nodeId, changes })}
-                      onUpdateParagraphStyleOverrides={(nodeId, changes) => dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDES", nodeId, changes })}
-                      onClearParagraphStyle={(nodeId) => dispatchEditorAction({ type: "CLEAR_PARAGRAPH_STYLE", nodeId })}
-                      onDetachParagraphStyle={(nodeId) => dispatchEditorAction({ type: "DETACH_PARAGRAPH_STYLE", nodeId })}
-                      onResetParagraphStyleOverrides={(nodeId) => dispatchEditorAction({ type: "RESET_PARAGRAPH_STYLE_OVERRIDES", nodeId })}
-                      onUpdateFieldRef={(fieldRefId, changes) => dispatchEditorAction({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
-                      onUpdateParagraphBoxStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
-                      onUpdateFlowStackBoxStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId, changes })}
-                      onUpdateFlowTableCellSpan={(cellId, changes) => dispatchEditorAction({ type: "UPDATE_FLOW_TABLE_CELL_SPAN", cellId, changes })}
-                      onSelectNode={(nodeId) => dispatchEditorAction({ type: "SELECT_NODE", nodeId, anchorNodeId: nodeId })}
-                      onSelectContextNode={selectContextNode}
-                      onSelectListGroup={selectOutlineListGroup}
-                      onSelectStyleResource={selectStyleResource}
-                      onDelete={(nodeId) => dispatchEditorAction({ type: "DELETE_NODE", nodeId })}
-                      tableOps={{
-                        addRow: (tableId, afterIndex) => {
-                          dispatchEditorAction({ type: "TABLE_ADD_ROW", tableId, afterIndex })
-                        },
-                        removeRow: (tableId, rowIndex) => {
-                          dispatchEditorAction({ type: "TABLE_REMOVE_ROW", tableId, rowIndex })
-                        },
-                        addCol: (tableId, afterIndex) => {
-                          dispatchEditorAction({ type: "TABLE_ADD_COL", tableId, afterIndex })
-                        },
-                        removeCol: (tableId, colIndex) => {
-                          dispatchEditorAction({ type: "TABLE_REMOVE_COL", tableId, colIndex })
-                        },
-                        fitToWidth: (tableId) => {
-                          dispatchEditorAction({ type: "TABLE_FIT_TO_WIDTH", tableId })
-                        },
-                      }}
-                      flowRowOps={{
-                        addCol: (rowId, stackId, position = "after") => {
-                          dispatchEditorAction({ type: "FLOW_ROW_ADD_COL", rowId, stackId, position })
-                        },
-                        resizePair: (leftStackId, rightStackId, leftShare, rightShare) => {
-                          dispatchEditorAction({ type: "RESIZE_COLUMNS", leftStackId, rightStackId, leftShare, rightShare })
-                        },
-                      }}
-                    />
-                  ) : (
-                    <FillingPanel
-                      doc={state.doc}
-                      registry={packageFieldRegistry}
-                      snapshot={dataSnapshot}
-                      readinessIssues={dataReadiness.issues}
-                      onChange={(key, value) => setDataSnapshot((prev) => setDataSnapshotValue(prev, key, value))}
-                    />
-                  )}
-                </div>
-              ) : null}
-              </EditorSubtreePerfProfiler>
+                  </div>
+                ) : rightRailMode === "style" ? (
+                  <div data-testid="editor-right-rail-style" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                    {selectedStyleResource?.kind === "paragraph-style" ? (
+                      <StyleDefinitionPanel
+                        doc={state.doc}
+                        selectedStyleId={selectedStyleResource.id}
+                        editable={isTemplateMode}
+                        onPatchStyleDefinition={(styleId, patch) => {
+                          if (!isTemplateMode) return
+                          finalizeInlineEditBeforeAction()
+                          dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_DEFINITION", styleId, patch })
+                        }}
+                        onRenameStyleDefinition={(styleId, name) => {
+                          if (!isTemplateMode) return
+                          finalizeInlineEditBeforeAction()
+                          dispatchEditorAction({ type: "RENAME_PARAGRAPH_STYLE_DEFINITION", styleId, name })
+                        }}
+                      />
+                    ) : (
+                      <ListResourceInspectorPanel
+                        doc={state.doc}
+                        selectedResource={selectedStyleResource}
+                      />
+                    )}
+                  </div>
+                ) : rightRailMode === "properties" ? (
+                  <div data-testid="editor-right-rail-properties" style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+                    {isTemplateMode ? (
+                      <PropertyPanel
+                        doc={state.doc}
+                        registry={packageFieldRegistry}
+                        selectedNodeId={state.selectedNodeId}
+                        selectionAnchorNodeId={state.selectionAnchorNodeId}
+                        onUpdateProps={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PROPS", nodeId, changes })}
+                        onUpdateText={(nodeId, text) => dispatchEditorAction({ type: "UPDATE_TEXT", nodeId, text })}
+                        onUpdateParagraphTextStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId, changes })}
+                        onApplyParagraphStylePreset={(nodeId, styleId) => dispatchEditorAction({ type: "APPLY_PARAGRAPH_STYLE_PRESET", nodeId, styleId })}
+                        onUpdateParagraphStyleBoxOverrides={(nodeId, changes) => dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX", nodeId, changes })}
+                        onUpdateParagraphStyleOverrides={(nodeId, changes) => dispatchEditorAction({ type: "PATCH_PARAGRAPH_STYLE_OVERRIDES", nodeId, changes })}
+                        onClearParagraphStyle={(nodeId) => dispatchEditorAction({ type: "CLEAR_PARAGRAPH_STYLE", nodeId })}
+                        onDetachParagraphStyle={(nodeId) => dispatchEditorAction({ type: "DETACH_PARAGRAPH_STYLE", nodeId })}
+                        onResetParagraphStyleOverrides={(nodeId) => dispatchEditorAction({ type: "RESET_PARAGRAPH_STYLE_OVERRIDES", nodeId })}
+                        onUpdateFieldRef={(fieldRefId, changes) => dispatchEditorAction({ type: "UPDATE_FIELD_REF", fieldRefId, changes })}
+                        onUpdateParagraphBoxStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId, changes })}
+                        onUpdateFlowStackBoxStyle={(nodeId, changes) => dispatchEditorAction({ type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId, changes })}
+                        onUpdateFlowTableCellSpan={(cellId, changes) => dispatchEditorAction({ type: "UPDATE_FLOW_TABLE_CELL_SPAN", cellId, changes })}
+                        onSelectNode={(nodeId) => dispatchEditorAction({ type: "SELECT_NODE", nodeId, anchorNodeId: nodeId })}
+                        onSelectContextNode={selectContextNode}
+                        onSelectListGroup={selectOutlineListGroup}
+                        onSelectStyleResource={selectStyleResource}
+                        onDelete={(nodeId) => dispatchEditorAction({ type: "DELETE_NODE", nodeId })}
+                        tableOps={{
+                          addRow: (tableId, afterIndex) => {
+                            dispatchEditorAction({ type: "TABLE_ADD_ROW", tableId, afterIndex })
+                          },
+                          removeRow: (tableId, rowIndex) => {
+                            dispatchEditorAction({ type: "TABLE_REMOVE_ROW", tableId, rowIndex })
+                          },
+                          addCol: (tableId, afterIndex) => {
+                            dispatchEditorAction({ type: "TABLE_ADD_COL", tableId, afterIndex })
+                          },
+                          removeCol: (tableId, colIndex) => {
+                            dispatchEditorAction({ type: "TABLE_REMOVE_COL", tableId, colIndex })
+                          },
+                          fitToWidth: (tableId) => {
+                            dispatchEditorAction({ type: "TABLE_FIT_TO_WIDTH", tableId })
+                          },
+                        }}
+                        flowRowOps={{
+                          addCol: (rowId, stackId, position = "after") => {
+                            dispatchEditorAction({ type: "FLOW_ROW_ADD_COL", rowId, stackId, position })
+                          },
+                          resizePair: (leftStackId, rightStackId, leftShare, rightShare) => {
+                            dispatchEditorAction({ type: "RESIZE_COLUMNS", leftStackId, rightStackId, leftShare, rightShare })
+                          },
+                        }}
+                      />
+                    ) : (
+                      <FillingPanel
+                        doc={state.doc}
+                        registry={packageFieldRegistry}
+                        snapshot={dataSnapshot}
+                        readinessIssues={dataReadiness.issues}
+                        onChange={(key, value) => setDataSnapshot((prev) => setDataSnapshotValue(prev, key, value))}
+                      />
+                    )}
+                  </div>
+                ) : null}
+                </EditorSubtreePerfProfiler>
+              </StructuralPaintDeferredSubtree>
             </div>
           )}
         </div>

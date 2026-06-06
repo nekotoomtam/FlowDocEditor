@@ -12,6 +12,7 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
   type ProfilerOnRenderCallback,
 } from "react"
@@ -21,7 +22,12 @@ import type { TextMeasurer } from "@/layout"
 import { resolvePaginatedLineBaselineY, type PageFragment, type PaginatedLine, type PaginatedPage, type ParagraphRenderProps } from "@/pagination"
 import type { ParagraphNode } from "@/schema"
 import { resolveFontCssFamily } from "@/font-registry"
-import { buildSplitEditInput, buildWysiwygDraftParagraphLayout, resolveWysiwygPointerSelectionState } from "./ParagraphTextSurface"
+import {
+  buildSplitEditInput,
+  buildWysiwygDraftParagraphLayout,
+  resolveWysiwygPointerSelectionState,
+  resolveWysiwygWordSelectionRange,
+} from "./ParagraphTextSurface"
 import {
   getWysiwygFragmentTextRange,
   resolveCaretOffsetFromPointInFragment,
@@ -53,6 +59,16 @@ import {
   finishWysiwygPerfSpan,
   startWysiwygPerfSpan,
 } from "./wysiwygPerformance"
+import type {
+  StructuralEditRuntime,
+  StructuralGuardDecision,
+  StructuralGuardInput,
+} from "./runtime/structuralEditRuntime"
+
+type DraftIslandStructuralRuntime = Pick<
+  StructuralEditRuntime,
+  "beginStructuralEdit" | "canStartStructuralEdit" | "markKeyRepeatDropped"
+>
 
 interface FlowdocDraftEditorIslandRootProps {
   active: boolean
@@ -75,8 +91,10 @@ interface FlowdocDraftEditorIslandRootProps {
   onSplitParagraph?: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph?: (nodeId: string, text?: string) => void
   onRequestUndo?: () => void
+  onCompositionChange?: (nodeId: string, isComposing: boolean) => void
   structuralRefocusStartedAt?: number | null
   onStructuralRefocusPainted?: (nodeId: string) => void
+  structuralEditRuntime?: DraftIslandStructuralRuntime
 }
 
 interface DraftIslandState {
@@ -135,6 +153,8 @@ interface DraftIslandStructuralGuardKeyInput {
 const ISLAND_PARENT_SYNC_DEBOUNCE_MS = 240
 const ISLAND_STRUCTURAL_EDIT_GUARD_TIMEOUT_MS = 180
 const ISLAND_MIN_HEIGHT_PT = 1
+const ISLAND_CONTINUATION_BOUNDARY_CLEARANCE_PT = 2
+const INPUT_BRIDGE_BEFOREINPUT_SUPPRESSION_MS = 1000
 const ISLAND_Z_INDEX = 8000
 
 const islandSvgStyle: CSSProperties = {
@@ -419,6 +439,12 @@ function resolveDraftIslandSurfaceHeightPt(sourceFragment: PageFragment, draftFr
   return Math.max(ISLAND_MIN_HEIGHT_PT, draftFragment.height)
 }
 
+function resolveDraftIslandSurfaceChromeHeightPt(sourceFragment: PageFragment, draftFragment: PageFragment): number {
+  const height = resolveDraftIslandSurfaceHeightPt(sourceFragment, draftFragment)
+  if (draftFragment.continuesFrom !== true) return height
+  return Math.max(ISLAND_MIN_HEIGHT_PT, height - ISLAND_CONTINUATION_BOUNDARY_CLEARANCE_PT)
+}
+
 function totalDraftIslandLineCount(fragments: PageFragment[]): number {
   return fragments.reduce((sum, fragment) => sum + (fragment.lines?.length ?? 0), 0)
 }
@@ -524,10 +550,16 @@ export function FlowdocDraftEditorIslandRoot({
   onSplitParagraph,
   onMergeParagraph,
   onRequestUndo,
+  onCompositionChange,
   structuralRefocusStartedAt,
   onStructuralRefocusPainted,
+  structuralEditRuntime,
 }: FlowdocDraftEditorIslandRootProps) {
   const inputBridgeRef = useRef<HTMLTextAreaElement | null>(null)
+  const lastBeforeInputChangeRef = useRef<{ insertedText: string; nextText: string } | null>(null)
+  const lastBeforeInputClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inputBridgeEchoSuppressedRef = useRef(false)
+  const inputBridgeEchoSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestDraftRef = useRef<DraftIslandState | null>(null)
   const parentSyncedRevisionRef = useRef<number>(-1)
   const parentSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -608,10 +640,19 @@ export function FlowdocDraftEditorIslandRoot({
     operation: DraftIslandStructuralEditOperation,
     current: DraftIslandState,
     source: string,
+    key?: "Enter" | "Backspace",
   ) => {
     if (structuralEditGuardTimeoutRef.current) clearTimeout(structuralEditGuardTimeoutRef.current)
     const startedAt = startWysiwygPerfSpan()
-    const token = structuralEditGuardTokenRef.current + 1
+    const transaction = structuralEditRuntime?.beginStructuralEdit({
+      key,
+      accepted: true,
+      kind: operation,
+      sourceNodeId: current.nodeId,
+      removedNodeId: operation === "merge" || operation === "delete-empty" ? current.nodeId : undefined,
+      startedAt,
+    })
+    const token = transaction?.generation ?? structuralEditGuardTokenRef.current + 1
     structuralEditGuardTokenRef.current = token
     const guard: DraftIslandStructuralEditGuard = {
       token,
@@ -630,7 +671,7 @@ export function FlowdocDraftEditorIslandRoot({
       clearStructuralEditGuard("timeout", "timeout-fallback", current.nodeId)
     }, ISLAND_STRUCTURAL_EDIT_GUARD_TIMEOUT_MS)
     return guard
-  }, [clearStructuralEditGuard, recordStructuralGuardEvent])
+  }, [clearStructuralEditGuard, recordStructuralGuardEvent, structuralEditRuntime])
 
   const dropGuardedStructuralKey = useCallback((
     key: "Enter" | "Backspace",
@@ -640,6 +681,39 @@ export function FlowdocDraftEditorIslandRoot({
     event?: KeyboardEvent<Element> | null,
   ) => {
     const guard = structuralEditGuardRef.current
+    const runtimeDecision: StructuralGuardDecision | null = structuralEditRuntime
+      ? structuralEditRuntime.canStartStructuralEdit({
+          key,
+          nodeId: current.nodeId,
+          caretIndex: current.caretOffset ?? current.text.length,
+          isComposing: event?.nativeEvent.isComposing ?? false,
+          hasActiveComposition: event?.nativeEvent.isComposing ?? false,
+          currentActiveNodeId: current.nodeId,
+          expectedNodeExists: true,
+          timestamp: startWysiwygPerfSpan(),
+        } satisfies StructuralGuardInput)
+      : null
+    if (runtimeDecision?.type === "ignore-composition") return false
+    if (runtimeDecision?.type === "guard") {
+      if (runtimeDecision.transactionId) {
+        structuralEditRuntime?.markKeyRepeatDropped({
+          id: runtimeDecision.transactionId,
+          generation: runtimeDecision.generation,
+        }, runtimeDecision.reason)
+      }
+      if (guard) {
+        recordStructuralGuardEvent({
+          action: "dropped",
+          guard,
+          source,
+          key,
+          attemptedOperation,
+          nodeId: current.nodeId,
+        })
+      }
+      return true
+    }
+    if (runtimeDecision) return false
     const shouldDrop = shouldDropDraftIslandStructuralKeyForGuard(guard, {
       key,
       nodeId: current.nodeId,
@@ -659,7 +733,7 @@ export function FlowdocDraftEditorIslandRoot({
       nodeId: current.nodeId,
     })
     return true
-  }, [recordStructuralGuardEvent])
+  }, [recordStructuralGuardEvent, structuralEditRuntime])
 
   useEffect(() => {
     if (!active || !nodeId || !paragraph) {
@@ -949,6 +1023,10 @@ export function FlowdocDraftEditorIslandRoot({
   useEffect(() => () => {
     if (parentSyncTimerRef.current) clearTimeout(parentSyncTimerRef.current)
     parentSyncTimerRef.current = null
+    if (lastBeforeInputClearTimerRef.current) clearTimeout(lastBeforeInputClearTimerRef.current)
+    lastBeforeInputClearTimerRef.current = null
+    if (inputBridgeEchoSuppressionTimerRef.current) clearTimeout(inputBridgeEchoSuppressionTimerRef.current)
+    inputBridgeEchoSuppressionTimerRef.current = null
     if (suppressNextUnmountParentSyncRef.current) {
       suppressNextUnmountParentSyncRef.current = false
       return
@@ -1248,7 +1326,7 @@ export function FlowdocDraftEditorIslandRoot({
 
   const applyStructuralEnter = useCallback((event: KeyboardEvent<Element> | null, current: DraftIslandState, source: string) => {
     if (!onSplitParagraph) return false
-    if (event && (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing)) return false
+    if (event && (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey)) return false
     if (dropGuardedStructuralKey("Enter", current, source, "split", event)) return true
     const currentTextStartedAt = startWysiwygPerfSpan()
     const currentTextLength = current.text.length
@@ -1292,7 +1370,7 @@ export function FlowdocDraftEditorIslandRoot({
       source,
       action: "draft-split-text-resolve",
     })
-    engageStructuralEditGuard("split", current, source)
+    engageStructuralEditGuard("split", current, source, "Enter")
     clearPendingParentSync()
     pointerSelectionDragRef.current = null
     suppressNextUnmountParentSyncRef.current = true
@@ -1314,7 +1392,7 @@ export function FlowdocDraftEditorIslandRoot({
 
   const applyStructuralBackspace = useCallback((event: KeyboardEvent<Element>, current: DraftIslandState) => {
     if (!onMergeParagraph) return false
-    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return false
+    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false
     if (dropGuardedStructuralKey("Backspace", current, "key:Backspace", current.text.length === 0 ? "delete-empty" : "merge", event)) return true
     const currentTextStartedAt = startWysiwygPerfSpan()
     const currentTextLength = current.text.length
@@ -1345,7 +1423,7 @@ export function FlowdocDraftEditorIslandRoot({
     })
     if (!range.isCollapsed || range.start !== 0) return false
     const operation = current.text.length === 0 ? "delete-empty" : "merge"
-    engageStructuralEditGuard(operation, current, "key:Backspace")
+    engageStructuralEditGuard(operation, current, "key:Backspace", "Backspace")
     clearPendingParentSync()
     pointerSelectionDragRef.current = null
     suppressNextUnmountParentSyncRef.current = true
@@ -1532,12 +1610,45 @@ export function FlowdocDraftEditorIslandRoot({
     if (!change) return
     event.preventDefault()
     event.stopPropagation()
+    lastBeforeInputChangeRef.current = {
+      insertedText: nativeEvent.data ?? "",
+      nextText: change.text,
+    }
+    if (lastBeforeInputClearTimerRef.current) clearTimeout(lastBeforeInputClearTimerRef.current)
+    lastBeforeInputClearTimerRef.current = setTimeout(() => {
+      lastBeforeInputChangeRef.current = null
+      lastBeforeInputClearTimerRef.current = null
+    }, INPUT_BRIDGE_BEFOREINPUT_SUPPRESSION_MS)
     applyDraftChange(change, `beforeinput:${inputType}`)
   }, [applyDraftChange, applyStructuralEnter])
 
   const handleInput = useCallback((event: FormEvent<HTMLTextAreaElement>) => {
-    const insertedText = event.currentTarget.value
+    const nativeEvent = event.nativeEvent as InputEvent
+    if (nativeEvent.isComposing || nativeEvent.inputType === "insertCompositionText") {
+      event.currentTarget.value = ""
+      if (event.currentTarget.textContent) event.currentTarget.textContent = ""
+      return
+    }
+    const bridgeValue = event.currentTarget.value
+    const nativeInsertedText = !nativeEvent.isComposing && nativeEvent.inputType === "insertText"
+      ? nativeEvent.data ?? ""
+      : ""
+    const insertedText = nativeInsertedText || bridgeValue
     event.currentTarget.value = ""
+    if (event.currentTarget.textContent) event.currentTarget.textContent = ""
+    if (inputBridgeEchoSuppressedRef.current) return
+    if (!insertedText) return
+    if (lastBeforeInputChangeRef.current) {
+      return
+    }
+    if (!nativeInsertedText && bridgeValue) {
+      inputBridgeEchoSuppressedRef.current = true
+      if (inputBridgeEchoSuppressionTimerRef.current) clearTimeout(inputBridgeEchoSuppressionTimerRef.current)
+      inputBridgeEchoSuppressionTimerRef.current = setTimeout(() => {
+        inputBridgeEchoSuppressedRef.current = false
+        inputBridgeEchoSuppressionTimerRef.current = null
+      }, INPUT_BRIDGE_BEFOREINPUT_SUPPRESSION_MS)
+    }
     applyTextInput(insertedText, "input-bridge-value")
   }, [applyTextInput])
 
@@ -1630,17 +1741,29 @@ export function FlowdocDraftEditorIslandRoot({
 
   const resolvePointerCandidate = useCallback((input: { clientX: number; clientY: number; currentTarget?: EventTarget | null }, source: string) => {
     if (!fragment) return null
-    const targetElement = input.currentTarget instanceof SVGSVGElement ? input.currentTarget : null
-    if (!targetElement) return null
-    const targetSurfaceKey = targetElement.getAttribute("data-wysiwyg-island-surface-key")
-    const targetPageKey = targetElement.getAttribute("data-wysiwyg-island-page-key")
+    const currentTargetElement = input.currentTarget instanceof SVGSVGElement ? input.currentTarget : null
+    if (!currentTargetElement) return null
+    const pointerTargetElement = Array.from(
+      currentTargetElement.ownerDocument.querySelectorAll<SVGSVGElement>('[data-wysiwyg-text-engine-layer="true"]'),
+    ).find((candidate) => {
+      if (candidate.getAttribute("data-inline-edit-node-id") !== fragment.nodeId) return false
+      const rect = candidate.getBoundingClientRect()
+      return (
+        input.clientX >= rect.left &&
+        input.clientX <= rect.right &&
+        input.clientY >= rect.top &&
+        input.clientY <= rect.bottom
+      )
+    }) ?? currentTargetElement
+    const targetSurfaceKey = pointerTargetElement.getAttribute("data-wysiwyg-island-surface-key")
+    const targetPageKey = pointerTargetElement.getAttribute("data-wysiwyg-island-page-key")
     const surfaces = latestSurfacesRef.current
     const surface = (targetSurfaceKey ? surfaces.find((candidate) => candidate.key === targetSurfaceKey) : null) ??
       (targetPageKey ? surfaces.find((candidate) => candidate.pageKey === targetPageKey) : null) ??
       surfaces[0] ??
       null
     if (!surface) return null
-    const svgRect = targetElement.getBoundingClientRect()
+    const svgRect = pointerTargetElement.getBoundingClientRect()
     if (svgRect.width <= 0 || svgRect.height <= 0) return null
     const viewBoxWidth = surface.fragment.width
     const viewBoxHeight = resolveDraftIslandSurfaceHeightPt(fragment, surface.fragment)
@@ -1683,6 +1806,30 @@ export function FlowdocDraftEditorIslandRoot({
     focusInputBridge()
     return true
   }, [applyDraftChange, focusInputBridge])
+
+  const selectWordFromPointerEvent = useCallback((event: MouseEvent<SVGSVGElement>, source: string) => {
+    focusInputBridge()
+    pointerSelectionDragRef.current = null
+    const candidate = resolvePointerCandidate(event, source)
+    const current = latestDraftRef.current
+    if (!candidate || !current) return false
+    const wordSelection = resolveWysiwygWordSelectionRange(current.text, candidate.offset)
+    if (!wordSelection) return false
+    return applyPointerSelection(wordSelection.anchorOffset, wordSelection.focusOffset, source)
+  }, [applyPointerSelection, focusInputBridge, resolvePointerCandidate])
+
+  const handleDoubleClick = useCallback((event: MouseEvent<SVGSVGElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    selectWordFromPointerEvent(event, "pointer-select-word-double-click")
+  }, [selectWordFromPointerEvent])
+
+  const handleClick = useCallback((event: MouseEvent<SVGSVGElement>) => {
+    if (event.detail < 2) return
+    event.preventDefault()
+    event.stopPropagation()
+    selectWordFromPointerEvent(event, "pointer-select-word-click-detail")
+  }, [selectWordFromPointerEvent])
 
   const handlePointerDown = useCallback((event: PointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return
@@ -1952,6 +2099,12 @@ export function FlowdocDraftEditorIslandRoot({
           onKeyDown={handleKeyDown}
           onBeforeInput={handleBeforeInput}
           onInput={handleInput}
+          onCompositionStart={() => {
+            onCompositionChange?.(nodeId, true)
+          }}
+          onCompositionEnd={() => {
+            onCompositionChange?.(nodeId, false)
+          }}
           onPaste={handlePaste}
           onCopy={handleCopy}
           onCut={handleCut}
@@ -1960,6 +2113,7 @@ export function FlowdocDraftEditorIslandRoot({
         {draftSurfaces.map((surface, surfaceIndex) => {
           const surfaceFragment = surface.fragment
           const surfaceHeightPt = resolveDraftIslandSurfaceHeightPt(fragment, surfaceFragment)
+          const surfaceChromeHeightPt = resolveDraftIslandSurfaceChromeHeightPt(fragment, surfaceFragment)
           const anchorElement = resolveDraftIslandAnchorElement(surface.pageKey, anchorElementsByPageKey, getPageElement)
           if (!anchorElement && !allowInlineFallback) return null
           const caret = resolveCollapsedCaretOverlayInFragment(surfaceFragment, draftState.caretOffset ?? draftState.text.length, { textMeasurer })
@@ -1988,8 +2142,11 @@ export function FlowdocDraftEditorIslandRoot({
               data-wysiwyg-island-surface-key={surface.key}
               data-wysiwyg-island-page-key={surface.pageKey}
               data-page-index={surfaceFragment.pageIndex}
+              data-line-start={surfaceFragment.lineStart ?? undefined}
+              data-line-end={surfaceFragment.lineEnd ?? undefined}
               data-wysiwyg-island-surface-index={surfaceIndex}
               data-wysiwyg-island-fragment-count={draftSurfaces.length}
+              data-wysiwyg-pointer-fragment-count={draftSurfaces.length}
               data-wysiwyg-island-page-boundary-preview={isPageBoundaryPreview ? "true" : "false"}
               data-wysiwyg-island-reflow-kind={draftReflowDecision?.kind ?? undefined}
               data-wysiwyg-island-reflow-reason={draftReflowDecision?.reason ?? undefined}
@@ -2017,12 +2174,17 @@ export function FlowdocDraftEditorIslandRoot({
               data-inline-edit-visual-mode="flowdoc-draft-editor-island"
               data-wysiwyg-island-revision={draftState.revision}
               data-wysiwyg-island-parent-sync-debounce-ms={ISLAND_PARENT_SYNC_DEBOUNCE_MS}
+              data-wysiwyg-island-surface-height-pt={surfaceHeightPt}
+              data-wysiwyg-island-surface-chrome-height-pt={surfaceChromeHeightPt}
+              data-wysiwyg-island-continuation-boundary-clearance-pt={surfaceFragment.continuesFrom === true ? ISLAND_CONTINUATION_BOUNDARY_CLEARANCE_PT : undefined}
               viewBox={viewBox}
               style={svgStyle}
               tabIndex={surfaceIndex === 0 ? 0 : -1}
               role="textbox"
               aria-multiline="true"
               onKeyDown={handleKeyDown}
+              onClick={handleClick}
+              onDoubleClick={handleDoubleClick}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
@@ -2038,7 +2200,7 @@ export function FlowdocDraftEditorIslandRoot({
                 x={surfaceFragment.x}
                 y={surfaceFragment.y}
                 width={surfaceFragment.width}
-                height={surfaceHeightPt}
+                height={surfaceChromeHeightPt}
                 fill="#ffffff"
                 pointerEvents="none"
               />
@@ -2057,7 +2219,7 @@ export function FlowdocDraftEditorIslandRoot({
                 x={surfaceFragment.x}
                 y={surfaceFragment.y}
                 width={surfaceFragment.width}
-                height={surfaceHeightPt}
+                height={surfaceChromeHeightPt}
                 fill="none"
                 stroke="#2563eb"
                 strokeWidth={1}

@@ -3,6 +3,9 @@ import {
   appendWysiwygPerfEvent,
   finishFlowDocPerfSpan,
   finishWysiwygPerfSpan,
+  getWysiwygPerformanceMetricDefinition,
+  getWysiwygPerformanceReportSchemaVersion,
+  getWysiwygPerformanceTimingAnchorVersion,
   isPaginationProfileRuntimeEnabled,
   isWysiwygPerfTraceRuntimeEnabled,
   recordFlowDocPerfEvent,
@@ -39,6 +42,17 @@ describe("appendWysiwygPerfEvent", () => {
 
   it("drops events when the cap is zero", () => {
     expect(appendWysiwygPerfEvent([], event("inline-edit-draft-update", 1), 0)).toEqual([])
+  })
+})
+
+describe("editor performance schema facade", () => {
+  it("exposes the normalized report schema metadata", () => {
+    expect(getWysiwygPerformanceReportSchemaVersion()).toBe("editor-performance-report-v1")
+    expect(getWysiwygPerformanceTimingAnchorVersion()).toBe("editor-performance-timing-anchors-v1")
+    expect(getWysiwygPerformanceMetricDefinition("fullPaginationSettledMs")).toMatchObject({
+      name: "fullPaginationSettledMs",
+      kind: "timing",
+    })
   })
 })
 
@@ -229,6 +243,33 @@ describe("finishWysiwygPerfSpan", () => {
     expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
   })
 
+  it("records WYSIWYG draft runtime metadata without draft content", () => {
+    vi.stubGlobal("window", {})
+
+    recordWysiwygPerfEvent(true, {
+      kind: "flowdoc-wysiwyg-draft-runtime",
+      startedAt: 100,
+      durationMs: 0,
+      nodeId: "p1",
+      source: "flowdoc-draft-island",
+      action: "runtime-begin",
+      active: true,
+      wysiwygDraftSessionBeginCount: 1,
+      wysiwygDraftCurrentGeneration: 1,
+      wysiwygDraftCurrentPhase: "starting",
+      wysiwygDraftCurrentNodeId: "p1",
+      wysiwygDraftSource: "flowdoc-draft-island",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "flowdoc-wysiwyg-draft-runtime",
+      nodeId: "p1",
+      action: "runtime-begin",
+      wysiwygDraftCurrentPhase: "starting",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
   it("records editor action classification metadata without document content", () => {
     vi.stubGlobal("window", {})
 
@@ -286,6 +327,33 @@ describe("finishWysiwygPerfSpan", () => {
       optimisticFragmentCount: 123,
       suppressedPageBreakNodeId: "cover_break",
       textLength: 42,
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
+  it("records structural panel release metadata without document content", () => {
+    vi.stubGlobal("window", {})
+
+    recordWysiwygPerfEvent(true, {
+      kind: "flowdoc-structural-panel-release",
+      startedAt: 20,
+      durationMs: 12.5,
+      nodeId: "cover_note",
+      operation: "merge",
+      action: "release-apply-start",
+      source: "structural-refocus-painted",
+      token: 3,
+      active: true,
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "flowdoc-structural-panel-release",
+      nodeId: "cover_note",
+      operation: "merge",
+      action: "release-apply-start",
+      source: "structural-refocus-painted",
+      token: 3,
+      active: true,
     })
     expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
   })

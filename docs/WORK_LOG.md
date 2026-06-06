@@ -20,6 +20,210 @@ Each entry should include:
 
 ## 2026-06-04
 
+### Task 17 PanelDeferralRuntime Extraction
+
+Goal: Move structural panel snapshot/freeze/release scheduling ownership out of
+`EditorShell` into a dedicated pure runtime while preserving panel timing,
+`flushSync`, structural edit, pagination, document model, validation,
+renderers/export, persistence, FlowTable, and WYSIWYG island behavior.
+
+Completed:
+
+- Added `PanelDeferralRuntime` and panel deferral types as a DOM-free state
+  machine for begin, snapshot active, schedule/cancel/abort, input quiet,
+  release started/completed, urgent structural flush blocking, generation apply
+  checks, stale release counters, and live restore metrics.
+- Added focused unit coverage for normal release, superseded stale releases,
+  abort cleanup, input quiet delay, old Enter release after Backspace, and
+  urgent structural flush blocking.
+- Wired `EditorShell` to store panel deferral ids and ask the runtime for
+  snapshot activity, non-interactive release eligibility, urgent-flush blocking,
+  input quiet decisions, stale generation checks, release start, and live-doc
+  restore completion.
+- Removed Shell-owned panel urgent-paint and last-input refs; Shell still owns
+  `requestAnimationFrame`, `setTimeout`, `requestIdleCallback`, React
+  `startTransition`, and the existing timing constants.
+- Extended the smoothness probe with stable `panelDeferral*` attribution aliases
+  while preserving the existing `deferredLeftRail*` names.
+- Fixed a probe-only false negative by rechecking the `live-doc-restored` perf
+  event after the existing short grace wait when deferred panel restore arrives
+  just after the 5s observation window.
+
+Files changed:
+
+- `src/app/editor/_components/runtime/panelDeferralTypes.ts`
+- `src/app/editor/_components/runtime/panelDeferralRuntime.ts`
+- `src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts`
+- `src/app/editor/_components/EditorShell.tsx`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+- `reports/task17-enter-mid-split.json`
+- `reports/task17-enter-backspace-immediate.json`
+- `reports/task17-enter-type-before-settle.json`
+- `reports/task17-enter-backspace-type-before-settle.json`
+- `reports/task17-enter-rapid.json`
+- `reports/task17-backspace-rapid.json`
+
+Verification performed:
+
+- `npm.cmd run test:app -- src/app/editor/_components/runtime/__tests__/panelDeferralRuntime.test.ts`
+- `npm.cmd run type-check`
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- Long mock `enter-mid-split`
+- Long mock `enter-backspace-immediate`
+- Long mock `enter-type-before-settle` with `PROBE_STRUCTURAL_TYPE_LENGTH=80`
+- Long mock `enter-backspace-type-before-settle` with
+  `PROBE_STRUCTURAL_TYPE_LENGTH=80`
+- Long mock `enter-rapid` with `PROBE_STRUCTURAL_ENTER_COUNT=8`
+- Long mock `backspace-rapid` with `PROBE_STRUCTURAL_BACKSPACE_COUNT=8`
+
+Observed:
+
+- All six Task 17 smoke reports finished with `ok=true`, `safetyOk=true`, and
+  `0` console/page errors.
+- `enter-type-before-settle` recorded `80` panel input-during-deferral events,
+  `13` release schedules, and one release start/completion, confirming the
+  input quiet reschedule path stayed active.
+- `enter-backspace-immediate` and `enter-backspace-type-before-settle` recorded
+  split plus merge deferral begins while only the latest merge release completed,
+  matching the intended supersede behavior.
+
+Notes:
+
+- No structural document operations, reducer actions, pagination semantics,
+  `flushSync` sites, panel delay constants, validation, export/renderers,
+  persistence, or FlowTable behavior were intentionally changed.
+- Runtime completion remains tied to the existing panel live-doc-restored path,
+  not full browser pagination settle.
+
+---
+
+### Task 11A Structural FlushSync Render Attribution
+
+Goal: Attribute the structural Enter/Backspace `flushSync` render path without
+changing editor behavior, pagination, renderers, persistence, Flow Table, or
+document semantics.
+
+Completed:
+
+- Added trace-gated structural render attribution for EditorShell derived
+  values: active section lookup, preview doc resolution, data readiness, page
+  navigation, selection context, draft island config, active structural island,
+  and suppressed canvas text nodes.
+- Added EditorCanvas attribution for page key derivation, pointer fragment
+  indexing, draft visual preview, forced page keys, structural render scope,
+  PageView/PageSlot memo comparator counts/costs, and layout-effect markers.
+- Extended the smoothness probe report with
+  `flushSyncRenderBreakdown`, `flushSyncRenderSummary`,
+  `flushSyncWindowTotalMs`, split/merge window totals, and per-sample render
+  attribution summaries.
+- Increased the WYSIWYG perf event ring buffer to preserve structural
+  comparator/render attribution during long mock probes.
+
+Files changed:
+
+- `src/app/editor/_components/EditorShell.tsx`
+- `src/app/editor/_components/EditorCanvas.tsx`
+- `src/app/editor/_components/wysiwygPerformance.ts`
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `npm.cmd run type-check`
+- `git diff --check`
+- `PROBE_REPEAT=5`, `PROBE_WARMUP=1`, long-mock `enter-mid-split`
+- `PROBE_REPEAT=5`, `PROBE_WARMUP=1`, long-mock
+  `enter-backspace-immediate`
+
+Observed:
+
+- `reports/task11a-enter-mid-split-repeat5.json`: measured samples passed;
+  median `flushSyncMs` `522.2ms`, median `firstIslandPaintMs` `93.1ms`,
+  median `fullPaginationSettledMs` `2828.8ms`, and render scope stayed at
+  `1 / 119` pages with `0` unaffected pages rendered.
+- `reports/task11a-enter-backspace-immediate-repeat5.json`: measured samples
+  passed; median Enter `flushSyncMs` `532.0ms`, median combined
+  `flushSyncWindowTotalMs` `1101.2ms`, median split window `532.0ms`, median
+  merge window `566.4ms`, and render scope stayed at `1 / 119` pages with `0`
+  unaffected pages rendered.
+- In both probes the dominant measured flush-window bucket was React Profiler
+  `actualDuration`; shell derived work, canvas derived work, memo comparators,
+  and layout effects were small by comparison. Full pagination remained
+  deferred and did not block first island visibility.
+
+Notes:
+
+- `flushSyncMs` keeps the Task 10.5 definition as the first Enter split
+  `flushSync` duration. `flushSyncWindowTotalMs` is the Task 11A attribution
+  total and can include both split and merge windows.
+- Smallest safe Task 11B candidate: isolate or memoize the dominant React
+  Profiler component render path reported in `reactActualDurationByComponent`
+  while preserving atomic structural island/document correctness.
+
+---
+
+### Task 10.5 Structural Timing Calibration
+
+Goal: Calibrate structural Enter/Backspace performance metrics so handler,
+flush, first RAF, first island visibility, and full pagination settle timings
+use documented anchors and can be compared across repeated samples.
+
+Completed:
+
+- Added probe-only `PROBE_REPEAT` and `PROBE_WARMUP` support for repeated
+  structural benchmark runs with one shared dev server.
+- Added per-sample structural timing traces with browser-clock anchors for
+  `keydownStart`, `flushSyncStart`, `flushSyncEnd`, `keydownEnd`, `firstRaf`,
+  `islandDomVisible`, `caretVisible`, `fullPaginationStart`, and
+  `fullPaginationEnd`.
+- Documented that `firstIslandPaintMs` is measured from browser-observed
+  `keydownStart` to the draft island DOM-visible layout-effect event, not to
+  full pagination settle.
+- Kept the patch instrumentation-only: no editor behavior, pagination,
+  renderer, persistence, or Flow Table changes.
+
+Files changed:
+
+- `scripts/wysiwyg-smoothness-probe.mjs`
+- `docs/WYSIWYG_SMOOTHNESS_PROBE.md`
+- `docs/WORK_LOG.md`
+- `docs/WORK_LOG_RECENT.md`
+
+Verification performed:
+
+- `node --check scripts/wysiwyg-smoothness-probe.mjs`
+- `npm.cmd run test:app -- src/app/editor/_components/__tests__/wysiwygPerformance.test.ts`
+- `PROBE_REPEAT=5`, `PROBE_WARMUP=1`, long-mock `enter-mid-split`
+- `PROBE_REPEAT=5`, `PROBE_WARMUP=1`, long-mock
+  `enter-backspace-immediate`
+
+Observed:
+
+- `enter-mid-split` measured samples passed with median `firstIslandPaintMs`
+  about `80.2ms`, min `63.9ms`, max `105.6ms`; median `enterHandlerMs` about
+  `485.1ms`; median full pagination settle about `2859.6ms`.
+- `enter-backspace-immediate` measured samples passed with median
+  `firstIslandPaintMs` about `95.0ms`, min `81.7ms`, max `103.6ms`; median
+  `enterHandlerMs` about `540.6ms`; full pagination settle did not apply
+  because the immediate merge superseded the split settle.
+- Both repeated probes kept PageView rendering scoped to `1 / 119` pages with
+  `0` unaffected pages rendered during the structural transition.
+
+Notes:
+
+- `enterHandlerMs` can exceed `firstIslandPaintMs` because the island
+  DOM-visible event is recorded during the synchronous keydown/`flushSync`
+  commit before Playwright's key press call returns. `firstRafMs` is the first
+  post-keydown RAF opportunity.
+
+---
+
 ### Release 0.6.26 Structural Edit Performance Baseline
 
 Goal: Mark the accepted structural edit performance attribution and React

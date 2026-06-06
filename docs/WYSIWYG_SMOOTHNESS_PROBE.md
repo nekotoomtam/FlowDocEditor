@@ -50,6 +50,13 @@ $env:PROBE_MODE="enter"; $env:PROBE_BURST_LENGTH="30"; $env:PROBE_INTERVAL_MS="0
 $env:PROBE_MODE="wrap-typing"; $env:PROBE_BURST_LENGTH="160"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
 ```
 
+Run repeated structural timing calibration with one warmup sample and five
+measured samples:
+
+```powershell
+$env:PROBE_REPEAT="5"; $env:PROBE_WARMUP="1"; $env:PROBE_MODE="enter-mid-split"; $env:FLOWDOC_PROBE_FILE="public/mock/flowdoc-long-mock.flowdoc.json"; $env:PROBE_TARGET_NODE_ID="cover_note"; $env:PROBE_ENTER_SPLIT_TEXT="pagination"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
 The probe starts a Next dev server with the WYSIWYG text engine flag, opens the
 Stage 3 boundary scenario, clicks into the target paragraph, and runs the
 selected mode (`typing` by default, plus `space-repeat`, `delete`, `enter`,
@@ -79,6 +86,38 @@ selected mode (`typing` by default, plus `space-repeat`, `delete`, `enter`,
 
 `ok: true` requires zero console errors and zero page errors. Threshold
 breaches do not fail the probe; they surface as numbers for human review.
+
+## Structural Timing Anchors
+
+Structural Enter/Backspace modes add `structuralTimingTrace` and
+`performanceAttribution.attribution.timingTrace` so timing values can be
+compared inside one browser clock domain.
+
+| Metric | Anchor |
+|---|---|
+| `enterHandlerMs` | App-recorded structural split keydown handler/transaction duration. |
+| `flushSyncMs` | App-recorded React `flushSync` structural transition duration. |
+| `flushSyncWindowTotalMs` | Total structural `flushSync` window duration included in Task 11A render attribution. In Enter->Backspace probes this can include both split and merge windows while `flushSyncMs` remains the first Enter split metric. |
+| `firstRafMs` | Browser-observed `keydownStart` to the first `requestAnimationFrame` callback scheduled by the probe keydown listener. |
+| `firstIslandPaintMs` | Browser-observed `keydownStart` to the draft island DOM-visible layout-effect event. It is not full pagination settle. |
+| `fullPaginationSettledMs` | Browser-observed `keydownStart` to the structural-refocus settled pagination completion event. |
+
+`firstIslandPaintMs` may be lower than `enterHandlerMs` because the island
+DOM-visible event is recorded during the synchronous keydown/`flushSync` commit,
+before Playwright's key press call returns. Use `firstRafMs` as the first
+post-keydown paint opportunity and `fullPaginationSettledMs` as the later full
+pagination settle gate.
+
+Task 11A structural render attribution adds
+`performanceAttribution.attribution.flushSyncRenderBreakdown` and
+`flushSyncRenderSummary`. The breakdown separates shell derived work,
+EditorCanvas derived work, PageView/PageSlot memo comparator work, React
+Profiler actual duration, layout-effect timing, attributed render time, and any
+remaining unattributed `flushSync` window time. Existing page isolation signals
+remain under `pagesRenderedDuringStructuralTransition` and
+`unaffectedPagesRenderedCount`; the flush-window-specific values are
+`pagesRenderedInFlushSyncWindow` and
+`unaffectedPagesRenderedInFlushSyncWindow`.
 
 ## Symptom Categories — What The Probe Covers vs Does Not
 
@@ -238,9 +277,10 @@ Reading:
 - The browser-preview pagination event count is 0 during the typing burst,
   confirming the immediate-input lane stays light through a page-boundary
   crossing.
-- `perfEvents.total` is capped at 200 by the existing perf trace ring buffer
+- `perfEvents.total` is capped at 2000 by the existing perf trace ring buffer
   (`MAX_WYSIWYG_PERF_EVENTS` in `src/app/editor/_components/wysiwygPerformance.ts`),
-  which is why a 400-char burst reports 200 events.
+  which is why very large probes can report fewer raw events than the number
+  emitted internally.
 - `keystrokeTotalMs` includes the 30ms inter-keystroke sleep and Playwright
   round-trip cost; it is not a paint metric. The paint metric is
   `paintLatencyMs`.
