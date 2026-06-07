@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { hasPlatformShortcutModifier, normalizeShortcutKey } from "../keyboardShortcuts"
+import {
+  hasPlatformShortcutModifier,
+  isEditorHistoryRedoShortcut,
+  isEditorHistoryShortcut,
+  isEditorHistoryUndoShortcut,
+  normalizeShortcutKey,
+} from "../keyboardShortcuts"
 
 describe("keyboard shortcut normalization", () => {
   it("uses physical key codes so shortcuts survive non-Latin keyboard layouts", () => {
@@ -27,5 +33,13 @@ describe("keyboard shortcut normalization", () => {
     expect(hasPlatformShortcutModifier({ key: "z", code: "KeyZ", metaKey: true })).toBe(true)
     expect(hasPlatformShortcutModifier({ key: "z", code: "KeyZ", ctrlKey: true, altKey: true })).toBe(false)
     expect(hasPlatformShortcutModifier({ key: "z", code: "KeyZ" })).toBe(false)
+  })
+
+  it("recognizes editor undo and redo shortcuts separately from clipboard chords", () => {
+    expect(isEditorHistoryUndoShortcut({ key: "ผ", code: "KeyZ", ctrlKey: true })).toBe(true)
+    expect(isEditorHistoryRedoShortcut({ key: "ผ", code: "KeyZ", ctrlKey: true, shiftKey: true })).toBe(true)
+    expect(isEditorHistoryRedoShortcut({ key: "y", code: "KeyY", metaKey: true })).toBe(true)
+    expect(isEditorHistoryShortcut({ key: "c", code: "KeyC", ctrlKey: true })).toBe(false)
+    expect(isEditorHistoryShortcut({ key: "z", code: "KeyZ", ctrlKey: true, altKey: true })).toBe(false)
   })
 })

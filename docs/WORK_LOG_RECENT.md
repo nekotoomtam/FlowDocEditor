@@ -22,6 +22,53 @@ Each entry should include:
 
 ---
 
+## 2026-06-07
+
+### Release 0.6.29 WYSIWYG History And Large-Document Performance Baseline
+
+Goal: Mark the accepted WYSIWYG undo/re-enter fix and focused large-document
+performance hardening as the next conservative `0.6.x` patch baseline.
+
+Completed:
+
+- Bumped the root project version marker from `0.6.28` to `0.6.29`.
+- Updated the lockfile root package version and project version marker test.
+- Preserved persisted FlowDoc package/storage versions at `2`.
+- Hardened WYSIWYG history shortcuts so editor undo/redo can commit/flush the
+  active draft and avoid stale same-node re-entry after undo.
+- Suppressed full-document browser draft pagination for large plain-boundary
+  typing while leaving responsive table/flow-stack draft pagination intact.
+- Prevented viewport-only page index changes from rescheduling full browser
+  preview settle.
+- Deferred large outline content until preview layout is full and reduced the
+  lazy page render margin for large-document scroll cost.
+
+Verification performed:
+
+- `npm.cmd run type-check`
+- Focused app tests for keyboard shortcuts, ParagraphTextSurface, preview
+  settle, WYSIWYG reflow, left rail/outline policy, and canvas viewport/lazy
+  rendering.
+- `npm.cmd run perf:baseline` with
+  `public/mock/flowdoc-stress-mock.flowdoc.json` and pagination profiling.
+- `npm.cmd run smoke:wysiwyg-smoothness` with the stress mock target
+  `p_00114`, page `14`, burst `120`.
+- `git diff --check`
+
+Notes:
+
+- This is a project release-readiness marker only. It does not change
+  `DocumentNode.version`, FlowDoc package version, storage package version,
+  export semantics, or persisted document schema.
+- Large documents can show deferred outline content briefly until preview
+  layout reaches `full`; fast scrolling may show lazy placeholders before the
+  narrower render window catches up.
+- Remaining performance work should be split into startup/import, layout
+  engine, canvas interaction, typing lane, and panel/selection side-effect
+  tracks.
+
+---
+
 ## 2026-06-06
 
 ### Task 42 Draft Pagination Shell Executor

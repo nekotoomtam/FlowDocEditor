@@ -662,6 +662,7 @@ interface Props {
   doc: DocumentNode
   selectedNodeId: string | null
   selectedListGroupId?: string | null
+  deferContent?: boolean
   onSelect: (nodeId: string) => void
   onSelectListGroup?: (instanceId: string) => void
   onAddShortcut?: () => void
@@ -767,12 +768,41 @@ function OutlinePanelImpl({
   doc,
   selectedNodeId,
   selectedListGroupId = null,
+  deferContent = false,
   onSelect,
   onSelectListGroup,
   onAddShortcut,
   onReorderBodyChild,
 }: Props) {
   const [dragState, setDragState] = useState<OutlineDragState | null>(null)
+
+  if (deferContent) {
+    return (
+      <div style={rightRailPanelShell}>
+        <RightRailPanelHeader
+          title="Outline"
+          testId="outline-panel-title"
+          action={onAddShortcut ? (
+            <button
+              type="button"
+              data-testid="outline-add-shortcut"
+              aria-label="Open add panel"
+              title="Add"
+              onClick={onAddShortcut}
+              style={outlineAddShortcutButton}
+            >
+              +
+            </button>
+          ) : undefined}
+        />
+        <div
+          data-outline-content-deferred="true"
+          style={{ ...rightRailPanelBody, padding: "8px 8px 12px" }}
+        />
+      </div>
+    )
+  }
+
   const listGroupState = buildStyleManagerState(doc).listGroups.items
   const markerTextByParagraphId = new Map(
     Array.from(resolveListMarkers(doc).entries()).map(([paragraphId, marker]) => [paragraphId, marker.markerText]),

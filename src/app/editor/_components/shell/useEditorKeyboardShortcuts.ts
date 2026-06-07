@@ -2,7 +2,12 @@ import { useCallback, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import type { EditorAction } from "../editorReducer"
 import type { WysiwygTextInputKey } from "../useWysiwygTextSession"
 import { WYSIWYG_RICH_TEXT_DRAFT_ENABLED } from "../wysiwygInlineEditConfig"
-import { hasPlatformShortcutModifier, normalizeShortcutKey } from "../keyboardShortcuts"
+import {
+  hasPlatformShortcutModifier,
+  isEditorHistoryRedoShortcut,
+  isEditorHistoryUndoShortcut,
+  normalizeShortcutKey,
+} from "../keyboardShortcuts"
 import type {
   HeaderFooterEditMode,
   HeaderFooterReservedDrag,
@@ -69,8 +74,10 @@ export function useEditorKeyboardShortcuts({
   zoomOut: () => void
 }) {
   const handleKeyDown = useCallback((event: ReactKeyboardEvent) => {
-    const tag = (event.target as HTMLElement).tagName
+    const target = event.target as HTMLElement
+    const tag = target.tagName
     const isTextInput = tag === "INPUT" || tag === "TEXTAREA"
+    const isInlineEditorInput = target.getAttribute("data-inline-edit-node-id") != null
     const shortcutKey = normalizeShortcutKey(event)
     if (!isTextInput && WYSIWYG_RICH_TEXT_DRAFT_ENABLED && wysiwygTextSessionNodeId) {
       const handledRichTextShortcut = handleWysiwygRichTextShortcut(wysiwygTextSessionNodeId, {
@@ -140,14 +147,14 @@ export function useEditorKeyboardShortcuts({
       dispatchEditorAction({ type: "DELETE_NODE", nodeId: selectedNodeId })
       setRightRailModeToPage()
     }
-    if (hasPlatformShortcutModifier(event) && !event.shiftKey && shortcutKey === "z") {
-      if (isTextInput) return
+    if (isEditorHistoryUndoShortcut(event)) {
+      if (isTextInput && !isInlineEditorInput) return
       event.preventDefault()
       if (!isTemplateMode) return
       handleUndo()
     }
-    if (hasPlatformShortcutModifier(event) && (shortcutKey === "y" || (event.shiftKey && shortcutKey === "z"))) {
-      if (isTextInput) return
+    if (isEditorHistoryRedoShortcut(event)) {
+      if (isTextInput && !isInlineEditorInput) return
       event.preventDefault()
       if (!isTemplateMode) return
       handleRedo()

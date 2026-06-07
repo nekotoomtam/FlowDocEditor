@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 import type { MutableRefObject, RefObject } from "react"
-import { hasPlatformShortcutModifier } from "./keyboardShortcuts"
+import { hasPlatformShortcutModifier, isEditorHistoryShortcut } from "./keyboardShortcuts"
 import { canStartParagraphTextSurfaceStructuralEdit } from "./paragraphTextSurfaceStructuralEdit"
 import type { ParagraphTextSurfaceStructuralEditGuard } from "./structuralEdit/paragraphTextSurfaceFallbackBridge"
 import {
@@ -114,6 +114,10 @@ export function useWysiwygNativeInputBridgeEvents(input: UseWysiwygNativeInputBr
     }
 
     const handleNativeKeyDown = (event: KeyboardEvent) => {
+      if (isEditorHistoryShortcut(event)) {
+        flushPendingDraftSyncImmediately()
+        return
+      }
       event.stopPropagation()
       if (event.key === "Escape") {
         event.preventDefault()

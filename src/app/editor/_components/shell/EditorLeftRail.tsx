@@ -19,6 +19,7 @@ interface EditorLeftRailProps {
   editable: boolean
   isDragging: boolean
   addPaletteScope?: "document" | "headerFooter"
+  deferOutlineContent?: boolean
   onModeChange: (mode: EditorLeftRailMode) => void
   onSelectNode: (nodeId: string) => void
   onSelectOutlineListGroup?: (instanceId: string) => void
@@ -105,6 +106,7 @@ function EditorLeftRailImpl({
   editable,
   isDragging,
   addPaletteScope = "document",
+  deferOutlineContent = false,
   onModeChange,
   onSelectNode,
   onSelectOutlineListGroup,
@@ -159,6 +161,7 @@ function EditorLeftRailImpl({
             doc={outlineDoc}
             selectedNodeId={editable ? selectedNodeId : null}
             selectedListGroupId={activeOutlineListGroupId ?? (selectedStyleResource?.kind === "list-group" ? selectedStyleResource.id : null)}
+            deferContent={deferOutlineContent}
             onAddShortcut={editable ? openAddPanel : undefined}
             onSelect={editable ? onSelectNode : noopSelectNode}
             onSelectListGroup={editable ? onSelectOutlineListGroup : undefined}

@@ -172,6 +172,8 @@ export function useEditorPaginationLifecycleController({
   const layoutVersionRef = useRef(0)
   const browserPaginationWorkerRef = useRef<Worker | null>(null)
   const browserPaginationWorkerRequestIdRef = useRef(0)
+  const currentCanvasPageIndexRef = useRef(currentCanvasPageIndex)
+  currentCanvasPageIndexRef.current = currentCanvasPageIndex
 
   const {
     serverLayoutCheckedForCurrentPreview,
@@ -694,7 +696,7 @@ export function useEditorPaginationLifecycleController({
             requestId,
             doc: previewDoc,
             visibleWindow: {
-              pageIndex: currentCanvasPageIndex,
+              pageIndex: currentCanvasPageIndexRef.current,
               marginPages: BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES,
             },
             profilePagination,
@@ -703,7 +705,7 @@ export function useEditorPaginationLifecycleController({
             requestId,
             generation,
             profilePagination,
-            visiblePageIndex: currentCanvasPageIndex,
+            visiblePageIndex: currentCanvasPageIndexRef.current,
           })
           const postStartedAt = startWysiwygPerfSpan()
           worker.postMessage(request)
@@ -755,7 +757,6 @@ export function useEditorPaginationLifecycleController({
       }
     }
   }, [
-    currentCanvasPageIndex,
     dispatch,
     editorTextMeasurer,
     editorTextMeasurerStatus,

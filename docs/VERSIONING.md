@@ -3,7 +3,7 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.26`: suitable for self-use with accepted
+The current baseline is `0.6.29`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -50,6 +50,9 @@ plain paragraph splits, immediate merge-back behavior, stale pagination settle
 guards, boundary-safe page-break suppression, and focused probe/test coverage,
 plus structural edit performance attribution and React render isolation around
 the WYSIWYG draft island flush path,
+plus WYSIWYG undo/re-enter history correctness and large-document editor
+performance hardening for active typing, preview settle scheduling, deferred
+outline startup, and narrower lazy page render windows,
 but not yet a general-user `v1`.
 
 ## Version Meaning
@@ -88,6 +91,7 @@ but not yet a general-user `v1`.
 | `0.6.24` | Patch baseline for FlowDoc Draft Editor Island V2 follow-up hardening: page-boundary local height handoff, split-paragraph outer-spacing transfer, island-owned selection/clipboard probes, and documented scroll-anchoring/structural split latency risks without changing persisted document or package schema versions. |
 | `0.6.25` | Patch baseline for structural Enter/Backspace release hardening around the WYSIWYG draft island: optimistic split/merge transaction invariants, page-break-adjacent long-mock probes, stale pagination settle guards, boundary-safe page-break suppression, and focused rapid-key smoke coverage without changing persisted document or package schema versions. |
 | `0.6.26` | Patch baseline for structural edit performance attribution and React render isolation around the WYSIWYG draft island: scoped PageView rendering, left-rail deferral, structural render telemetry, and focused long-mock smoke coverage without changing persisted document or package schema versions. |
+| `0.6.29` | Patch baseline for WYSIWYG undo/re-enter history correctness and large-document editor performance hardening: plain-boundary draft pagination suppression, viewport-only preview settle guard, deferred large-outline startup, and narrower lazy page render windows without changing persisted document or package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

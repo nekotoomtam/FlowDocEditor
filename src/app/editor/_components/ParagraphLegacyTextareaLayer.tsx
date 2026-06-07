@@ -26,6 +26,7 @@ import {
 } from "./WysiwygTextRenderPrimitives"
 import { renderSelectionOverlay } from "./WysiwygSelectionOverlayLayer"
 import { canStartParagraphTextSurfaceStructuralEdit } from "./paragraphTextSurfaceStructuralEdit"
+import { isEditorHistoryShortcut } from "./keyboardShortcuts"
 
 interface ParagraphLegacyTextareaLayerProps {
   fragment: PageFragment
@@ -216,9 +217,10 @@ export function ParagraphLegacyTextareaLayer({
           }}
           onBlur={() => onEndEdit(fragment.nodeId, "blur")}
           onKeyDown={(event) => {
-            event.stopPropagation()
             const el = event.currentTarget
             if (!isCurrentEditSlice(el)) return
+            if (isEditorHistoryShortcut(event)) return
+            event.stopPropagation()
             markUserEditInteraction()
             const decision = classifyInlineEditKey({
               key: event.key,

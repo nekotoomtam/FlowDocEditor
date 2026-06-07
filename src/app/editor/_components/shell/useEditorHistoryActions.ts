@@ -1,4 +1,5 @@
 import { useCallback } from "react"
+import { flushSync } from "react-dom"
 import type { EditorAction } from "../editorReducer"
 
 export function useEditorHistoryActions({
@@ -16,16 +17,20 @@ export function useEditorHistoryActions({
 }) {
   const handleUndo = useCallback(() => {
     if (!isTemplateMode) return
-    const hadInlineEdit = finalizeInlineEditBeforeResponsiveAction()
-    if (pastLength === 0 && !hadInlineEdit) return
-    dispatchEditorAction({ type: "UNDO" })
+    flushSync(() => {
+      const hadInlineEdit = finalizeInlineEditBeforeResponsiveAction()
+      if (pastLength === 0 && !hadInlineEdit) return
+      dispatchEditorAction({ type: "UNDO" })
+    })
   }, [dispatchEditorAction, finalizeInlineEditBeforeResponsiveAction, isTemplateMode, pastLength])
 
   const handleRedo = useCallback(() => {
     if (!isTemplateMode) return
-    const hadInlineEdit = finalizeInlineEditBeforeResponsiveAction()
-    if (futureLength === 0 && !hadInlineEdit) return
-    dispatchEditorAction({ type: "REDO" })
+    flushSync(() => {
+      const hadInlineEdit = finalizeInlineEditBeforeResponsiveAction()
+      if (futureLength === 0 && !hadInlineEdit) return
+      dispatchEditorAction({ type: "REDO" })
+    })
   }, [dispatchEditorAction, finalizeInlineEditBeforeResponsiveAction, futureLength, isTemplateMode])
 
   return {

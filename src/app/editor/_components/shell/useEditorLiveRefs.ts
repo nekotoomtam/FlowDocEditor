@@ -22,13 +22,17 @@ export function useEditorLiveRefs({
   const paginatedRef = useRef(paginated)
   const paginatedPerfSummaryRef = useRef(summarizePaginatedForWysiwygPerf(paginated))
 
-  useLayoutEffect(() => { docRef.current = doc }, [doc])
+  // These refs can be imperatively advanced during inline-edit finalize; undo may
+  // restore the same object identity, so sync them after every render.
+  useLayoutEffect(() => {
+    docRef.current = doc
+  })
   useEffect(() => { packageFieldRegistryRef.current = packageFieldRegistry }, [packageFieldRegistry])
   useEffect(() => { dataSnapshotRef.current = dataSnapshot }, [dataSnapshot])
   useLayoutEffect(() => {
     paginatedRef.current = paginated
     paginatedPerfSummaryRef.current = summarizePaginatedForWysiwygPerf(paginated)
-  }, [paginated])
+  })
 
   return {
     docRef,

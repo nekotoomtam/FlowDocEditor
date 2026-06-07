@@ -275,6 +275,7 @@ export function useEditorInlineEditLifecycleController({
     if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionNodeId && wysiwygTextSessionNodeId !== nodeId) {
       finalizeInlineEditBeforeAction(finalizeMode)
     }
+    const wasInlineEditingSameNode = inlineEditNodeIdRef.current === nodeId
     startInlineEditSession(nodeId, caretIndex, pageIndex)
     if (!WYSIWYG_TEXT_ENGINE_ENABLED) return
     if (!isWysiwygTextEngineFragmentEligible({
@@ -287,7 +288,8 @@ export function useEditorInlineEditLifecycleController({
       endWysiwygTextSession()
       return
     }
-    if (wysiwygTextSessionNodeId === nodeId) {
+    const currentWysiwygTextSessionNodeId = wysiwygTextSessionStateRef.current.nodeId ?? wysiwygTextSessionNodeId
+    if (currentWysiwygTextSessionNodeId === nodeId && wasInlineEditingSameNode) {
       moveWysiwygTextCaret(caretIndex)
       return
     }
@@ -297,10 +299,12 @@ export function useEditorInlineEditLifecycleController({
     docRef,
     endWysiwygTextSession,
     finalizeInlineEditBeforeAction,
+    inlineEditNodeIdRef,
     moveWysiwygTextCaret,
     paginatedRef,
     startInlineEditSession,
     startWysiwygTextSession,
+    wysiwygTextSessionStateRef,
     wysiwygTextSessionNodeId,
   ])
 

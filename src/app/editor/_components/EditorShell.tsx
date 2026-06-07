@@ -99,6 +99,7 @@ import {
   MIN_SCALE,
   WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS,
   WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+  WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_PAGE_LIMIT,
 } from "./shell/editorShellConstants"
 import {
   type DeferredInlineEditEnd,
@@ -153,6 +154,7 @@ import {
 import {
   resolveDraftPreviewPaginationDelayMsBridge,
   resolveDraftPreviewPaginationResponsiveNodeId,
+  shouldSchedulePlainBoundaryDraftPagination,
 } from "./structuralEdit/previewSettleBridge"
 import {
   canStartParagraphTextSurfaceFallbackStructuralEditBridge,
@@ -725,11 +727,38 @@ export default function EditorShell() {
       currentFragmentCount,
     })
     const useResponsiveDraftPagination = responsiveDraftPaginationNodeId !== null
-    if (useResponsiveDraftPagination || plainBoundaryDraftPaginationActive) {
+    const plainBoundaryPaginationSummary = plainBoundaryDraftPaginationActive && !useResponsiveDraftPagination
+      ? summarizePaginatedForWysiwygPerf(paginatedRef.current)
+      : null
+    const plainBoundaryPageCount = plainBoundaryPaginationSummary?.pageCount ?? 0
+    const plainBoundaryFragmentCount = plainBoundaryPaginationSummary?.fragmentCount ?? 0
+    const shouldUsePlainBoundaryDraftPagination = plainBoundaryPaginationSummary
+      ? shouldSchedulePlainBoundaryDraftPagination({
+          pageCount: plainBoundaryPageCount,
+          pageLimit: WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_PAGE_LIMIT,
+        })
+      : false
+    if (plainBoundaryDraftPaginationActive && !useResponsiveDraftPagination && !shouldUsePlainBoundaryDraftPagination) {
+      wysiwygPlainTextBoundaryDraftPaginationNodeIdRef.current = null
+      recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        kind: "draft-pagination-schedule",
+        startedAt: startWysiwygPerfSpan(),
+        durationMs: 0,
+        nodeId,
+        draftVersion: wysiwygTextSessionState.dirtyVersion + 1,
+        textLength: text.length,
+        requestedDelayMs: WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
+        source: "plain-boundary-large-doc-suppressed",
+        action: "skip-large-doc",
+        pageCount: plainBoundaryPageCount,
+        fragmentCount: plainBoundaryFragmentCount,
+      })
+    }
+    if (useResponsiveDraftPagination || shouldUsePlainBoundaryDraftPagination) {
       if (responsiveDraftPaginationNodeId) {
         setWysiwygDraftPaginationNodeId(responsiveDraftPaginationNodeId)
       }
-      const draftPaginationDelayMs = plainBoundaryDraftPaginationActive && !useResponsiveDraftPagination
+      const draftPaginationDelayMs = shouldUsePlainBoundaryDraftPagination && !useResponsiveDraftPagination
         ? WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS
         : resolveDraftPreviewPaginationDelayMsBridge({
             draftPaginationActive: true,
@@ -847,6 +876,34 @@ export default function EditorShell() {
     })
     if (!reflow.shouldQueueSettledPagination) return
     if (isPlainParagraphBoundary) {
+      const plainBoundaryPaginationSummary = summarizePaginatedForWysiwygPerf(paginatedRef.current)
+      const plainBoundaryPageCount = plainBoundaryPaginationSummary.pageCount ?? 0
+      const plainBoundaryFragmentCount = plainBoundaryPaginationSummary.fragmentCount ?? 0
+      const shouldUsePlainBoundaryDraftPagination = shouldSchedulePlainBoundaryDraftPagination({
+        pageCount: plainBoundaryPageCount,
+        pageLimit: WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_PAGE_LIMIT,
+      })
+      if (!shouldUsePlainBoundaryDraftPagination) {
+        if (wysiwygPlainTextBoundaryDraftPaginationNodeIdRef.current === nodeId) {
+          wysiwygPlainTextBoundaryDraftPaginationNodeIdRef.current = null
+        }
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "draft-pagination-schedule",
+          startedAt: startWysiwygPerfSpan(),
+          durationMs: 0,
+          nodeId,
+          draftVersion: wysiwygTextSessionState.dirtyVersion,
+          textLength: wysiwygTextSessionState.draftText.length,
+          requestedDelayMs,
+          source: "plain-boundary-large-doc-suppressed",
+          action: "skip-large-doc",
+          reflowKind: reflow.kind,
+          reflowReason: reflow.reason,
+          pageCount: plainBoundaryPageCount,
+          fragmentCount: plainBoundaryFragmentCount,
+        })
+        return
+      }
       if (wysiwygPlainTextBoundaryDraftPaginationNodeIdRef.current === nodeId) return
       wysiwygPlainTextBoundaryDraftPaginationNodeIdRef.current = nodeId
     }
@@ -1372,6 +1429,7 @@ export default function EditorShell() {
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <EditorLeftRailPane
           deferLeftRailForStructuralPaint={deferLeftRailForStructuralPaint}
+          previewLayoutStatus={browserPreviewLayout.status}
           wysiwygPerfTraceActive={wysiwygPerfTraceActive}
           mode={leftRailMode}
           outlineDoc={leftRailOutlineDoc}

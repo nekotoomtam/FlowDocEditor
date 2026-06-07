@@ -23,6 +23,7 @@ import {
   resolvePreviewSettleDebounceMs,
   resolvePreviewSettleGraceRemainingMs,
   schedulePreviewSettleBridge,
+  shouldSchedulePlainBoundaryDraftPagination,
   shouldRescheduleDraftPreviewPaginationForRevision,
   shouldRunDraftPreviewPagination,
   shouldSupersedePreviewSettleOnCleanup,
@@ -281,6 +282,15 @@ describe("preview settle bridge", () => {
       draftPaginationActive: false,
       currentFragmentCount: 2,
     })).toBeNull()
+
+    expect(shouldSchedulePlainBoundaryDraftPagination({
+      pageCount: 64,
+      pageLimit: 64,
+    })).toBe(true)
+    expect(shouldSchedulePlainBoundaryDraftPagination({
+      pageCount: 65,
+      pageLimit: 64,
+    })).toBe(false)
   })
 
   it("keeps draft pagination lifecycle decisions explicit", () => {

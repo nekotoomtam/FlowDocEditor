@@ -187,6 +187,22 @@ describe("OutlinePanel", () => {
     expect(markup).toContain("title=\"Add\"")
   })
 
+  it("keeps the outline shell while deferred content skips heavy rows", () => {
+    const markup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: outlineDoc(),
+      selectedNodeId: null,
+      deferContent: true,
+      onSelect: () => undefined,
+      onAddShortcut: () => undefined,
+    }))
+
+    expect(markup).toContain("data-testid=\"outline-panel-title\"")
+    expect(markup).toContain("data-testid=\"outline-add-shortcut\"")
+    expect(markup).toContain("data-outline-content-deferred=\"true\"")
+    expect(markup).not.toContain("data-testid=\"outline-node-row\"")
+    expect(markup).not.toContain("First paragraph")
+  })
+
   it("shows flow-backed rows and stacks with standard row/column labels", () => {
     const markup = renderToStaticMarkup(createElement(OutlinePanel, {
       doc: flowOutlineDoc(),

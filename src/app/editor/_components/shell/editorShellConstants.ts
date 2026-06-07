@@ -28,6 +28,9 @@ export const WYSIWYG_DRAFT_PAGINATION_DEBOUNCE_MS = 450
 // Keep the authoritative draft pagination close to the input frame instead.
 export const FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS = 16
 export const WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS = 450
+// Large plain paragraphs use the draft island as the active visual truth while
+// typing; full-document draft pagination settles on commit instead.
+export const WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_PAGE_LIMIT = 64
 export const WYSIWYG_RESPONSIVE_DRAFT_PAGINATION_QUIET_MS = 48
 export const WYSIWYG_RESPONSIVE_DRAFT_PAGINATION_MAX_LAG_MS = 160
 export const FLOWDOC_FONT_HEADER = "X-FlowDoc-Font"

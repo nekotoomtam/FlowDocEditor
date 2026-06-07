@@ -7,10 +7,12 @@ import {
 import { startWysiwygPerfSpan } from "../wysiwygPerformance"
 import {
   describeWysiwygTextSessionAccessibility,
+  INACTIVE_WYSIWYG_TEXT_SESSION,
   useWysiwygTextSession,
   type WysiwygTextSelection,
 } from "../useWysiwygTextSession"
 import {
+  INACTIVE_WYSIWYG_RICH_TEXT_DRAFT_SESSION,
   projectRichTextDraftSessionToWysiwygTextSession,
   useWysiwygRichTextDraftSession,
 } from "../richTextDraftSession"
@@ -69,6 +71,8 @@ export function useEditorWysiwygTextSessionController({
   const wysiwygTextSessionState = WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygTextSessionProjection.nodeId
     ? richWysiwygTextSessionProjection
     : plainWysiwygTextSessionState
+  const wysiwygTextSessionStateRef = useRef(wysiwygTextSessionState)
+  const richWysiwygDraftSessionStateRef = useRef(richWysiwygDraftSessionState)
 
   const beginWysiwygDraftRuntimeSession = useCallback((input: {
     nodeId: string
@@ -162,6 +166,8 @@ export function useEditorWysiwygTextSessionController({
 
   const endWysiwygTextSession = useCallback(() => {
     cancelCurrentWysiwygDraftRuntimeSession("end-wysiwyg-text-session")
+    wysiwygTextSessionStateRef.current = INACTIVE_WYSIWYG_TEXT_SESSION
+    richWysiwygDraftSessionStateRef.current = INACTIVE_WYSIWYG_RICH_TEXT_DRAFT_SESSION
     endPlainWysiwygTextSession()
     endRichWysiwygDraftSession()
   }, [cancelCurrentWysiwygDraftRuntimeSession, endPlainWysiwygTextSession, endRichWysiwygDraftSession])
@@ -170,9 +176,6 @@ export function useEditorWysiwygTextSessionController({
     () => describeWysiwygTextSessionAccessibility(wysiwygTextSessionState),
     [wysiwygTextSessionState],
   )
-  const wysiwygTextSessionStateRef = useRef(wysiwygTextSessionState)
-  const richWysiwygDraftSessionStateRef = useRef(richWysiwygDraftSessionState)
-
   useEffect(() => { wysiwygTextSessionStateRef.current = wysiwygTextSessionState }, [wysiwygTextSessionState])
   useEffect(() => { richWysiwygDraftSessionStateRef.current = richWysiwygDraftSessionState }, [richWysiwygDraftSessionState])
 

@@ -13,6 +13,7 @@ import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import type { WysiwygDraftSyncPayload } from "./wysiwygDraftSyncState"
 import type { ParagraphTextSurfaceStructuralEditGuard } from "./structuralEdit/paragraphTextSurfaceFallbackBridge"
 import { canStartParagraphTextSurfaceStructuralEdit } from "./paragraphTextSurfaceStructuralEdit"
+import { isEditorHistoryShortcut } from "./keyboardShortcuts"
 import {
   INLINE_EDIT_TEXT_COLOR,
   fontStyleForRenderProps,
@@ -284,8 +285,13 @@ export function WysiwygNativeEditLayer({
             scheduleBlurEndEdit()
           }}
           onKeyDown={(event) => {
-            event.stopPropagation()
             const textarea = event.currentTarget
+            if (isEditorHistoryShortcut(event)) {
+              applyNativeTextareaDraft(textarea, { defer: false })
+              flushPendingDraftSyncImmediately()
+              return
+            }
+            event.stopPropagation()
             const keyInput = {
               key: normalizeWysiwygTextInputKey(event.key),
               shiftKey: event.shiftKey,

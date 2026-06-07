@@ -128,6 +128,11 @@ export interface DraftPreviewPaginationResponsiveNodeBridgeInput {
   currentFragmentCount: number
 }
 
+export interface PlainBoundaryDraftPaginationBridgeInput {
+  pageCount: number
+  pageLimit: number
+}
+
 export interface DraftPreviewPaginationApplyBridgeInput {
   nodeId: string
   requestedDelayMs: number
@@ -215,6 +220,13 @@ export function resolveDraftPreviewPaginationResponsiveNodeId({
     draftPaginationActive,
     currentFragmentCount,
   }) ? nodeId : null
+}
+
+export function shouldSchedulePlainBoundaryDraftPagination({
+  pageCount,
+  pageLimit,
+}: PlainBoundaryDraftPaginationBridgeInput): boolean {
+  return pageCount <= pageLimit
 }
 
 export function createDraftPreviewPaginationSchedulePlan({

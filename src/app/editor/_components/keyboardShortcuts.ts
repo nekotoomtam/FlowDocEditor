@@ -49,3 +49,19 @@ export function normalizeShortcutKey(event: ShortcutKeyboardEvent): NormalizedSh
     ? key as NormalizedShortcutKey
     : null
 }
+
+export function isEditorHistoryUndoShortcut(event: ShortcutKeyboardEvent): boolean {
+  return hasPlatformShortcutModifier(event) &&
+    event.shiftKey !== true &&
+    normalizeShortcutKey(event) === "z"
+}
+
+export function isEditorHistoryRedoShortcut(event: ShortcutKeyboardEvent): boolean {
+  if (!hasPlatformShortcutModifier(event)) return false
+  const key = normalizeShortcutKey(event)
+  return key === "y" || (event.shiftKey === true && key === "z")
+}
+
+export function isEditorHistoryShortcut(event: ShortcutKeyboardEvent): boolean {
+  return isEditorHistoryUndoShortcut(event) || isEditorHistoryRedoShortcut(event)
+}
