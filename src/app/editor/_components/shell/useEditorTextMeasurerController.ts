@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useState } from "react"
 import { createBrowserTextMeasurer } from "../browserTextMeasurer"
 import { resolveBrowserEditorTextMeasurer, type EditorTextMeasurerStatus } from "../editorTextMeasurerState"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "../wysiwygInlineEditConfig"
@@ -14,7 +14,7 @@ export function useEditorTextMeasurerController() {
   const [editorTextMeasurerStatus, setEditorTextMeasurerStatus] = useState<EditorTextMeasurerStatus>("loading")
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let cancelled = false
     const startedAt = startWysiwygPerfSpan()
     recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {

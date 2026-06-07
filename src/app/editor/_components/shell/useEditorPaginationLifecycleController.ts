@@ -66,7 +66,7 @@ import type {
   MinHeightDrag,
   ResizeDrag,
 } from "../editorInteractionTypes"
-import { createBrowserPaginationWorker } from "./browserPaginationWorkerClient"
+import { createBrowserPaginationWorker, prewarmBrowserPaginationWorkerMeasurer } from "./browserPaginationWorkerClient"
 import {
   BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES,
   FLOWDOC_FONT_FALLBACK_VALUE,
@@ -81,6 +81,47 @@ type MutableCurrentRef<T> = {
 }
 
 type OptimisticStructuralSettleRef = MutableCurrentRef<(PendingOptimisticSplitRefocus & StructuralPreviewSettleSnapshot) | null>
+type IdleWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
+  cancelIdleCallback?: (handle: number) => void
+}
+
+function waitForServerPaginationApplyIdle(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error("server pagination apply aborted"))
+  if (typeof window === "undefined") return Promise.resolve()
+
+  const idleWindow = window as IdleWindow
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let idleHandle: number | null = null
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+
+    const cleanup = () => {
+      signal.removeEventListener("abort", abort)
+      if (idleHandle !== null) idleWindow.cancelIdleCallback?.(idleHandle)
+      if (timeoutHandle !== null) clearTimeout(timeoutHandle)
+    }
+    const finish = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve()
+    }
+    const abort = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new Error("server pagination apply aborted"))
+    }
+
+    signal.addEventListener("abort", abort, { once: true })
+    if (idleWindow.requestIdleCallback) {
+      idleHandle = idleWindow.requestIdleCallback(finish, { timeout: 1200 })
+    } else {
+      timeoutHandle = setTimeout(finish, 16)
+    }
+  })
+}
 
 export function useEditorPaginationLifecycleController({
   authoritativePaginated,
@@ -171,6 +212,7 @@ export function useEditorPaginationLifecycleController({
   const serverPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layoutVersionRef = useRef(0)
   const browserPaginationWorkerRef = useRef<Worker | null>(null)
+  const browserPaginationWorkerMeasurerPrewarmedRef = useRef(false)
   const browserPaginationWorkerRequestIdRef = useRef(0)
   const currentCanvasPageIndexRef = useRef(currentCanvasPageIndex)
   currentCanvasPageIndexRef.current = currentCanvasPageIndex
@@ -452,6 +494,18 @@ export function useEditorPaginationLifecycleController({
         },
       })
       return () => undefined
+    }
+    if (useBackgroundPagination && !browserPaginationWorkerMeasurerPrewarmedRef.current) {
+      const prewarmStartedAt = startWysiwygPerfSpan()
+      const worker = getBrowserPaginationWorker()
+      const posted = prewarmBrowserPaginationWorkerMeasurer(worker)
+      if (posted) browserPaginationWorkerMeasurerPrewarmedRef.current = true
+      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-measurer-prewarm", prewarmStartedAt, {
+        generation,
+        posted,
+        measurerStatus: editorTextMeasurerStatus,
+        fontReadyVersion,
+      })
     }
     const scheduleStartedAt = startWysiwygPerfSpan()
     recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
@@ -827,6 +881,7 @@ export function useEditorPaginationLifecycleController({
         layoutVersion,
       })
       controller = new AbortController()
+      const activeController = controller
       setIsLayoutLoading(true)
       setLayoutStatus("reconciling")
 
@@ -841,7 +896,7 @@ export function useEditorPaginationLifecycleController({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: requestBody,
-        signal: controller.signal,
+        signal: activeController.signal,
       })
         .then(async (res) => {
           finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:server-pagination-response", requestStartedAt, {
@@ -856,7 +911,14 @@ export function useEditorPaginationLifecycleController({
           setFontFallback(res.headers.get(FLOWDOC_FONT_HEADER) === FLOWDOC_FONT_FALLBACK_VALUE)
           return await res.json() as PaginatedDocument
         })
-        .then((paginated) => {
+        .then(async (paginated) => {
+          const applyIdleStartedAt = startWysiwygPerfSpan()
+          await waitForServerPaginationApplyIdle(activeController.signal)
+          finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:server-pagination-apply-idle-delay", applyIdleStartedAt, {
+            layoutVersion,
+          })
+          if (cancelled) return
+          if (activeController.signal.aborted) return
           if (layoutVersion !== layoutVersionRef.current) return
           setLayoutError(false)
           setServerLayoutWarnings(collectPaginatedLayoutWarnings(paginated))
@@ -889,7 +951,7 @@ export function useEditorPaginationLifecycleController({
         })
         .catch((error) => {
           if (cancelled) return
-          if (controller?.signal.aborted) return
+          if (activeController.signal.aborted) return
           if (error instanceof DOMException && error.name === "AbortError") return
           if (
             error instanceof TypeError &&

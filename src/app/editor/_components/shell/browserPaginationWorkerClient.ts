@@ -1,5 +1,8 @@
+import type { BrowserPaginationWorkerRequest } from "../browserPaginationWorkerTypes"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "../wysiwygInlineEditConfig"
 import { finishFlowDocPerfSpan, startWysiwygPerfSpan } from "../wysiwygPerformance"
+
+const PREWARM_MEASURER_REQUEST: BrowserPaginationWorkerRequest = { type: "prewarm-measurer" }
 
 export function createBrowserPaginationWorker(): Worker | null {
   if (typeof Worker === "undefined") return null
@@ -18,5 +21,15 @@ export function createBrowserPaginationWorker(): Worker | null {
     })
     console.error("browser pagination worker unavailable:", error)
     return null
+  }
+}
+
+export function prewarmBrowserPaginationWorkerMeasurer(worker: Pick<Worker, "postMessage"> | null): boolean {
+  if (!worker) return false
+  try {
+    worker.postMessage(PREWARM_MEASURER_REQUEST)
+    return true
+  } catch {
+    return false
   }
 }

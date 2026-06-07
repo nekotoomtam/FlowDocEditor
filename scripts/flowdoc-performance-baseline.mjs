@@ -128,6 +128,9 @@ function createReport(config) {
       arch: process.arch,
       browserName: "chromium",
       appUrl: config.editorUrl,
+      appUrlSource: config.appUrlSource,
+      requestedAppUrl: config.requestedAppUrl,
+      appServerMode: "pending",
       ci: envTruthy("CI"),
     },
     documentStats: null,
@@ -312,13 +315,13 @@ async function startOrReuseFlowDocDevServer(appUrl, timeoutMs) {
   const server = startNextDevServer(appUrl)
   try {
     await waitForServer(editorUrlFromAppUrl(appUrl), server, timeoutMs)
-    return { appUrl, server }
+    return { appUrl, server, appServerMode: "started" }
   } catch (error) {
     const existingUrl = existingNextDevServerUrl(server)
     if (!existingUrl) throw error
     await stopNextDevServer(server)
     await waitForServer(editorUrlFromAppUrl(existingUrl), null, timeoutMs)
-    return { appUrl: existingUrl, server: null }
+    return { appUrl: existingUrl, server: null, appServerMode: "reused-existing-next" }
   }
 }
 
@@ -1769,7 +1772,9 @@ async function runBaseline() {
   const generatedAt = new Date()
   const fixtureInput = process.env.BASELINE_FLOWDOC_FILE ?? DEFAULT_BASELINE_FILE
   const fixturePath = path.resolve(repoRoot, fixtureInput)
-  let appUrl = process.env.BASELINE_APP_URL ?? await automaticAppUrl()
+  const baselineAppUrl = process.env.BASELINE_APP_URL
+  let appUrl = baselineAppUrl ?? await automaticAppUrl()
+  const appUrlSource = baselineAppUrl ? "env" : "automatic"
   const profilePagination = envFlag("BASELINE_PROFILE_PAGINATION")
   let editorUrl = editorUrlFromAppUrl(appUrl, profilePagination)
   const outputDir = path.resolve(repoRoot, process.env.BASELINE_OUTPUT_DIR ?? DEFAULT_OUTPUT_DIR)
@@ -1781,7 +1786,13 @@ async function runBaseline() {
   const slowMo = finiteNumber(process.env.BASELINE_SLOW_MO, 0)
   const allowConsoleErrors = envFlag("BASELINE_ALLOW_CONSOLE_ERRORS")
   const compareReportInput = process.env.BASELINE_COMPARE_REPORT
-  const report = createReport({ generatedAt, fixturePath, editorUrl })
+  const report = createReport({
+    generatedAt,
+    fixturePath,
+    editorUrl,
+    appUrlSource,
+    requestedAppUrl: appUrl,
+  })
   let fixture = null
   let server = null
   let browser = null
@@ -1790,13 +1801,15 @@ async function runBaseline() {
   try {
     fixture = await loadBaselineFixture(fixturePath, report)
 
-    if (process.env.BASELINE_APP_URL) {
+    if (baselineAppUrl) {
       await withStage("connect-existing-app", () => waitForServer(editorUrl, null, Math.min(timeoutMs, SERVER_START_TIMEOUT_MS)))
+      report.environment.appServerMode = "external"
     } else {
       const started = await withStage("start-app", () => startOrReuseFlowDocDevServer(appUrl, SERVER_START_TIMEOUT_MS))
       appUrl = started.appUrl
       editorUrl = editorUrlFromAppUrl(appUrl, profilePagination)
       report.environment.appUrl = editorUrl
+      report.environment.appServerMode = started.appServerMode
       server = started.server
     }
 

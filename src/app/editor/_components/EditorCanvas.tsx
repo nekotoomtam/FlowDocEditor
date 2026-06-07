@@ -2231,6 +2231,7 @@ function PageView({
   showTextSegments: boolean
   showDrift: boolean
   driftMap: Map<string, FragmentDrift> | null
+  pageScopedEditAffected: boolean
   wysiwygInlineEditEnabled: boolean
   wysiwygTextEngineEnabled: boolean
   wysiwygTextDraftNodeId: string | null
@@ -3669,7 +3670,7 @@ const PAGE_VIEW_SCOPED_EDIT_PROP_KEYS: Array<keyof PageViewProps> = [
   "onWysiwygTextReflowDecision",
 ]
 
-interface PageViewScopedEditProps {
+export interface PageViewScopedEditProps {
   selectedNodeId: string | null
   selectionAnchorNodeId: string | null
   inlineEditNodeId: string | null
@@ -3752,6 +3753,21 @@ export function pageViewScopedEditPropsAffectPage(
   props: PageViewScopedEditProps,
 ): boolean {
   return pageViewScopedEditPropsAffectPageBridge(page, props)
+}
+
+export function buildPageScopedEditAffectedPageIndexes(
+  paginated: PaginatedDocument,
+  props: PageViewScopedEditProps,
+): Set<number> {
+  const affectedPageIndexes = new Set<number>()
+  for (const section of paginated.sections) {
+    for (const page of section.pages) {
+      if (pageViewScopedEditPropsAffectPage(page, props)) {
+        affectedPageIndexes.add(page.index)
+      }
+    }
+  }
+  return affectedPageIndexes
 }
 
 export function pageViewStructuralTransitionAffectsPage(
@@ -3847,6 +3863,13 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
   }
 
   const scopedEditPropsChanged = PAGE_VIEW_SCOPED_EDIT_PROP_KEYS.some((key) => prev[key] !== next[key])
+  if (
+    scopedEditPropsChanged &&
+    !prev.pageScopedEditAffected &&
+    !next.pageScopedEditAffected
+  ) {
+    return finishComparator(true, "scoped-edit-unaffected")
+  }
   if (scopedEditPropsChanged && (
     pageViewScopedEditPropsAffectPage(prev.page, prev) ||
     pageViewScopedEditPropsAffectPage(next.page, next)
@@ -4710,6 +4733,30 @@ export function EditorCanvas({
     wysiwygTextDraftNodeId,
     wysiwygTextEngineEnabled,
   ])
+  const pageScopedEditAffectedPageIndexes = useMemo(() => buildPageScopedEditAffectedPageIndexes(paginated, {
+    selectedNodeId,
+    selectionAnchorNodeId,
+    inlineEditNodeId,
+    inlineEditPageIndex,
+    wysiwygTextDraftNodeId,
+    wysiwygDraftVisualPreview,
+    suppressedCanvasTextNodeIds,
+    activeOutOfCanvasStructuralIsland,
+    wysiwygTableCellDraftVisualChromeByPageIndex,
+    wysiwygTextPointerFragments,
+  }), [
+    activeOutOfCanvasStructuralIsland,
+    inlineEditNodeId,
+    inlineEditPageIndex,
+    paginated,
+    selectedNodeId,
+    selectionAnchorNodeId,
+    suppressedCanvasTextNodeIds,
+    wysiwygDraftVisualPreview,
+    wysiwygTableCellDraftVisualChromeByPageIndex,
+    wysiwygTextDraftNodeId,
+    wysiwygTextPointerFragments,
+  ])
 
   const forcedPageKeys = useMemo(() => (
     captureStructuralCanvasRenderValue(
@@ -4990,6 +5037,7 @@ export function EditorCanvas({
                   minHeightDrag={minHeightDrag}
                   onMinHeightResizeStart={stableOnMinHeightResizeStart}
                   sectionIndex={si}
+                  pageScopedEditAffected={pageScopedEditAffectedPageIndexes.has(page.index)}
                   marginDrag={marginDrag}
                   marginEditMode={marginEditMode}
                   headerFooterEditMode={headerFooterEditMode}

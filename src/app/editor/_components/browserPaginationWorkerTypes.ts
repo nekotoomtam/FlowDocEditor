@@ -14,13 +14,21 @@ export interface BrowserPaginationWorkerPartialCoverage {
   requestedPageIndex: number
 }
 
-export interface BrowserPaginationWorkerRequest {
+export interface BrowserPaginationWorkerPrewarmRequest {
+  type: "prewarm-measurer"
+}
+
+export interface BrowserPaginationWorkerPaginateRequest {
   type: "paginate"
   requestId: number
   doc: DocumentNode
   visibleWindow?: BrowserPaginationWorkerVisibleWindow
   profilePagination?: boolean
 }
+
+export type BrowserPaginationWorkerRequest =
+  | BrowserPaginationWorkerPrewarmRequest
+  | BrowserPaginationWorkerPaginateRequest
 
 export interface BrowserPaginationWorkerTiming {
   receivedAtMs: number

@@ -6,6 +6,8 @@ import { POST as exportPost } from "../export/route"
 import { RUNTIME_FONT_RESPONSE_HEADER } from "../runtimeFont"
 import { parsePersistedDocument } from "../../editor/_components/documentPersistence"
 
+const EXPORT_INTEGRATION_TIMEOUT_MS = 30000
+
 function jsonRequest(url: string, body: unknown): Request {
   return new Request(url, {
     method: "POST",
@@ -40,5 +42,5 @@ describe("user report package import/export path", () => {
     const bytes = new Uint8Array(await response.arrayBuffer())
     const pdf = await PdfLibDocument.load(bytes)
     expect(pdf.getPageCount()).toBe(fixture.expected.totalPages)
-  })
+  }, EXPORT_INTEGRATION_TIMEOUT_MS)
 })

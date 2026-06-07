@@ -98,7 +98,7 @@ reports/perf-baseline/latest-summary.txt
 The JSON report contains:
 
 - `fixture`: path, byte size, document id, and title when available.
-- `environment`: Node, platform, browser, app URL, and CI flag.
+- `environment`: Node, platform, browser, app URL, app-server mode, and CI flag.
 - `documentStats`: structural counts for sections, body children, total nodes,
   paragraphs, headings, TOC nodes, flow-row/stack/table nodes, field refs, and
   text characters.

@@ -3,7 +3,7 @@ import { createDefaultDocument, createParagraphNode } from "@/document"
 import { defaultTextMeasurer } from "@/layout"
 import { paginateDocument } from "@/pagination"
 import type { BodyNode, DocumentNode, PageBreakNode } from "@/schema"
-import type { BrowserPaginationWorkerRequest } from "../browserPaginationWorkerTypes"
+import type { BrowserPaginationWorkerPaginateRequest } from "../browserPaginationWorkerTypes"
 import { tryBuildBrowserPaginationPartialResponse } from "../browserPaginationWorkerStrategy"
 
 function pageBreak(id: string): PageBreakNode {
@@ -27,7 +27,7 @@ function makeBodyBasicDocument(pageCount: number): DocumentNode {
   return doc
 }
 
-function request(doc: DocumentNode, pageIndex: number): BrowserPaginationWorkerRequest {
+function request(doc: DocumentNode, pageIndex: number): BrowserPaginationWorkerPaginateRequest {
   return {
     type: "paginate",
     requestId: 7,

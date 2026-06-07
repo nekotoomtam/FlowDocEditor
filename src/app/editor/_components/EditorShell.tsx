@@ -1429,6 +1429,7 @@ export default function EditorShell() {
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <EditorLeftRailPane
           deferLeftRailForStructuralPaint={deferLeftRailForStructuralPaint}
+          deferOutlineSelection={leftRailMode === "outline" && inlineEditNodeId !== null}
           previewLayoutStatus={browserPreviewLayout.status}
           wysiwygPerfTraceActive={wysiwygPerfTraceActive}
           mode={leftRailMode}

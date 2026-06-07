@@ -5,6 +5,7 @@ import { createDefaultDocument, DEFAULT_PARAGRAPH_PROPS, getAllListStylePresets,
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DocumentNode } from "@/schema"
 import { EditorLeftRail } from "../shell/EditorLeftRail"
+import { resolveDeferredLeftRailOutlineSelection } from "../shell/EditorLeftRailPane"
 
 const registry: FieldRegistryV1 = { version: 1, fields: [] }
 
@@ -119,5 +120,27 @@ describe("EditorLeftRail", () => {
     expect(markup).toContain("data-outline-list-group-id=\"tor-main\"")
     expect(markup).toContain("aria-pressed=\"true\"")
     expect(markup).toContain("Listed paragraph")
+  })
+
+  it("keeps the previous outline selection while outline selection rendering is deferred", () => {
+    const snapshot = {
+      selectedNodeId: "p1",
+      activeOutlineListGroupId: "tor-main",
+    }
+    const current = {
+      selectedNodeId: "p2",
+      activeOutlineListGroupId: "tor-next",
+    }
+
+    expect(resolveDeferredLeftRailOutlineSelection({
+      current,
+      defer: true,
+      snapshot,
+    })).toEqual(snapshot)
+    expect(resolveDeferredLeftRailOutlineSelection({
+      current,
+      defer: false,
+      snapshot,
+    })).toEqual(current)
   })
 })

@@ -59,6 +59,10 @@ const workerScope = self as BrowserPaginationWorkerScope
 
 workerScope.onmessage = (event: MessageEvent<BrowserPaginationWorkerRequest>) => {
   const request = event.data
+  if (request?.type === "prewarm-measurer") {
+    void resolveWorkerMeasurer()
+    return
+  }
   if (request?.type !== "paginate") return
 
   void (async () => {

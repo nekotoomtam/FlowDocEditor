@@ -1,13 +1,13 @@
 import type { TextMeasurer } from "@/layout"
 import { tryPaginateDocumentBodyBasicsVisibleWindow } from "@/pagination"
 import type {
+  BrowserPaginationWorkerPaginateRequest,
   BrowserPaginationWorkerMeasurerStatus,
-  BrowserPaginationWorkerRequest,
   BrowserPaginationWorkerResponse,
 } from "./browserPaginationWorkerTypes"
 
 export function tryBuildBrowserPaginationPartialResponse(
-  request: BrowserPaginationWorkerRequest,
+  request: BrowserPaginationWorkerPaginateRequest,
   measurer: TextMeasurer,
   measurerStatus: BrowserPaginationWorkerMeasurerStatus,
 ): BrowserPaginationWorkerResponse | null {

@@ -7,6 +7,7 @@ import type { DocumentNode, ParagraphNode } from "@/schema"
 import {
   buildEditorFragmentClipPathId,
   buildEditorFragmentRenderKey,
+  buildPageScopedEditAffectedPageIndexes,
   buildWysiwygDraftVisualPreview,
   buildWysiwygTableCellDraftVisualChromeFragments,
   buildWysiwygTextPointerFragmentIndex,
@@ -1005,6 +1006,23 @@ describe("EditorCanvas page memoization", () => {
 
     expect(pageViewScopedEditPropsAffectPage(activePage, props)).toBe(true)
     expect(pageViewScopedEditPropsAffectPage(otherPage, props)).toBe(false)
+  })
+
+  it("precomputes the WYSIWYG edit affected page index for memo comparisons", () => {
+    const activePage = pageWithFragments(0, [textFragment("active-p", "Active", 72)])
+    const otherPage = pageWithFragments(1, [textFragment("other-p", "Other", 72, { pageIndex: 1 })])
+    const paginated: PaginatedDocument = {
+      tocEntries: [],
+      sections: [{ sectionId: "s1", pages: [activePage, otherPage] }],
+    }
+
+    const affectedPageIndexes = buildPageScopedEditAffectedPageIndexes(paginated, scopedEditProps({
+      inlineEditNodeId: "active-p",
+      inlineEditPageIndex: 0,
+      wysiwygTextDraftNodeId: "active-p",
+    }))
+
+    expect([...affectedPageIndexes]).toEqual([0])
   })
 
   it("keeps header/footer paragraph edits in the page render scope", () => {
