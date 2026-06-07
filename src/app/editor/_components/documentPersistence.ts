@@ -512,6 +512,35 @@ export function loadDocumentFromStorage(storage: Pick<Storage, "getItem">, key =
   }
 }
 
+let cachedStorageParse: { key: string; raw: string | null; result: DocumentParseResult } | null = null
+
+export function loadDocumentFromStorageCachedByRawValue(
+  storage: Pick<Storage, "getItem">,
+  key = STORAGE_KEY,
+): DocumentParseResult {
+  try {
+    const readStartedAt = persistencePerfNow()
+    const raw = storage.getItem(key)
+    finishDocumentPersistencePerfSpan("pre-pagination:document-import-storage-read", readStartedAt, {
+      key,
+      sizeBytes: raw?.length ?? 0,
+    })
+    if (cachedStorageParse?.key === key && cachedStorageParse.raw === raw) {
+      finishDocumentPersistencePerfSpan("pre-pagination:document-import-storage-cache-hit", readStartedAt, {
+        key,
+        ok: cachedStorageParse.result.ok,
+      })
+      return cachedStorageParse.result
+    }
+
+    const result = parsePersistedDocument(raw)
+    cachedStorageParse = { key, raw, result }
+    return result
+  } catch {
+    return { ok: false, reason: "empty" }
+  }
+}
+
 export function saveDocumentToStorage(
   storage: Pick<Storage, "setItem">,
   doc: DocumentNode,

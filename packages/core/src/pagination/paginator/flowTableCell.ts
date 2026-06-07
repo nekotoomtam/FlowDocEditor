@@ -1,9 +1,9 @@
 import {
   defaultWordBreaker,
-  measureParagraph,
+  measureParagraphWithCache,
   paragraphBoxLeftInset,
 } from "../../layout"
-import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
+import type { FlowBox, ParagraphMeasurementCache, TextMeasurer, WordBreaker } from "../../layout"
 import type { FlowTableCellNode, FlowTableNode } from "../../schema"
 import type {
   PageFragment,
@@ -31,12 +31,13 @@ function measureFlowTableCellParagraph(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
   listNumbering: ListNumberingPaginationContext | undefined,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ) {
   const node = tableNode.nodes[child.nodeId]
   if (node?.type !== "paragraph") return null
   const marker = listNumbering?.markers.get(node.id)
   const layoutNode = withListBodyIndent(node, marker, listNumbering)
-  const measured = measureParagraph(layoutNode, child.width, measurer, wordBreaker)
+  const measured = measureParagraphWithCache(layoutNode, child.width, measurer, wordBreaker, paragraphMeasurementCache)
   return { node, layoutNode, measured, marker }
 }
 
@@ -49,6 +50,7 @@ export function collectFlowTableCellContents(
   wordBreaker: WordBreaker = defaultWordBreaker,
   pageNumberOffset: number = 0,
   listNumbering?: ListNumberingPaginationContext,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFragment[] {
   const fragments: PageFragment[] = []
   const offsetY = cellPageY - cellBox.y
@@ -63,7 +65,7 @@ export function collectFlowTableCellContents(
     let listMarker: PageFragment["listMarker"]
 
     if (child.nodeType === "paragraph") {
-      const paragraph = measureFlowTableCellParagraph(child, tableNode, measurer, wordBreaker, listNumbering)
+      const paragraph = measureFlowTableCellParagraph(child, tableNode, measurer, wordBreaker, listNumbering, paragraphMeasurementCache)
       if (paragraph) {
         const { layoutNode, measured, marker } = paragraph
         const rawLines = buildPositionedParagraphLines(measured, measured.lines, child.x, childPageY, 0, layoutNode.props.align)
@@ -110,12 +112,13 @@ export function computeFlowTableSplitPointFrom(
   wordBreaker: WordBreaker,
   from: SplitPoint,
   listNumbering?: ListNumberingPaginationContext,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): SplitPoint | null {
   const cellNode = tableNode.nodes[cellBox.nodeId]
   const heightUsed = cellNode?.type === "flow-table-cell"
     ? flowTableCellSliceTopInset(cellNode, from)
     : 0
-  return computeCellSplitPointFrom(cellBox, tableNode, availH, measurer, wordBreaker, from, heightUsed, listNumbering)
+  return computeCellSplitPointFrom(cellBox, tableNode, availH, measurer, wordBreaker, from, heightUsed, listNumbering, paragraphMeasurementCache)
 }
 
 export function collectFlowTableCellSlice(
@@ -129,6 +132,7 @@ export function collectFlowTableCellSlice(
   wordBreaker: WordBreaker,
   pageNumberOffset: number = 0,
   listNumbering?: ListNumberingPaginationContext,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFragment[] {
   const fragments: PageFragment[] = []
   const cellNode = tableNode.nodes[cellBox.nodeId]
@@ -160,7 +164,7 @@ export function collectFlowTableCellSlice(
         curY += child.height
       }
     } else if (child.nodeType === "paragraph") {
-      const paragraph = measureFlowTableCellParagraph(child, tableNode, measurer, wordBreaker, listNumbering)
+      const paragraph = measureFlowTableCellParagraph(child, tableNode, measurer, wordBreaker, listNumbering, paragraphMeasurementCache)
       if (!paragraph) { if (isAtTo) break; continue }
       const { layoutNode, measured, marker } = paragraph
       const lines = lineEnd !== undefined

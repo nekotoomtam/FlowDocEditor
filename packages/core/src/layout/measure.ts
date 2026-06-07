@@ -52,6 +52,25 @@ type RichTextRange = {
 
 const ZERO_EDGES: MeasuredBoxEdges = { top: 0, right: 0, bottom: 0, left: 0 }
 
+export interface ParagraphMeasurementCache {
+  get(node: ParagraphNode, availableWidth: number): MeasuredParagraph | undefined
+  set(node: ParagraphNode, availableWidth: number, measured: MeasuredParagraph): void
+}
+
+export function createParagraphMeasurementCache(): ParagraphMeasurementCache {
+  const measuredByNode = new WeakMap<ParagraphNode, Map<number, MeasuredParagraph>>()
+  return {
+    get(node, availableWidth) {
+      return measuredByNode.get(node)?.get(availableWidth)
+    },
+    set(node, availableWidth, measured) {
+      const byWidth = measuredByNode.get(node) ?? new Map<number, MeasuredParagraph>()
+      byWidth.set(availableWidth, measured)
+      measuredByNode.set(node, byWidth)
+    },
+  }
+}
+
 function edgeSum(edges: MeasuredBoxEdges): number {
   return edges.top + edges.right + edges.bottom + edges.left
 }
@@ -664,6 +683,20 @@ export function measureParagraph(
     box,
     totalHeight,
   }
+}
+
+export function measureParagraphWithCache(
+  node: ParagraphNode,
+  availableWidth: number,
+  measurer: TextMeasurer,
+  wordBreaker: WordBreaker = defaultWordBreaker,
+  cache?: ParagraphMeasurementCache,
+): MeasuredParagraph {
+  const cached = cache?.get(node, availableWidth)
+  if (cached) return cached
+  const measured = measureParagraph(node, availableWidth, measurer, wordBreaker)
+  cache?.set(node, availableWidth, measured)
+  return measured
 }
 
 // Measures only the lines starting from the hard-line that contains `fromOffset`.

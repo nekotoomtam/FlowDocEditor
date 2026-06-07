@@ -2,7 +2,7 @@ import { useState } from "react"
 import { SAMPLE_FIELD_REGISTRY_V1 } from "@/app/_lib/fieldRegistry"
 import type { DataSnapshotV1 } from "@/dataSnapshot"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
-import { loadDocumentFromStorage } from "../documentPersistence"
+import { loadDocumentFromStorageCachedByRawValue } from "../documentPersistence"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "../wysiwygInlineEditConfig"
 import { finishFlowDocPerfSpan, startWysiwygPerfSpan } from "../wysiwygPerformance"
 import {
@@ -26,7 +26,7 @@ export function useEditorPackageDataState(hasInitialTestScenario: boolean) {
       })
       return snapshot
     }
-    const result = loadDocumentFromStorage(localStorage)
+    const result = loadDocumentFromStorageCachedByRawValue(localStorage)
     const snapshot = dataSnapshotFromDocumentParseResult(result)
     finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:data-snapshot-create", startedAt, {
       invocationId,
@@ -46,7 +46,7 @@ export function useEditorPackageDataState(hasInitialTestScenario: boolean) {
       })
       return SAMPLE_FIELD_REGISTRY_V1
     }
-    const result = loadDocumentFromStorage(localStorage)
+    const result = loadDocumentFromStorageCachedByRawValue(localStorage)
     const registry = fieldRegistryFromDocumentParseResult(result)
     finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:field-registry-create", startedAt, {
       invocationId,

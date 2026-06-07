@@ -13,6 +13,7 @@ import {
   documentImportSuccessMessage,
   documentParseFailureMessage,
   loadDocumentFromStorage,
+  loadDocumentFromStorageCachedByRawValue,
   makeFlowDocFileName,
   migratePersistedDocumentPackage,
   migratePersistedDocumentPackageToV2,
@@ -239,6 +240,29 @@ describe("document persistence", () => {
     if (!result.ok) return
     expect(result.doc.document.meta?.title).toBe("Storage")
     expect(result.package?.packageVersion).toBe(CURRENT_STORAGE_PACKAGE_VERSION)
+  })
+
+  it("reuses cached storage parse results until the stored raw value changes", () => {
+    const items = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => { items.set(key, value) },
+    }
+    const firstDoc = createDefaultDocument("Cached One")
+    const secondDoc = createDefaultDocument("Cached Two")
+
+    expect(saveDocumentToStorage(storage, firstDoc)).toEqual({ ok: true })
+    const first = loadDocumentFromStorageCachedByRawValue(storage)
+    const second = loadDocumentFromStorageCachedByRawValue(storage)
+
+    expect(first).toBe(second)
+    expect(first.ok ? first.doc.document.meta?.title : null).toBe("Cached One")
+
+    expect(saveDocumentToStorage(storage, secondDoc)).toEqual({ ok: true })
+    const third = loadDocumentFromStorageCachedByRawValue(storage)
+
+    expect(third).not.toBe(first)
+    expect(third.ok ? third.doc.document.meta?.title : null).toBe("Cached Two")
   })
 
   it("round-trips flow-row stack content through localStorage without flattening columns", () => {

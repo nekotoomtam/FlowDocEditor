@@ -1,5 +1,5 @@
 import { defaultWordBreaker } from "../../layout"
-import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
+import type { FlowBox, ParagraphMeasurementCache, TextMeasurer, WordBreaker } from "../../layout"
 import type { DocumentSection, FlowTableNode } from "../../schema"
 import { resolveFlowTableGrid } from "../../document/flowTableGrid"
 import type {
@@ -46,6 +46,7 @@ export function paginateFlowTable(
   wordBreaker: WordBreaker = defaultWordBreaker,
   listNumbering?: ListNumberingPaginationContext,
   profiler?: PaginationProfiler,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   const tableNode = section.nodes[box.nodeId] as unknown as FlowTableNode
   if (!tableNode || tableNode.type !== "flow-table") return cursor
@@ -88,6 +89,7 @@ export function paginateFlowTable(
           flowTableCellGridPropsById,
           listNumbering,
           profiler,
+          paragraphMeasurementCache,
         ),
       )
     }
@@ -162,6 +164,7 @@ export function paginateFlowTable(
             flowTableCellGridPropsById,
             shouldRepeatHeaders ? placeHeaders : undefined,
             listNumbering,
+            paragraphMeasurementCache,
           ),
         )
         continue
@@ -192,6 +195,7 @@ export function paginateFlowTable(
             flowTableCellGridPropsById,
             listNumbering,
             profiler,
+            paragraphMeasurementCache,
           ),
         )
       }
@@ -221,6 +225,7 @@ export function paginateFlowTable(
           flowTableCellGridPropsById,
           listNumbering,
           profiler,
+          paragraphMeasurementCache,
         ),
       )
     } else if (allowBreak && !isHeaderGroup) {
@@ -242,6 +247,7 @@ export function paginateFlowTable(
           shouldRepeatHeaders ? headerHeight : 0,
           listNumbering,
           profiler,
+          paragraphMeasurementCache,
         ),
       )
     } else {
@@ -265,6 +271,7 @@ export function paginateFlowTable(
           flowTableCellGridPropsById,
           listNumbering,
           profiler,
+          paragraphMeasurementCache,
         ),
       )
     }

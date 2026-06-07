@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { defaultTextMeasurer, defaultWordBreaker } from "../../layout"
+import { defaultTextMeasurer, defaultWordBreaker, type TextMeasurer, type WordBreaker } from "../../layout"
 import { pt } from "../../schema"
-import type { DocumentNode, LayoutNode, ParagraphNode } from "../../schema"
+import type { DocumentNode, FlowTableCellNode, FlowTableNode, FlowTableRowNode, LayoutNode, ParagraphNode } from "../../schema"
 import type { PaginatedDocument } from "../types"
 import { paginateDocument, paginateDocumentWithProfile } from "../paginator"
 
@@ -51,6 +51,74 @@ function makeDoc(): DocumentNode {
   }
 }
 
+function makeRepeatedParagraphDoc(count: number): DocumentNode {
+  const childIds = Array.from({ length: count }, (_, index) => `p${index + 1}`)
+  const nodes: Record<string, LayoutNode> = {
+    body: { id: "body", type: "body", props: {}, childIds },
+  }
+  for (const id of childIds) {
+    nodes[id] = makePara(id, "Repeated layout cache sample")
+  }
+  return {
+    version: 1,
+    document: {
+      id: "profile-cache-test-doc",
+      sections: [{
+        id: "sec",
+        type: "section",
+        page: PAGE_SETTINGS,
+        bodyRootId: "body",
+        nodes,
+      }],
+    },
+  }
+}
+
+function makeFlowTableCacheDoc(): DocumentNode {
+  const paragraph = makePara("cell-p1", "Flow table cell measurement cache sample")
+  const cell: FlowTableCellNode = {
+    id: "cell-1",
+    type: "flow-table-cell",
+    props: {},
+    childIds: [paragraph.id],
+  }
+  const row: FlowTableRowNode = {
+    id: "row-1",
+    type: "flow-table-row",
+    props: {},
+    cellIds: [cell.id],
+  }
+  const table: FlowTableNode = {
+    id: "table-1",
+    type: "flow-table",
+    props: { headerRowCount: 0, repeatHeaderRows: false },
+    columns: [{ width: pt(180) }],
+    rowIds: [row.id],
+    nodes: {
+      [row.id]: row,
+      [cell.id]: cell,
+      [paragraph.id]: paragraph,
+    },
+  }
+  const nodes: Record<string, LayoutNode> = {
+    body: { id: "body", type: "body", props: {}, childIds: [table.id] },
+    [table.id]: table as unknown as LayoutNode,
+  }
+  return {
+    version: 1,
+    document: {
+      id: "profile-flow-table-cache-test-doc",
+      sections: [{
+        id: "sec",
+        type: "section",
+        page: PAGE_SETTINGS,
+        bodyRootId: "body",
+        nodes,
+      }],
+    },
+  }
+}
+
 function fragmentSignature(paginated: PaginatedDocument) {
   return paginated.sections.flatMap((section) =>
     section.pages.flatMap((page) =>
@@ -81,5 +149,78 @@ describe("pagination profiling", () => {
     expect(fragmentSignature(profiled.paginated)).toEqual(fragmentSignature(plain))
     expect(profiled.paginationProfile.stages.map((stage) => stage.name)).toContain("total")
     expect(profiled.paginationProfile.topStages?.length).toBeGreaterThan(0)
+  })
+
+  it("reuses repeated word segmentation inside a pagination run", () => {
+    const doc = makeRepeatedParagraphDoc(8)
+    const splitOnSpaces: WordBreaker = {
+      segment(text) {
+        return text.split(/(\s+)/).filter((part) => part.length > 0)
+      },
+    }
+    const expected = paginateDocument(doc, defaultTextMeasurer, splitOnSpaces)
+    let segmentCalls = 0
+    const wordBreaker: WordBreaker = {
+      segment(text) {
+        segmentCalls += 1
+        return splitOnSpaces.segment(text)
+      },
+    }
+
+    const paginated = paginateDocument(doc, defaultTextMeasurer, wordBreaker)
+
+    expect(fragmentSignature(paginated)).toEqual(fragmentSignature(expected))
+    expect(segmentCalls).toBe(1)
+
+    const profiled = paginateDocumentWithProfile(doc, defaultTextMeasurer, splitOnSpaces, undefined, {
+      paginationProfileSource: "server",
+    })
+    expect(profiled.paginationProfile.counters?.cacheHits?.["text-segmentation"]).toBeGreaterThan(0)
+    expect(profiled.paginationProfile.counters?.cacheMisses?.["text-segmentation"]).toBeGreaterThan(0)
+  })
+
+  it("reuses paragraph measurements between flow layout and page packing", () => {
+    const doc = makeRepeatedParagraphDoc(1)
+    const expected = paginateDocument(doc, defaultTextMeasurer, defaultWordBreaker)
+    let lineHeightCalls = 0
+    const measurer: TextMeasurer = {
+      measureText(text, fontFamilyKey, fontSize, fontVariant) {
+        return defaultTextMeasurer.measureText(text, fontFamilyKey, fontSize, fontVariant)
+      },
+      measureLineHeight(fontFamilyKey, fontSize, lineHeightRatio) {
+        lineHeightCalls += 1
+        return defaultTextMeasurer.measureLineHeight(fontFamilyKey, fontSize, lineHeightRatio)
+      },
+    }
+
+    const paginated = paginateDocument(doc, measurer, defaultWordBreaker)
+
+    expect(fragmentSignature(paginated)).toEqual(fragmentSignature(expected))
+    expect(lineHeightCalls).toBe(3)
+
+    const profiled = paginateDocumentWithProfile(doc, defaultTextMeasurer, defaultWordBreaker, undefined, {
+      paginationProfileSource: "server",
+    })
+    expect(profiled.paginationProfile.counters?.cacheHits?.["paragraph-measure"]).toBeGreaterThan(0)
+  })
+
+  it("reuses flow-table cell paragraph measurements during table placement", () => {
+    const doc = makeFlowTableCacheDoc()
+    const expected = paginateDocument(doc, defaultTextMeasurer, defaultWordBreaker)
+    let lineHeightCalls = 0
+    const measurer: TextMeasurer = {
+      measureText(text, fontFamilyKey, fontSize, fontVariant) {
+        return defaultTextMeasurer.measureText(text, fontFamilyKey, fontSize, fontVariant)
+      },
+      measureLineHeight(fontFamilyKey, fontSize, lineHeightRatio) {
+        lineHeightCalls += 1
+        return defaultTextMeasurer.measureLineHeight(fontFamilyKey, fontSize, lineHeightRatio)
+      },
+    }
+
+    const paginated = paginateDocument(doc, measurer, defaultWordBreaker)
+
+    expect(fragmentSignature(paginated)).toEqual(fragmentSignature(expected))
+    expect(lineHeightCalls).toBe(3)
   })
 })

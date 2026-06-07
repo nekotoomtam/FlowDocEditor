@@ -96,6 +96,7 @@ interface ActiveStage {
 
 const NOOP_END = () => undefined
 const PROFILE_VERSION = 1
+const WORD_SEGMENT_CACHE_LIMIT = 8192
 
 function defaultNow(): number {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -173,6 +174,20 @@ function aggregateTopStages(stages: PaginationStageTiming[], totalMs: number): P
 
 function assignCounter(counters: PaginationCounters, name: string, amount: number): void {
   if (!Number.isFinite(amount) || amount <= 0) return
+  if (name.startsWith("cache-hit:")) {
+    const key = name.slice("cache-hit:".length)
+    if (!key) return
+    counters.cacheHits = counters.cacheHits ?? {}
+    counters.cacheHits[key] = (counters.cacheHits[key] ?? 0) + amount
+    return
+  }
+  if (name.startsWith("cache-miss:")) {
+    const key = name.slice("cache-miss:".length)
+    if (!key) return
+    counters.cacheMisses = counters.cacheMisses ?? {}
+    counters.cacheMisses[key] = (counters.cacheMisses[key] ?? 0) + amount
+    return
+  }
   switch (name) {
     case "measuredParagraphs":
     case "paragraph-measure":
@@ -360,6 +375,30 @@ export function profileTextMeasurer(measurer: TextMeasurer, profiler: Pagination
     },
     measureLineHeight(fontFamilyKey: string, fontSize: number, lineHeightRatio: number) {
       return measurer.measureLineHeight(fontFamilyKey, fontSize, lineHeightRatio)
+    },
+  }
+}
+
+export function createCachedWordBreaker(
+  wordBreaker: WordBreaker,
+  profiler?: PaginationProfiler,
+): WordBreaker {
+  const segmentsByText = new Map<string, string[]>()
+
+  return {
+    segment(text: string) {
+      const cached = segmentsByText.get(text)
+      if (cached) {
+        profiler?.count("cache-hit:text-segmentation")
+        return cached.slice()
+      }
+
+      profiler?.count("cache-miss:text-segmentation")
+      const segments = wordBreaker.segment(text)
+      if (segmentsByText.size < WORD_SEGMENT_CACHE_LIMIT) {
+        segmentsByText.set(text, segments.slice())
+      }
+      return segments
     },
   }
 }

@@ -52,7 +52,7 @@ import type { ReservedZonePriority } from "@/document"
 import type { DocumentNode, LayoutNode, ParagraphNode, ParagraphStyleProperties } from "@/schema"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import type { DragSource, PlacementOperation, PlacementPreview } from "@/placement/types"
-import { loadDocumentFromStorage } from "./documentPersistence"
+import { loadDocumentFromStorageCachedByRawValue } from "./documentPersistence"
 import { createEditorPlaceholderPaginatedDocument } from "./editorInitialPagination"
 import { resizeFragmentHeightAndShift } from "./inlineEditHeightPreview"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
@@ -171,7 +171,7 @@ let initialEditorStateInvocationId = 0
 function loadFromStorage(): DocumentNode | null {
   const invocationId = ++storageLoadInvocationId
   const startedAt = startWysiwygPerfSpan()
-  const result = loadDocumentFromStorage(localStorage)
+  const result = loadDocumentFromStorageCachedByRawValue(localStorage)
   finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:storage-document-load", startedAt, {
     invocationId,
     ok: result.ok,

@@ -1,10 +1,10 @@
 import {
   defaultWordBreaker,
   measureDivider,
-  measureParagraph,
+  measureParagraphWithCache,
   paragraphBoxLeftInset,
 } from "../../layout"
-import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
+import type { FlowBox, ParagraphMeasurementCache, TextMeasurer, WordBreaker } from "../../layout"
 import type { DocumentSection } from "../../schema"
 import type {
   PageFlowCursor,
@@ -39,6 +39,7 @@ function pushStackContents(
   wordBreaker: WordBreaker = defaultWordBreaker,
   pageNumberOffset: number = 0,
   listNumbering?: ListNumberingPaginationContext,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): void {
   const offsetY = pageY - stackBox.y
   stackBox.children.forEach((child) => {
@@ -53,7 +54,7 @@ function pushStackContents(
       if (node?.type === "paragraph") {
         const resolvedListMarker = listNumbering?.markers.get(node.id)
         const layoutNode = withListBodyIndent(node, resolvedListMarker, listNumbering)
-        const measured = measureParagraph(layoutNode, child.width, measurer, wordBreaker)
+        const measured = measureParagraphWithCache(layoutNode, child.width, measurer, wordBreaker, paragraphMeasurementCache)
         const rawLines = buildPositionedParagraphLines(measured, measured.lines, child.x, childPageY, 0, layoutNode.props.align)
         lines = resolvePageNumbers(rawLines, pageIndex + 1 + pageNumberOffset)
         renderProps = buildRenderProps(layoutNode, measured.lineHeight, measured.box)
@@ -103,6 +104,7 @@ export function paginateRow(
   parentNodeId?: string,
   wordBreaker: WordBreaker = defaultWordBreaker,
   listNumbering?: ListNumberingPaginationContext,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   let current = cursor
 
@@ -139,7 +141,7 @@ export function paginateRow(
       width: stackBox.width,
       height: box.height,
     })
-    pushStackContents(stackBox, section, measurer, pages, template, current.pageIndex, current.cursorY, wordBreaker, current.pageNumberOffset, listNumbering)
+    pushStackContents(stackBox, section, measurer, pages, template, current.pageIndex, current.cursorY, wordBreaker, current.pageNumberOffset, listNumbering, paragraphMeasurementCache)
   })
 
   return { ...current, cursorY: current.cursorY + box.height }

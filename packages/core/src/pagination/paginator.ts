@@ -2,6 +2,7 @@ import type { DocumentNode, DocumentSection, LayoutNode, TocNode } from "../sche
 import { resolveDocumentParagraphStyles } from "../document/paragraphStyles"
 import { resolveListMarkers } from "../document/listNumbering"
 import {
+  createParagraphMeasurementCache,
   flowSection,
   flowZone,
   measureDivider,
@@ -9,7 +10,7 @@ import {
   paragraphBoxLeftInset,
   paragraphBoxTopInset,
 } from "../layout"
-import type { FlowBox, TextMeasurer, WordBreaker } from "../layout"
+import type { FlowBox, ParagraphMeasurementCache, TextMeasurer, WordBreaker } from "../layout"
 import { defaultWordBreaker } from "../layout"
 import type {
   PageFlowCursor,
@@ -45,6 +46,7 @@ import { measureParagraphWithPaginationProfile } from "./paginator/profiledMeasu
 import {
   collectPaginationDocumentCounts,
   countPaginatedPagesAndFragments,
+  createCachedWordBreaker,
   createPaginationProfiler,
   isPaginationProfilerEnabled,
   measureWithPaginationProfile,
@@ -145,6 +147,7 @@ function paginateParagraph(
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
   listNumbering?: ListNumberingPaginationContext,
   profiler?: PaginationProfiler,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   let current = cursor
 
@@ -164,7 +167,7 @@ function paginateParagraph(
 
   const resolvedListMarker = listNumbering?.markers.get(node.id)
   const layoutNode = withListBodyIndent(node, resolvedListMarker, listNumbering)
-  const measured = measureParagraphWithPaginationProfile(layoutNode, box.width, measurer, wordBreaker, profiler)
+  const measured = measureParagraphWithPaginationProfile(layoutNode, box.width, measurer, wordBreaker, profiler, paragraphMeasurementCache)
   const renderProps = buildRenderProps(layoutNode, measured.lineHeight, measured.box)
   const spacingBefore = measured.spacingBefore
   const paragraphContentX = box.x + paragraphBoxLeftInset(measured.box)
@@ -371,6 +374,7 @@ function paginateVerticalContainer(
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
   listNumbering?: ListNumberingPaginationContext,
   profiler?: PaginationProfiler,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   let current = cursor
   const containerNode = section.nodes[box.nodeId]
@@ -403,7 +407,7 @@ function paginateVerticalContainer(
       return
     }
 
-    current = paginateFlowBox(child, section, measurer, pages, template, contentTop, contentBottom, current, box.nodeId, wordBreaker, onSplitDecision, listNumbering, profiler)
+    current = paginateFlowBox(child, section, measurer, pages, template, contentTop, contentBottom, current, box.nodeId, wordBreaker, onSplitDecision, listNumbering, profiler, paragraphMeasurementCache)
   })
 
   return current
@@ -425,10 +429,11 @@ function paginateFlowBox(
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
   listNumbering?: ListNumberingPaginationContext,
   profiler?: PaginationProfiler,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   switch (box.nodeType) {
     case "paragraph":
-      return paginateParagraph(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, onSplitDecision, listNumbering, profiler)
+      return paginateParagraph(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, onSplitDecision, listNumbering, profiler, paragraphMeasurementCache)
     case "spacer":
       return paginateSpacer(box, pages, template, contentTop, contentBottom, cursor, parentNodeId)
     case "divider":
@@ -436,22 +441,22 @@ function paginateFlowBox(
     case "page-break":
       return paginatePageBreak(box, pages, template, contentTop, cursor, parentNodeId)
     case "row":
-      return measureWithPaginationProfile(profiler, "flow-row-measure", () => paginateRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering))
+      return measureWithPaginationProfile(profiler, "flow-row-measure", () => paginateRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering, paragraphMeasurementCache))
     case "flow-row":
-      return measureWithPaginationProfile(profiler, "flow-row-measure", () => paginateFlowRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering))
+      return measureWithPaginationProfile(profiler, "flow-row-measure", () => paginateFlowRow(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering, paragraphMeasurementCache))
     case "flow-stack":
       throw new Error(`${box.nodeType} pagination is not implemented yet`)
     case "body":
-      return paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision, listNumbering, profiler)
+      return paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision, listNumbering, profiler, paragraphMeasurementCache)
     case "stack":
       return measureWithPaginationProfile(profiler, "flow-stack-measure", () =>
-        paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision, listNumbering, profiler),
+        paginateVerticalContainer(box, section, measurer, pages, template, contentTop, contentBottom, cursor, wordBreaker, onSplitDecision, listNumbering, profiler, paragraphMeasurementCache),
       )
     case "flow-table":
       profiler?.count("measuredTables")
       profiler?.count("measuredTableRows", box.children.length)
       profiler?.count("measuredTableCells", box.children.reduce((sum, row) => sum + row.children.length, 0))
-      return measureWithPaginationProfile(profiler, "table-measure", () => paginateFlowTable(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering, profiler))
+      return measureWithPaginationProfile(profiler, "table-measure", () => paginateFlowTable(box, section, measurer, pages, template, contentTop, contentBottom, cursor, parentNodeId, wordBreaker, listNumbering, profiler, paragraphMeasurementCache))
     case "flow-table-row":
     case "flow-table-cell":
       throw new Error(`${box.nodeType} pagination is owned by flow-table`)
@@ -475,6 +480,7 @@ function paginateSection(
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
   listNumbering?: ListNumberingPaginationContext,
   profiler?: PaginationProfiler,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PaginatedSection {
   const metrics = getPageMetrics(section.page)
   const template = createEmptyPage(startPageIndex, metrics)
@@ -487,7 +493,7 @@ function paginateSection(
 
   // ─── Body ────────────────────────────────────────────────────────────────────
   const flowBox = measureWithPaginationProfile(profiler, "flow-layout", () =>
-    flowSection(section, contentX, contentWidth, measurer, wordBreaker, tocHeightOverrides),
+    flowSection(section, contentX, contentWidth, measurer, wordBreaker, tocHeightOverrides, paragraphMeasurementCache),
   )
   // pageNumberOffset: when pageNumberStart is set, display number = globalPageIndex + 1 + offset
   const pageNumberOffset = section.page.pageNumberStart !== undefined
@@ -495,7 +501,7 @@ function paginateSection(
     : 0
   const cursor: PageFlowCursor = { pageIndex: startPageIndex, cursorY: contentTop, pageNumberOffset }
   measureWithPaginationProfile(profiler, "page-packing", () =>
-    paginateFlowBox(flowBox, section, measurer, pages, template, contentTop, contentBottom, cursor, undefined, wordBreaker, onSplitDecision, listNumbering, profiler),
+    paginateFlowBox(flowBox, section, measurer, pages, template, contentTop, contentBottom, cursor, undefined, wordBreaker, onSplitDecision, listNumbering, profiler, paragraphMeasurementCache),
   )
 
   if (pages.length === 0) pages.push(createEmptyPage(startPageIndex, metrics))
@@ -508,17 +514,17 @@ function paginateSection(
   const headerZoneBox = { x: zoneHorizontalBox.x, y: headerY, width: zoneHorizontalBox.width, height: headerReserved }
   const footerZoneBox = { x: zoneHorizontalBox.x, y: footerY, width: zoneHorizontalBox.width, height: footerReserved }
 
-  const defaultHeaderBox = flowZone(section, section.headerRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker)
-  const defaultFooterBox = flowZone(section, section.footerRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker)
+  const defaultHeaderBox = flowZone(section, section.headerRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker, paragraphMeasurementCache)
+  const defaultFooterBox = flowZone(section, section.footerRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker, paragraphMeasurementCache)
 
   // first page: undefined = ใช้ default, null = ไม่มี header/footer
   const hasFirstPageHeader = section.headerFirstPageRootId !== undefined
   const hasFirstPageFooter = section.footerFirstPageRootId !== undefined
   const firstPageHeaderBox = hasFirstPageHeader
-    ? flowZone(section, section.headerFirstPageRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker)
+    ? flowZone(section, section.headerFirstPageRootId, zoneHorizontalBox.x, headerY, zoneHorizontalBox.width, measurer, wordBreaker, paragraphMeasurementCache)
     : defaultHeaderBox
   const firstPageFooterBox = hasFirstPageFooter
-    ? flowZone(section, section.footerFirstPageRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker)
+    ? flowZone(section, section.footerFirstPageRootId, zoneHorizontalBox.x, footerY, zoneHorizontalBox.width, measurer, wordBreaker, paragraphMeasurementCache)
     : defaultFooterBox
 
   const defaultHeaderFragments = buildZoneFragments(defaultHeaderBox, section, measurer, wordBreaker)
@@ -725,12 +731,13 @@ function runAllSections(
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
   listNumbering?: ListNumberingPaginationContext,
   profiler?: PaginationProfiler,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PaginatedSection[] {
   let pageIndex = 0
   const sections: PaginatedSection[] = []
   doc.document.sections.forEach((section, index) => {
     if (index > 0) pageIndex += 1
-    const paginated = paginateSection(section, pageIndex, measurer, wb, tocHeightOverrides, onSplitDecision, listNumbering, profiler)
+    const paginated = paginateSection(section, pageIndex, measurer, wb, tocHeightOverrides, onSplitDecision, listNumbering, profiler, paragraphMeasurementCache)
     sections.push(paginated)
     pageIndex += paginated.pages.length - 1
   })
@@ -837,7 +844,8 @@ function paginateDocumentUnprofiled(
   wordBreaker?: WordBreaker,
   onSplitDecision?: (d: ParagraphSplitDecision) => void,
 ): PaginatedDocument {
-  const wb = wordBreaker ?? defaultWordBreaker
+  const wb = createCachedWordBreaker(wordBreaker ?? defaultWordBreaker)
+  const paragraphMeasurementCache = createParagraphMeasurementCache()
   const layoutDoc = resolveDocumentParagraphStyles(doc)
   const listNumbering: ListNumberingPaginationContext = {
     markers: resolveListMarkers(layoutDoc),
@@ -845,13 +853,13 @@ function paginateDocumentUnprofiled(
   }
 
   // Pass 1: paginate with estimated TOC heights
-  const sections1 = runAllSections(layoutDoc, measurer, wb, undefined, onSplitDecision, listNumbering)
+  const sections1 = runAllSections(layoutDoc, measurer, wb, undefined, onSplitDecision, listNumbering, undefined, paragraphMeasurementCache)
   const entries1 = collectTocEntries(sections1, layoutDoc)
   const overrides = computeTocOverrides(sections1, layoutDoc, entries1)
 
   if (overrides.size > 0) {
     // Pass 2: repaginate with corrected TOC heights; page numbers may shift
-    const sections2 = runAllSections(layoutDoc, measurer, wb, overrides, onSplitDecision, listNumbering)
+    const sections2 = runAllSections(layoutDoc, measurer, wb, overrides, onSplitDecision, listNumbering, undefined, paragraphMeasurementCache)
     const entries2 = collectTocEntries(sections2, layoutDoc)
     fillTocFragments(sections2, layoutDoc, entries2, measurer)
     return { sections: sections2, tocEntries: entries2 }
@@ -876,7 +884,8 @@ export function paginateDocument(
     return paginateDocumentUnprofiled(doc, measurer, wordBreaker, onSplitDecision)
   }
   const measuredText = profileTextMeasurer(measurer, profiler)
-  const wb = profileWordBreaker(wordBreaker ?? defaultWordBreaker, profiler)
+  const wb = profileWordBreaker(createCachedWordBreaker(wordBreaker ?? defaultWordBreaker, profiler), profiler)
+  const paragraphMeasurementCache = createParagraphMeasurementCache()
   profiler.note("style-resolve and list-state-preparation are isolated during document-prepare.")
   profiler.note("flow-layout includes the first flow-box construction pass, including paragraph and table cell measurement performed by the flow layer.")
   profiler.note("paragraph-measure covers paginator-side paragraph remeasurement; flow-layer paragraph measurement is visible through flow-layout, text-segmentation, and text-width-measure.")
@@ -894,13 +903,13 @@ export function paginateDocument(
     })
 
     // Pass 1: paginate with estimated TOC heights
-    const sections1 = runAllSections(layoutDoc, measuredText, wb, undefined, onSplitDecision, listNumbering!, profiler)
+    const sections1 = runAllSections(layoutDoc, measuredText, wb, undefined, onSplitDecision, listNumbering!, profiler, paragraphMeasurementCache)
     const entries1 = measureWithPaginationProfile(profiler, "toc-heading-collection", () => collectTocEntries(sections1, layoutDoc))
     const overrides = measureWithPaginationProfile(profiler, "toc-heading-collection", () => computeTocOverrides(sections1, layoutDoc, entries1))
 
     if (overrides.size > 0) {
       // Pass 2: repaginate with corrected TOC heights; page numbers may shift
-      const sections2 = runAllSections(layoutDoc, measuredText, wb, overrides, onSplitDecision, listNumbering!, profiler)
+      const sections2 = runAllSections(layoutDoc, measuredText, wb, overrides, onSplitDecision, listNumbering!, profiler, paragraphMeasurementCache)
       const entries2 = measureWithPaginationProfile(profiler, "toc-heading-collection", () => collectTocEntries(sections2, layoutDoc))
       measureWithPaginationProfile(profiler, "fragment-generation", () => fillTocFragments(sections2, layoutDoc, entries2, measuredText))
       return { sections: sections2, tocEntries: entries2 }

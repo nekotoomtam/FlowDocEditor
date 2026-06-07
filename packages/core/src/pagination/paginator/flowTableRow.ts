@@ -1,4 +1,4 @@
-import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
+import type { FlowBox, ParagraphMeasurementCache, TextMeasurer, WordBreaker } from "../../layout"
 import type { FlowTableNode } from "../../schema"
 import type {
   FlowTableCellGridRenderProps,
@@ -47,6 +47,7 @@ export function paginateFlowTableRowFull(
   flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
   listNumbering?: ListNumberingPaginationContext,
   profiler?: PaginationProfiler,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   pushFragment(pages, template, {
     nodeId: rowBox.nodeId,
@@ -84,7 +85,7 @@ export function paginateFlowTableRowFull(
 
   cellBoxes
     .flatMap((cellBox) => measureWithPaginationProfile(profiler, "table-cell-measure", () =>
-      collectFlowTableCellContents(cellBox, tableNode, measurer, cursor.pageIndex, cursor.cursorY, wordBreaker, cursor.pageNumberOffset, listNumbering),
+      collectFlowTableCellContents(cellBox, tableNode, measurer, cursor.pageIndex, cursor.cursorY, wordBreaker, cursor.pageNumberOffset, listNumbering, paragraphMeasurementCache),
     ))
     .sort((a, b) => a.y - b.y || a.x - b.x || a.nodeId.localeCompare(b.nodeId))
     .forEach((fragment) => pushFragment(pages, template, fragment))
@@ -109,6 +110,7 @@ export function paginateFlowTableRowSplit(
   repeatedHeaderHeight: number = 0,
   listNumbering?: ListNumberingPaginationContext,
   profiler?: PaginationProfiler,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   const fromSplits = new Map<string, SplitPoint>()
   for (const cellBox of rowBox.children) fromSplits.set(cellBox.nodeId, { childIdx: 0, lineIdx: 0 })
@@ -135,14 +137,14 @@ export function paginateFlowTableRowSplit(
     if (!sliceIsLast) {
       for (const cellBox of rowBox.children) {
         const from = fromSplits.get(cellBox.nodeId)!
-        toSplits.set(cellBox.nodeId, computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, sliceH), measurer, wordBreaker, from, listNumbering))
+        toSplits.set(cellBox.nodeId, computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, sliceH), measurer, wordBreaker, from, listNumbering, paragraphMeasurementCache))
       }
 
       let hasRemainingContent = false
       let hasContentProgress = false
       for (const cellBox of rowBox.children) {
         const from = fromSplits.get(cellBox.nodeId)!
-        const hasRemaining = cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, from, listNumbering)
+        const hasRemaining = cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, from, listNumbering, paragraphMeasurementCache)
         hasRemainingContent = hasRemainingContent || hasRemaining
         hasContentProgress = hasContentProgress ||
           (hasRemaining && splitPointProgressed(from, toSplits.get(cellBox.nodeId) ?? null, cellBox))
@@ -159,7 +161,7 @@ export function paginateFlowTableRowSplit(
         }
 
         const forcedCell = rowBox.children.find((cellBox) =>
-          cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, fromSplits.get(cellBox.nodeId)!, listNumbering),
+          cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, fromSplits.get(cellBox.nodeId)!, listNumbering, paragraphMeasurementCache),
         )
         if (forcedCell) {
           const from = fromSplits.get(forcedCell.nodeId)!
@@ -170,6 +172,7 @@ export function paginateFlowTableRowSplit(
             wordBreaker,
             from,
             listNumbering,
+            paragraphMeasurementCache,
           )
           if (forcedSplit) {
             toSplits.set(forcedCell.nodeId, forcedSplit)
@@ -185,6 +188,7 @@ export function paginateFlowTableRowSplit(
               from,
               forcedSplit,
               listNumbering,
+              paragraphMeasurementCache,
             )
             const forcedSliceHeight = forcedTopInset + forcedContentHeight
             sliceH = Math.max(sliceH, Math.min(totalHeight - heightPlaced, forcedSliceHeight))
@@ -241,6 +245,7 @@ export function paginateFlowTableRowSplit(
           wordBreaker,
           current.pageNumberOffset,
           listNumbering,
+          paragraphMeasurementCache,
         ),
       )
       for (const fragment of cellContentFragments) {

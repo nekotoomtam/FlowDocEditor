@@ -1,4 +1,4 @@
-import type { FlowBox, TextMeasurer, WordBreaker } from "../../layout"
+import type { FlowBox, ParagraphMeasurementCache, TextMeasurer, WordBreaker } from "../../layout"
 import type { FlowTableNode } from "../../schema"
 import type {
   FlowTableCellGridRenderProps,
@@ -214,6 +214,7 @@ function paginateFlowTableRowspanTallRowSlice(
   rowspanPageContentStarts: Map<string, FlowTableRowspanPageContentStart>,
   repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
   listNumbering?: ListNumberingPaginationContext,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   const rowBox = rowBoxes[rowIndex]
   if (!rowBox) return cursor
@@ -237,6 +238,7 @@ function paginateFlowTableRowspanTallRowSlice(
       wordBreaker,
       splitByCellId.get(cell.cellId) ?? { childIdx: 0, lineIdx: 0 },
       listNumbering,
+      paragraphMeasurementCache,
     ),
   )
 
@@ -257,14 +259,14 @@ function paginateFlowTableRowspanTallRowSlice(
 
     for (const cell of cells) {
       const from = splitByCellId.get(cell.cellId) ?? { childIdx: 0, lineIdx: 0 }
-      const remaining = cellHasRemainingSplitContent(cell.cellBox, tableNode, measurer, wordBreaker, from, listNumbering)
+      const remaining = cellHasRemainingSplitContent(cell.cellBox, tableNode, measurer, wordBreaker, from, listNumbering, paragraphMeasurementCache)
       if (!remaining) {
         toSplits.set(cell.cellId, null)
         continue
       }
 
       anyRemainingContent = true
-      const to = computeFlowTableSplitPointFrom(cell.cellBox, tableNode, Math.max(0, sliceHeight), measurer, wordBreaker, from, listNumbering)
+      const to = computeFlowTableSplitPointFrom(cell.cellBox, tableNode, Math.max(0, sliceHeight), measurer, wordBreaker, from, listNumbering, paragraphMeasurementCache)
       toSplits.set(cell.cellId, to)
       anyContentProgress = anyContentProgress || splitPointProgressed(from, to, cell.cellBox)
     }
@@ -286,6 +288,7 @@ function paginateFlowTableRowspanTallRowSlice(
           wordBreaker,
           splitByCellId.get(cell.cellId) ?? { childIdx: 0, lineIdx: 0 },
           listNumbering,
+          paragraphMeasurementCache,
         ),
       )
       if (forcedCell) {
@@ -297,6 +300,7 @@ function paginateFlowTableRowspanTallRowSlice(
           wordBreaker,
           from,
           listNumbering,
+          paragraphMeasurementCache,
         )
         if (forcedSplit) {
           toSplits.set(forcedCell.cellId, forcedSplit)
@@ -312,6 +316,7 @@ function paginateFlowTableRowspanTallRowSlice(
             from,
             forcedSplit,
             listNumbering,
+            paragraphMeasurementCache,
           )
           const forcedSliceHeight = forcedTopInset + forcedContentHeight
           const visualLimit = remainingRowHeight > 0 ? remainingRowHeight : forcedSliceHeight
@@ -342,6 +347,7 @@ function paginateFlowTableRowspanTallRowSlice(
         wordBreaker,
         nextSplits.get(cell.cellId) ?? { childIdx: 0, lineIdx: 0 },
         listNumbering,
+        paragraphMeasurementCache,
       ),
     )
 
@@ -367,6 +373,7 @@ function paginateFlowTableRowspanTallRowSlice(
             wordBreaker,
             contentFrom,
             listNumbering,
+            paragraphMeasurementCache,
           )
         : toSplits.get(cell.cellId) ?? null
       if (mergedWithPreviousPageSlice) {
@@ -388,6 +395,7 @@ function paginateFlowTableRowspanTallRowSlice(
         wordBreaker,
         current.pageNumberOffset,
         listNumbering,
+        paragraphMeasurementCache,
       ))
     }
 
@@ -510,6 +518,7 @@ function pushFlowTableRowspanGroupSlice(
   rowspanContentSplits: Map<string, SplitPoint>,
   rowspanPageContentStarts: Map<string, FlowTableRowspanPageContentStart>,
   listNumbering?: ListNumberingPaginationContext,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   const sliceTopRowBox = rowBoxes[slice.rowStartIndex]
   if (!sliceTopRowBox) return cursor
@@ -536,15 +545,15 @@ function pushFlowTableRowspanGroupSlice(
       cellPageY,
     )
     let to = isContinued
-      ? computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, cellHeight), measurer, wordBreaker, from, listNumbering)
+      ? computeFlowTableSplitPointFrom(cellBox, tableNode, Math.max(0, cellHeight), measurer, wordBreaker, from, listNumbering, paragraphMeasurementCache)
       : null
 
     if (
       isContinued &&
-      cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, from, listNumbering) &&
+      cellHasRemainingSplitContent(cellBox, tableNode, measurer, wordBreaker, from, listNumbering, paragraphMeasurementCache) &&
       !splitPointProgressed(from, to, cellBox)
     ) {
-      const forcedSplit = forceOneSplitUnitProgress(cellBox, tableNode, measurer, wordBreaker, from, listNumbering)
+      const forcedSplit = forceOneSplitUnitProgress(cellBox, tableNode, measurer, wordBreaker, from, listNumbering, paragraphMeasurementCache)
       if (forcedSplit) {
         to = forcedSplit
         const warning: PageFragmentWarning = {
@@ -567,6 +576,7 @@ function pushFlowTableRowspanGroupSlice(
       wordBreaker,
       cursor.pageNumberOffset,
       listNumbering,
+      paragraphMeasurementCache,
     ))
 
     if (isContinued) {
@@ -646,6 +656,7 @@ function pushFlowTableRowspanGroupSlice(
           wordBreaker,
           cursor.pageNumberOffset,
           listNumbering,
+          paragraphMeasurementCache,
         ))
       }
     }
@@ -714,6 +725,7 @@ export function paginateFlowTableRowspanGroupSplit(
   flowTableCellGridPropsById: Map<string, FlowTableCellGridRenderProps>,
   repeatHeaders?: (cursor: PageFlowCursor) => PageFlowCursor,
   listNumbering?: ListNumberingPaginationContext,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): PageFlowCursor {
   let current = cursor
   let rowOffset = 0
@@ -769,6 +781,7 @@ export function paginateFlowTableRowspanGroupSplit(
         rowspanPageContentStarts,
         repeatHeaders,
         listNumbering,
+        paragraphMeasurementCache,
       )
       rowOffset = endOffset
       continue
@@ -790,6 +803,7 @@ export function paginateFlowTableRowspanGroupSplit(
       rowspanContentSplits,
       rowspanPageContentStarts,
       listNumbering,
+      paragraphMeasurementCache,
     )
     rowOffset = endOffset
   }

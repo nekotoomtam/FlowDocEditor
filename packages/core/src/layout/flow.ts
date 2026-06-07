@@ -2,12 +2,13 @@ import type { BodyNode, DocumentSection, FlowRowNode, FlowStackNode, FlowTableCe
 import { DEFAULT_STACK_MIN_HEIGHT } from "../document/defaults"
 import { resolveFlowTableGrid } from "../document/flowTableGrid"
 import {
-  measureParagraph,
+  measureParagraphWithCache,
   measureDivider,
   measureSpacer,
   paragraphBoxBottomInset,
   paragraphBoxLeftInset,
   paragraphBoxTopInset,
+  type ParagraphMeasurementCache,
   resolveParagraphBoxStyle,
   toAbstractUnit,
 } from "./measure"
@@ -103,20 +104,21 @@ function flowNode(
   stackRenderHeight?: number,
   wordBreaker: WordBreaker = defaultWordBreaker,
   tocHeightOverrides?: Map<string, number>,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): FlowBox {
   switch (node.type) {
     case "body":
-      return flowVerticalContainer(section, node, x, y, width, measurer, undefined, wordBreaker, tocHeightOverrides)
+      return flowVerticalContainer(section, node, x, y, width, measurer, undefined, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     case "stack":
-      return flowVerticalContainer(section, node, x, y, width, measurer, stackRenderHeight, wordBreaker, tocHeightOverrides)
+      return flowVerticalContainer(section, node, x, y, width, measurer, stackRenderHeight, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     case "row":
-      return flowRow(section, node, x, y, width, measurer, wordBreaker, tocHeightOverrides)
+      return flowRow(section, node, x, y, width, measurer, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     case "flow-row":
-      return flowFlowRow(section, node, x, y, width, measurer, wordBreaker, tocHeightOverrides)
+      return flowFlowRow(section, node, x, y, width, measurer, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     case "flow-stack":
-      return flowFlowStack(section, node, x, y, width, measurer, stackRenderHeight, wordBreaker, tocHeightOverrides)
+      return flowFlowStack(section, node, x, y, width, measurer, stackRenderHeight, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     case "paragraph": {
-      const measured = measureParagraph(node, width, measurer, wordBreaker)
+      const measured = measureParagraphWithCache(node, width, measurer, wordBreaker, paragraphMeasurementCache)
       return {
         nodeId: node.id,
         nodeType: "paragraph",
@@ -163,7 +165,7 @@ function flowNode(
       }
     }
     case "flow-table": {
-      return flowFlowTable(section, node as unknown as FlowTableNode, x, y, width, measurer, wordBreaker)
+      return flowFlowTable(section, node as unknown as FlowTableNode, x, y, width, measurer, wordBreaker, paragraphMeasurementCache)
     }
     case "toc": {
       const toc = node as unknown as TocNode
@@ -208,6 +210,7 @@ function flowVerticalContainer(
   stackRenderHeight?: number,
   wordBreaker: WordBreaker = defaultWordBreaker,
   tocHeightOverrides?: Map<string, number>,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): FlowBox {
   const padding = Math.max(0, node.props.padding ?? 0)
   const gap = Math.max(0, node.props.gap ?? 0)
@@ -224,7 +227,7 @@ function flowVerticalContainer(
     .filter((n): n is LayoutNode => n != null)
 
   childNodes.forEach((child, index) => {
-    const childBox = flowNode(section, child, innerX, cursorY, innerWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
+    const childBox = flowNode(section, child, innerX, cursorY, innerWidth, measurer, undefined, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     children.push(childBox)
     cursorY = childBox.y + childBox.height
     if (gap > 0 && index < childNodes.length - 1) {
@@ -261,6 +264,7 @@ function flowRow(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
   tocHeightOverrides?: Map<string, number>,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): FlowBox {
   const gap = Math.max(0, node.props.gap ?? 0)
   const columnWidths = distributeRowWidths(section, node, width)
@@ -271,7 +275,7 @@ function flowRow(
 
   const measuredHeights = childNodes.map((child, index) => {
     const colWidth = columnWidths[index] ?? 0
-    const box = flowNode(section, child, 0, 0, colWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
+    const box = flowNode(section, child, 0, 0, colWidth, measurer, undefined, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     return box.height
   })
 
@@ -282,7 +286,7 @@ function flowRow(
 
   childNodes.forEach((child, index) => {
     const colWidth = columnWidths[index] ?? 0
-    const childBox = flowNode(section, child, cursorX, y, colWidth, measurer, rowHeight, wordBreaker, tocHeightOverrides)
+    const childBox = flowNode(section, child, cursorX, y, colWidth, measurer, rowHeight, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     children.push(childBox)
     cursorX += colWidth + gap
   })
@@ -308,6 +312,7 @@ function flowFlowStack(
   stackRenderHeight?: number,
   wordBreaker: WordBreaker = defaultWordBreaker,
   tocHeightOverrides?: Map<string, number>,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): FlowBox {
   const measuredBox = resolveParagraphBoxStyle(node.props.box, width)
   const contentX = x + paragraphBoxLeftInset(measuredBox)
@@ -321,7 +326,7 @@ function flowFlowStack(
     .filter((n): n is LayoutNode => n != null)
 
   childNodes.forEach((child) => {
-    const childBox = flowNode(section, child, contentX, cursorY, contentWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
+    const childBox = flowNode(section, child, contentX, cursorY, contentWidth, measurer, undefined, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     children.push(childBox)
     cursorY = childBox.y + childBox.height
   })
@@ -350,6 +355,7 @@ function flowFlowRow(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
   tocHeightOverrides?: Map<string, number>,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): FlowBox {
   const gap = Math.max(0, node.props.gap ?? 0)
   const columnWidths = distributeFlowRowWidths(section, node, width)
@@ -360,7 +366,7 @@ function flowFlowRow(
 
   const measuredHeights = childNodes.map((child, index) => {
     const colWidth = columnWidths[index] ?? 0
-    const box = flowNode(section, child, 0, 0, colWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
+    const box = flowNode(section, child, 0, 0, colWidth, measurer, undefined, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     return box.height
   })
 
@@ -371,7 +377,7 @@ function flowFlowRow(
 
   childNodes.forEach((child, index) => {
     const colWidth = columnWidths[index] ?? 0
-    const childBox = flowNode(section, child, cursorX, y, colWidth, measurer, rowHeight, wordBreaker, tocHeightOverrides)
+    const childBox = flowNode(section, child, cursorX, y, colWidth, measurer, rowHeight, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
     children.push(childBox)
     cursorX += colWidth + gap
   })
@@ -455,12 +461,13 @@ function measureFlowTableCellHeight(
   innerWidth: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): number {
   let h = 0
   cellNode.childIds.forEach((childId) => {
     const child = table.nodes[childId]
     if (!child) return
-    if (child.type === "paragraph") h += measureParagraph(child, innerWidth, measurer, wordBreaker).totalHeight
+    if (child.type === "paragraph") h += measureParagraphWithCache(child, innerWidth, measurer, wordBreaker, paragraphMeasurementCache).totalHeight
     else if (child.type === "spacer") h += child.props.height
   })
   return h
@@ -474,6 +481,7 @@ function flowFlowTable(
   width: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): FlowBox {
   const colWidths = resolveTableColumnWidths(table, width)
   const tableWidth = colWidths.reduce((sum, colWidth) => sum + colWidth, 0)
@@ -501,7 +509,7 @@ function flowFlowTable(
       const { padding, innerWidth } = resolveFlowTableCellBox(cellNode, placement.columnIndex, colWidths)
       rowHeight = Math.max(
         rowHeight,
-        measureFlowTableCellHeight(cellNode, table, innerWidth, measurer, wordBreaker) + padding.top + padding.bottom,
+        measureFlowTableCellHeight(cellNode, table, innerWidth, measurer, wordBreaker, paragraphMeasurementCache) + padding.top + padding.bottom,
       )
     })
 
@@ -514,7 +522,7 @@ function flowFlowTable(
     if (cellNode?.type !== "flow-table-cell") return
 
     const { padding, innerWidth } = resolveFlowTableCellBox(cellNode, placement.columnIndex, colWidths)
-    const cellNeedH = measureFlowTableCellHeight(cellNode, table, innerWidth, measurer, wordBreaker) + padding.top + padding.bottom
+    const cellNeedH = measureFlowTableCellHeight(cellNode, table, innerWidth, measurer, wordBreaker, paragraphMeasurementCache) + padding.top + padding.bottom
     const spannedH = rowHeights.slice(placement.rowIndex, placement.rowIndex + placement.rowspan).reduce((s, h) => s + h, 0)
     if (cellNeedH > spannedH) {
       rowHeights[placement.rowIndex + placement.rowspan - 1] += cellNeedH - spannedH
@@ -557,6 +565,8 @@ function flowFlowTable(
           measurer,
           undefined,
           wordBreaker,
+          undefined,
+          paragraphMeasurementCache,
         )
         childBoxes.push(childBox)
         childCursorY = childBox.y + childBox.height
@@ -608,11 +618,12 @@ export function flowZone(
   contentWidth: number,
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): FlowBox | null {
   if (rootId == null) return null
   const node = section.nodes[rootId]
   if (node == null) return null
-  return flowNode(section, node, contentX, zoneY, contentWidth, measurer, undefined, wordBreaker)
+  return flowNode(section, node, contentX, zoneY, contentWidth, measurer, undefined, wordBreaker, undefined, paragraphMeasurementCache)
 }
 
 export function flowSection(
@@ -622,11 +633,12 @@ export function flowSection(
   measurer: TextMeasurer,
   wordBreaker: WordBreaker = defaultWordBreaker,
   tocHeightOverrides?: Map<string, number>,
+  paragraphMeasurementCache?: ParagraphMeasurementCache,
 ): FlowBox {
   const body = section.nodes[section.bodyRootId]
   if (body?.type !== "body") {
     throw new Error(`Section "${section.id}" has no valid body root`)
   }
 
-  return flowNode(section, body, contentX, 0, availableWidth, measurer, undefined, wordBreaker, tocHeightOverrides)
+  return flowNode(section, body, contentX, 0, availableWidth, measurer, undefined, wordBreaker, tocHeightOverrides, paragraphMeasurementCache)
 }
