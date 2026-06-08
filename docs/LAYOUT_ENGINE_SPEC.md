@@ -761,7 +761,8 @@ Resolved decisions that used to be open:
 
 ## 10. Related Documents
 
-- `docs/AGENT_WORKFLOW.md`
+- `AGENTS.md`
+- `docs/agent/AGENT_OPERATING_MODEL.md`
 - `docs/ARCHITECTURE_OVERVIEW.md`
 - `docs/CROSS_PAGE_BEHAVIOR.md`
 - `docs/DOCS_INDEX.md`

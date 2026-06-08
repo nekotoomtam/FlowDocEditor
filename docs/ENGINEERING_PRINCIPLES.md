@@ -15,7 +15,8 @@ For the system overview, see `docs/ARCHITECTURE_OVERVIEW.md`.
 For editor interaction expectations, see `docs/EDITOR_UX_CONTRACT.md`.
 
 For the expected Codex/session workflow around reading docs, updating work logs,
-verification, and commits, see `docs/AGENT_WORKFLOW.md`.
+verification, and commits, see `AGENTS.md` and
+`docs/agent/AGENT_OPERATING_MODEL.md`.
 
 For the project-wide test and QA strategy, see `docs/TEST_STRATEGY.md`.
 

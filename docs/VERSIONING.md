@@ -3,7 +3,7 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.30`: suitable for self-use with accepted
+The current baseline is `0.6.31`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -56,6 +56,10 @@ outline startup, and narrower lazy page render windows,
 plus localStorage raw-value parse reuse and pagination measurement-cache
 hardening across word segmentation, flow layout, page packing, rows, flow rows,
 and Flow Table placement,
+plus active documentation cleanup that keeps the agent docs, work logs, docs
+index, and frontend runtime architecture reference concise without changing
+document schema, pagination semantics, undo/redo, export behavior, or editor
+runtime behavior,
 but not yet a general-user `v1`.
 
 ## Version Meaning
@@ -96,6 +100,7 @@ but not yet a general-user `v1`.
 | `0.6.26` | Patch baseline for structural edit performance attribution and React render isolation around the WYSIWYG draft island: scoped PageView rendering, left-rail deferral, structural render telemetry, and focused long-mock smoke coverage without changing persisted document or package schema versions. |
 | `0.6.29` | Patch baseline for WYSIWYG undo/re-enter history correctness and large-document editor performance hardening: plain-boundary draft pagination suppression, viewport-only preview settle guard, deferred large-outline startup, and narrower lazy page render windows without changing persisted document or package schema versions. |
 | `0.6.30` | Patch baseline for large-document boot and pagination performance hardening: raw localStorage parse reuse, word-segmentation cache counters, per-pagination paragraph measurement cache reuse across flow layout/page packing/row/flow-row/Flow Table placement, and focused profile coverage without changing persisted document or package schema versions. |
+| `0.6.31` | Patch baseline for active documentation cleanup: compact work logs, single-source agent docs, a shorter docs index, and a concise frontend runtime architecture reference without changing persisted document/package schema versions or editor/runtime behavior. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

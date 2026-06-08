@@ -15,7 +15,8 @@ Architecture overview lives in `docs/ARCHITECTURE_OVERVIEW.md`.
 
 Editor UX expectations live in `docs/EDITOR_UX_CONTRACT.md`.
 
-Session workflow rules live in `docs/AGENT_WORKFLOW.md`.
+Session workflow rules live in `AGENTS.md` and
+`docs/agent/AGENT_OPERATING_MODEL.md`.
 
 Test and QA level guidance lives in `docs/TEST_STRATEGY.md`.
 

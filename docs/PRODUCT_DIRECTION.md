@@ -81,9 +81,9 @@ trustworthy workflow editor:
   scenarios and fixtures.
 - `docs/ENGINEERING_PRINCIPLES.md` explains how to keep implementation choices
   aligned with this direction.
-- `docs/AGENT_WORKFLOW.md` defines the expected collaborator/session workflow:
-  what to read, when to update docs, how to verify, and when to write the work
-  log.
+- `AGENTS.md` and `docs/agent/AGENT_OPERATING_MODEL.md` define the expected
+  collaborator/session workflow: what to read, when to update docs, how to
+  verify, and when to write the work log.
 - `docs/ARCHITECTURE_OVERVIEW.md` explains how the app, core, API routes,
   pagination, and renderers connect.
 - `docs/EDITOR_UX_CONTRACT.md` defines editor interaction expectations.

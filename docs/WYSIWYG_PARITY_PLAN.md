@@ -420,7 +420,7 @@ release.
 - [ ] Verify rollback works
 - [ ] Release notes
 - [ ] Update `WYSIWYG_PRODUCTION_GATE.md` to "PRODUCTION ENABLED"
-- [ ] Archive this plan into `docs/archive/` once stable for one release
+- [ ] Retire this plan from default reading once stable for one release
 
 ---
 
@@ -452,7 +452,7 @@ Each session should:
 1. Read this plan plus the phase-specific checklist
 2. Read the source-of-truth contract for any file it touches
 3. Update the checklist in this doc as items complete
-4. Append to `docs/WORK_LOG.md` per session
+4. Record only durable milestone context in `docs/WORK_LOG.md`
 
 When a phase is fully complete:
 
@@ -471,8 +471,8 @@ This parity plan is fully done when:
   consecutive `review:gate:full` runs
 - One real user-facing release ships with the text engine as default and no
   parity-related regression in the first follow-up review window
-- This plan is archived to `docs/archive/` and replaced (if needed) by a
-  much shorter ongoing-maintenance note in the relevant active contract
+- This plan is removed from default reading and replaced (if needed) by a much
+  shorter ongoing-maintenance note in the relevant active contract
 
 ## Related Docs
 
