@@ -12,6 +12,13 @@ Read with `docs/WYSIWYG_PARITY_PLAN.md` Phase C and
 
 ## How To Run
 
+For paragraph typing/click/Enter/Backspace smoothness work, treat
+`Mock FlowDoc Stress Thai Document` as the primary baseline. The default command
+below is a quick sanity run only; ordinary documents usually do not expose the
+large-document costs this work is trying to reduce.
+
+Quick sanity run:
+
 ```powershell
 npm.cmd run smoke:wysiwyg-smoothness
 ```
@@ -28,11 +35,36 @@ Adjust burst:
 $env:PROBE_BURST_LENGTH="200"; $env:PROBE_INTERVAL_MS="20"; npm.cmd run smoke:wysiwyg-smoothness
 ```
 
-Run against the long stress mock and scroll the lazy canvas to page 15 before
-clicking the target paragraph:
+Primary paragraph smoothness baseline. This runs against the stress Thai mock
+and scrolls the lazy canvas to page 15 before clicking the target paragraph:
 
 ```powershell
 $env:FLOWDOC_PROBE_FILE="public/mock/flowdoc-stress-mock.flowdoc.json"; $env:PROBE_TARGET_NODE_ID="p_00114"; $env:PROBE_TARGET_PAGE_INDEX="14"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
+Run the focused stress baseline modes:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/flowdoc-stress-mock.flowdoc.json"; $env:PROBE_TARGET_NODE_ID="p_00114"; $env:PROBE_TARGET_PAGE_INDEX="14"; $env:PROBE_READY_TIMEOUT_MS="240000"
+$env:PROBE_MODE="typing"; $env:PROBE_BURST_LENGTH="400"; $env:PROBE_INTERVAL_MS="30"; npm.cmd run smoke:wysiwyg-smoothness
+$env:PROBE_MODE="wrap-typing"; $env:PROBE_BURST_LENGTH="160"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
+$env:PROBE_MODE="delete"; $env:PROBE_BURST_LENGTH="120"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
+Run stress boundary-handoff and existing-continuation targets:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/flowdoc-stress-mock.flowdoc.json"; $env:PROBE_READY_TIMEOUT_MS="240000"
+$env:PROBE_TARGET_NODE_ID="p_00104"; $env:PROBE_TARGET_PAGE_INDEX="12"; $env:PROBE_MODE="wrap-typing"; $env:PROBE_BURST_LENGTH="160"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
+$env:PROBE_TARGET_NODE_ID="p_00104"; $env:PROBE_TARGET_PAGE_INDEX="12"; $env:PROBE_MODE="typing"; $env:PROBE_BURST_LENGTH="400"; $env:PROBE_INTERVAL_MS="30"; npm.cmd run smoke:wysiwyg-smoothness
+$env:PROBE_TARGET_NODE_ID="p_00132"; $env:PROBE_TARGET_PAGE_INDEX="14"; $env:PROBE_MODE="wrap-typing"; $env:PROBE_BURST_LENGTH="160"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
+Run stress Enter/newline separately:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/flowdoc-stress-mock.flowdoc.json"; $env:PROBE_TARGET_NODE_ID="p_00104"; $env:PROBE_TARGET_PAGE_INDEX="12"; $env:PROBE_READY_TIMEOUT_MS="240000"
+$env:PROBE_MODE="enter"; $env:PROBE_BURST_LENGTH="30"; $env:PROBE_INTERVAL_MS="0"; npm.cmd run smoke:wysiwyg-smoothness
 ```
 
 Run the range-selection drag probe:
@@ -73,6 +105,13 @@ selected mode (`typing` by default, plus `space-repeat`, `delete`, `enter`,
 | `keystrokeTotalMs.*` | total time per keystroke including network/idle | bounded by `PROBE_INTERVAL_MS` |
 | `perfEvents.countByKind.browser-preview-pagination` | full repagination triggered during typing | must be 0 in the immediate input lane |
 | `perfEvents.countByKind.active-paragraph-measure` | active-paragraph re-measure events | proportional to burst length; not bounded |
+| `perfEvents.draftMeasureBreakdown.measureText` | per-event text-width measurement calls, time, character count, and unique key count inside `text-engine-draft-measure` | use to decide whether a text-width cache patch is justified |
+| `perfEvents.draftMeasureBreakdown.wordSegment` | per-event `wordBreaker.segment` calls, time, character count, and unique text count inside `text-engine-draft-measure` | use to decide whether segmentation caching is justified |
+| `perfEvents.draftMeasureBreakdown.residual` | remaining draft measurement time after text-width, line-height, and segmentation timing are subtracted | use to decide whether wrap/build/render cadence is the better target |
+| `perfEvents.flowdocIsland.fragmentSplit` | time and scope for splitting active draft lines into page fragments | use to decide whether draft preview is preparing more pages/fragments than the visible/caret scope needs |
+| `perfEvents.flowdocIsland.visibleLines.scope` | fragment, page, and surface counts attached to input-to-visible draft island timing | use to decide whether visible-line latency correlates with draft preview scope |
+| `perfEvents.flowdocIsland.cadence` | ratio of draft measure, fragment split, visible-lines, and React commit events to island input events | use to separate true per-key work from extra render attempts |
+| `perfEvents.flowdocIsland.draftMeasure.cache` | cache hit/miss split for out-of-canvas draft layout measurement | use to confirm whether extra draft-measure events are cheap cache hits or expensive full measurements |
 | `perfEvents.countByKind.text-engine-pointer-frame` | selection drag move coalescing frame cost | should stay below one frame in `longestEvent` |
 | `perfEvents.countByKind.text-engine-pointer-hit-test` | pointer point-to-text-offset mapping cost | should stay below one frame |
 | `perfEvents.countByKind.text-engine-selection-overlay` | selection highlight rectangle geometry cost | should stay below one frame |

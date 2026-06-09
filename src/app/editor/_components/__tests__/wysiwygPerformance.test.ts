@@ -270,6 +270,39 @@ describe("finishWysiwygPerfSpan", () => {
     expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
   })
 
+  it("records draft island scope metadata without draft content", () => {
+    vi.stubGlobal("window", {})
+
+    recordWysiwygPerfEvent(true, {
+      kind: "flowdoc-island-fragment-split",
+      startedAt: 100,
+      durationMs: 1.5,
+      nodeId: "p1",
+      pageIndex: 14,
+      textLength: 220,
+      lineCount: 12,
+      draftFragmentCount: 2,
+      draftPageCount: 2,
+      draftSurfaceCount: 2,
+      draftMissingSurfaceCount: 0,
+      draftCandidatePageCount: 18,
+      draftLayoutCacheHit: true,
+      pageIndexes: "14,15",
+      source: "split-pages",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "flowdoc-island-fragment-split",
+      nodeId: "p1",
+      draftFragmentCount: 2,
+      draftPageCount: 2,
+      draftCandidatePageCount: 18,
+      draftLayoutCacheHit: true,
+      pageIndexes: "14,15",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
   it("records editor action classification metadata without document content", () => {
     vi.stubGlobal("window", {})
 

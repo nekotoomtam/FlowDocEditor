@@ -59,6 +59,11 @@ import {
 } from "../wysiwygDraftParagraphLayout"
 import {
   FlowdocDraftEditorIslandRoot,
+  ISLAND_BOUNDARY_HEIGHT_PREVIEW_DEBOUNCE_MS,
+  ISLAND_PARENT_SYNC_DEBOUNCE_MS,
+  ISLAND_TEXT_INPUT_PARENT_SYNC_DEBOUNCE_MS,
+  resolveDraftIslandHeightPreviewDelayMs,
+  resolveDraftIslandParentSyncDelayMs,
   shouldQueueDraftIslandPageBoundaryReflow,
   shouldReportDraftIslandHeightPreview,
 } from "../FlowdocDraftEditorIslandRoot"
@@ -340,6 +345,48 @@ function expectFlowdocDraftLinesMarkup(markup: string, text?: string): void {
 }
 
 describe("FlowdocDraftEditorIslandRoot", () => {
+  it("uses a longer parent sync debounce for held text input without delaying caret-only sync", () => {
+    expect(resolveDraftIslandParentSyncDelayMs({
+      textChanged: true,
+      source: "key:ห",
+    })).toBe(ISLAND_TEXT_INPUT_PARENT_SYNC_DEBOUNCE_MS)
+    expect(resolveDraftIslandParentSyncDelayMs({
+      textChanged: true,
+      source: "beforeinput:insertText",
+    })).toBe(ISLAND_TEXT_INPUT_PARENT_SYNC_DEBOUNCE_MS)
+    expect(resolveDraftIslandParentSyncDelayMs({
+      textChanged: false,
+      source: "key:ArrowDown",
+    })).toBe(ISLAND_PARENT_SYNC_DEBOUNCE_MS)
+    expect(resolveDraftIslandParentSyncDelayMs({
+      textChanged: true,
+      source: "pointer-select-start",
+    })).toBe(ISLAND_PARENT_SYNC_DEBOUNCE_MS)
+  })
+
+  it("delays only hard page-boundary height preview handoff", () => {
+    expect(resolveDraftIslandHeightPreviewDelayMs({
+      shouldPatchBoundaryHeight: true,
+      reflow: {
+        kind: "hard-page-boundary",
+        reason: "page-boundary",
+        shouldPatchActiveLines: true,
+        shouldPatchSamePageHeight: false,
+        shouldQueueSettledPagination: true,
+      },
+    })).toBe(ISLAND_BOUNDARY_HEIGHT_PREVIEW_DEBOUNCE_MS)
+    expect(resolveDraftIslandHeightPreviewDelayMs({
+      shouldPatchBoundaryHeight: false,
+      reflow: {
+        kind: "hard-local",
+        reason: "line-count-changed",
+        shouldPatchActiveLines: true,
+        shouldPatchSamePageHeight: true,
+        shouldQueueSettledPagination: true,
+      },
+    })).toBe(0)
+  })
+
   it("drops repeated Enter while a split structural guard is in flight", () => {
     const guard: DraftIslandStructuralEditGuard = {
       token: 1,
@@ -1002,6 +1049,9 @@ describe("FlowdocDraftEditorIslandRoot", () => {
     expect(markup).toContain("data-wysiwyg-visible-pointer-owner=\"flowdoc-draft-island-v2\"")
     expect(markup).toContain("data-wysiwyg-flowdoc-draft-pointer-selection=\"true\"")
     expect(markup).toContain("data-wysiwyg-flowdoc-draft-clipboard=\"true\"")
+    expect(markup).toContain(`data-wysiwyg-island-parent-sync-debounce-ms="${ISLAND_PARENT_SYNC_DEBOUNCE_MS}"`)
+    expect(markup).toContain(`data-wysiwyg-island-text-parent-sync-debounce-ms="${ISLAND_TEXT_INPUT_PARENT_SYNC_DEBOUNCE_MS}"`)
+    expect(markup).toContain(`data-wysiwyg-island-boundary-height-preview-debounce-ms="${ISLAND_BOUNDARY_HEIGHT_PREVIEW_DEBOUNCE_MS}"`)
     expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
     expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
     expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
@@ -3628,6 +3678,40 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(layout?.lines.map((line) => line.text)).toEqual(["A", "BC"])
     expect(layout?.lines.map((line) => line.y)).toEqual([22, 34])
     expect(layout?.lines.map((line) => line.x)).toEqual([45, 40])
+  })
+
+  it("records profiled draft measure metadata without draft content", () => {
+    vi.stubGlobal("window", {
+      __flowDocWysiwygPerfTraceEnabled: true,
+      location: { search: "" },
+    })
+    const doc = makeDoc("Trace secret")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({ width: 80 })
+
+    const layout = buildWysiwygDraftParagraphLayout(fragment, paragraph, "Trace secret", fixedMeasurer, {
+      traceMeasure: true,
+    })
+
+    const event = window.__flowDocWysiwygPerfEvents?.find((item) => item.kind === "text-engine-draft-measure")
+    expect(layout).not.toBeNull()
+    expect(event).toMatchObject({
+      kind: "text-engine-draft-measure",
+      nodeId: "p1",
+      textLength: 12,
+      draftMeasureProfiled: true,
+      draftMeasureTextCallCount: expect.any(Number),
+      draftMeasureTextMs: expect.any(Number),
+      draftMeasureLineHeightCallCount: expect.any(Number),
+      draftMeasureLineHeightMs: expect.any(Number),
+      draftMeasureWordSegmentCallCount: expect.any(Number),
+      draftMeasureWordSegmentMs: expect.any(Number),
+      draftMeasureResidualMs: expect.any(Number),
+    })
+    expect(event?.draftMeasureTextCallCount).toBeGreaterThan(0)
+    expect(event?.draftMeasureLineHeightCallCount).toBeGreaterThan(0)
+    expect(event?.draftMeasureWordSegmentCallCount).toBeGreaterThan(0)
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("Trace secret")
   })
 
   it("builds list item draft layout from generated body indent without mutating paragraph props", () => {

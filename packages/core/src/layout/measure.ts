@@ -333,15 +333,25 @@ function splitSourceSegmentToGraphemes(
   measurer: TextMeasurer,
 ): SourceLineSegment[] {
   const graphemeSegments: SourceLineSegment[] = []
+  const widthByGrapheme = new Map<string, number>()
   let graphemeStart = segment.start
 
   for (const grapheme of splitTextGraphemes(segment.text)) {
     const graphemeEnd = graphemeStart + grapheme.length
+    const cachedWidth = widthByGrapheme.get(grapheme)
+    const width = cachedWidth ?? measureSegmentWidth(
+      grapheme,
+      measurer,
+      segment.style.fontFamilyKey,
+      segment.style.fontSize,
+      segment.style.fontVariant,
+    )
+    if (cachedWidth === undefined) widthByGrapheme.set(grapheme, width)
     graphemeSegments.push({
       text: grapheme,
       start: graphemeStart,
       end: graphemeEnd,
-      width: measureSegmentWidth(grapheme, measurer, segment.style.fontFamilyKey, segment.style.fontSize, segment.style.fontVariant),
+      width,
       kind: "grapheme",
       sourceId: segment.sourceId,
       sourceType: segment.sourceType,

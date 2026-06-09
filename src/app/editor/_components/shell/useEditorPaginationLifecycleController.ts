@@ -535,249 +535,272 @@ export function useEditorPaginationLifecycleController({
         active: true,
       })
     }
+    let rafHandle: number | null = null
     interactiveDebounceRef.current = setTimeout(() => {
       interactiveDebounceRef.current = null
-      finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:browser-pagination-debounce-delay", scheduleStartedAt, {
-        generation,
-        requestedDelayMs: debounceMs,
-        useBackgroundPagination,
-        measurerStatus: editorTextMeasurerStatus,
-        fontReadyVersion,
-      })
-      const startPlan = getBrowserPreviewSettleApplyPlan()
-      if (startPlan.action === "ignore") {
-        ignorePreviewSettle(startPlan, "browser-preview-schedule")
-        return
-      }
-      markPreviewSettleStartedBridge(previewSettleRuntime, previewSettleRequest)
-
-      const commitPagination = (
-        paginated: PaginatedDocument,
-        startedAt: number,
-        source: string,
-        extra: Record<string, unknown> = {},
-      ) => {
-        finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
-          nodeId: inlineEditNodeIdAtSchedule ?? undefined,
-          draftVersion: inlineEditDraftVersionAtSchedule,
-          scheduledDelayMs: debounceMs,
-          source,
-          ...extra,
-          ...summarizePaginatedForWysiwygPerf(paginated),
+      rafHandle = requestAnimationFrame(() => {
+        rafHandle = null
+        finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:browser-pagination-debounce-delay", scheduleStartedAt, {
+          generation,
+          requestedDelayMs: debounceMs,
+          useBackgroundPagination,
+          measurerStatus: editorTextMeasurerStatus,
+          fontReadyVersion,
         })
-        markPreviewSettleCompletedBridge(previewSettleRuntime, previewSettleRequest)
-        const applyPlan = getBrowserPreviewSettleApplyPlan()
-        const structuralSettle = optimisticStructuralSettleRef.current
-        const shellMutationPlan = getBrowserPreviewShellMutationPlan(
-          applyPlan,
-          "paginated-output",
-          source,
-          Boolean(structuralSettle && structuralSettle.newNodeId === inlineEditNodeIdAtSchedule),
-        )
-        recordPreviewSettleShellMutationPlan(shellMutationPlan, { token: generation })
-        if (shellMutationPlan.action === "ignore") {
-          if (applyPlan.action === "ignore") {
-            ignorePreviewSettle(applyPlan, shellMutationPlan.source)
-          }
+        const startPlan = getBrowserPreviewSettleApplyPlan()
+        if (startPlan.action === "ignore") {
+          ignorePreviewSettle(startPlan, "browser-preview-schedule")
           return
         }
-        applyPaginatedOutputBrowserPreviewShellMutation({
-          plan: shellMutationPlan,
-          optimisticLayout: { doc: previewDoc, paginated },
-          paginated,
-          inlineEditVisualFreshVersion: inlineEditDraftVersionAtSchedule,
-          createFullBrowserPreviewLayout: markEditorPreviewLayoutFull,
-          createSettlingBlockingBrowserPreviewLayout: (layoutGeneration) => markEditorPreviewLayoutSettling(layoutGeneration, { blocksCanvas: true }),
-          writeOptimisticLayout: (layout) => {
-            optimisticLayoutRef.current = layout
-          },
-          writePaginatedRef: (nextPaginated) => {
-            paginatedRef.current = nextPaginated
-          },
-          clearPartialPreview: () => setPartialPreviewPaginated(null),
-          setBrowserPreviewLayout,
-          dispatchSetPaginated: (nextPaginated) => dispatch({ type: "SET_PAGINATED", paginated: nextPaginated }),
-          markPreviewSettleLifecycle: () => {
-            markPreviewSettleAppliedBridge(previewSettleRuntime, previewSettleRequest)
-          },
-          markInlineEditVisualFresh,
-          completeStructuralSettle: structuralSettle
-            ? () => {
-                optimisticStructuralSettleRef.current = null
-                const settleCompletedAt = startWysiwygPerfSpan()
-                recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-                  kind: "flowdoc-structural-pagination-schedule",
-                  startedAt: structuralSettle.startedAt,
-                  durationMs: Math.max(0, settleCompletedAt - structuralSettle.startedAt),
-                  nodeId: structuralSettle.newNodeId,
-                  previousNodeId: structuralSettle.sourceNodeId,
-                  sourceNodeId: structuralSettle.sourceNodeId,
-                  pageIndex: structuralSettle.sourceFragment.pageIndex,
-                  action: "completed",
-                  operation: "settle",
-                  token: generation,
-                  scheduledDelayMs: debounceMs,
-                  source,
-                  active: true,
-                  latestSettleApplied: true,
-                })
-                finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "structural-refocus-settled-pagination", structuralSettle.startedAt, {
-                  nodeId: structuralSettle.newNodeId,
-                  previousNodeId: structuralSettle.sourceNodeId,
-                  pageIndex: structuralSettle.sourceFragment.pageIndex,
-                  source,
-                  active: true,
-                  latestSettleApplied: true,
-                  ...summarizePaginatedForWysiwygPerf(paginated),
-                })
-              }
-            : null,
-        })
-      }
+        if (previewSettleRuntime.getCurrentRequest()?.id !== previewSettleRequest.id) {
+          ignorePreviewSettle(
+            {
+              ...startPlan,
+              action: "ignore",
+              reason: "stale-settle-discarded",
+              decision: { type: "ignore-stale", reason: "stale-settle-discarded" }
+            } as any,
+            "browser-preview-schedule"
+          )
+          return
+        }
+        markPreviewSettleStartedBridge(previewSettleRuntime, previewSettleRequest)
 
-      const runMainThreadPagination = (source: string) => {
-        const startedAt = startWysiwygPerfSpan()
-        const paginated = paginateDocument(previewDoc, editorTextMeasurer)
-        commitPagination(paginated, startedAt, source)
-      }
-
-      if (useBackgroundPagination) {
-        const profilePagination = isPaginationProfileRuntimeEnabled()
-        const worker = getBrowserPaginationWorker()
-        if (worker) {
-          const startedAt = startWysiwygPerfSpan()
-          const requestId = ++browserPaginationWorkerRequestIdRef.current
-          let requestSettled = false
-
-          const fallbackToMainThread = (reason: string) => {
-            if (requestSettled) return
-            const fallbackPlan = getBrowserPreviewSettleApplyPlan()
-            if (fallbackPlan.action === "ignore") {
-              ignorePreviewSettle(fallbackPlan, "document-preview-worker-fallback")
-              return
+        const commitPagination = (
+          paginated: PaginatedDocument,
+          startedAt: number,
+          source: string,
+          extra: Record<string, unknown> = {},
+        ) => {
+          finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "browser-preview-pagination", startedAt, {
+            nodeId: inlineEditNodeIdAtSchedule ?? undefined,
+            draftVersion: inlineEditDraftVersionAtSchedule,
+            scheduledDelayMs: debounceMs,
+            source,
+            ...extra,
+            ...summarizePaginatedForWysiwygPerf(paginated),
+          })
+          markPreviewSettleCompletedBridge(previewSettleRuntime, previewSettleRequest)
+          const applyPlan = getBrowserPreviewSettleApplyPlan()
+          const structuralSettle = optimisticStructuralSettleRef.current
+          const shellMutationPlan = getBrowserPreviewShellMutationPlan(
+            applyPlan,
+            "paginated-output",
+            source,
+            Boolean(structuralSettle && structuralSettle.newNodeId === inlineEditNodeIdAtSchedule),
+          )
+          recordPreviewSettleShellMutationPlan(shellMutationPlan, { token: generation })
+          if (shellMutationPlan.action === "ignore") {
+            if (applyPlan.action === "ignore") {
+              ignorePreviewSettle(applyPlan, shellMutationPlan.source)
             }
-            requestSettled = true
-            console.error("browser pagination worker failed:", reason)
-            runMainThreadPagination("document-preview-worker-fallback")
+            return
           }
+          applyPaginatedOutputBrowserPreviewShellMutation({
+            plan: shellMutationPlan,
+            optimisticLayout: { doc: previewDoc, paginated },
+            paginated,
+            inlineEditVisualFreshVersion: inlineEditDraftVersionAtSchedule,
+            createFullBrowserPreviewLayout: markEditorPreviewLayoutFull,
+            createSettlingBlockingBrowserPreviewLayout: (layoutGeneration) => markEditorPreviewLayoutSettling(layoutGeneration, { blocksCanvas: true }),
+            writeOptimisticLayout: (layout) => {
+              optimisticLayoutRef.current = layout
+            },
+            writePaginatedRef: (nextPaginated) => {
+              paginatedRef.current = nextPaginated
+            },
+            clearPartialPreview: () => setPartialPreviewPaginated(null),
+            setBrowserPreviewLayout,
+            dispatchSetPaginated: (nextPaginated) => dispatch({ type: "SET_PAGINATED", paginated: nextPaginated }),
+            markPreviewSettleLifecycle: () => {
+              markPreviewSettleAppliedBridge(previewSettleRuntime, previewSettleRequest)
+            },
+            markInlineEditVisualFresh,
+            completeStructuralSettle: structuralSettle
+              ? () => {
+                  optimisticStructuralSettleRef.current = null
+                  const settleCompletedAt = startWysiwygPerfSpan()
+                  recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+                    kind: "flowdoc-structural-pagination-schedule",
+                    startedAt: structuralSettle.startedAt,
+                    durationMs: Math.max(0, settleCompletedAt - structuralSettle.startedAt),
+                    nodeId: structuralSettle.newNodeId,
+                    previousNodeId: structuralSettle.sourceNodeId,
+                    sourceNodeId: structuralSettle.sourceNodeId,
+                    pageIndex: structuralSettle.sourceFragment.pageIndex,
+                    action: "completed",
+                    operation: "settle",
+                    token: generation,
+                    scheduledDelayMs: debounceMs,
+                    source,
+                    active: true,
+                    latestSettleApplied: true,
+                  })
+                  finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "structural-refocus-settled-pagination", structuralSettle.startedAt, {
+                    nodeId: structuralSettle.newNodeId,
+                    previousNodeId: structuralSettle.sourceNodeId,
+                    pageIndex: structuralSettle.sourceFragment.pageIndex,
+                    source,
+                    active: true,
+                    latestSettleApplied: true,
+                    ...summarizePaginatedForWysiwygPerf(paginated),
+                  })
+                }
+              : null,
+          })
+        }
 
-          worker.onmessage = (event: MessageEvent<BrowserPaginationWorkerResponse>) => {
-            const response = event.data
-            if (!response) return
-            if (response.requestId !== requestId) {
-              recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-                name: "pre-pagination:worker-response-ignored",
-                startMs: startWysiwygPerfSpan(),
-                detail: {
-                  reason: "request-id-mismatch",
-                  activeRequestId: requestId,
-                  responseRequestId: response.requestId,
-                  activeGeneration: generation,
-                  currentGeneration: getCurrentPreviewSettleGenerationBridge(previewSettleRuntime),
-                  responseType: response.type,
-                  ...(response.type === "success" ? {
-                    workerMeasurerStatus: response.measurerStatus,
-                    ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
-                  } : {}),
-                },
-              })
-              return
-            }
-            const responsePlan = getBrowserPreviewSettleApplyPlan()
-            if (responsePlan.action === "ignore") {
-              ignorePreviewSettle(responsePlan, "document-preview-worker")
-              recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-                name: "pre-pagination:worker-response-ignored",
-                startMs: startWysiwygPerfSpan(),
-                detail: {
-                  reason: responsePlan.reason,
-                  requestId,
-                  responseGeneration: generation,
-                  currentGeneration: getCurrentPreviewSettleGenerationBridge(previewSettleRuntime),
-                  responseType: response.type,
-                  ...(response.type === "success" ? {
-                    workerMeasurerStatus: response.measurerStatus,
-                    ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
-                  } : {}),
-                },
-              })
-              return
-            }
-            if (requestSettled) return
-            if (response.type === "partial") {
-              const partialShellMutationPlan = getBrowserPreviewShellMutationPlan(
-                responsePlan,
-                "partial-worker",
-                "document-preview-worker-partial",
-              )
-              recordPreviewSettleShellMutationPlan(partialShellMutationPlan, {
-                token: generation,
-                requestId,
-              })
-              if (partialShellMutationPlan.action === "ignore") {
+        const runMainThreadPagination = (source: string) => {
+          const startedAt = startWysiwygPerfSpan()
+          const paginated = paginateDocument(previewDoc, editorTextMeasurer)
+          commitPagination(paginated, startedAt, source)
+        }
+
+        if (useBackgroundPagination) {
+          const profilePagination = isPaginationProfileRuntimeEnabled()
+          const worker = getBrowserPaginationWorker()
+          if (worker) {
+            const startedAt = startWysiwygPerfSpan()
+            const requestId = ++browserPaginationWorkerRequestIdRef.current
+            let requestSettled = false
+
+            const fallbackToMainThread = (reason: string) => {
+              if (requestSettled) return
+              const fallbackPlan = getBrowserPreviewSettleApplyPlan()
+              if (fallbackPlan.action === "ignore") {
+                ignorePreviewSettle(fallbackPlan, "document-preview-worker-fallback")
                 return
               }
-              applyPartialWorkerBrowserPreviewShellMutation({
-                plan: partialShellMutationPlan,
-                partialPreview: {
-                  generation,
-                  requestId,
-                  paginated: response.paginated,
-                },
-                createPartialBrowserPreviewLayout: markEditorPreviewLayoutPartial,
-                setPartialPreview: setPartialPreviewPaginated,
-                setBrowserPreviewLayout,
-              })
-              return
+              requestSettled = true
+              console.error("browser pagination worker failed:", reason)
+              runMainThreadPagination("document-preview-worker-fallback")
             }
-            if (response.type === "error") {
-              fallbackToMainThread(response.message)
-              return
-            }
-            requestSettled = true
-            commitPagination(response.paginated, startedAt, "document-preview-worker", {
-              workerMeasurerStatus: response.measurerStatus,
-              ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
-              ...(response.paginationProfile ? { paginationProfile: response.paginationProfile } : {}),
-            })
-          }
-          worker.onerror = (event) => {
-            fallbackToMainThread(event.message || "worker error")
-          }
-          const requestBuildStartedAt = startWysiwygPerfSpan()
-          const request: BrowserPaginationWorkerRequest = {
-            type: "paginate",
-            requestId,
-            doc: previewDoc,
-            visibleWindow: {
-              pageIndex: currentCanvasPageIndexRef.current,
-              marginPages: BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES,
-            },
-            profilePagination,
-          }
-          finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-request-payload-built", requestBuildStartedAt, {
-            requestId,
-            generation,
-            profilePagination,
-            visiblePageIndex: currentCanvasPageIndexRef.current,
-          })
-          const postStartedAt = startWysiwygPerfSpan()
-          worker.postMessage(request)
-          finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-request-posted", postStartedAt, {
-            requestId,
-            generation,
-          })
-          return
-        }
-      }
 
-      runMainThreadPagination(inlineEditNodeIdAtSchedule ? "inline-edit-preview" : "document-preview")
+            worker.onmessage = (event: MessageEvent<BrowserPaginationWorkerResponse>) => {
+              const response = event.data
+              if (!response) return
+              if (response.requestId !== requestId) {
+                recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+                  name: "pre-pagination:worker-response-ignored",
+                  startMs: startWysiwygPerfSpan(),
+                  detail: {
+                    reason: "request-id-mismatch",
+                    activeRequestId: requestId,
+                    responseRequestId: response.requestId,
+                    activeGeneration: generation,
+                    currentGeneration: getCurrentPreviewSettleGenerationBridge(previewSettleRuntime),
+                    responseType: response.type,
+                    ...(response.type === "success" ? {
+                      workerMeasurerStatus: response.measurerStatus,
+                      ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
+                    } : {}),
+                  },
+                })
+                return
+              }
+              const responsePlan = getBrowserPreviewSettleApplyPlan()
+              if (responsePlan.action === "ignore") {
+                ignorePreviewSettle(responsePlan, "document-preview-worker")
+                recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+                  name: "pre-pagination:worker-response-ignored",
+                  startMs: startWysiwygPerfSpan(),
+                  detail: {
+                    reason: responsePlan.reason,
+                    requestId,
+                    responseGeneration: generation,
+                    currentGeneration: getCurrentPreviewSettleGenerationBridge(previewSettleRuntime),
+                    responseType: response.type,
+                    ...(response.type === "success" ? {
+                      workerMeasurerStatus: response.measurerStatus,
+                      ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
+                    } : {}),
+                  },
+                })
+                return
+              }
+              if (requestSettled) return
+              if (response.type === "partial") {
+                const partialShellMutationPlan = getBrowserPreviewShellMutationPlan(
+                  responsePlan,
+                  "partial-worker",
+                  "document-preview-worker-partial",
+                )
+                recordPreviewSettleShellMutationPlan(partialShellMutationPlan, {
+                  token: generation,
+                  requestId,
+                })
+                if (partialShellMutationPlan.action === "ignore") {
+                  return
+                }
+                applyPartialWorkerBrowserPreviewShellMutation({
+                  plan: partialShellMutationPlan,
+                  partialPreview: {
+                    generation,
+                    requestId,
+                    paginated: response.paginated,
+                  },
+                  createPartialBrowserPreviewLayout: markEditorPreviewLayoutPartial,
+                  setPartialPreview: setPartialPreviewPaginated,
+                  setBrowserPreviewLayout,
+                })
+                return
+              }
+              if (response.type === "error") {
+                fallbackToMainThread(response.message)
+                return
+              }
+              requestSettled = true
+              commitPagination(response.paginated, startedAt, "document-preview-worker", {
+                workerMeasurerStatus: response.measurerStatus,
+                ...(response.workerTiming ? { workerTiming: response.workerTiming } : {}),
+                ...(response.paginationProfile ? { paginationProfile: response.paginationProfile } : {}),
+              })
+            }
+            worker.onerror = (event) => {
+              fallbackToMainThread(event.message || "worker error")
+            }
+            const requestBuildStartedAt = startWysiwygPerfSpan()
+            const request: BrowserPaginationWorkerRequest = {
+              type: "paginate",
+              requestId,
+              doc: previewDoc,
+              visibleWindow: {
+                pageIndex: currentCanvasPageIndexRef.current,
+                marginPages: BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES,
+              },
+              profilePagination,
+            }
+            finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-request-payload-built", requestBuildStartedAt, {
+              requestId,
+              generation,
+              profilePagination,
+              visiblePageIndex: currentCanvasPageIndexRef.current,
+            })
+            const postStartedAt = startWysiwygPerfSpan()
+            worker.postMessage(request)
+            finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:worker-request-posted", postStartedAt, {
+              requestId,
+              generation,
+            })
+            return
+          }
+        }
+
+        runMainThreadPagination(inlineEditNodeIdAtSchedule ? "inline-edit-preview" : "document-preview")
+      })
     }, debounceMs)
 
     return () => {
+      const wasPending = Boolean(interactiveDebounceRef.current || rafHandle)
+      if (rafHandle) {
+        cancelAnimationFrame(rafHandle)
+        rafHandle = null
+      }
       if (interactiveDebounceRef.current) {
         clearTimeout(interactiveDebounceRef.current)
         interactiveDebounceRef.current = null
+      }
+      if (wasPending) {
         const structuralSettleForCleanup = structuralSettleAtSchedule
         if (shouldSupersedePreviewSettleOnCleanup({
           hasPendingDebounce: true,

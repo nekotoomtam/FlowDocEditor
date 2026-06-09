@@ -366,6 +366,166 @@ function summarizeDurations(events) {
   }
 }
 
+function finiteEventNumbers(events, field) {
+  return events
+    .map((event) => event[field])
+    .filter((value) => typeof value === "number" && Number.isFinite(value))
+}
+
+function summarizeEventNumberField(events, field) {
+  const values = finiteEventNumbers(events, field).sort((a, b) => a - b)
+  return {
+    count: values.length,
+    total: values.reduce((sum, value) => sum + value, 0),
+    p50: percentile(values, 0.5),
+    p95: percentile(values, 0.95),
+    max: values[values.length - 1] ?? null,
+  }
+}
+
+function sumEventNumberField(events, field) {
+  return finiteEventNumbers(events, field).reduce((sum, value) => sum + value, 0)
+}
+
+function maxEventNumberField(events, field) {
+  const values = finiteEventNumbers(events, field)
+  return values.length > 0 ? Math.max(...values) : null
+}
+
+function summarizeDraftMeasureBreakdown(events) {
+  const profiledEvents = events.filter((event) => event.draftMeasureProfiled === true)
+  return {
+    eventCount: events.length,
+    profiledCount: profiledEvents.length,
+    unprofiledCount: events.length - profiledEvents.length,
+    measureText: {
+      callCount: sumEventNumberField(profiledEvents, "draftMeasureTextCallCount"),
+      totalMs: sumEventNumberField(profiledEvents, "draftMeasureTextMs"),
+      eventMs: summarizeEventNumberField(profiledEvents, "draftMeasureTextMs"),
+      charCount: sumEventNumberField(profiledEvents, "draftMeasureTextCharCount"),
+      maxTextLength: maxEventNumberField(profiledEvents, "draftMeasureTextMaxTextLength"),
+      uniqueKeyCount: sumEventNumberField(profiledEvents, "draftMeasureTextUniqueKeyCount"),
+    },
+    lineHeight: {
+      callCount: sumEventNumberField(profiledEvents, "draftMeasureLineHeightCallCount"),
+      totalMs: sumEventNumberField(profiledEvents, "draftMeasureLineHeightMs"),
+      eventMs: summarizeEventNumberField(profiledEvents, "draftMeasureLineHeightMs"),
+    },
+    wordSegment: {
+      callCount: sumEventNumberField(profiledEvents, "draftMeasureWordSegmentCallCount"),
+      totalMs: sumEventNumberField(profiledEvents, "draftMeasureWordSegmentMs"),
+      eventMs: summarizeEventNumberField(profiledEvents, "draftMeasureWordSegmentMs"),
+      charCount: sumEventNumberField(profiledEvents, "draftMeasureWordSegmentCharCount"),
+      maxTextLength: maxEventNumberField(profiledEvents, "draftMeasureWordSegmentMaxTextLength"),
+      uniqueTextCount: sumEventNumberField(profiledEvents, "draftMeasureWordSegmentUniqueTextCount"),
+    },
+    residual: {
+      totalMs: sumEventNumberField(profiledEvents, "draftMeasureResidualMs"),
+      eventMs: summarizeEventNumberField(profiledEvents, "draftMeasureResidualMs"),
+    },
+  }
+}
+
+function summarizeDraftIslandScopeFields(events) {
+  const latest = events[events.length - 1] ?? null
+  return {
+    draftFragmentCount: summarizeEventNumberField(events, "draftFragmentCount"),
+    draftPageCount: summarizeEventNumberField(events, "draftPageCount"),
+    draftSurfaceCount: summarizeEventNumberField(events, "draftSurfaceCount"),
+    draftMissingSurfaceCount: summarizeEventNumberField(events, "draftMissingSurfaceCount"),
+    draftCandidatePageCount: summarizeEventNumberField(events, "draftCandidatePageCount"),
+    maxLineCount: maxEventNumberField(events, "lineCount"),
+    pageIndexes: [...new Set(events.flatMap((event) => String(event.pageIndexes ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)))],
+    latest: latest
+      ? {
+        source: latest.source ?? null,
+        lineCount: latest.lineCount ?? null,
+        draftFragmentCount: latest.draftFragmentCount ?? null,
+        draftPageCount: latest.draftPageCount ?? null,
+        draftSurfaceCount: latest.draftSurfaceCount ?? null,
+        draftMissingSurfaceCount: latest.draftMissingSurfaceCount ?? null,
+        draftCandidatePageCount: latest.draftCandidatePageCount ?? null,
+        pageIndexes: latest.pageIndexes ?? null,
+      }
+      : null,
+  }
+}
+
+function summarizeDraftIslandScopeEvents(events) {
+  const bySource = events.reduce((acc, event) => {
+    const source = event.source ?? "unknown"
+    acc[source] = (acc[source] ?? 0) + 1
+    return acc
+  }, {})
+  return {
+    ...summarizeDurations(events),
+    bySource,
+    scope: summarizeDraftIslandScopeFields(events),
+  }
+}
+
+function countDistinctEventField(events, field) {
+  return new Set(
+    events
+      .map((event) => event[field])
+      .filter((value) => value != null),
+  ).size
+}
+
+function ratioToInput(count, inputCount) {
+  return inputCount > 0 ? count / inputCount : null
+}
+
+function summarizeDraftIslandMeasureCache(events) {
+  const cacheHitEvents = events.filter((event) => event.draftLayoutCacheHit === true)
+  const cacheMissEvents = events.filter((event) => event.draftLayoutCacheHit === false)
+  return {
+    hitCount: cacheHitEvents.length,
+    missCount: cacheMissEvents.length,
+    unknownCount: events.length - cacheHitEvents.length - cacheMissEvents.length,
+    hit: summarizeDurations(cacheHitEvents),
+    miss: summarizeDurations(cacheMissEvents),
+  }
+}
+
+function summarizeDraftIslandParentSync(events) {
+  const bySource = events.reduce((acc, event) => {
+    const source = event.source ?? "unknown"
+    acc[source] = (acc[source] ?? 0) + 1
+    return acc
+  }, {})
+  return {
+    ...summarizeDurations(events),
+    bySource,
+    scheduledDelayMs: summarizeEventNumberField(events, "scheduledDelayMs"),
+  }
+}
+
+function summarizeDraftIslandCadence(inputEvents, measureEvents, fragmentSplitEvents, visibleEvents, commitEvents) {
+  const inputCount = inputEvents.length
+  return {
+    inputCount,
+    draftMeasureCount: measureEvents.length,
+    fragmentSplitCount: fragmentSplitEvents.length,
+    visibleLinesCount: visibleEvents.length,
+    reactCommitCount: commitEvents.length,
+    draftMeasurePerInput: ratioToInput(measureEvents.length, inputCount),
+    fragmentSplitPerInput: ratioToInput(fragmentSplitEvents.length, inputCount),
+    visibleLinesPerInput: ratioToInput(visibleEvents.length, inputCount),
+    reactCommitPerInput: ratioToInput(commitEvents.length, inputCount),
+    uniqueDraftVersions: {
+      input: countDistinctEventField(inputEvents, "draftVersion"),
+      draftMeasure: countDistinctEventField(measureEvents, "draftVersion"),
+      fragmentSplit: countDistinctEventField(fragmentSplitEvents, "draftVersion"),
+      visibleLines: countDistinctEventField(visibleEvents, "draftVersion"),
+      reactCommit: countDistinctEventField(commitEvents, "draftVersion"),
+    },
+  }
+}
+
 function summarizeComponentRenderEvents(events) {
   return events.reduce((acc, event) => {
     const component = event.componentName ?? event.source ?? "unknown"
@@ -961,7 +1121,9 @@ function summarizePerfEvents(perfEvents) {
     return acc
   }, {})
   const draftMeasureEvents = perfEvents.filter((event) => event.kind === "text-engine-draft-measure")
+  const flowdocIslandInputEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-input")
   const flowdocIslandMeasureEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-draft-measure")
+  const flowdocIslandFragmentSplitEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-fragment-split")
   const flowdocIslandVisibleEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-visible-lines")
   const flowdocIslandCommitEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-react-commit")
   const flowdocIslandParentSyncEvents = perfEvents.filter((event) => event.kind === "flowdoc-island-parent-sync")
@@ -1098,12 +1260,30 @@ function summarizePerfEvents(perfEvents) {
       boundaryHandoffCount: heightPreviewBySource["set-inline-edit-height-dispatch-boundary-handoff"] ?? 0,
     },
     draftMeasure: summarizeDurations(draftMeasureEvents),
+    draftMeasureBreakdown: summarizeDraftMeasureBreakdown(draftMeasureEvents),
     flowdocIsland: {
-      draftMeasure: summarizeDurations(flowdocIslandMeasureEvents),
-      visibleLines: summarizeDurations(flowdocIslandVisibleEvents),
-      reactCommit: summarizeDurations(flowdocIslandCommitEvents),
+      cadence: summarizeDraftIslandCadence(
+        flowdocIslandInputEvents,
+        flowdocIslandMeasureEvents,
+        flowdocIslandFragmentSplitEvents,
+        flowdocIslandVisibleEvents,
+        flowdocIslandCommitEvents,
+      ),
+      draftMeasure: {
+        ...summarizeDurations(flowdocIslandMeasureEvents),
+        cache: summarizeDraftIslandMeasureCache(flowdocIslandMeasureEvents),
+      },
+      fragmentSplit: summarizeDraftIslandScopeEvents(flowdocIslandFragmentSplitEvents),
+      visibleLines: {
+        ...summarizeDurations(flowdocIslandVisibleEvents),
+        scope: summarizeDraftIslandScopeFields(flowdocIslandVisibleEvents),
+      },
+      reactCommit: {
+        ...summarizeDurations(flowdocIslandCommitEvents),
+        scope: summarizeDraftIslandScopeFields(flowdocIslandCommitEvents),
+      },
       parentSyncCount: flowdocIslandParentSyncEvents.length,
-      parentSync: summarizeDurations(flowdocIslandParentSyncEvents),
+      parentSync: summarizeDraftIslandParentSync(flowdocIslandParentSyncEvents),
       blurHandoff: {
         count: flowdocIslandBlurHandoffEvents.length,
         byAction: flowdocIslandBlurHandoffEvents.reduce((acc, event) => {

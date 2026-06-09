@@ -197,6 +197,11 @@ function ParagraphTextSurfaceImpl({
   const [isSelectionCollapsed, setIsSelectionCollapsed] = useState(true)
   const [selectionSnapshot, setSelectionSnapshot] = useState<InlineEditSelectionSnapshot | null>(null)
   const [isComposing, setIsComposing] = useState(false)
+  const [hasActivelyTyped, setHasActivelyTyped] = useState(false)
+
+  useEffect(() => {
+    if (!isEditing) setHasActivelyTyped(false)
+  }, [isEditing])
   const traceHotPathPerf = useMemo(() => (
     isWysiwygPerfTraceRuntimeEnabled(WYSIWYG_PERF_TRACE_ENABLED)
   ), [])
@@ -244,7 +249,8 @@ function ParagraphTextSurfaceImpl({
     shouldUsePlainParagraphNativeGeometryHandoff &&
     paragraphNode != null &&
     textMeasurer != null &&
-    isCollapsedWysiwygTextSelection(wysiwygTextSelection)
+    isCollapsedWysiwygTextSelection(wysiwygTextSelection) &&
+    !hasActivelyTyped
   const isCurrentEditSlice = useCallback((el: HTMLTextAreaElement) => (
     el.dataset.inlineEditSliceKey === editSliceKey
   ), [editSliceKey])
@@ -350,6 +356,13 @@ function ParagraphTextSurfaceImpl({
   const shouldBuildMeasuredTextEngineDraftVisual = false
   const textEngineDraftText = wysiwygTextDraftText ?? fullText
   const textEngineDraftChanged = hasWysiwygTextDraftChange(fullText, textEngineDraftText)
+
+  useEffect(() => {
+    if (isEditing && textEngineDraftChanged) {
+      setHasActivelyTyped(true)
+    }
+  }, [isEditing, textEngineDraftChanged])
+
   const textEngineCaretOffset = wysiwygTextCaretOffset ?? initialCaretIndex
   const textEngineDraftLayout = useMemo(() => {
     if (!shouldBuildMeasuredTextEngineDraftVisual || !textEngineDraftChanged || !supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null

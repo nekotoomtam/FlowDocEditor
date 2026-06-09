@@ -31,6 +31,7 @@ export type WysiwygPerfEventKind =
   | "browser-preview-pagination"
   | "flowdoc-island-input"
   | "flowdoc-island-draft-measure"
+  | "flowdoc-island-fragment-split"
   | "flowdoc-island-visible-lines"
   | "flowdoc-island-react-commit"
   | "flowdoc-island-parent-sync"
@@ -69,6 +70,26 @@ export interface WysiwygPerfEvent {
   lineCount?: number
   availableWidth?: number
   paragraphHeight?: number
+  draftMeasureProfiled?: boolean
+  draftMeasureTextCallCount?: number
+  draftMeasureTextMs?: number
+  draftMeasureTextCharCount?: number
+  draftMeasureTextMaxTextLength?: number
+  draftMeasureTextUniqueKeyCount?: number
+  draftMeasureLineHeightCallCount?: number
+  draftMeasureLineHeightMs?: number
+  draftMeasureWordSegmentCallCount?: number
+  draftMeasureWordSegmentMs?: number
+  draftMeasureWordSegmentCharCount?: number
+  draftMeasureWordSegmentMaxTextLength?: number
+  draftMeasureWordSegmentUniqueTextCount?: number
+  draftMeasureResidualMs?: number
+  draftFragmentCount?: number
+  draftPageCount?: number
+  draftSurfaceCount?: number
+  draftMissingSurfaceCount?: number
+  draftCandidatePageCount?: number
+  draftLayoutCacheHit?: boolean
   requestedDelayMs?: number
   scheduledDelayMs?: number
   firstRequestedAtMs?: number

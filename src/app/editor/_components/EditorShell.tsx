@@ -1,6 +1,6 @@
 "use client"
 
-import { useReducer, useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo } from "react"
+import { startTransition, useReducer, useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo } from "react"
 import { assertDocument, createUniqueListPresetInstanceId, normalizeDocument, resolveParagraphListContext } from "@/document"
 import type { FlowDocListStylePresetId } from "@/document"
 import type { DocumentNode } from "@/schema"
@@ -830,7 +830,9 @@ export default function EditorShell() {
       reflowKind: reflow?.kind,
       reflowReason: reflow?.reason,
     })
-    dispatch({ type: "SET_INLINE_EDIT_HEIGHT", nodeId, height, pageIndex, reflow })
+    startTransition(() => {
+      dispatch({ type: "SET_INLINE_EDIT_HEIGHT", nodeId, height, pageIndex, reflow })
+    })
   }, [
     handleInlineEditHeightChange,
     wysiwygTextSessionState.dirtyVersion,

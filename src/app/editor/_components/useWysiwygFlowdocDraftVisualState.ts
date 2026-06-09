@@ -32,29 +32,10 @@ interface UseWysiwygFlowdocDraftVisualStateInput {
 
 export function useWysiwygFlowdocDraftVisualState(input: UseWysiwygFlowdocDraftVisualStateInput) {
   const flowdocDraftLayoutCacheRef = useRef(createWysiwygDraftParagraphLayoutCache())
-  const flowdocDraftLinesSessionRef = useRef<{ nodeId: string | null; enabled: boolean }>({
-    nodeId: null,
-    enabled: false,
-  })
-
-  if (flowdocDraftLinesSessionRef.current.nodeId !== input.activeVisualFragment.nodeId) {
-    flowdocDraftLinesSessionRef.current = { nodeId: input.activeVisualFragment.nodeId, enabled: false }
-  }
-
-  const canStartFlowdocDraftLines = Boolean(
-    input.isNativeEditLayerEnabled &&
-    input.useFlowdocDraftLines &&
-    input.draftParagraphNode &&
-    input.textMeasurer,
-  )
-  if (canStartFlowdocDraftLines) {
-    flowdocDraftLinesSessionRef.current.enabled = true
-  }
-
   const flowdocDraftSelectionCollapsed = isCollapsedWysiwygTextSelection(input.flowdocDraftState.selection)
   const shouldUseFlowdocDraftLines = Boolean(
     input.isNativeEditLayerEnabled &&
-    flowdocDraftLinesSessionRef.current.enabled &&
+    input.useFlowdocDraftLines &&
     input.draftParagraphNode &&
     input.textMeasurer,
   )

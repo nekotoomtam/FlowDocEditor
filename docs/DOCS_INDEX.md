@@ -38,6 +38,7 @@ For a new session:
 | Style manager | `docs/STYLE_MANAGER_CONTRACT.md` |
 | WYSIWYG roadmap | `docs/WYSIWYG_EDITOR_ROADMAP.md` |
 | WYSIWYG text engine | `docs/WYSIWYG_TEXT_ENGINE_PLAN.md` |
+| WYSIWYG paragraph interactions | `docs/WYSIWYG_PARAGRAPH_INTERACTION_CHECKLIST.md` |
 | WYSIWYG edit/show parity | `docs/WYSIWYG_PARITY_PLAN.md` |
 | Rich text draft lane | `docs/RICH_TEXT_DRAFT_DECISION.md` |
 | List numbering | `docs/LIST_NUMBERING_CONTRACT.md` |
@@ -68,6 +69,8 @@ WYSIWYG or inline editing:
 - `docs/EDITOR_UX_CONTRACT.md`
 - `docs/WYSIWYG_EDITOR_ROADMAP.md`
 - `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
+- `docs/WYSIWYG_PARAGRAPH_INTERACTION_CHECKLIST.md` when paragraph typing,
+  click-to-caret, Enter, or Backspace smoothness is in scope
 - `docs/WYSIWYG_PARITY_PLAN.md`
 - `docs/RICH_TEXT_DRAFT_DECISION.md` when rich draft state is in scope
 - `docs/WYSIWYG_PRODUCTION_GATE.md` before changing default/production

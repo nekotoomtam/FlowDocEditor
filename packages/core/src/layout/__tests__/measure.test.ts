@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import { measureParagraph, measureParagraphFrom, snapToGraphemeBoundary, splitTextGraphemes, textGraphemeBoundaries } from "../measure"
 import { defaultTextMeasurer, defaultWordBreaker } from "../types"
 import type { ParagraphNode } from "../../schema"
-import type { WordBreaker } from "../types"
+import type { TextMeasurer, WordBreaker } from "../types"
 
 // defaultTextMeasurer widths at fontSize=10:
 //   ASCII printable (space included): 10 * 0.48 = 4.8 per char
@@ -275,6 +275,24 @@ describe("long unbroken text (grapheme fallback)", () => {
         expect(seg.kind).toBe("grapheme")
       }
     }
+  })
+
+  it("reuses measured width for repeated graphemes inside one split segment", () => {
+    const callsByText = new Map<string, number>()
+    const measurer: TextMeasurer = {
+      measureText(text, fontFamilyKey, fontSize, fontVariant) {
+        callsByText.set(text, (callsByText.get(text) ?? 0) + 1)
+        return defaultTextMeasurer.measureText(text, fontFamilyKey, fontSize, fontVariant)
+      },
+      measureLineHeight: defaultTextMeasurer.measureLineHeight,
+    }
+    const text = "ห".repeat(12)
+
+    const result = measureParagraph(makeParagraph(text), 20, measurer, spaceBreaker)
+
+    expect(result.lines.map((line) => line.text).join("")).toBe(text)
+    expect(result.lines.flatMap((line) => line.segments ?? []).every((segment) => segment.kind === "grapheme")).toBe(true)
+    expect(callsByText.get("ห")).toBe(1)
   })
 })
 

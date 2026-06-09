@@ -3,16 +3,21 @@ import {
   replaceTextRunParagraphTextInParagraph,
 } from "@/document"
 import {
+  defaultWordBreaker,
   measureParagraph,
   paragraphBoxLeftInset,
   resolveParagraphBoxStyle,
 } from "@/layout"
-import type { TextMeasurer } from "@/layout"
+import type { TextMeasurer, WordBreaker } from "@/layout"
 import { buildPositionedParagraphLines } from "@/pagination"
 import type { PageFragment, PaginatedLine, ParagraphRenderProps } from "@/pagination"
 import type { ParagraphBoxStyle, ParagraphNode } from "@/schema"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
-import { finishWysiwygPerfSpan, startWysiwygPerfSpan } from "./wysiwygPerformance"
+import {
+  isWysiwygPerfTraceRuntimeEnabled,
+  recordWysiwygPerfEvent,
+  startWysiwygPerfSpan,
+} from "./wysiwygPerformance"
 
 function paragraphWithDraftText(node: ParagraphNode, draftText: string): ParagraphNode | null {
   if (!isTextRunOnlyParagraph(node)) return null
@@ -31,6 +36,21 @@ export interface WysiwygDraftParagraphLayoutCache {
 }
 
 const WYSIWYG_DRAFT_PARAGRAPH_LAYOUT_CACHE_LIMIT = 64
+
+interface WysiwygDraftMeasureProfile {
+  measureTextCallCount: number
+  measureTextMs: number
+  measureTextCharCount: number
+  measureTextMaxTextLength: number
+  measureTextUniqueKeyCount: number
+  lineHeightCallCount: number
+  lineHeightMs: number
+  wordSegmentCallCount: number
+  wordSegmentMs: number
+  wordSegmentCharCount: number
+  wordSegmentMaxTextLength: number
+  wordSegmentUniqueTextCount: number
+}
 
 export function createWysiwygDraftParagraphLayoutCache(): WysiwygDraftParagraphLayoutCache {
   return {
@@ -56,6 +76,78 @@ function cloneWysiwygDraftParagraphLayout(layout: WysiwygDraftParagraphLayout): 
 
 function ptUnit(value: number) {
   return { value, unit: "pt" as const }
+}
+
+function createEmptyWysiwygDraftMeasureProfile(): WysiwygDraftMeasureProfile {
+  return {
+    measureTextCallCount: 0,
+    measureTextMs: 0,
+    measureTextCharCount: 0,
+    measureTextMaxTextLength: 0,
+    measureTextUniqueKeyCount: 0,
+    lineHeightCallCount: 0,
+    lineHeightMs: 0,
+    wordSegmentCallCount: 0,
+    wordSegmentMs: 0,
+    wordSegmentCharCount: 0,
+    wordSegmentMaxTextLength: 0,
+    wordSegmentUniqueTextCount: 0,
+  }
+}
+
+function createProfiledWysiwygDraftMeasureInputs(textMeasurer: TextMeasurer): {
+  textMeasurer: TextMeasurer
+  wordBreaker: WordBreaker
+  profile: WysiwygDraftMeasureProfile
+} {
+  const profile = createEmptyWysiwygDraftMeasureProfile()
+  const measureTextKeys = new Set<string>()
+  const wordSegmentTexts = new Set<string>()
+
+  return {
+    profile,
+    textMeasurer: {
+      measureText(text, fontFamilyKey, fontSize, fontVariant) {
+        const startedAt = startWysiwygPerfSpan()
+        try {
+          return textMeasurer.measureText(text, fontFamilyKey, fontSize, fontVariant)
+        } finally {
+          const durationMs = Math.max(0, startWysiwygPerfSpan() - startedAt)
+          profile.measureTextCallCount += 1
+          profile.measureTextMs += durationMs
+          profile.measureTextCharCount += text.length
+          profile.measureTextMaxTextLength = Math.max(profile.measureTextMaxTextLength, text.length)
+          measureTextKeys.add(`${fontFamilyKey}|${fontSize}|${fontVariant ?? "regular"}|${text}`)
+          profile.measureTextUniqueKeyCount = measureTextKeys.size
+        }
+      },
+      measureLineHeight(fontFamilyKey, fontSize, lineHeightRatio) {
+        const startedAt = startWysiwygPerfSpan()
+        try {
+          return textMeasurer.measureLineHeight(fontFamilyKey, fontSize, lineHeightRatio)
+        } finally {
+          profile.lineHeightCallCount += 1
+          profile.lineHeightMs += Math.max(0, startWysiwygPerfSpan() - startedAt)
+        }
+      },
+    },
+    wordBreaker: {
+      segment(text) {
+        const startedAt = startWysiwygPerfSpan()
+        try {
+          return defaultWordBreaker.segment(text)
+        } finally {
+          const durationMs = Math.max(0, startWysiwygPerfSpan() - startedAt)
+          profile.wordSegmentCallCount += 1
+          profile.wordSegmentMs += durationMs
+          profile.wordSegmentCharCount += text.length
+          profile.wordSegmentMaxTextLength = Math.max(profile.wordSegmentMaxTextLength, text.length)
+          wordSegmentTexts.add(text)
+          profile.wordSegmentUniqueTextCount = wordSegmentTexts.size
+        }
+      },
+    },
+  }
 }
 
 function paragraphBoxStyleFromRenderProps(renderProps: ParagraphRenderProps): ParagraphBoxStyle | undefined {
@@ -222,16 +314,42 @@ export function buildWysiwygDraftParagraphLayout(
   if (!draftNode) return null
   const resolvedDraftNode = paragraphWithWysiwygFragmentRenderProps(fragment, draftNode)
   const layoutNode = withWysiwygListBodyIndent(fragment, resolvedDraftNode)
-  const startedAt = options.traceMeasure ? startWysiwygPerfSpan() : null
-  const measured = measureParagraph(layoutNode, fragment.width, textMeasurer)
-  if (startedAt !== null) {
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "text-engine-draft-measure", startedAt, {
+  const shouldTraceMeasure = options.traceMeasure === true && isWysiwygPerfTraceRuntimeEnabled(WYSIWYG_PERF_TRACE_ENABLED)
+  const profileInputs = shouldTraceMeasure ? createProfiledWysiwygDraftMeasureInputs(textMeasurer) : null
+  const startedAt = shouldTraceMeasure ? startWysiwygPerfSpan() : null
+  const measured = profileInputs
+    ? measureParagraph(layoutNode, fragment.width, profileInputs.textMeasurer, profileInputs.wordBreaker)
+    : measureParagraph(layoutNode, fragment.width, textMeasurer)
+  if (startedAt !== null && profileInputs) {
+    const durationMs = Math.max(0, startWysiwygPerfSpan() - startedAt)
+    const profile = profileInputs.profile
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "text-engine-draft-measure",
+      startedAt,
+      durationMs,
       nodeId: fragment.nodeId,
       pageIndex: fragment.pageIndex,
       textLength: draftText.length,
       lineCount: measured.lines.length,
       availableWidth: fragment.width,
       paragraphHeight: measured.totalHeight,
+      draftMeasureProfiled: true,
+      draftMeasureTextCallCount: profile.measureTextCallCount,
+      draftMeasureTextMs: profile.measureTextMs,
+      draftMeasureTextCharCount: profile.measureTextCharCount,
+      draftMeasureTextMaxTextLength: profile.measureTextMaxTextLength,
+      draftMeasureTextUniqueKeyCount: profile.measureTextUniqueKeyCount,
+      draftMeasureLineHeightCallCount: profile.lineHeightCallCount,
+      draftMeasureLineHeightMs: profile.lineHeightMs,
+      draftMeasureWordSegmentCallCount: profile.wordSegmentCallCount,
+      draftMeasureWordSegmentMs: profile.wordSegmentMs,
+      draftMeasureWordSegmentCharCount: profile.wordSegmentCharCount,
+      draftMeasureWordSegmentMaxTextLength: profile.wordSegmentMaxTextLength,
+      draftMeasureWordSegmentUniqueTextCount: profile.wordSegmentUniqueTextCount,
+      draftMeasureResidualMs: Math.max(
+        0,
+        durationMs - profile.measureTextMs - profile.lineHeightMs - profile.wordSegmentMs,
+      ),
     })
   }
   return {
