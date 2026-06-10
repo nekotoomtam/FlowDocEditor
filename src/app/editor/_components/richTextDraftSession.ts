@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { useCallback, useState, useRef } from "react"
 import {
   applyRichTextDraftStyleCommand,
   createRichTextDraft,
@@ -256,49 +256,52 @@ export function useWysiwygRichTextDraftSession({
   enabled,
   getParagraph,
 }: UseWysiwygRichTextDraftSessionOptions) {
-  const [state, setState] = useState<WysiwygRichTextDraftSessionState>(INACTIVE_WYSIWYG_RICH_TEXT_DRAFT_SESSION)
+  const [nodeId, setNodeId] = useState<string | null>(null)
+  const stateRef = useRef<WysiwygRichTextDraftSessionState>(INACTIVE_WYSIWYG_RICH_TEXT_DRAFT_SESSION)
+
+  const setNodeIdIfChanged = useCallback((nextState: WysiwygRichTextDraftSessionState) => {
+    stateRef.current = nextState
+    setNodeId((prev) => prev !== nextState.nodeId ? nextState.nodeId : prev)
+  }, [])
 
   const start = useCallback((nodeId: string, caretOffset: number | null = null, pageIndex: number | null = null) => {
     if (!enabled) return false
     const paragraph = getParagraph(nodeId)
     if (!paragraph) return false
-    setState((current) => startWysiwygRichTextDraftSessionState(current, {
-      nodeId,
-      paragraph,
-      caretOffset,
-      pageIndex,
-    }))
+    const nextState = startWysiwygRichTextDraftSessionState(stateRef.current, { nodeId, paragraph, caretOffset, pageIndex })
+    setNodeIdIfChanged(nextState)
     return true
   }, [enabled, getParagraph])
 
   const changeDraft = useCallback((change: WysiwygTextSessionDraftChange) => {
     if (!enabled) return
-    setState((current) => changeWysiwygRichTextDraftSessionPlainText(current, change))
+    stateRef.current = changeWysiwygRichTextDraftSessionPlainText(stateRef.current, change)
   }, [enabled])
 
   const moveCaret = useCallback((caretOffset: number | null, selection?: WysiwygTextSelection | null) => {
     if (!enabled) return
-    setState((current) => moveWysiwygRichTextDraftSessionSelection(current, caretOffset, selection))
+    stateRef.current = moveWysiwygRichTextDraftSessionSelection(stateRef.current, caretOffset, selection)
   }, [enabled])
 
   const applyStyleCommand = useCallback((patch: TextRunStylePatch) => {
     if (!enabled) return
-    setState((current) => applyRichTextDraftSessionStyleCommand(current, patch))
+    stateRef.current = applyRichTextDraftSessionStyleCommand(stateRef.current, patch)
   }, [enabled])
 
   const markLayoutFresh = useCallback((layoutVersion?: number) => {
     if (!enabled) return
-    setState((current) => markWysiwygRichTextDraftSessionLayoutFresh(current, layoutVersion))
+    stateRef.current = markWysiwygRichTextDraftSessionLayoutFresh(stateRef.current, layoutVersion)
   }, [enabled])
 
   const end = useCallback(() => {
-    setState(endWysiwygRichTextDraftSessionState())
+    const nextState = endWysiwygRichTextDraftSessionState()
+    setNodeIdIfChanged(nextState)
   }, [])
 
   return {
-    state,
-    isActive: state.nodeId !== null,
-    isLayoutFresh: isWysiwygRichTextDraftSessionLayoutFresh(state),
+    state: stateRef.current,
+    isActive: nodeId !== null,
+    isLayoutFresh: isWysiwygRichTextDraftSessionLayoutFresh(stateRef.current),
     start,
     changeDraft,
     moveCaret,

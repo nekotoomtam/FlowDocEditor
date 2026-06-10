@@ -18,6 +18,11 @@ import {
   createParagraphMergeOperationPlan,
   createParagraphSplitOperationPlan,
 } from "../operations/editorStructuralOperationPlans"
+import {
+  executeParagraphSplitOperationPlan,
+  executeParagraphMergeOperationPlan,
+  type StructuralExecutionContext
+} from "../operations/editorStructuralHandlers"
 import type { StructuralEditController } from "../structuralEdit/structuralEditBridgeTypes"
 import { createStructuralDraftSessionPlan } from "../structuralEdit/structuralEditPlans"
 import type { StructuralPreviewSettleSnapshot } from "../structuralEdit/previewSettleBridge"
@@ -52,12 +57,12 @@ import {
 import type { EditorPageNavigationIndex } from "./editorCanvasNavigation"
 import { OPTIMISTIC_STRUCTURAL_PREVIEW_SETTLE_DEBOUNCE_MS } from "./editorShellConstants"
 import type {
-  OptimisticStructuralIslandOverride,
-  OptimisticStructuralRefocusPaint,
   PendingOptimisticMergeRefocus,
   PendingOptimisticSplitRefocus,
   SplitParagraphHistory,
 } from "./editorShellTypes"
+
+import { useEditorStructuralIslandStore, editorStructuralIslandStore } from "./editorStructuralIslandStore"
 
 type MutableCurrentRef<T> = {
   current: T
@@ -92,10 +97,7 @@ export function useEditorOptimisticStructuralRefocusController({
   mergeResult,
   moveWysiwygTextCaret,
   optimisticLayoutRef,
-  optimisticStructuralIslandOverride,
   paginatedRef,
-  setOptimisticStructuralIslandOverride,
-  setOptimisticStructuralRefocusPaint,
   startInlineEditAfterOptimisticStructuralChange,
   startInlineEditAfterStructuralChange,
   startPlainWysiwygTextSessionFromText,
@@ -124,10 +126,7 @@ export function useEditorOptimisticStructuralRefocusController({
   mergeResult: { prevNodeId: string; caretIndex: number } | null
   moveWysiwygTextCaret: (caretIndex: number | null) => void
   optimisticLayoutRef: MutableCurrentRef<OptimisticLayoutSnapshot | null>
-  optimisticStructuralIslandOverride: OptimisticStructuralIslandOverride | null
   paginatedRef: MutableCurrentRef<PaginatedDocument>
-  setOptimisticStructuralIslandOverride: (value: OptimisticStructuralIslandOverride | null) => void
-  setOptimisticStructuralRefocusPaint: (value: OptimisticStructuralRefocusPaint | null) => void
   startInlineEditAfterOptimisticStructuralChange: (
     nodeId: string,
     caretIndex: number | null,
@@ -144,6 +143,7 @@ export function useEditorOptimisticStructuralRefocusController({
   wysiwygTextSessionStateRef: MutableCurrentRef<{ nodeId: string | null }>
   lastSplitNodeId: string | null
 }) {
+  const { optimisticStructuralIslandOverride } = useEditorStructuralIslandStore()
   const pendingOptimisticSplitRefocusRef = useRef<PendingOptimisticSplitRefocus | null>(null)
   const pendingOptimisticMergeRefocusRef = useRef<PendingOptimisticMergeRefocus | null>(null)
   const optimisticStructuralSettleRef = useRef<(PendingOptimisticSplitRefocus & StructuralPreviewSettleSnapshot) | null>(null)
@@ -197,13 +197,50 @@ export function useEditorOptimisticStructuralRefocusController({
     wysiwygTextSessionStateRef,
   ])
 
+  const getStructuralExecutionContext = (): StructuralExecutionContext => ({
+    abortStructuralEditTransactionAndPanelDeferral,
+    beginStructuralPanelReleaseDeferral,
+    beginWysiwygDraftRuntimeSession,
+    clearWysiwygDraftPagination,
+    dispatchEditorAction,
+    endRichWysiwygDraftSession,
+    endWysiwygTextSession,
+    setOptimisticStructuralIslandOverride: (override) => {
+      if (typeof override === "function") {
+        editorStructuralIslandStore.setState({ optimisticStructuralIslandOverride: (override as Function)(editorStructuralIslandStore.getState().optimisticStructuralIslandOverride) })
+      } else {
+        editorStructuralIslandStore.setState({ optimisticStructuralIslandOverride: override })
+      }
+    },
+    setOptimisticStructuralRefocusPaint: (paint) => {
+      if (typeof paint === "function") {
+        editorStructuralIslandStore.setState({ optimisticStructuralRefocusPaint: (paint as Function)(editorStructuralIslandStore.getState().optimisticStructuralRefocusPaint) })
+      } else {
+        editorStructuralIslandStore.setState({ optimisticStructuralRefocusPaint: paint })
+      }
+    },
+    startInlineEditAfterOptimisticStructuralChange,
+    startPlainWysiwygTextSessionFromText,
+    structuralEditController,
+    setPendingOptimisticSplitRefocus: (val: any) => { pendingOptimisticSplitRefocusRef.current = val },
+    setPendingOptimisticMergeRefocus: (val: any) => { pendingOptimisticMergeRefocusRef.current = val },
+    setPaginatedRef: (val: any) => { paginatedRef.current = val },
+    setOptimisticLayoutRef: (val: any) => { optimisticLayoutRef.current = val },
+    setOptimisticStructuralSettleRef: (val: any) => { optimisticStructuralSettleRef.current = val },
+    setOptimisticStructuralPreviewSettleGraceUntilRef: (val: any) => { optimisticStructuralPreviewSettleGraceUntilRef.current = val },
+    setSuppressNextLayoutLoadingOverlayRef: (val: any) => { suppressNextLayoutLoadingOverlayRef.current = val },
+    getPaginatedRef: () => paginatedRef.current,
+    getOptimisticLayoutRef: () => optimisticLayoutRef.current,
+    getOptimisticStructuralSettleRef: () => optimisticStructuralSettleRef.current,
+    getOptimisticStructuralPreviewSettleGraceUntilRef: () => optimisticStructuralPreviewSettleGraceUntilRef.current,
+  })
+
   const startOptimisticSplitRefocusBeforeDispatch = useCallback((
     pending: PendingOptimisticSplitRefocus,
     splitIndex: number,
     text?: string,
     history?: SplitParagraphHistory,
   ): boolean => {
-    const totalStartedAt = startWysiwygPerfSpan()
     const plan = createParagraphSplitOperationPlan({
       doc: docRef.current,
       displayPaginated,
@@ -218,207 +255,17 @@ export function useEditorOptimisticStructuralRefocusController({
       editorTextMeasurer,
     })
 
-    if (
-      plan.status !== "success" ||
-      !plan.optimisticLayout ||
-      !plan.optimisticFragment ||
-      !plan.newParagraph ||
-      !plan.newText ||
-      !plan.pageKey ||
-      !plan.operation
-    ) {
-      return false
-    }
+    if (plan.status !== "success") return false
 
-    const {
-      newNodeId,
-      optimisticLayout,
-      optimisticFragment,
-      newParagraph,
-      newText,
-      mode,
-      overflowedPage,
-      suppressedPageBreakNodeId,
-      pageKey,
-    } = plan
-
-    pending.prestarted = true
-    pendingOptimisticSplitRefocusRef.current = pending
-    paginatedRef.current = optimisticLayout.paginated
-    optimisticLayoutRef.current = optimisticLayout
-    optimisticStructuralSettleRef.current = { ...pending, newNodeId: newNodeId! }
-    optimisticStructuralPreviewSettleGraceUntilRef.current = startWysiwygPerfSpan() + OPTIMISTIC_STRUCTURAL_PREVIEW_SETTLE_DEBOUNCE_MS
-    suppressNextLayoutLoadingOverlayRef.current = true
-
-    const optimistic = {
-      paginated: optimisticLayout.paginated,
-      newFragment: optimisticFragment,
-      mode: mode ?? "same-page",
-      overflowedPage: overflowedPage ?? false,
-    }
-
-    let inlineStarted = false
-    let textSessionStarted = false
-    let splitDispatched = false
-    const structuralBridge = structuralEditController.beginSplit({
-      sourceNodeId: pending.sourceNodeId,
-      newNodeId: pending.newNodeId,
-      pageIndex: optimistic.newFragment.pageIndex,
-      suppressedPageBreakNodeId,
-      startedAt: pending.startedAt,
-    })
-    const structuralTransaction = structuralBridge.transaction
-    const structuralTransactionIdentity = structuralBridge.identity
-    const failAfterStructuralTransactionBegin = (reason: string) => {
-      abortStructuralEditTransactionAndPanelDeferral(structuralTransactionIdentity, reason)
-      return false
-    }
-    beginStructuralPanelReleaseDeferral(structuralBridge.panelDeferral)
-    structuralEditController.markUrgentPainting(structuralTransactionIdentity)
-    const flushStartedAt = startWysiwygPerfSpan()
-    const inlineSetupStartedAt = startWysiwygPerfSpan()
-    inlineStarted = startInlineEditAfterOptimisticStructuralChange(
-      pending.newNodeId,
-      0,
-      optimistic.paginated,
-      optimistic.newFragment.pageIndex,
-      optimisticLayout.doc,
-      newText,
-    )
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", inlineSetupStartedAt, {
-      nodeId: pending.newNodeId,
-      previousNodeId: pending.sourceNodeId,
-      sourceNodeId: pending.sourceNodeId,
-      pageIndex: optimistic.newFragment.pageIndex,
-      action: "inline-edit-session-setup",
-      operation: "split",
-      active: inlineStarted,
-    })
-    const textSessionSetupStartedAt = startWysiwygPerfSpan()
-    textSessionStarted = startPlainWysiwygTextSessionFromText({
-      nodeId: pending.newNodeId,
-      text: newText,
-      caretOffset: 0,
-      pageIndex: optimistic.newFragment.pageIndex,
-    })
-    if (textSessionStarted) {
-      beginWysiwygDraftRuntimeSession(createStructuralDraftSessionPlan({
-        transaction: structuralTransaction,
-        nodeId: pending.newNodeId,
-        textLength: newText.length,
-        caretIndex: 0,
-      }))
-    }
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", textSessionSetupStartedAt, {
-      nodeId: pending.newNodeId,
-      previousNodeId: pending.sourceNodeId,
-      sourceNodeId: pending.sourceNodeId,
-      pageIndex: optimistic.newFragment.pageIndex,
-      textLength: newText.length,
-      action: "text-session-setup",
-      operation: "split",
-      active: textSessionStarted,
-    })
-    const islandOverrideStartedAt = startWysiwygPerfSpan()
-    setOptimisticStructuralIslandOverride({
-      nodeId: pending.newNodeId,
-      paragraph: newParagraph,
-      fragment: optimistic.newFragment,
-      pageKey,
-      pages: optimistic.paginated.sections.flatMap((section) => section.pages),
-      mode: optimistic.mode,
-      suppressedPageBreakNodeId,
-    })
-    setOptimisticStructuralRefocusPaint({ nodeId: pending.newNodeId, startedAt: pending.startedAt })
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", islandOverrideStartedAt, {
-      nodeId: pending.newNodeId,
-      previousNodeId: pending.sourceNodeId,
-      sourceNodeId: pending.sourceNodeId,
-      pageIndex: optimistic.newFragment.pageIndex,
-      action: "island-override-setup",
-      operation: "split",
-      boundarySafeMode: optimistic.mode === "boundary-safe",
-      suppressedPageBreakNodeId,
-      active: true,
-    })
-
-    if (!inlineStarted) return failAfterStructuralTransactionBegin("split-inline-session-setup-failed")
-    if (!textSessionStarted) return failAfterStructuralTransactionBegin("split-text-session-setup-failed")
-
-    const dispatchStartedAt = startWysiwygPerfSpan()
-    dispatchEditorAction(plan.operation.action)
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", dispatchStartedAt, {
-      nodeId: pending.newNodeId,
-      previousNodeId: pending.sourceNodeId,
-      sourceNodeId: pending.sourceNodeId,
-      pageIndex: optimistic.newFragment.pageIndex,
-      action: "dispatch",
-      operation: "split",
-      commandType: "SPLIT_PARAGRAPH",
-      active: true,
-    })
-    splitDispatched = true
-
-    structuralEditController.markSplitCommitted(structuralTransactionIdentity, pending.newNodeId)
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", flushStartedAt, {
-      nodeId: pending.newNodeId,
-      previousNodeId: pending.sourceNodeId,
-      sourceNodeId: pending.sourceNodeId,
-      pageIndex: optimistic.newFragment.pageIndex,
-      action: "flush-sync-transition",
-      operation: "split",
-      active: inlineStarted && textSessionStarted && splitDispatched,
-      optimisticMode: optimistic.mode,
-    })
-    if (!inlineStarted) return failAfterStructuralTransactionBegin("split-inline-session-setup-failed")
-    if (!textSessionStarted) return failAfterStructuralTransactionBegin("split-text-session-setup-failed")
-    if (!splitDispatched) return failAfterStructuralTransactionBegin("split-dispatch-failed")
-    endRichWysiwygDraftSession()
-    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-      kind: "structural-refocus-used-full-pagination-before-island",
-      startedAt: pending.startedAt,
-      durationMs: Math.max(0, startWysiwygPerfSpan() - pending.startedAt),
-      nodeId: pending.newNodeId,
-      previousNodeId: pending.sourceNodeId,
-      pageIndex: optimistic.newFragment.pageIndex,
-      source: "optimistic-prestarted",
-      action: "prestarted",
-      active: true,
-      usedFullPaginationBeforeIsland: false,
-      overflowedPage: optimistic.overflowedPage,
-      optimisticMode: optimistic.mode,
-      ...summarizePaginatedForWysiwygPerf(optimistic.paginated),
-    })
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", totalStartedAt, {
-      nodeId: pending.newNodeId,
-      previousNodeId: pending.sourceNodeId,
-      sourceNodeId: pending.sourceNodeId,
-      pageIndex: optimistic.newFragment.pageIndex,
-      action: "total",
-      operation: "split",
-      active: true,
-      overflowedPage: optimistic.overflowedPage,
-      optimisticMode: optimistic.mode,
-      ...summarizePaginatedForWysiwygPerf(optimistic.paginated),
-    })
-    return true
+    return executeParagraphSplitOperationPlan(plan, pending, getStructuralExecutionContext())
   }, [
-    abortStructuralEditTransactionAndPanelDeferral,
-    beginStructuralPanelReleaseDeferral,
-    beginWysiwygDraftRuntimeSession,
-    dispatchEditorAction,
+    displayPaginated,
     docRef,
-    editorPageNavigation.pageKeyByPageIndex,
+    editorPageNavigation,
     editorTextMeasurer,
-    endRichWysiwygDraftSession,
-    optimisticLayoutRef,
-    paginatedRef,
-    setOptimisticStructuralIslandOverride,
-    setOptimisticStructuralRefocusPaint,
-    startInlineEditAfterOptimisticStructuralChange,
-    startPlainWysiwygTextSessionFromText,
-    structuralEditController,
-    suppressNextLayoutLoadingOverlayRef,
+    inlineEditPageIndexRef,
+    getStructuralExecutionContext,
+    wysiwygTextSessionStateRef,
   ])
 
   const startOptimisticMergeRefocusBeforeDispatch = useCallback((
@@ -442,233 +289,18 @@ export function useEditorOptimisticStructuralRefocusController({
       optimisticStructuralIslandOverride,
     })
 
-    if (plan.status !== "success") {
-      return false
-    }
+    if (plan.status !== "success") return false
 
-    const optimisticLayout = plan.optimisticLayout
-    const optimistic = {
-      paginated: optimisticLayout.paginated,
-      mergedFragment: plan.mergedFragment,
-      mode: plan.mode ?? "same-page",
-      overflowedPage: plan.overflowedPage ?? false,
-    }
-
-    const previousPaginated = paginatedRef.current
-    const previousOptimisticLayout = optimisticLayoutRef.current
-    const previousStructuralSettle = optimisticStructuralSettleRef.current
-    const previousStructuralPreviewGraceUntil = optimisticStructuralPreviewSettleGraceUntilRef.current
-    const pending: PendingOptimisticMergeRefocus = {
-      currentNodeId: plan.sourceNodeId,
-      previousNodeId: plan.previousNodeId,
-      currentFragment: plan.sourceFragment!,
-      previousFragment: plan.previousFragment!,
-      startedAt: plan.perf!.startedAt,
-      prestarted: true,
-    }
-
-    pendingOptimisticMergeRefocusRef.current = pending
-    optimisticStructuralSettleRef.current = null
-    optimisticStructuralPreviewSettleGraceUntilRef.current = startWysiwygPerfSpan() + OPTIMISTIC_STRUCTURAL_PREVIEW_SETTLE_DEBOUNCE_MS
-    paginatedRef.current = optimistic.paginated
-    optimisticLayoutRef.current = { doc: optimisticLayout.doc, paginated: optimistic.paginated }
-    suppressNextLayoutLoadingOverlayRef.current = true
-
-    let inlineStarted = false
-    let textSessionStarted = false
-    let mergeDispatched = false
-    const structuralBridge = structuralEditController.beginMerge({
-      currentNodeId: plan.sourceNodeId,
-      previousNodeId: plan.previousNodeId,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-      startedAt: plan.perf!.startedAt,
-    })
-    const structuralTransaction = structuralBridge.transaction
-    const structuralTransactionIdentity = structuralBridge.identity
-    beginStructuralPanelReleaseDeferral(structuralBridge.panelDeferral)
-    structuralEditController.markUrgentPainting(structuralTransactionIdentity)
-    const flushStartedAt = startWysiwygPerfSpan()
-    flushSync(() => {
-      const inlineSetupStartedAt = startWysiwygPerfSpan()
-    inlineStarted = startInlineEditAfterOptimisticStructuralChange(
-      plan.previousNodeId,
-      plan.operation.action.type === "MERGE_PARAGRAPH" && plan.operation.action.precomputed ? plan.operation.action.precomputed.caretIndex : 0,
-      optimistic.paginated,
-      optimistic.mergedFragment.pageIndex,
-      optimisticLayout.doc,
-      plan.mergedText,
-    )
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", inlineSetupStartedAt, {
-      nodeId: plan.previousNodeId,
-      previousNodeId: plan.sourceNodeId,
-      sourceNodeId: plan.sourceNodeId,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-      action: "inline-edit-session-setup",
-      operation: "merge",
-      active: inlineStarted,
-    })
-    const textSessionSetupStartedAt = startWysiwygPerfSpan()
-    textSessionStarted = startPlainWysiwygTextSessionFromText({
-      nodeId: plan.previousNodeId,
-      text: plan.mergedText,
-      caretOffset: plan.operation.action.type === "MERGE_PARAGRAPH" && plan.operation.action.precomputed ? plan.operation.action.precomputed.caretIndex : 0,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-    })
-      if (textSessionStarted) {
-      beginWysiwygDraftRuntimeSession(createStructuralDraftSessionPlan({
-        transaction: structuralTransaction,
-        nodeId: plan.previousNodeId,
-        textLength: plan.mergedText.length,
-        caretIndex: plan.operation.action.type === "MERGE_PARAGRAPH" && plan.operation.action.precomputed ? plan.operation.action.precomputed.caretIndex : 0,
-      }))
-      }
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", textSessionSetupStartedAt, {
-      nodeId: plan.previousNodeId,
-      previousNodeId: plan.sourceNodeId,
-      sourceNodeId: plan.sourceNodeId,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-      textLength: plan.mergedText.length,
-      action: "text-session-setup",
-      operation: "merge",
-      active: textSessionStarted,
-    })
-    const islandOverrideStartedAt = startWysiwygPerfSpan()
-    setOptimisticStructuralIslandOverride({
-      nodeId: plan.previousNodeId,
-      paragraph: plan.previousParagraph,
-      fragment: optimistic.mergedFragment,
-      pageKey: plan.pageKey,
-      pages: optimistic.paginated.sections.flatMap((section) => section.pages),
-      mode: optimistic.mode,
-      settleRemovedNodeId: plan.sourceNodeId,
-    })
-    setOptimisticStructuralRefocusPaint({ nodeId: plan.previousNodeId, startedAt: plan.perf!.startedAt })
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", islandOverrideStartedAt, {
-      nodeId: plan.previousNodeId,
-      previousNodeId: plan.sourceNodeId,
-      sourceNodeId: plan.sourceNodeId,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-      action: "island-override-setup",
-      operation: "merge",
-      boundarySafeMode: optimistic.mode === "boundary-safe",
-      active: true,
-    })
-    })
-
-    if (!inlineStarted || !textSessionStarted) {
-      abortStructuralEditTransactionAndPanelDeferral(
-        structuralTransactionIdentity,
-        !inlineStarted
-          ? "merge-inline-session-setup-failed"
-          : "merge-text-session-setup-failed"
-      )
-      pendingOptimisticMergeRefocusRef.current = null
-      optimisticStructuralSettleRef.current = previousStructuralSettle
-      optimisticStructuralPreviewSettleGraceUntilRef.current = previousStructuralPreviewGraceUntil
-      paginatedRef.current = previousPaginated
-      optimisticLayoutRef.current = previousOptimisticLayout
-      clearWysiwygDraftPagination()
-      endWysiwygTextSession()
-      return false
-    }
-
-    const dispatchStartedAt = startWysiwygPerfSpan()
-    dispatchEditorAction(plan.operation.action)
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", dispatchStartedAt, {
-      nodeId: plan.previousNodeId,
-      previousNodeId: plan.sourceNodeId,
-      sourceNodeId: plan.sourceNodeId,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-      action: "dispatch",
-      operation: "merge",
-      commandType: "MERGE_PARAGRAPH",
-      active: true,
-    })
-    mergeDispatched = true
-
-    structuralEditController.markMergeCommitted(structuralTransactionIdentity, {
-      removedNodeId: plan.sourceNodeId,
-      committedNodeId: plan.previousNodeId,
-    })
-
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", flushStartedAt, {
-      nodeId: plan.previousNodeId,
-      previousNodeId: plan.sourceNodeId,
-      sourceNodeId: plan.sourceNodeId,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-      action: "flush-sync-transition",
-      operation: "merge",
-      active: inlineStarted && textSessionStarted && mergeDispatched,
-      optimisticMode: optimistic.mode,
-    })
-    if (!inlineStarted || !textSessionStarted || !mergeDispatched) {
-      abortStructuralEditTransactionAndPanelDeferral(
-        structuralTransactionIdentity,
-        !inlineStarted
-          ? "merge-inline-session-setup-failed"
-          : !textSessionStarted
-          ? "merge-text-session-setup-failed"
-          : "merge-dispatch-failed",
-      )
-      pendingOptimisticMergeRefocusRef.current = null
-      optimisticStructuralSettleRef.current = previousStructuralSettle
-      optimisticStructuralPreviewSettleGraceUntilRef.current = previousStructuralPreviewGraceUntil
-      paginatedRef.current = previousPaginated
-      optimisticLayoutRef.current = previousOptimisticLayout
-      clearWysiwygDraftPagination()
-      endWysiwygTextSession()
-      return false
-    }
-    endRichWysiwygDraftSession()
-    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-      kind: "structural-refocus-used-full-pagination-before-island",
-      startedAt: plan.perf!.startedAt,
-      durationMs: Math.max(0, startWysiwygPerfSpan() - plan.perf!.startedAt),
-      nodeId: plan.previousNodeId,
-      previousNodeId: plan.sourceNodeId,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-      source: "optimistic-merge-prestarted",
-      action: "merge-prestarted",
-      active: true,
-      usedFullPaginationBeforeIsland: false,
-      overflowedPage: optimistic.overflowedPage,
-      optimisticMode: optimistic.mode,
-      ...summarizePaginatedForWysiwygPerf(optimistic.paginated),
-    })
-    finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-transaction", plan.perf!.startedAt, {
-      nodeId: plan.previousNodeId,
-      previousNodeId: plan.sourceNodeId,
-      sourceNodeId: plan.sourceNodeId,
-      pageIndex: optimistic.mergedFragment.pageIndex,
-      action: "total",
-      operation: "merge",
-      active: true,
-      overflowedPage: optimistic.overflowedPage,
-      optimisticMode: optimistic.mode,
-      ...summarizePaginatedForWysiwygPerf(optimistic.paginated),
-    })
-    return true
+    return executeParagraphMergeOperationPlan(plan, getStructuralExecutionContext())
   }, [
-    abortStructuralEditTransactionAndPanelDeferral,
-    beginStructuralPanelReleaseDeferral,
-    beginWysiwygDraftRuntimeSession,
-    clearWysiwygDraftPagination,
-    dispatchEditorAction,
     docRef,
-    editorPageNavigation.pageKeyByPageIndex,
+    editorPageNavigation,
     editorTextMeasurer,
-    endRichWysiwygDraftSession,
-    endWysiwygTextSession,
     inlineEditPageIndexRef,
-    optimisticLayoutRef,
     optimisticStructuralIslandOverride,
     paginatedRef,
-    setOptimisticStructuralIslandOverride,
-    setOptimisticStructuralRefocusPaint,
-    startInlineEditAfterOptimisticStructuralChange,
-    startPlainWysiwygTextSessionFromText,
-    structuralEditController,
-    suppressNextLayoutLoadingOverlayRef,
+    getStructuralExecutionContext,
+    wysiwygTextSessionStateRef,
   ])
 
   const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number, text?: string) => {
@@ -811,6 +443,7 @@ export function useEditorOptimisticStructuralRefocusController({
     suppressNextLayoutLoadingOverlayRef.current = true
     const pageKey = editorPageNavigation.pageKeyByPageIndex.get(optimistic.newFragment.pageIndex) ?? null
     if (!pageKey) return false
+    // Defer SET_PAGINATED dispatch: let the structuralEditController manage the transaction
     dispatch({ type: "SET_PAGINATED", paginated: optimistic.paginated })
     const sessionStarted = startInlineEditAfterOptimisticStructuralChange(
       nodeId,
@@ -837,20 +470,22 @@ export function useEditorOptimisticStructuralRefocusController({
     startWysiwygTextSession(nodeId, caretIndex, optimistic.newFragment.pageIndex)
     const newParagraph = getParagraphFromDoc(docRef.current, nodeId)
     if (newParagraph && isTextRunOnlyParagraph(newParagraph)) {
-      const suppressedPageBreakNodeId = optimistic.mode === "boundary-safe"
-        ? findImmediatePageBreakSiblingAfterNode(docRef.current, nodeId)
-        : null
-      setOptimisticStructuralIslandOverride({
-        nodeId,
-        paragraph: newParagraph,
-        fragment: optimistic.newFragment,
-        pageKey,
-        pages: optimistic.paginated.sections.flatMap((section) => section.pages),
-        mode: optimistic.mode,
-        suppressedPageBreakNodeId,
-      })
-    }
-    setOptimisticStructuralRefocusPaint({ nodeId, startedAt })
+        const suppressedPageBreakNodeId = optimistic.mode === "boundary-safe"
+          ? findImmediatePageBreakSiblingAfterNode(docRef.current, nodeId)
+          : null
+        editorStructuralIslandStore.setState({
+          optimisticStructuralIslandOverride: {
+            nodeId,
+            paragraph: newParagraph,
+            fragment: optimistic.newFragment,
+            pageKey,
+            pages: optimistic.paginated.sections.flatMap((section) => section.pages),
+            mode: optimistic.mode,
+            suppressedPageBreakNodeId,
+          }
+        })
+      }
+    editorStructuralIslandStore.setState({ optimisticStructuralRefocusPaint: { nodeId, startedAt } })
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "structural-refocus-used-full-pagination-before-island",
       startedAt,
@@ -876,8 +511,6 @@ export function useEditorOptimisticStructuralRefocusController({
     endWysiwygTextSession,
     optimisticLayoutRef,
     paginatedRef,
-    setOptimisticStructuralIslandOverride,
-    setOptimisticStructuralRefocusPaint,
     startInlineEditAfterOptimisticStructuralChange,
     startWysiwygTextSession,
     suppressNextLayoutLoadingOverlayRef,

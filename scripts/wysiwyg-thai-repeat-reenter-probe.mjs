@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process"
+import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { getSmokeBrowserConfig, launchSmokeBrowser, smokeBrowserLabel } from "./smoke-browser.mjs"
 
 const STORAGE_KEY = "flowdoc_document"
 const DEFAULT_PORT = 4022
-const TARGET_NODE_ID = "thai-repeat-target"
+const stressFilePath = process.env.FLOWDOC_STRESS_FILE ?? process.env.FLOWDOC_PROBE_FILE ?? null
+const TARGET_NODE_ID = process.env.PROBE_TARGET_NODE_ID ?? process.env.STRESS_TARGET_NODE_ID ?? "thai-repeat-target"
+const targetPageIndex = Number(process.env.STRESS_PAGE_INDEX ?? process.env.PROBE_TARGET_PAGE_INDEX ?? 14)
 const BASE_TEXT = "New paragraph"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
@@ -340,16 +343,17 @@ async function waitForStableSnapshot(page, label, options = {}) {
 
   while (Date.now() - startedAt < timeoutMs) {
     latest = await captureSnapshot(page, label)
-    const hasFragments = latest.fragments.length > 0 &&
-      latest.fragments.every((fragment) => fragment.lines.length > 0 || fragment.native.active)
     const isEditing = latest.activeIsland?.active === true || latest.fragments.some((fragment) => fragment.isEditing)
+    const hasFragments = latest.fragments.length > 0 &&
+      latest.fragments.every((fragment) => isEditing || fragment.isEditing || fragment.native.active ? true : fragment.lines.length > 0)
+    const hasIslandLines = !isEditing || latest.activeIsland?.lineCount > 0
     const editingMatches = expectEditing === null || isEditing === expectEditing
     const liveEchoSettled = !requireNoLiveEcho || latest.liveEchoCount === 0
     const key = snapshotKey(latest)
     stableCount = key === previousKey ? stableCount + 1 : 1
     previousKey = key
 
-    if (hasFragments && editingMatches && liveEchoSettled && stableCount >= stableSamples) {
+    if (hasFragments && hasIslandLines && editingMatches && liveEchoSettled && stableCount >= stableSamples) {
       return latest
     }
     await page.waitForTimeout(sampleDelayMs)
@@ -359,14 +363,31 @@ async function waitForStableSnapshot(page, label, options = {}) {
 }
 
 async function openStoredDocument(page) {
+  let docPayload
+  if (stressFilePath) {
+    const rawDocument = await readFile(path.resolve(repoRoot, stressFilePath), "utf8")
+    docPayload = JSON.parse(rawDocument)
+  } else {
+    docPayload = makeThaiRepeatDocument()
+  }
+
   await page.addInitScript((payload) => {
     localStorage.setItem(payload.storageKey, JSON.stringify(payload.doc))
-  }, { storageKey: STORAGE_KEY, doc: makeThaiRepeatDocument() })
+  }, { storageKey: STORAGE_KEY, doc: docPayload })
   await page.goto(baseEditorUrl, { waitUntil: "domcontentloaded" })
   const shell = page.locator('[data-testid="editor-shell"]')
-  await shell.waitFor({ state: "visible", timeout: 15000 })
+  await shell.waitFor({ state: "visible", timeout: 30000 })
   assert(await shell.getAttribute("data-wysiwyg-text-engine-enabled") === "true", "text engine flag is not enabled")
-  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: 15000 })
+
+  if (stressFilePath) {
+    const pageSelector = `[data-testid="editor-page-frame"][data-page-index="${targetPageIndex}"]`
+    await page.waitForSelector(pageSelector, { timeout: 30000 })
+    await page.evaluate((selector) => {
+      document.querySelector(selector)?.scrollIntoView({ block: "start" })
+    }, pageSelector)
+  }
+
+  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: 30000 })
 }
 
 async function focusTargetBridge(page) {

@@ -27,34 +27,35 @@ Verification anchor:
 
 ## Current Runtime Context
 
-Tasks 38-42 completed the PreviewSettle output-lane executor slice:
+Tasks for Editor Operation Architecture Phase 1 to 3A have been completed:
+- Phase 1: Established `OperationEnvelope`, `Adapter`, and `Dispatcher` for lossless operation wrapping.
+- Phase 2: Extracted `createParagraphSplitOperationPlan` and `createParagraphMergeOperationPlan` from the controller into pure `editorStructuralOperationPlans.ts` without behavior changes.
+- Phase 3A: Defined `StructuralExecutionContext` and extracted `executeParagraphSplitOperationPlan` as a side-effect handler into `editorStructuralHandlers.ts`, delegating from the controller with identical `flushSync` timing.
 
-- precomputed browser preview Shell executor
-- partial worker preview Shell executor
-- visual-only browser preview Shell executor
-- final paginated-output Shell executor
-- draft-pagination Shell executor
+The accepted constraint is zero behavior change during this refactoring phase:
+- No changes to `flushSync` boundaries.
+- No changes to dispatch order/timing or telemetry.
+- Operation Plans must remain synchronous and side-effect free.
+- Structural Handlers use explicit dependency injection via `StructuralExecutionContext`.
 
-The accepted constraint is narrow: these lanes still execute Shell-owned
-mutations through callbacks. Runtime guard decisions, preview document
-construction, pagination output production, validation, reducer semantics,
-renderer/export behavior, persistence, FlowTable behavior, typing, and
-IME/composition behavior were not intentionally moved.
-
-Primary architecture reference:
-
+Primary architecture references:
+- `docs/EDITOR_OPERATION_ARCHITECTURE.md`
 - `docs/FRONTEND_RUNTIME_ARCHITECTURE.md`
+
+## WYSIWYG Performance Refactor Polish
+
+- Completed Stages A-E of the WYSIWYG data-flow refactor to decouple the typing path from the global React tree.
+- Added `useDeferredValue` in `FlowdocDraftEditorIslandRoot` for heavy visual layout/fragment splitting to keep typing latency <16ms.
+- Refactored `onRichTextShortcut` to apply formatting commands locally without forcing global re-renders.
+- Implemented `flushAllWysiwygDrafts` on global boundaries (save, export, undo, split/merge).
+- Added `nodeTextVersion` to `PageFragment` and implemented strict `arePageFragmentsStructurallyEqual` comparison in `EditorCanvas.tsx` to eliminate the 700-slot re-render pattern during active typing.
+- Regression tests added to verify identical page slot fragments do not trigger React re-renders.
 
 ## Next Useful Work
 
-1. Add a PreviewSettle ownership/design closure gate before larger runtime
-   movement.
-2. Define the smallest runtime-owned state that can move without changing
-   document model, pagination semantics, reducer behavior, renderers/export,
-   persistence, FlowTable, validation, `flushSync`, typing, or
-   IME/composition behavior.
-3. Split remaining performance work by lane: startup/import, layout engine,
-   canvas interaction, typing lane, and panel/selection side effects.
+1. Phase 3B: Extract `executeParagraphMergeOperationPlan` handler preserving rollback/focus protections.
+2. Phase 3C: Slim down `useEditorOptimisticStructuralRefocusController.ts` by fully delegating side effects to handlers.
+3. Validate telemetry and rendering boundaries to ensure structural flush optimizations remain intact.
 
 ## Handoff Rules
 

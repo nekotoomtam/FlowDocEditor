@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, type Dispatch, type SetStateAction } from "react"
+import { useCallback, useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from "react"
 import { isTextRunOnlyParagraph } from "@/document"
 import type { PaginatedDocument, PageFragment } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
@@ -14,9 +14,6 @@ import {
 } from "../wysiwygPerformance"
 import {
   findWysiwygTextEngineFragment,
-  isParagraphInsideFlowStack,
-  isParagraphInsideRowStack,
-  isParagraphInsideTableCell,
 } from "../wysiwygTextEligibility"
 import type { StructuralEditRuntime } from "../runtime/structuralEditRuntime"
 import type { PanelDeferralRuntime } from "../runtime/panelDeferralRuntime"
@@ -58,6 +55,25 @@ export interface FlowdocDraftEditorIslandConfig {
   pages: PaginatedDocument["sections"][number]["pages"]
 }
 
+export type DraftIslandConfigNullReason =
+  | "mode-disabled"
+  | "missing-session-node"
+  | "inline-edit-node-mismatch"
+  | "optimistic-override-missing"
+  | "paragraph-missing"
+  | "paragraph-not-text-run-only"
+  | "fragment-missing"
+  | "continued-fragment"
+  | "non-paragraph-fragment"
+  | "list-marker-fragment"
+  | "page-key-missing"
+
+export type DraftIslandConfigResolveResult =
+  | { kind: "ready"; config: FlowdocDraftEditorIslandConfig }
+  | { kind: "null"; reason: DraftIslandConfigNullReason; nodeId?: string | null }
+
+import { useEditorStructuralIslandStore, editorStructuralIslandStore } from "./editorStructuralIslandStore"
+
 export function useEditorStructuralIslandController({
   captureStructuralShellRenderValue,
   deferredStructuralPanelReleaseRef,
@@ -67,17 +83,14 @@ export function useEditorStructuralIslandController({
   inlineEditNodeId,
   inlineEditPageIndex,
   isTemplateMode,
-  optimisticStructuralIslandOverride,
-  optimisticStructuralRefocusPaint,
   panelDeferralRuntime,
   pendingBoundarySafeInlineEditEndRef,
   previewDoc,
   pushStructuralShellRenderAttributionEvent,
   scheduleDeferredStructuralPanelRelease,
-  setOptimisticStructuralIslandOverride,
-  setOptimisticStructuralRefocusPaint,
   structuralEditRuntime,
   wysiwygTextSessionNodeId,
+  wysiwygTextSessionGeneration,
 }: {
   captureStructuralShellRenderValue: CaptureStructuralShellRenderValue
   deferredStructuralPanelReleaseRef: MutableCurrentRef<DeferredStructuralPanelRelease | null>
@@ -87,50 +100,132 @@ export function useEditorStructuralIslandController({
   inlineEditNodeId: string | null
   inlineEditPageIndex: number | null
   isTemplateMode: boolean
-  optimisticStructuralIslandOverride: OptimisticStructuralIslandOverride | null
-  optimisticStructuralRefocusPaint: OptimisticStructuralRefocusPaint | null
   panelDeferralRuntime: PanelDeferralRuntime
   pendingBoundarySafeInlineEditEndRef: MutableCurrentRef<DeferredInlineEditEnd | null>
   previewDoc: DocumentNode
   pushStructuralShellRenderAttributionEvent: PushStructuralShellRenderAttributionEvent
   scheduleDeferredStructuralPanelRelease: (generation: number, reason: string) => void
-  setOptimisticStructuralIslandOverride: Dispatch<SetStateAction<OptimisticStructuralIslandOverride | null>>
-  setOptimisticStructuralRefocusPaint: Dispatch<SetStateAction<OptimisticStructuralRefocusPaint | null>>
   structuralEditRuntime: StructuralEditRuntime
   wysiwygTextSessionNodeId: string | null
+  wysiwygTextSessionGeneration: number | null
 }) {
+  const { optimisticStructuralIslandOverride, optimisticStructuralRefocusPaint } = useEditorStructuralIslandStore()
+  const lastActiveDraftIslandConfigRef = useRef<FlowdocDraftEditorIslandConfig | null>(null)
+  const lastActiveSessionGenerationRef = useRef<number | null>(null)
+
   const flowdocDraftEditorIslandConfig = useMemo<FlowdocDraftEditorIslandConfig | null>(() => (
     captureStructuralShellRenderValue(
       "shell-derived:draft-island-config",
       () => {
-        if (!isTemplateMode || !WYSIWYG_TEXT_ENGINE_ENABLED) return null
-        const nodeId = wysiwygTextSessionNodeId
-        if (!nodeId || inlineEditNodeId !== nodeId) return null
-        if (optimisticStructuralIslandOverride?.nodeId === nodeId) {
-          return optimisticStructuralIslandOverride
+        const result = captureStructuralShellRenderValue(
+          "shell-derived:draft-island-config-resolve",
+          (): DraftIslandConfigResolveResult => {
+            if (!isTemplateMode || !WYSIWYG_TEXT_ENGINE_ENABLED) {
+              return { kind: "null", reason: "mode-disabled" }
+            }
+            const nodeId = wysiwygTextSessionNodeId
+            if (!nodeId) {
+              return { kind: "null", reason: "missing-session-node" }
+            }
+            if (inlineEditNodeId !== nodeId) {
+              return { kind: "null", reason: "inline-edit-node-mismatch", nodeId }
+            }
+            if (optimisticStructuralIslandOverride?.nodeId === nodeId) {
+              return { kind: "ready", config: optimisticStructuralIslandOverride }
+            }
+            const paragraph = getParagraphFromDoc(previewDoc, nodeId)
+            if (!paragraph) {
+              return { kind: "null", reason: "paragraph-missing", nodeId }
+            }
+            if (!isTextRunOnlyParagraph(paragraph)) {
+              return { kind: "null", reason: "paragraph-not-text-run-only", nodeId }
+            }
+            const fragmentLookupStartedAt = startWysiwygPerfSpan()
+            const activeFragment = findWysiwygTextEngineFragment(displayPaginated, nodeId, inlineEditPageIndex)
+            const fragment = activeFragment?.continuesFrom
+              ? findWysiwygTextEngineFragment(displayPaginated, nodeId, null)
+              : activeFragment
+            pushStructuralShellRenderAttributionEvent("shell-derived:draft-island-active-fragment", fragmentLookupStartedAt, {
+              renderReason: "findWysiwygTextEngineFragment",
+              nodeId,
+              pageIndex: fragment?.pageIndex ?? activeFragment?.pageIndex ?? null,
+              currentFragmentCount: fragment ? 1 : 0,
+            })
+            if (!fragment) {
+              return { kind: "null", reason: "fragment-missing", nodeId }
+            }
+            if (fragment.continuesFrom) {
+              return { kind: "null", reason: "continued-fragment", nodeId }
+            }
+            if (fragment.nodeType !== "paragraph") {
+              return { kind: "null", reason: "non-paragraph-fragment", nodeId }
+            }
+            if (fragment.listMarker) {
+              return { kind: "null", reason: "list-marker-fragment", nodeId }
+            }
+            const pageKey = editorPageNavigation.pageKeyByPageIndex.get(fragment.pageIndex) ?? null
+            if (!pageKey) {
+              return { kind: "null", reason: "page-key-missing", nodeId }
+            }
+            const pages = displayPaginated.sections.flatMap((section) => section.pages)
+            return {
+              kind: "ready",
+              config: { nodeId, paragraph, fragment, pageKey, pages }
+            }
+          }
+        )
+
+        if (result.kind === "ready") {
+          lastActiveDraftIslandConfigRef.current = result.config
+          lastActiveSessionGenerationRef.current = wysiwygTextSessionGeneration
+          return result.config
         }
-        if (isParagraphInsideTableCell(previewDoc, nodeId)) return null
-        if (isParagraphInsideFlowStack(previewDoc, nodeId)) return null
-        if (isParagraphInsideRowStack(previewDoc, nodeId)) return null
-        const paragraph = getParagraphFromDoc(previewDoc, nodeId)
-        if (!paragraph || !isTextRunOnlyParagraph(paragraph)) return null
-        const fragmentLookupStartedAt = startWysiwygPerfSpan()
-        const activeFragment = findWysiwygTextEngineFragment(displayPaginated, nodeId, inlineEditPageIndex)
-        const fragment = activeFragment?.continuesFrom
-          ? findWysiwygTextEngineFragment(displayPaginated, nodeId, null)
-          : activeFragment
-        pushStructuralShellRenderAttributionEvent("shell-derived:draft-island-active-fragment", fragmentLookupStartedAt, {
-          renderReason: "findWysiwygTextEngineFragment",
-          nodeId,
-          pageIndex: fragment?.pageIndex ?? activeFragment?.pageIndex ?? null,
-          currentFragmentCount: fragment ? 1 : 0,
+
+        const previous = lastActiveDraftIslandConfigRef.current
+        const isSameActiveNode =
+          previous &&
+          previous.nodeId === wysiwygTextSessionNodeId &&
+          inlineEditNodeId === previous.nodeId
+
+        const isSameSession =
+          isSameActiveNode &&
+          lastActiveSessionGenerationRef.current !== null &&
+          lastActiveSessionGenerationRef.current === wysiwygTextSessionGeneration
+
+        const isTransientReason =
+          result.reason === "fragment-missing" ||
+          result.reason === "continued-fragment" ||
+          result.reason === "page-key-missing"
+
+        if (isSameSession && isTransientReason) {
+          recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+            kind: "flowdoc-island-config",
+            startedAt: startWysiwygPerfSpan(),
+            durationMs: 0,
+            nodeId: wysiwygTextSessionNodeId,
+            action: "draft-island-config-sticky",
+            source: result.reason,
+            active: true,
+          })
+          return previous
+        }
+
+        if (!isSameSession) {
+          lastActiveDraftIslandConfigRef.current = null
+          lastActiveSessionGenerationRef.current = null
+        }
+
+        recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+          kind: "flowdoc-island-config",
+          startedAt: startWysiwygPerfSpan(),
+          durationMs: 0,
+          nodeId: wysiwygTextSessionNodeId,
+          action: "draft-island-config-null",
+          source: result.reason,
+          active: false,
         })
-        if (!fragment || fragment.continuesFrom || fragment.nodeType !== "paragraph") return null
-        if (fragment.listMarker) return null
-        const pageKey = editorPageNavigation.pageKeyByPageIndex.get(fragment.pageIndex) ?? null
-        if (!pageKey) return null
-        const pages = displayPaginated.sections.flatMap((section) => section.pages)
-        return { nodeId, paragraph, fragment, pageKey, pages }
+
+        return null
       },
       (config) => ({
         renderReason: "flowdocDraftEditorIslandConfig",
@@ -152,6 +247,7 @@ export function useEditorStructuralIslandController({
     previewDoc,
     pushStructuralShellRenderAttributionEvent,
     wysiwygTextSessionNodeId,
+    wysiwygTextSessionGeneration,
   ])
 
   const useOutOfCanvasWysiwygIsland = flowdocDraftEditorIslandConfig !== null
@@ -212,9 +308,10 @@ export function useEditorStructuralIslandController({
   ])
 
   const handleOptimisticStructuralRefocusPainted = useCallback((nodeId: string) => {
-    setOptimisticStructuralRefocusPaint((current) => (
-      current?.nodeId === nodeId ? null : current
-    ))
+    const current = editorStructuralIslandStore.getState().optimisticStructuralRefocusPaint
+    if (current?.nodeId === nodeId) {
+      editorStructuralIslandStore.setState({ optimisticStructuralRefocusPaint: null })
+    }
     const release = deferredStructuralPanelReleaseRef.current
     if (release?.pending && release.nodeId === nodeId) {
       const identity = {
@@ -230,7 +327,6 @@ export function useEditorStructuralIslandController({
     deferredStructuralPanelReleaseRef,
     panelDeferralRuntime,
     scheduleDeferredStructuralPanelRelease,
-    setOptimisticStructuralRefocusPaint,
     structuralEditRuntime,
   ])
 
@@ -277,17 +373,15 @@ export function useEditorStructuralIslandController({
       inlineEditPageIndex ?? optimisticStructuralIslandOverride.fragment.pageIndex,
     )
     if (!settledFragment) return
-    setOptimisticStructuralIslandOverride((current) => (
-      current?.nodeId === optimisticStructuralIslandOverride.nodeId
-        ? null
-        : current
-    ))
+    const current = editorStructuralIslandStore.getState().optimisticStructuralIslandOverride
+    if (current?.nodeId === optimisticStructuralIslandOverride.nodeId) {
+      editorStructuralIslandStore.setState({ optimisticStructuralIslandOverride: null })
+    }
   }, [
     displayPaginated,
     inlineEditPageIndex,
     optimisticStructuralIslandOverride,
     previewDoc,
-    setOptimisticStructuralIslandOverride,
   ])
 
   return {

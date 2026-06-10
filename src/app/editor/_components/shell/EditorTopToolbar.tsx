@@ -25,7 +25,7 @@ interface EditorTopToolbarProps extends Omit<EditorToolbarProps, "children"> {
   richDraftParagraph: ParagraphNode | null
   richDraftPendingStyle: TextRunStyle | null
   richTextToolbarSelection: RichTextToolbarSelectionSnapshot | null
-  richTextToolbarLiveSelection: RichTextToolbarSelectionSnapshot | null
+  getRichTextToolbarLiveSelection: () => RichTextToolbarSelectionSnapshot | null
   onToggleListPreset: (nodeId: string, styleId: FlowDocListStylePresetId, instanceId: string, level: number) => void
   onChangeListItemLevel: (nodeId: string, direction: ListLevelChangeDirection) => void
   onApplyRichTextDraftCommand: (nodeId: string, command: RichTextStyleCommand) => boolean
@@ -46,7 +46,7 @@ export function EditorTopToolbar({
   richDraftParagraph,
   richDraftPendingStyle,
   richTextToolbarSelection,
-  richTextToolbarLiveSelection,
+  getRichTextToolbarLiveSelection,
   onToggleListPreset,
   onChangeListItemLevel,
   onApplyRichTextDraftCommand,
@@ -82,7 +82,7 @@ export function EditorTopToolbar({
                     ? richDraftPendingStyle
                     : null}
                   textSelection={richTextToolbarSelection}
-                  commandTextSelection={richTextToolbarLiveSelection}
+                  getCommandTextSelection={getRichTextToolbarLiveSelection}
                   editable={isTemplateMode}
                   onUpdateParagraphTextStyle={(nodeId, changes) => {
                     if (onApplyRichTextDraftCommand(nodeId, { type: "setStyle", patch: changes })) return

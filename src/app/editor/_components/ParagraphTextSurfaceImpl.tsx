@@ -9,7 +9,7 @@ import {
 } from "./wysiwygCaretMapping"
 import { classifyInlineEditKey, getInlineEditInputSnapshot } from "./wysiwygTextInteraction"
 import type { InlineEditSelectionSnapshot, ListLevelChangeDirection } from "./wysiwygTextInteraction"
-import type { WysiwygTextInputKey, WysiwygTextSelection } from "./useWysiwygTextSession"
+import type { WysiwygLocalDraftSnapshot, WysiwygTextInputKey, WysiwygTextSelection } from "./useWysiwygTextSession"
 import {
   classifyWysiwygTextReflow,
   shouldPrepareWysiwygTableCellDraftVisualPreview,
@@ -64,8 +64,9 @@ import {
   shouldUseNativeInlineEditEnter,
   shouldUseNativeTableCellBoundaryBackspace,
   shouldUseWysiwygTextEngineLayer,
-  type ContinuationEditState,
 } from "./inlineEditSurfaceState"
+import type { ContinuationEditState } from "./inlineEditSurfaceState"
+import { useWysiwygDraftStoreForNode } from "./shell/wysiwygDraftStore"
 import { WysiwygTextLayer } from "./WysiwygTextLayer"
 
 export type { WysiwygCaretVisualMode } from "./WysiwygTextRenderPrimitives"
@@ -104,7 +105,7 @@ interface Props {
   onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onBackspaceListItemAtStart?: (nodeId: string, text?: string, caretIndex?: number | null) => void
   onWysiwygTextDraftChange?: (nodeId: string, text: string, caretIndex: number | null, selection?: WysiwygTextSelection | null) => void
-  onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
+  onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey, overrideSnapshot?: WysiwygLocalDraftSnapshot) => boolean
   onWysiwygTextReflowDecision?: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
 }
 
@@ -188,6 +189,12 @@ function ParagraphTextSurfaceImpl({
   onWysiwygRichTextShortcut,
   onWysiwygTextReflowDecision,
 }: Props) {
+  const draftStore = useWysiwygDraftStoreForNode(fragment.nodeId)
+  const isDraftIslandActive = draftStore != null
+  const resolvedWysiwygTextDraftText = isDraftIslandActive ? draftStore.text : wysiwygTextDraftText
+  const resolvedWysiwygTextCaretOffset = isDraftIslandActive ? draftStore.caretIndex : wysiwygTextCaretOffset
+  const resolvedWysiwygTextSelection = isDraftIslandActive ? draftStore.selection : wysiwygTextSelection
+
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const pointerSelectionAnchorRef = useRef<number | null>(null)
   const sliceContextRef = useRef<(ContinuationEditState & { editSliceKey: string }) | null>(null)
@@ -249,7 +256,7 @@ function ParagraphTextSurfaceImpl({
     shouldUsePlainParagraphNativeGeometryHandoff &&
     paragraphNode != null &&
     textMeasurer != null &&
-    isCollapsedWysiwygTextSelection(wysiwygTextSelection) &&
+    isCollapsedWysiwygTextSelection(resolvedWysiwygTextSelection) &&
     !hasActivelyTyped
   const isCurrentEditSlice = useCallback((el: HTMLTextAreaElement) => (
     el.dataset.inlineEditSliceKey === editSliceKey
@@ -354,7 +361,7 @@ function ParagraphTextSurfaceImpl({
   // Measured draft lines/live echo are legacy/deferred visual paths and must
   // not be built on the keypress render path.
   const shouldBuildMeasuredTextEngineDraftVisual = false
-  const textEngineDraftText = wysiwygTextDraftText ?? fullText
+  const textEngineDraftText = resolvedWysiwygTextDraftText ?? fullText
   const textEngineDraftChanged = hasWysiwygTextDraftChange(fullText, textEngineDraftText)
 
   useEffect(() => {
@@ -363,7 +370,7 @@ function ParagraphTextSurfaceImpl({
     }
   }, [isEditing, textEngineDraftChanged])
 
-  const textEngineCaretOffset = wysiwygTextCaretOffset ?? initialCaretIndex
+  const textEngineCaretOffset = resolvedWysiwygTextCaretOffset ?? initialCaretIndex
   const textEngineDraftLayout = useMemo(() => {
     if (!shouldBuildMeasuredTextEngineDraftVisual || !textEngineDraftChanged || !supportsLocalDraftLayout || !useWysiwygTextEngineLayer || !paragraphNode || textEngineDraftText == null || !textMeasurer) return null
     return buildCachedWysiwygDraftParagraphLayout(textEngineDraftLayoutCacheRef.current, fragment, paragraphNode, textEngineDraftText, textMeasurer, {
@@ -408,31 +415,31 @@ function ParagraphTextSurfaceImpl({
     ? null
     : null
   const textEngineSelectionOverlayRects = useMemo(() => {
-    if (!useWysiwygTextEngineLayer || !shouldBuildMeasuredTextEngineDraftVisual || !wysiwygTextSelection) return []
-    if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
+    if (!useWysiwygTextEngineLayer || !shouldBuildMeasuredTextEngineDraftVisual || !resolvedWysiwygTextSelection) return []
+    if (resolvedWysiwygTextSelection.anchorOffset === resolvedWysiwygTextSelection.focusOffset) return []
     const visualFragment = textEngineVisualDraftLines ? { ...displayFragment, lines: textEngineVisualDraftLines } : displayFragment
     return resolveSelectionOverlayRectsInFragmentWithPerf({
       fragment: visualFragment,
-      anchorOffset: wysiwygTextSelection.anchorOffset,
-      focusOffset: wysiwygTextSelection.focusOffset,
+      anchorOffset: resolvedWysiwygTextSelection.anchorOffset,
+      focusOffset: resolvedWysiwygTextSelection.focusOffset,
       textMeasurer,
       tracePerf: traceHotPathPerf,
       source: "active",
     })
-  }, [displayFragment, shouldBuildMeasuredTextEngineDraftVisual, textEngineVisualDraftLines, textMeasurer, traceHotPathPerf, useWysiwygTextEngineLayer, wysiwygTextSelection])
+  }, [displayFragment, shouldBuildMeasuredTextEngineDraftVisual, textEngineVisualDraftLines, textMeasurer, traceHotPathPerf, useWysiwygTextEngineLayer, resolvedWysiwygTextSelection])
   const passiveTextEngineSelectionOverlayRects = useMemo(() => {
-    if (isEditing || !wysiwygTextEngineEnabled || !wysiwygTextSelection) return []
-    if (wysiwygTextSelection.anchorOffset === wysiwygTextSelection.focusOffset) return []
+    if (isEditing || !wysiwygTextEngineEnabled || !resolvedWysiwygTextSelection) return []
+    if (resolvedWysiwygTextSelection.anchorOffset === resolvedWysiwygTextSelection.focusOffset) return []
     const visualFragment = wysiwygTextVisualDraftLines ? { ...displayFragment, lines: wysiwygTextVisualDraftLines } : displayFragment
     return resolveSelectionOverlayRectsInFragmentWithPerf({
       fragment: visualFragment,
-      anchorOffset: wysiwygTextSelection.anchorOffset,
-      focusOffset: wysiwygTextSelection.focusOffset,
+      anchorOffset: resolvedWysiwygTextSelection.anchorOffset,
+      focusOffset: resolvedWysiwygTextSelection.focusOffset,
       textMeasurer,
       tracePerf: traceHotPathPerf,
       source: "passive",
     })
-  }, [displayFragment, isEditing, textMeasurer, traceHotPathPerf, wysiwygTextEngineEnabled, wysiwygTextSelection, wysiwygTextVisualDraftLines])
+  }, [displayFragment, isEditing, textMeasurer, traceHotPathPerf, wysiwygTextEngineEnabled, resolvedWysiwygTextSelection, wysiwygTextVisualDraftLines])
   const passiveTextEngineSelectionFragment = wysiwygTextVisualDraftLines
     ? { ...displayFragment, lines: wysiwygTextVisualDraftLines }
     : displayFragment
@@ -532,7 +539,7 @@ function ParagraphTextSurfaceImpl({
           scale={scale}
           textMeasurer={textMeasurer}
           caretIndex={textEngineCaretOffset}
-          selection={wysiwygTextSelection}
+          selection={resolvedWysiwygTextSelection}
           draftText={textEngineDraftText}
           hasDraftChange={shouldBuildMeasuredTextEngineDraftVisual && textEngineDraftChanged}
           isListItem={isListItem}

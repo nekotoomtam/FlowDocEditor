@@ -30,6 +30,7 @@ import {
   getParagraphFromDoc,
   getParagraphTextFromDoc,
 } from "./editorDocumentLookup"
+import { wysiwygDraftStore } from "./wysiwygDraftStore"
 
 export function useEditorWysiwygTextSessionController({
   docRef,
@@ -109,11 +110,13 @@ export function useEditorWysiwygTextSessionController({
       const started = startRichWysiwygDraftSession(nodeId, caretOffset, pageIndex)
       if (started) {
         endPlainWysiwygTextSession()
+        const initialText = getParagraphTextFromDoc(docRef.current, nodeId) ?? ""
+        wysiwygDraftStore.setState({ nodeId, text: initialText, caretIndex: caretOffset, selection: null })
         beginWysiwygDraftRuntimeSession({
           nodeId,
           mode: "rich-text",
           source: "flowdoc-draft-island",
-          initialTextLength: getParagraphTextFromDoc(docRef.current, nodeId)?.length,
+          initialTextLength: initialText.length,
           caretIndex: caretOffset,
         })
       }
@@ -122,11 +125,13 @@ export function useEditorWysiwygTextSessionController({
     const started = startPlainWysiwygTextSession(nodeId, caretOffset, pageIndex)
     if (started) {
       endRichWysiwygDraftSession()
+      const initialText = getParagraphTextFromDoc(docRef.current, nodeId) ?? ""
+      wysiwygDraftStore.setState({ nodeId, text: initialText, caretIndex: caretOffset, selection: null })
       beginWysiwygDraftRuntimeSession({
         nodeId,
         mode: "plain-text",
         source: "flowdoc-draft-island",
-        initialTextLength: getParagraphTextFromDoc(docRef.current, nodeId)?.length,
+        initialTextLength: initialText.length,
         caretIndex: caretOffset,
       })
     }
@@ -141,6 +146,7 @@ export function useEditorWysiwygTextSessionController({
   ])
 
   const changeWysiwygTextDraft = useCallback((change: Parameters<typeof changePlainWysiwygTextDraft>[0]) => {
+    wysiwygDraftStore.setState({ text: change.text, caretIndex: change.caretOffset ?? null, selection: change.selection ?? null })
     if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionState.nodeId) {
       changeRichWysiwygDraft(change)
       return
@@ -153,6 +159,7 @@ export function useEditorWysiwygTextSessionController({
   ])
 
   const moveWysiwygTextCaret = useCallback((caretOffset: number | null, selection?: Parameters<typeof movePlainWysiwygTextCaret>[1]) => {
+    wysiwygDraftStore.setState({ caretIndex: caretOffset, selection: selection ?? null })
     if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionState.nodeId) {
       moveRichWysiwygDraftCaret(caretOffset, selection)
       return
@@ -165,6 +172,7 @@ export function useEditorWysiwygTextSessionController({
   ])
 
   const endWysiwygTextSession = useCallback(() => {
+    wysiwygDraftStore.setState({ nodeId: null, text: "", caretIndex: null, selection: null })
     cancelCurrentWysiwygDraftRuntimeSession("end-wysiwyg-text-session")
     wysiwygTextSessionStateRef.current = INACTIVE_WYSIWYG_TEXT_SESSION
     richWysiwygDraftSessionStateRef.current = INACTIVE_WYSIWYG_RICH_TEXT_DRAFT_SESSION

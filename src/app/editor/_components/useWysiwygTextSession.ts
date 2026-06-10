@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { useCallback, useState, useRef } from "react"
 import { nextTextGraphemeBoundary, previousTextGraphemeBoundary } from "@/layout"
 
 export interface WysiwygTextSelection {
@@ -42,6 +42,14 @@ export interface WysiwygTextInputKey {
   ctrlKey?: boolean
   metaKey?: boolean
   isComposing?: boolean
+}
+
+export interface WysiwygLocalDraftSnapshot {
+  nodeId: string
+  draftText: string
+  selection: WysiwygTextSelection
+  caretIndex: number | null
+  draftVersion: number
 }
 
 export interface UseWysiwygTextSessionOptions {
@@ -333,45 +341,55 @@ export function useWysiwygTextSession({
   enabled,
   getParagraphText,
 }: UseWysiwygTextSessionOptions) {
-  const [state, setState] = useState<WysiwygTextSessionState>(INACTIVE_WYSIWYG_TEXT_SESSION)
+  const [nodeId, setNodeId] = useState<string | null>(null)
+  const stateRef = useRef<WysiwygTextSessionState>(INACTIVE_WYSIWYG_TEXT_SESSION)
+
+  const setNodeIdIfChanged = useCallback((nextState: WysiwygTextSessionState) => {
+    stateRef.current = nextState
+    setNodeId((prev) => prev !== nextState.nodeId ? nextState.nodeId : prev)
+  }, [])
 
   const start = useCallback((nodeId: string, caretOffset: number | null = null, pageIndex: number | null = null) => {
     if (!enabled) return false
     const text = getParagraphText(nodeId)
     if (text == null) return false
-    setState((current) => startWysiwygTextSessionState(current, { nodeId, text, caretOffset, pageIndex }))
+    const nextState = startWysiwygTextSessionState(stateRef.current, { nodeId, text, caretOffset, pageIndex })
+    setNodeIdIfChanged(nextState)
     return true
-  }, [enabled, getParagraphText])
+  }, [enabled, getParagraphText, setNodeIdIfChanged])
 
   const startFromText = useCallback((startInput: WysiwygTextSessionStart) => {
     if (!enabled) return false
-    setState((current) => startWysiwygTextSessionState(current, startInput))
+    const nextState = startWysiwygTextSessionState(stateRef.current, startInput)
+    setNodeIdIfChanged(nextState)
     return true
-  }, [enabled])
+  }, [enabled, setNodeIdIfChanged])
 
   const changeDraft = useCallback((change: WysiwygTextSessionDraftChange) => {
     if (!enabled) return
-    setState((current) => changeWysiwygTextSessionDraft(current, change))
+    stateRef.current = changeWysiwygTextSessionDraft(stateRef.current, change)
   }, [enabled])
 
   const moveCaret = useCallback((caretOffset: number | null, selection?: WysiwygTextSelection | null) => {
     if (!enabled) return
-    setState((current) => moveWysiwygTextSessionCaret(current, caretOffset, selection))
+    stateRef.current = moveWysiwygTextSessionCaret(stateRef.current, caretOffset, selection)
   }, [enabled])
 
   const markLayoutFresh = useCallback((layoutVersion?: number) => {
     if (!enabled) return
-    setState((current) => markWysiwygTextLayoutFresh(current, layoutVersion))
+    stateRef.current = markWysiwygTextLayoutFresh(stateRef.current, layoutVersion)
   }, [enabled])
 
   const end = useCallback(() => {
-    setState(endWysiwygTextSessionState())
-  }, [])
+    const nextState = endWysiwygTextSessionState()
+    setNodeIdIfChanged(nextState)
+  }, [setNodeIdIfChanged])
 
   return {
-    state,
-    isActive: state.nodeId !== null,
-    isLayoutFresh: isWysiwygTextSessionLayoutFresh(state),
+    state: stateRef.current,
+    stateRef,
+    isActive: nodeId !== null,
+    isLayoutFresh: isWysiwygTextSessionLayoutFresh(stateRef.current),
     start,
     startFromText,
     changeDraft,

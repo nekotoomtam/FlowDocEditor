@@ -57,8 +57,13 @@ function toThumbnailFragment(fragment: PageFragment, zone: EditorPageThumbnailZo
   }
 }
 
+const pageThumbnailFragmentsCache = new WeakMap<PaginatedPage, EditorPageThumbnailFragment[]>()
+
 function collectPageThumbnailFragments(page: PaginatedPage): EditorPageThumbnailFragment[] {
-  return [
+  let cached = pageThumbnailFragmentsCache.get(page)
+  if (cached) return cached
+
+  cached = [
     ...page.headerFragments.map((fragment) => toThumbnailFragment(fragment, "header")),
     ...page.fragments.map((fragment) => toThumbnailFragment(fragment, "body")),
     ...page.footerFragments.map((fragment) => toThumbnailFragment(fragment, "footer")),
@@ -66,6 +71,9 @@ function collectPageThumbnailFragments(page: PaginatedPage): EditorPageThumbnail
     .filter((fragment): fragment is EditorPageThumbnailFragment => fragment !== null)
     .sort((a, b) => a.y - b.y || a.x - b.x || b.width * b.height - a.width * a.height)
     .slice(0, MAX_PAGE_THUMBNAIL_FRAGMENTS)
+    
+  pageThumbnailFragmentsCache.set(page, cached)
+  return cached
 }
 
 export function buildEditorPageNavigationIndex(paginated: PaginatedDocument): EditorPageNavigationIndex {

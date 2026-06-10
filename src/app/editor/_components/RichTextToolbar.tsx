@@ -16,7 +16,7 @@ interface RichTextToolbarProps {
   doc: DocumentNode
   selectedNodeId: string | null
   textSelection?: RichTextToolbarSelection | null
-  commandTextSelection?: RichTextToolbarSelection | null
+  getCommandTextSelection?: () => RichTextToolbarSelection | null
   draftParagraph?: ParagraphNode | null
   pendingStyle?: TextRunStyle | null
   editable: boolean
@@ -42,7 +42,7 @@ export function RichTextToolbar({
   doc,
   selectedNodeId,
   textSelection = null,
-  commandTextSelection,
+  getCommandTextSelection,
   draftParagraph = null,
   pendingStyle = null,
   editable,
@@ -55,9 +55,6 @@ export function RichTextToolbar({
   const canStyleText = editable && paragraph !== null && text !== null && isTextRunOnlyParagraph(paragraph)
   const activeRange = paragraph && text !== null
     ? resolveRichTextToolbarRange(paragraph.id, text.length, textSelection)
-    : null
-  const commandRange = paragraph && text !== null
-    ? resolveRichTextToolbarCommandRange(paragraph.id, text.length, textSelection, commandTextSelection)
     : null
   const activeScope = resolveRichTextToolbarScope({
     canStyleText,
@@ -102,6 +99,10 @@ export function RichTextToolbar({
   const hasItalicVariant = Boolean(currentFont.variants.italic || currentFont.variants.boldItalic)
 
   function updateTextStyle(changes: ParagraphTextStyleChanges) {
+    const liveSelection = getCommandTextSelection ? getCommandTextSelection() : null
+    const commandRange = paragraph && text !== null
+      ? resolveRichTextToolbarCommandRange(paragraph.id, text.length, textSelection, liveSelection)
+      : null
     const targetRange = commandRange ?? activeRange
     if (!paragraph || !canStyleText || !targetRange) return
     if (targetRange.mode === "range" && onUpdateTextRunStyleRange) {

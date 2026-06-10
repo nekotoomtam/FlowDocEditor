@@ -28,36 +28,37 @@ type RecordStructuralPanelReleaseEvent = (
   metadata?: StructuralPanelReleaseEventMetadata,
 ) => void
 
+import { editorStructuralIslandStore } from "./editorStructuralIslandStore"
+
 export function useEditorLeftRailDocuments({
   doc,
   previewDoc,
   isTemplateMode,
-  optimisticStructuralRefocusPaint,
-  optimisticStructuralIslandOverride,
   panelDeferralRuntime,
   structuralEditRuntime,
   structuralPanelReleaseApplyingRef,
   recordStructuralPanelReleaseEvent,
+  isInlineEditing = false,
 }: {
   doc: DocumentNode
   previewDoc: DocumentNode
   isTemplateMode: boolean
-  optimisticStructuralRefocusPaint: OptimisticStructuralRefocusPaint | null
-  optimisticStructuralIslandOverride: OptimisticStructuralIslandOverride | null
   panelDeferralRuntime: PanelDeferralRuntime
   structuralEditRuntime: StructuralEditRuntime
   structuralPanelReleaseApplyingRef: MutableRefObject<StructuralPanelReleaseApplying | null>
   recordStructuralPanelReleaseEvent: RecordStructuralPanelReleaseEvent
+  isInlineEditing?: boolean
 }) {
   const currentLeftRailOutlineDoc = isTemplateMode ? doc : previewDoc
   const currentLeftRailStyleDoc = doc
   const panelDeferralSnapshotActive = panelDeferralRuntime.shouldUsePanelSnapshot()
   const panelDeferralNonInteractive = panelDeferralRuntime.isPanelNonInteractive()
+  const { optimisticStructuralRefocusPaint, optimisticStructuralIslandOverride } = editorStructuralIslandStore.getState()
   const deferLeftRailForStructuralPaint = optimisticStructuralRefocusPaint !== null ||
     optimisticStructuralIslandOverride !== null ||
     panelDeferralSnapshotActive
   const deferNonCriticalPanelsForStructuralPaint = deferLeftRailForStructuralPaint || panelDeferralNonInteractive
-  const deferLeftRailDocForStructuralPaint = deferLeftRailForStructuralPaint
+  const deferLeftRailDocForStructuralPaint = deferLeftRailForStructuralPaint || isInlineEditing
   const leftRailDocumentSnapshotRef = useRef<{ outlineDoc: DocumentNode; styleDoc: DocumentNode } | null>(null)
   const previousDeferLeftRailForStructuralPaintRef = useRef(deferLeftRailForStructuralPaint)
 

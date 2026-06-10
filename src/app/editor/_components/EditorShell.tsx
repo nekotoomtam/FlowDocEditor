@@ -6,7 +6,6 @@ import type { FlowDocListStylePresetId } from "@/document"
 import type { DocumentNode } from "@/schema"
 import type { PaginatedDocument } from "@/pagination"
 import { EditorCanvas } from "./EditorCanvas"
-import { FlowdocDraftEditorIslandRoot } from "./FlowdocDraftEditorIslandRoot"
 import type { DriftReport } from "./comparePagination"
 import type { OptimisticLayoutSnapshot } from "./layoutReconciliation"
 import {
@@ -42,6 +41,7 @@ import { useInlineEditSession } from "./useInlineEditSession"
 import {
   areWysiwygTextSelectionsEqual,
   type WysiwygTextInputKey,
+  type WysiwygLocalDraftSnapshot,
 } from "./useWysiwygTextSession"
 import {
   applyRichTextDraftSessionStyleCommand,
@@ -91,6 +91,8 @@ import {
   EditorCanvasPerfProfiler,
 } from "./shell/EditorShellPerfChrome"
 import { EditorShellOverlayChrome } from "./shell/EditorShellOverlayChrome"
+import { editorStructuralIslandStore } from "./shell/editorStructuralIslandStore"
+import { EditorCanvasStructuralIslandWrapper } from "./EditorCanvasStructuralIslandWrapper"
 import { EditorRightRail } from "./shell/EditorRightRail"
 import { EditorLeftRailPane } from "./shell/EditorLeftRailPane"
 import {
@@ -165,6 +167,8 @@ import {
 
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
+const editorShellNoop = () => {}
+
 export default function EditorShell() {
   const initialTestScenario = useMemo(() => resolveEditorTestScenarioFromLocation(), [])
   const {
@@ -218,8 +222,6 @@ export default function EditorShell() {
     setPackageFieldRegistry,
   } = useEditorPackageDataState(Boolean(initialTestScenario))
   const isTemplateMode = mode === "template"
-  const [optimisticStructuralRefocusPaint, setOptimisticStructuralRefocusPaint] = useState<OptimisticStructuralRefocusPaint | null>(null)
-  const [optimisticStructuralIslandOverride, setOptimisticStructuralIslandOverride] = useState<OptimisticStructuralIslandOverride | null>(null)
   const {
     structuralEditRuntime,
     structuralEditController,
@@ -243,66 +245,28 @@ export default function EditorShell() {
     previewSettleRuntime,
     abortWysiwygDraftRuntimeSessionForStructuralTransaction,
   })
-  const structuralShellRenderAttributionActive = isWysiwygPerfTraceRuntimeEnabled(WYSIWYG_PERF_TRACE_ENABLED) && Boolean(
-    optimisticStructuralIslandOverride || optimisticStructuralRefocusPaint,
-  )
+
+  const structuralShellRenderAttributionActive = false
   const pushStructuralShellRenderAttributionEvent = useCallback((
     action: string,
     startedAt: number,
     metadata: Partial<Omit<WysiwygPerfEvent, "kind" | "startedAt" | "durationMs" | "action">> = {},
-  ): void => {
-    if (!structuralShellRenderAttributionActive) return
-    const activeIsland = optimisticStructuralIslandOverride
-    const endedAt = startWysiwygPerfSpan()
-    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-      kind: "flowdoc-structural-render-attribution",
-      startedAt,
-      durationMs: Math.max(0, endedAt - startedAt),
-      nodeId: activeIsland?.nodeId ?? optimisticStructuralRefocusPaint?.nodeId,
-      pageIndex: activeIsland?.fragment.pageIndex ?? null,
-      componentName: "EditorShell",
-      source: "EditorShell",
-      action,
-      optimisticMode: activeIsland?.mode,
-      active: true,
-      derivedValueCount: 1,
-      ...metadata,
-    })
-  }, [optimisticStructuralIslandOverride, optimisticStructuralRefocusPaint, structuralShellRenderAttributionActive])
+  ): void => {}, [])
   const captureStructuralShellRenderValue = useCallback(<T,>(
     action: string,
     compute: () => T,
     metadata: (value: T) => Partial<Omit<WysiwygPerfEvent, "kind" | "startedAt" | "durationMs" | "action">> = () => ({}),
   ): T => {
-    if (!structuralShellRenderAttributionActive) return compute()
-    const startedAt = startWysiwygPerfSpan()
-    const value = compute()
-    pushStructuralShellRenderAttributionEvent(action, startedAt, metadata(value))
-    return value
-  }, [pushStructuralShellRenderAttributionEvent, structuralShellRenderAttributionActive])
-  useLayoutEffect(() => {
-    if (!structuralShellRenderAttributionActive) return
-    const startedAt = startWysiwygPerfSpan()
-    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
-      kind: "flowdoc-structural-render-attribution",
-      startedAt,
-      durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
-      nodeId: optimisticStructuralIslandOverride?.nodeId ?? optimisticStructuralRefocusPaint?.nodeId,
-      pageIndex: optimisticStructuralIslandOverride?.fragment.pageIndex ?? null,
-      componentName: "EditorShell",
-      source: "EditorShell",
-      action: "shell-layout-effect",
-      optimisticMode: optimisticStructuralIslandOverride?.mode,
-      active: true,
-    })
-  })
+    return compute()
+  }, [])
+  useLayoutEffect(() => {})
   const {
     outlineSelectionState,
   } = useEditorOutlineSelectionState({
     doc: state.doc,
     selectedNodeId: state.selectedNodeId,
     selectedStyleResource,
-    frozen: Boolean(optimisticStructuralIslandOverride),
+    frozen: false,
   })
   const {
     activeSectionIndex,
@@ -327,6 +291,7 @@ export default function EditorShell() {
   const pendingDragRef = useRef<PendingDrag | null>(null)
   const pendingEditorActionClassificationRef = useRef<PendingEditorActionClassification | null>(null)
   const suppressNextLayoutLoadingOverlayRef = useRef(false)
+
   const dispatchEditorAction = useCallback((action: EditorAction) => {
     const startedAt = startWysiwygPerfSpan()
     const classification = classifyEditorAction(action)
@@ -407,22 +372,7 @@ export default function EditorShell() {
     partialPreviewPaginated,
     previewLayout: browserPreviewLayout,
   }), [browserPreviewLayout, partialPreviewPaginated, state.paginated])
-  const {
-    leftRailOutlineDoc,
-    leftRailStyleDoc,
-    deferLeftRailForStructuralPaint,
-    deferNonCriticalPanelsForStructuralPaint,
-  } = useEditorLeftRailDocuments({
-    doc: state.doc,
-    previewDoc,
-    isTemplateMode,
-    optimisticStructuralRefocusPaint,
-    optimisticStructuralIslandOverride,
-    panelDeferralRuntime,
-    structuralEditRuntime,
-    structuralPanelReleaseApplyingRef,
-    recordStructuralPanelReleaseEvent,
-  })
+
   const {
     nodeId: inlineEditNodeId,
     caretIndex: inlineEditCaretIndex,
@@ -519,6 +469,25 @@ export default function EditorShell() {
     wysiwygDraftRuntime,
     wysiwygDraftSessionIdentityRef,
   })
+  const lastProcessedWysiwygDraftRevisionRef = useRef<number>(-1)
+  useEffect(() => {
+    lastProcessedWysiwygDraftRevisionRef.current = -1
+  }, [wysiwygTextSessionState.nodeId])
+  const {
+    leftRailOutlineDoc,
+    leftRailStyleDoc,
+    deferLeftRailForStructuralPaint,
+    deferNonCriticalPanelsForStructuralPaint,
+  } = useEditorLeftRailDocuments({
+    doc: state.doc,
+    previewDoc,
+    isTemplateMode,
+    panelDeferralRuntime,
+    structuralEditRuntime,
+    structuralPanelReleaseApplyingRef,
+    recordStructuralPanelReleaseEvent,
+    isInlineEditing: inlineEditNodeId !== null || wysiwygTextSessionState.nodeId !== null,
+  })
   const {
     wysiwygPerfTraceActive,
     handleEditorCanvasProfilerRender,
@@ -533,11 +502,8 @@ export default function EditorShell() {
   })
   const {
     richTextToolbarSelection,
-    richTextToolbarLiveSelection,
-  } = useEditorRichTextToolbarSelection(
-    wysiwygTextSessionState.nodeId,
-    wysiwygTextSessionState.selection,
-  )
+    getRichTextToolbarLiveSelection,
+  } = useEditorRichTextToolbarSelection()
   const {
     getPersistableDocumentSnapshot,
     recordPreviewSettleShellMutationPlan,
@@ -582,16 +548,27 @@ export default function EditorShell() {
       !isParagraphInsideRowStack(doc, nodeId)
   }, [])
 
-  const applyActiveRichTextDraftCommand = useCallback((nodeId: string, command: RichTextDraftSessionCommand): boolean => {
+  const applyActiveRichTextDraftCommand = useCallback((nodeId: string, command: RichTextDraftSessionCommand, overrideSnapshot?: WysiwygLocalDraftSnapshot): boolean => {
     if (!WYSIWYG_RICH_TEXT_DRAFT_ENABLED) return false
     const current = richWysiwygDraftSessionStateRef.current
     if (!current.nodeId || current.nodeId !== nodeId || !current.draft) return false
-    const patch = getRichTextDraftSessionCommandPatch(current, command)
+    
+    // Create an effective state with the local draft snapshot if provided
+    const effectiveState = overrideSnapshot ? {
+      ...current,
+      draft: {
+        ...current.draft,
+        text: overrideSnapshot.draftText,
+        selection: overrideSnapshot.selection,
+      }
+    } as typeof current : current
+
+    const patch = getRichTextDraftSessionCommandPatch(effectiveState, command)
     const layoutAffecting = isRichTextDraftStylePatchLayoutAffecting(patch)
     const canUseLocalStylePreview = !layoutAffecting && canUseLocalRichTextDraftStylePreview(nodeId)
-    const selection = current.draft.selection
+    const selection = effectiveState.draft!.selection
     const startedAt = startWysiwygPerfSpan()
-    const next = applyRichTextDraftSessionStyleCommand(current, patch)
+    const next = applyRichTextDraftSessionStyleCommand(effectiveState, patch)
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "rich-draft-style-command", startedAt, {
       nodeId,
       commandType: command.type,
@@ -600,7 +577,7 @@ export default function EditorShell() {
       localStylePreview: canUseLocalStylePreview,
       selectionCollapsed: selection.anchorOffset === selection.focusOffset,
     })
-    if (next === current) return false
+    if (next === effectiveState) return false
     applyRichWysiwygDraftStyleCommand(patch)
     if (next.dirtyVersion !== current.dirtyVersion) {
       if (!canUseLocalStylePreview) {
@@ -614,9 +591,9 @@ export default function EditorShell() {
     scheduleRichTextDraftStylePagination,
   ])
 
-  const handleWysiwygRichTextShortcut = useCallback((nodeId: string, input: WysiwygTextInputKey): boolean => {
+  const handleWysiwygRichTextShortcut = useCallback((nodeId: string, input: WysiwygTextInputKey, overrideSnapshot?: WysiwygLocalDraftSnapshot): boolean => {
     const richTextCommand = resolveRichTextDraftKeyboardCommand(input)
-    return richTextCommand ? applyActiveRichTextDraftCommand(nodeId, richTextCommand) : false
+    return richTextCommand ? applyActiveRichTextDraftCommand(nodeId, richTextCommand, overrideSnapshot) : false
   }, [applyActiveRichTextDraftCommand])
 
   const {
@@ -648,7 +625,6 @@ export default function EditorShell() {
     isTemplateMode,
     moveWysiwygTextCaret,
     optimisticLayoutRef,
-    optimisticStructuralIslandOverride,
     paginatePreviewDoc,
     paginatedRef,
     pendingBoundarySafeInlineEditEndRef,
@@ -664,15 +640,60 @@ export default function EditorShell() {
     wysiwygTextSessionStateRef,
   })
 
-  const handleWysiwygTextDraftChange = useCallback((nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => {
-    if (wysiwygTextSessionState.nodeId !== nodeId) return
-    const textChanged = text !== wysiwygTextSessionState.draftText
+  const handleWysiwygTextDraftChange = useCallback((
+    nodeId: string,
+    text: string,
+    caretIndex: number | null,
+    selection?: { anchorOffset: number; focusOffset: number } | null,
+    source?: string,
+    revision?: number,
+  ) => {
+    const startedAtEnter = startWysiwygPerfSpan()
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "editor-shell-draft-change-enter",
+      startedAt: startedAtEnter,
+      durationMs: 0,
+      nodeId,
+      source: source ?? "unknown",
+      action: "draft-change-enter",
+      active: true,
+    })
+
+    const exitDraftChange = (action: string) => {
+      recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        kind: "editor-shell-draft-change-exit",
+        startedAt: startWysiwygPerfSpan(),
+        durationMs: Math.max(0, startWysiwygPerfSpan() - startedAtEnter),
+        nodeId,
+        source: source ?? "unknown",
+        action,
+        active: false,
+      })
+    }
+
+    if (wysiwygTextSessionStateRef.current.nodeId !== nodeId) {
+      exitDraftChange("node-id-mismatch")
+      return
+    }
+
+    if (revision !== undefined) {
+      if (revision <= lastProcessedWysiwygDraftRevisionRef.current) {
+        exitDraftChange("stale-ignored")
+        return
+      }
+      lastProcessedWysiwygDraftRevisionRef.current = revision
+    }
+
+    const textChanged = text !== wysiwygTextSessionStateRef.current.draftText
     const nextSelection = selection ?? (caretIndex == null ? null : { anchorOffset: caretIndex, focusOffset: caretIndex })
     if (
       !textChanged &&
-      wysiwygTextSessionState.caretOffset === caretIndex &&
-      areWysiwygTextSelectionsEqual(wysiwygTextSessionState.selection, nextSelection)
-    ) return
+      wysiwygTextSessionStateRef.current.caretOffset === caretIndex &&
+      areWysiwygTextSelectionsEqual(wysiwygTextSessionStateRef.current.selection, nextSelection)
+    ) {
+      exitDraftChange("no-change")
+      return
+    }
     const nextSnapshotRevision = recordWysiwygDraftPaginationSnapshot({
       nodeId,
       draftText: text,
@@ -695,7 +716,7 @@ export default function EditorShell() {
       moveWysiwygTextCaret(caretIndex, nextSelection)
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-selection-update", startedAt, {
         nodeId,
-        draftVersion: wysiwygTextSessionState.dirtyVersion,
+        draftVersion: wysiwygTextSessionStateRef.current.dirtyVersion,
         textLength: text.length,
         richDraft: WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionStateRef.current.nodeId === nodeId,
         selectionCollapsed: !selection || selection.anchorOffset === selection.focusOffset,
@@ -705,12 +726,15 @@ export default function EditorShell() {
       changeWysiwygTextDraft({ text, caretOffset: caretIndex, selection })
       finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "inline-edit-draft-update", startedAt, {
         nodeId,
-        draftVersion: wysiwygTextSessionState.dirtyVersion + 1,
+        draftVersion: wysiwygTextSessionStateRef.current.dirtyVersion + 1,
         textLength: text.length,
       })
     }
-    handleInlineEditCaretChange(nodeId, caretIndex)
-    if (!textChanged) return
+      // handleInlineEditCaretChange(nodeId, caretIndex)
+    if (!textChanged) {
+      exitDraftChange("processed-selection-only")
+      return
+    }
     const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
     const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
     const draftPaginationActive = wysiwygDraftPaginationNodeId === nodeId
@@ -745,7 +769,7 @@ export default function EditorShell() {
         startedAt: startWysiwygPerfSpan(),
         durationMs: 0,
         nodeId,
-        draftVersion: wysiwygTextSessionState.dirtyVersion + 1,
+        draftVersion: wysiwygTextSessionStateRef.current.dirtyVersion + 1,
         textLength: text.length,
         requestedDelayMs: WYSIWYG_PLAIN_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
         source: "plain-boundary-large-doc-suppressed",
@@ -755,7 +779,7 @@ export default function EditorShell() {
       })
     }
     if (useResponsiveDraftPagination || shouldUsePlainBoundaryDraftPagination) {
-      if (responsiveDraftPaginationNodeId) {
+      if (responsiveDraftPaginationNodeId && wysiwygDraftPaginationNodeId !== responsiveDraftPaginationNodeId) {
         setWysiwygDraftPaginationNodeId(responsiveDraftPaginationNodeId)
       }
       const draftPaginationDelayMs = shouldUsePlainBoundaryDraftPagination && !useResponsiveDraftPagination
@@ -769,6 +793,7 @@ export default function EditorShell() {
           })
       scheduleWysiwygDraftPagination(nodeId, draftPaginationDelayMs)
     }
+    exitDraftChange("processed-draft")
   }, [
     changeWysiwygTextDraft,
     handleInlineEditCaretChange,
@@ -777,10 +802,7 @@ export default function EditorShell() {
     scheduleWysiwygDraftPagination,
     setWysiwygDraftPaginationNodeId,
     wysiwygDraftRuntime,
-    wysiwygTextSessionState.caretOffset,
-    wysiwygTextSessionState.draftText,
-    wysiwygTextSessionState.nodeId,
-    wysiwygTextSessionState.selection,
+    wysiwygTextSessionStateRef,
     wysiwygDraftPaginationNodeId,
   ])
 
@@ -804,7 +826,7 @@ export default function EditorShell() {
     }
     inlineEditHeightPreviewLastDispatchRef.current = { key, height }
     handleInlineEditHeightChange(nodeId, height, pageIndex)
-    if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionState.nodeId !== nodeId) return
+    if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionStateRef.current.nodeId !== nodeId) return
     const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
     const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
     const shouldPatchBoundaryHeight = shouldPatchPlainParagraphBoundaryHeightPreview({
@@ -819,8 +841,8 @@ export default function EditorShell() {
       durationMs: 0,
       nodeId,
       pageIndex,
-      draftVersion: wysiwygTextSessionState.dirtyVersion,
-      textLength: wysiwygTextSessionState.draftText.length,
+      draftVersion: wysiwygTextSessionStateRef.current.dirtyVersion,
+      textLength: wysiwygTextSessionStateRef.current.draftText.length,
       paragraphHeight: height,
       source: shouldPatchBoundaryHeight
         ? "set-inline-edit-height-dispatch-boundary-handoff"
@@ -835,13 +857,11 @@ export default function EditorShell() {
     })
   }, [
     handleInlineEditHeightChange,
-    wysiwygTextSessionState.dirtyVersion,
-    wysiwygTextSessionState.draftText.length,
-    wysiwygTextSessionState.nodeId,
+    wysiwygTextSessionStateRef,
   ])
 
   const handleWysiwygTextReflowDecision = useCallback((nodeId: string, reflow: WysiwygTextReflowDecision) => {
-    if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionState.nodeId !== nodeId) return
+    if (!WYSIWYG_TEXT_ENGINE_ENABLED || wysiwygTextSessionStateRef.current.nodeId !== nodeId) return
     const isFlowStackParagraph = isParagraphInsideFlowStack(docRef.current, nodeId)
     const isTableCellParagraph = isParagraphInsideTableCell(docRef.current, nodeId)
     const isPlainParagraphBoundary =
@@ -863,8 +883,8 @@ export default function EditorShell() {
       startedAt: startWysiwygPerfSpan(),
       durationMs: 0,
       nodeId,
-      draftVersion: wysiwygTextSessionState.dirtyVersion,
-      textLength: wysiwygTextSessionState.draftText.length,
+      draftVersion: wysiwygTextSessionStateRef.current.dirtyVersion,
+      textLength: wysiwygTextSessionStateRef.current.draftText.length,
       requestedDelayMs: reflow.shouldQueueSettledPagination ? requestedDelayMs : undefined,
       source: "handle-wysiwyg-text-reflow-decision",
       reflowKind: reflow.kind,
@@ -894,8 +914,8 @@ export default function EditorShell() {
           startedAt: startWysiwygPerfSpan(),
           durationMs: 0,
           nodeId,
-          draftVersion: wysiwygTextSessionState.dirtyVersion,
-          textLength: wysiwygTextSessionState.draftText.length,
+          draftVersion: wysiwygTextSessionStateRef.current.dirtyVersion,
+          textLength: wysiwygTextSessionStateRef.current.draftText.length,
           requestedDelayMs,
           source: "plain-boundary-large-doc-suppressed",
           action: "skip-large-doc",
@@ -912,9 +932,7 @@ export default function EditorShell() {
     scheduleWysiwygDraftPagination(nodeId, requestedDelayMs)
   }, [
     scheduleWysiwygDraftPagination,
-    wysiwygTextSessionState.dirtyVersion,
-    wysiwygTextSessionState.draftText,
-    wysiwygTextSessionState.nodeId,
+    wysiwygTextSessionStateRef,
   ])
 
   // ─── Auto-save ───────────────────────────────────────────────────────────────
@@ -994,10 +1012,7 @@ export default function EditorShell() {
     mergeResult: state.mergeResult,
     moveWysiwygTextCaret,
     optimisticLayoutRef,
-    optimisticStructuralIslandOverride,
     paginatedRef,
-    setOptimisticStructuralIslandOverride,
-    setOptimisticStructuralRefocusPaint,
     startInlineEditAfterOptimisticStructuralChange,
     startInlineEditAfterStructuralChange,
     startPlainWysiwygTextSessionFromText,
@@ -1150,6 +1165,40 @@ export default function EditorShell() {
     setIsExporting,
   })
 
+  const structuralEditControllerProps = useMemo(() => ({
+    captureStructuralShellRenderValue,
+    deferredStructuralPanelReleaseRef,
+    displayPaginated,
+    editorPageNavigation,
+    handleInlineEditEnd,
+    inlineEditNodeId,
+    inlineEditPageIndex,
+    isTemplateMode,
+    panelDeferralRuntime,
+    pendingBoundarySafeInlineEditEndRef,
+    previewDoc,
+    pushStructuralShellRenderAttributionEvent,
+    scheduleDeferredStructuralPanelRelease,
+    structuralEditRuntime,
+    wysiwygTextSessionNodeId: wysiwygTextSessionState.nodeId,
+  }), [
+    captureStructuralShellRenderValue,
+    deferredStructuralPanelReleaseRef,
+    displayPaginated,
+    editorPageNavigation,
+    handleInlineEditEnd,
+    inlineEditNodeId,
+    inlineEditPageIndex,
+    isTemplateMode,
+    panelDeferralRuntime,
+    pendingBoundarySafeInlineEditEndRef,
+    previewDoc,
+    pushStructuralShellRenderAttributionEvent,
+    scheduleDeferredStructuralPanelRelease,
+    structuralEditRuntime,
+    wysiwygTextSessionState.nodeId,
+  ])
+
   useInlineEditPageRelocation({
     authoritativePaginated: state.paginated,
     previewDoc,
@@ -1178,17 +1227,14 @@ export default function EditorShell() {
     inlineEditNodeId,
     inlineEditPageIndex,
     isTemplateMode,
-    optimisticStructuralIslandOverride,
-    optimisticStructuralRefocusPaint,
     panelDeferralRuntime,
     pendingBoundarySafeInlineEditEndRef,
     previewDoc,
     pushStructuralShellRenderAttributionEvent,
     scheduleDeferredStructuralPanelRelease,
-    setOptimisticStructuralIslandOverride,
-    setOptimisticStructuralRefocusPaint,
     structuralEditRuntime,
     wysiwygTextSessionNodeId: wysiwygTextSessionState.nodeId,
+    wysiwygTextSessionGeneration: wysiwygDraftSessionIdentityRef.current?.generation ?? null,
   })
 
   const {
@@ -1418,7 +1464,7 @@ export default function EditorShell() {
         richDraftParagraph={richWysiwygDraftSessionState.draft?.paragraph ?? null}
         richDraftPendingStyle={richWysiwygDraftSessionState.draft?.pendingStyle ?? null}
         richTextToolbarSelection={richTextToolbarSelection}
-        richTextToolbarLiveSelection={richTextToolbarLiveSelection}
+        getRichTextToolbarLiveSelection={getRichTextToolbarLiveSelection}
         onToggleListPreset={handleToggleListPreset}
         onChangeListItemLevel={handleToolbarChangeListItemLevel}
         onApplyRichTextDraftCommand={applyActiveRichTextDraftCommand}
@@ -1478,118 +1524,116 @@ export default function EditorShell() {
             >
               Preparing layout...
             </div>
-          ) : (
-            <EditorCanvasPerfProfiler
-              enabled={wysiwygPerfTraceActive}
-              onRender={handleEditorCanvasProfilerRender}
-            >
-              <EditorCanvas
-                paginated={displayPaginated}
-                doc={previewDoc}
-                drag={isTemplateMode ? state.drag : null}
-                scale={scale}
-                activePageIndex={currentCanvasPageIndex}
-                selectedNodeId={isTemplateMode ? state.selectedNodeId : null}
-                selectionAnchorNodeId={isTemplateMode ? state.selectionAnchorNodeId : null}
-                isLayoutLoading={showLayoutLoadingOverlay}
-                textMeasurer={editorTextMeasurer}
-                inlineEditVisualFresh={isTemplateMode ? inlineEditDocumentVisualReady : true}
-                inlineEditNodeId={isTemplateMode && !useOutOfCanvasWysiwygIsland ? inlineEditNodeId : null}
-                inlineEditCaretIndex={isTemplateMode && !useOutOfCanvasWysiwygIsland ? inlineEditCaretIndex : null}
-                inlineEditPageIndex={isTemplateMode && !useOutOfCanvasWysiwygIsland ? inlineEditPageIndex : null}
-                inlineEditVisualLocked={isTemplateMode ? inlineEditVisualLocked : false}
-                onInlineEditStart={isTemplateMode ? handleInlineEditStart : () => undefined}
-                onInlineEditChange={isTemplateMode ? handleInlineEditChange : () => undefined}
-                onInlineEditCaretChange={isTemplateMode ? handleInlineEditCaretChange : () => undefined}
-                onInlineEditUserInteraction={isTemplateMode ? handleInlineEditUserInteraction : () => undefined}
-                onInlineEditHeightChange={isTemplateMode ? handleInlineEditHeightPreviewChange : () => undefined}
-                onInlineEditEnd={isTemplateMode ? handleInlineEditEnd : () => undefined}
-                onSplitParagraph={isTemplateMode ? handleSplitParagraph : () => undefined}
-                onMergeParagraph={isTemplateMode ? handleMergeParagraph : () => undefined}
-                onCanStartStructuralEdit={isTemplateMode ? handleCanStartParagraphTextSurfaceStructuralEdit : undefined}
-                onExitListItem={isTemplateMode ? handleExitListItem : () => undefined}
-                onChangeListItemLevel={isTemplateMode ? handleChangeListItemLevel : () => undefined}
-                onBackspaceListItemAtStart={isTemplateMode ? handleBackspaceListItemAtStart : () => undefined}
-                setPageRef={setPageRef}
-                setPageOverlayRef={setPageOverlayRef}
-                onNodePointerDown={isTemplateMode ? startNodePointerDown : () => undefined}
-                onBackgroundPointerDown={isTemplateMode ? handleBackgroundPointerDown : () => undefined}
-                onSelectContextNode={isTemplateMode ? selectContextNode : () => undefined}
-                onStartCloneDrag={isTemplateMode ? startCloneDragPointerDown : () => undefined}
-                onDeleteNode={isTemplateMode ? deleteNodeFromCanvas : () => undefined}
-                onTableAction={isTemplateMode ? applyCanvasTableAction : () => undefined}
-                onResizeStart={isTemplateMode ? handleResizeStart : () => undefined}
-                onTableColumnResizeStart={isTemplateMode ? handleTableColumnResizeStart : () => undefined}
-                resizeDrag={isTemplateMode ? resizeDrag : null}
-                minHeightDrag={isTemplateMode ? minHeightDrag : null}
-                onMinHeightResizeStart={isTemplateMode ? handleMinHeightResizeStart : () => undefined}
-                marginDrag={isTemplateMode ? marginDrag : null}
-                marginEditMode={isTemplateMode ? marginEditMode : null}
-                headerFooterEditMode={isTemplateMode ? headerFooterEditMode : null}
-                headerFooterReservedDrag={isTemplateMode ? headerFooterReservedDrag : null}
-                onMarginEditModeEnter={isTemplateMode ? enterMarginEditMode : () => undefined}
-                onMarginEditModeExit={isTemplateMode ? exitMarginEditMode : () => undefined}
-                onHeaderFooterEditModeEnter={isTemplateMode ? enterHeaderFooterEditMode : () => undefined}
-                onHeaderFooterEditModeExit={isTemplateMode ? exitHeaderFooterEditMode : () => undefined}
-                onHeaderFooterZonePointerDown={isTemplateMode ? handleHeaderFooterZonePointerDown : () => undefined}
-                onHeaderFooterReservedResizeStart={isTemplateMode ? handleHeaderFooterReservedResizeStart : () => undefined}
-                onMarginResizeStart={isTemplateMode ? handleMarginResizeStart : () => undefined}
-                onScaleChange={handleCanvasScaleChange}
-                autoFitScale={zoomMode === "fit"}
-                showTextSegments={showTextSegments}
-                showDrift={showDrift}
-                driftMap={driftReport?.driftMap ?? null}
-                wysiwygInlineEditEnabled={WYSIWYG_INLINE_EDIT_ENABLED}
-                wysiwygTextEngineEnabled={WYSIWYG_TEXT_ENGINE_ENABLED}
-                wysiwygTextDraftNodeId={useOutOfCanvasWysiwygIsland ? null : wysiwygTextSessionState.nodeId}
-                wysiwygTextDraftText={!useOutOfCanvasWysiwygIsland && wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.draftText : null}
-                wysiwygTextDraftParagraph={!useOutOfCanvasWysiwygIsland && WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
-                  richWysiwygDraftSessionState.nodeId === wysiwygTextSessionState.nodeId
-                  ? richWysiwygDraftSessionState.draft?.paragraph ?? null
-                  : null}
-                wysiwygTextDraftDirtyVersion={!useOutOfCanvasWysiwygIsland && wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.dirtyVersion : 0}
-                wysiwygTextCaretOffset={!useOutOfCanvasWysiwygIsland && wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.caretOffset : null}
-                wysiwygTextSelection={!useOutOfCanvasWysiwygIsland && wysiwygTextSessionState.nodeId ? wysiwygTextSessionState.selection : null}
-                wysiwygTextDraftPaginationActive={!useOutOfCanvasWysiwygIsland && wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId}
-                suppressedCanvasTextNodeIds={suppressedCanvasTextNodeIds}
-                activeOutOfCanvasStructuralIsland={activeOutOfCanvasStructuralIsland}
-                onWysiwygTextDraftChange={handleWysiwygTextDraftChange}
-                onWysiwygRichTextShortcut={handleWysiwygRichTextShortcut}
-                onWysiwygTextReflowDecision={handleWysiwygTextReflowDecision}
+          ) : (() => {
+            const wrapperNode = (
+              <EditorCanvasStructuralIslandWrapper
+                controllerProps={structuralEditControllerProps}
+                canvasProps={{
+                  paginated: displayPaginated,
+                  doc: previewDoc,
+                  drag: isTemplateMode ? state.drag : null,
+                  scale: scale,
+                  activePageIndex: currentCanvasPageIndex,
+                  selectedNodeId: isTemplateMode ? state.selectedNodeId : null,
+                  selectionAnchorNodeId: isTemplateMode ? state.selectionAnchorNodeId : null,
+                  isLayoutLoading: showLayoutLoadingOverlay,
+                  textMeasurer: editorTextMeasurer,
+                  inlineEditVisualFresh: isTemplateMode ? inlineEditDocumentVisualReady : true,
+                  inlineEditNodeId: isTemplateMode && !useOutOfCanvasWysiwygIsland ? inlineEditNodeId : null,
+                  inlineEditCaretIndex: isTemplateMode && !useOutOfCanvasWysiwygIsland ? inlineEditCaretIndex : null,
+                  inlineEditPageIndex: isTemplateMode && !useOutOfCanvasWysiwygIsland ? inlineEditPageIndex : null,
+                  inlineEditVisualLocked: isTemplateMode ? inlineEditVisualLocked : false,
+                  onInlineEditStart: isTemplateMode ? handleInlineEditStart : editorShellNoop,
+                  onInlineEditChange: isTemplateMode ? handleInlineEditChange : editorShellNoop,
+                  onInlineEditCaretChange: isTemplateMode ? handleInlineEditCaretChange : editorShellNoop,
+                  onInlineEditUserInteraction: isTemplateMode ? handleInlineEditUserInteraction : editorShellNoop,
+                  onInlineEditHeightChange: isTemplateMode ? handleInlineEditHeightPreviewChange : editorShellNoop,
+                  onInlineEditEnd: isTemplateMode ? handleInlineEditEnd : editorShellNoop,
+                  onSplitParagraph: isTemplateMode ? handleSplitParagraph : editorShellNoop,
+                  onMergeParagraph: isTemplateMode ? handleMergeParagraph : editorShellNoop,
+                  onCanStartStructuralEdit: isTemplateMode ? handleCanStartParagraphTextSurfaceStructuralEdit : undefined,
+                  onExitListItem: isTemplateMode ? handleExitListItem : editorShellNoop,
+                  onChangeListItemLevel: isTemplateMode ? handleChangeListItemLevel : editorShellNoop,
+                  onBackspaceListItemAtStart: isTemplateMode ? handleBackspaceListItemAtStart : editorShellNoop,
+                  setPageRef: setPageRef,
+                  setPageOverlayRef: setPageOverlayRef,
+                  onNodePointerDown: isTemplateMode ? startNodePointerDown : editorShellNoop,
+                  onBackgroundPointerDown: isTemplateMode ? handleBackgroundPointerDown : editorShellNoop,
+                  onSelectContextNode: isTemplateMode ? selectContextNode : editorShellNoop,
+                  onStartCloneDrag: isTemplateMode ? startCloneDragPointerDown : editorShellNoop,
+                  onDeleteNode: isTemplateMode ? deleteNodeFromCanvas : editorShellNoop,
+                  onTableAction: isTemplateMode ? applyCanvasTableAction : editorShellNoop,
+                  onResizeStart: isTemplateMode ? handleResizeStart : editorShellNoop,
+                  onTableColumnResizeStart: isTemplateMode ? handleTableColumnResizeStart : editorShellNoop,
+                  resizeDrag: isTemplateMode ? resizeDrag : null,
+                  minHeightDrag: isTemplateMode ? minHeightDrag : null,
+                  onMinHeightResizeStart: isTemplateMode ? handleMinHeightResizeStart : editorShellNoop,
+                  marginDrag: isTemplateMode ? marginDrag : null,
+                  marginEditMode: isTemplateMode ? marginEditMode : null,
+                  headerFooterEditMode: isTemplateMode ? headerFooterEditMode : null,
+                  headerFooterReservedDrag: isTemplateMode ? headerFooterReservedDrag : null,
+                  onMarginEditModeEnter: isTemplateMode ? enterMarginEditMode : editorShellNoop,
+                  onMarginEditModeExit: isTemplateMode ? exitMarginEditMode : editorShellNoop,
+                  onHeaderFooterEditModeEnter: isTemplateMode ? enterHeaderFooterEditMode : editorShellNoop,
+                  onHeaderFooterEditModeExit: isTemplateMode ? exitHeaderFooterEditMode : editorShellNoop,
+                  onHeaderFooterZonePointerDown: isTemplateMode ? handleHeaderFooterZonePointerDown : editorShellNoop,
+                  onHeaderFooterReservedResizeStart: isTemplateMode ? handleHeaderFooterReservedResizeStart : editorShellNoop,
+                  onMarginResizeStart: isTemplateMode ? handleMarginResizeStart : editorShellNoop,
+                  onScaleChange: handleCanvasScaleChange,
+                  autoFitScale: zoomMode === "fit",
+                  showTextSegments: showTextSegments,
+                  showDrift: showDrift,
+                  driftMap: driftReport?.driftMap ?? null,
+                  wysiwygInlineEditEnabled: WYSIWYG_INLINE_EDIT_ENABLED,
+                  wysiwygTextEngineEnabled: WYSIWYG_TEXT_ENGINE_ENABLED,
+                  wysiwygTextDraftNodeId: useOutOfCanvasWysiwygIsland ? null : wysiwygTextSessionState.nodeId,
+                  wysiwygTextDraftText: null, // Read locally by islands via wysiwygDraftStore
+                  wysiwygTextDraftParagraph: !useOutOfCanvasWysiwygIsland && WYSIWYG_RICH_TEXT_DRAFT_ENABLED &&
+                    richWysiwygDraftSessionState.nodeId === wysiwygTextSessionState.nodeId
+                    ? richWysiwygDraftSessionState.draft?.paragraph ?? null
+                    : null,
+                  wysiwygTextDraftDirtyVersion: 0,
+                  wysiwygTextCaretOffset: null, // Read locally by islands via wysiwygDraftStore
+                  wysiwygTextSelection: null, // Read locally by islands via wysiwygDraftStore
+                  wysiwygTextDraftPaginationActive: !useOutOfCanvasWysiwygIsland && wysiwygDraftPaginationNodeId === wysiwygTextSessionState.nodeId,
+                  onWysiwygTextDraftChange: handleWysiwygTextDraftChange,
+                  onWysiwygRichTextShortcut: handleWysiwygRichTextShortcut,
+                  onWysiwygTextReflowDecision: handleWysiwygTextReflowDecision,
+                }}
+                islandProps={{
+                  scale,
+                  textMeasurer: editorTextMeasurer,
+                  draftText: wysiwygTextSessionState.draftText,
+                  caretOffset: wysiwygTextSessionState.caretOffset,
+                  selection: wysiwygTextSessionState.selection,
+                  getPageElement: getPageOverlayElement,
+                  getPageKeyByPageIndex: (pageIndex) => editorPageNavigation.pageKeyByPageIndex.get(pageIndex) ?? null,
+                  onDraftChange: handleWysiwygTextDraftChange,
+                  onHeightChange: handleInlineEditHeightPreviewChange,
+                  onReflowDecision: handleWysiwygTextReflowDecision,
+                  onRichTextShortcut: handleWysiwygRichTextShortcut,
+                  onEndEdit: handleFlowdocDraftIslandEndEdit,
+                  onSplitParagraph: handleSplitParagraph,
+                  onMergeParagraph: handleMergeParagraph,
+                  onRequestUndo: handleUndo,
+                  onCompositionChange: handleWysiwygDraftCompositionChange,
+                  structuralEditRuntime,
+                }}
               />
-            </EditorCanvasPerfProfiler>
-          )}
-          {flowdocDraftEditorIslandConfig ? (
-            <FlowdocDraftEditorIslandRoot
-              key={flowdocDraftEditorIslandConfig.nodeId}
-              active
-              nodeId={flowdocDraftEditorIslandConfig.nodeId}
-              paragraph={flowdocDraftEditorIslandConfig.paragraph}
-              fragment={flowdocDraftEditorIslandConfig.fragment}
-              pageKey={flowdocDraftEditorIslandConfig.pageKey}
-              pages={flowdocDraftEditorIslandConfig.pages}
-              scale={scale}
-              textMeasurer={editorTextMeasurer}
-              draftText={wysiwygTextSessionState.draftText}
-              caretOffset={wysiwygTextSessionState.caretOffset}
-              selection={wysiwygTextSessionState.selection}
-              getPageElement={getPageOverlayElement}
-              getPageKeyByPageIndex={(pageIndex) => editorPageNavigation.pageKeyByPageIndex.get(pageIndex) ?? null}
-              onDraftChange={handleWysiwygTextDraftChange}
-              onHeightChange={handleInlineEditHeightPreviewChange}
-              onReflowDecision={handleWysiwygTextReflowDecision}
-              onEndEdit={handleFlowdocDraftIslandEndEdit}
-              onSplitParagraph={handleSplitParagraph}
-              onMergeParagraph={handleMergeParagraph}
-              onRequestUndo={handleUndo}
-              onCompositionChange={handleWysiwygDraftCompositionChange}
-              structuralEditRuntime={structuralEditRuntime}
-              structuralRefocusStartedAt={optimisticStructuralRefocusPaint?.nodeId === flowdocDraftEditorIslandConfig.nodeId
-                ? optimisticStructuralRefocusPaint.startedAt
-                : null}
-              onStructuralRefocusPainted={handleOptimisticStructuralRefocusPainted}
-            />
-          ) : null}
+            )
+
+            return wysiwygPerfTraceActive ? (
+              <EditorCanvasPerfProfiler
+                enabled={true}
+                onRender={handleEditorCanvasProfilerRender}
+              >
+                {wrapperNode}
+              </EditorCanvasPerfProfiler>
+            ) : (
+              wrapperNode
+            )
+          })()}
+
         </EditorCanvasColumn>
         <EditorRightRail
           doc={state.doc}

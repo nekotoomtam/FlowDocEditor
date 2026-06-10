@@ -182,7 +182,7 @@ function paginateParagraph(
     measureWithPaginationProfile(profiler, "fragment-generation", () => pushFragment(pages, template, {
       nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
       pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
-      width: box.width, height: measured.totalHeight, lines, renderProps,
+      width: box.width, height: measured.totalHeight, lines, renderProps, nodeTextVersion: hashPageFragmentLines(lines),
       listMarker,
       fragmentIndex: 0, lineStart: 0, lineEnd: measured.lines.length,
       continuesFrom: false, isContinued: false,
@@ -268,7 +268,7 @@ function paginateParagraph(
     measureWithPaginationProfile(profiler, "fragment-generation", () => pushFragment(pages, template, {
       nodeId: box.nodeId, nodeType: "paragraph", parentNodeId,
       pageIndex: current.pageIndex, x: box.x, y: current.cursorY,
-      width: box.width, height: fragHeight, lines: positionedLines, renderProps,
+      width: box.width, height: fragHeight, lines: positionedLines, renderProps, nodeTextVersion: hashPageFragmentLines(positionedLines),
       listMarker: lineOffset === 0 ? listMarker : undefined,
       fragmentIndex, lineStart: lineOffset, lineEnd: resolvedLineEnd,
       continuesFrom: !isFirstFragment, isContinued: !isLastFragment,
@@ -467,6 +467,20 @@ function paginateFlowBox(
           : undefined,
       })
   }
+}
+
+
+function hashPageFragmentLines(lines?: { text: string }[]): number | undefined {
+  if (!lines) return undefined;
+  let hash = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i].text;
+    for (let j = 0; j < text.length; j++) {
+      hash = ((hash << 5) - hash) + text.charCodeAt(j);
+      hash |= 0;
+    }
+  }
+  return hash;
 }
 
 // ─── Section Entry ────────────────────────────────────────────────────────────

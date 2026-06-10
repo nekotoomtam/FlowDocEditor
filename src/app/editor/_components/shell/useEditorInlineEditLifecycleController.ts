@@ -12,6 +12,7 @@ import {
   markTrackedWysiwygDraftRuntimeSessionCommittedBridge,
   markTrackedWysiwygDraftRuntimeSessionCommittingBridge,
 } from "../wysiwygDraftRuntimeBridge"
+import { flushAllWysiwygDrafts } from "./wysiwygDraftStore"
 import {
   WYSIWYG_PERF_TRACE_ENABLED,
   WYSIWYG_RICH_TEXT_DRAFT_ENABLED,
@@ -40,7 +41,6 @@ import { getParagraphTextFromDoc } from "./editorDocumentLookup"
 import type {
   DeferredInlineEditEnd,
   DeferredInlineEditStart,
-  OptimisticStructuralIslandOverride,
   PendingClickAction,
   WysiwygFinalizeMode,
 } from "./editorShellTypes"
@@ -50,6 +50,8 @@ type MutableCurrentRef<T> = {
 }
 
 type InlineEditEndReason = "blur" | "keyboard"
+
+import { editorStructuralIslandStore } from "./editorStructuralIslandStore"
 
 export function useEditorInlineEditLifecycleController({
   clearWysiwygDraftPagination,
@@ -68,7 +70,6 @@ export function useEditorInlineEditLifecycleController({
   isTemplateMode,
   moveWysiwygTextCaret,
   optimisticLayoutRef,
-  optimisticStructuralIslandOverride,
   paginatePreviewDoc,
   paginatedRef,
   pendingBoundarySafeInlineEditEndRef,
@@ -99,7 +100,6 @@ export function useEditorInlineEditLifecycleController({
   isTemplateMode: boolean
   moveWysiwygTextCaret: (caretIndex: number | null) => void
   optimisticLayoutRef: MutableCurrentRef<OptimisticLayoutSnapshot | null>
-  optimisticStructuralIslandOverride: OptimisticStructuralIslandOverride | null
   paginatePreviewDoc: (doc: DocumentNode) => PaginatedDocument
   paginatedRef: MutableCurrentRef<PaginatedDocument>
   pendingBoundarySafeInlineEditEndRef: MutableCurrentRef<DeferredInlineEditEnd | null>
@@ -118,6 +118,7 @@ export function useEditorInlineEditLifecycleController({
   const deferredInlineEditEndRef = useRef<DeferredInlineEditEnd | null>(null)
 
   const finalizeWysiwygTextSessionBeforeAction = useCallback((mode: WysiwygFinalizeMode = "settled-preview"): boolean => {
+    flushAllWysiwygDrafts()
     const useResponsivePreview = mode === "responsive-preview"
     if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED) {
       const richSession = richWysiwygDraftSessionState
@@ -436,7 +437,7 @@ export function useEditorInlineEditLifecycleController({
   ])
 
   const shouldDeferBoundarySafeInlineEditEnd = useCallback((nodeId: string): boolean => {
-    const override = optimisticStructuralIslandOverride
+    const override = editorStructuralIslandStore.getState().optimisticStructuralIslandOverride
     if (!override || override.nodeId !== nodeId || override.mode !== "boundary-safe") return false
     const settledFragment = findWysiwygTextEngineFragment(
       displayPaginated,
@@ -444,7 +445,7 @@ export function useEditorInlineEditLifecycleController({
       inlineEditPageIndex ?? override.fragment.pageIndex,
     )
     return !settledFragment
-  }, [displayPaginated, inlineEditPageIndex, optimisticStructuralIslandOverride])
+  }, [displayPaginated, inlineEditPageIndex])
 
   const deferBoundarySafeInlineEditEnd = useCallback((nodeId: string, reason: InlineEditEndReason, source: string): boolean => {
     if (!shouldDeferBoundarySafeInlineEditEnd(nodeId)) return false

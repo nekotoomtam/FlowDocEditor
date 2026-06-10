@@ -153,9 +153,9 @@ export type EditorAction =
   | { type: "ENSURE_HEADER_FOOTER_ZONE_VISIBLE"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY"; sectionIndex: number; zone: "header" | "footer" }
   | { type: "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE"; sectionIndex: number; mode: "body" | "full" }
-  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; text?: string; history?: HistoryEntry; newNodeId?: string; precomputed?: PrecomputedSplitParagraphResult; precomputedDocValidation?: PrecomputedDocValidation; paginated?: PaginatedDocument }
+  | { type: "SPLIT_PARAGRAPH"; nodeId: string; splitIndex: number; text?: string; history?: HistoryEntry; newNodeId?: string; precomputed?: PrecomputedSplitParagraphResult; precomputedDocValidation?: PrecomputedDocValidation; paginated?: PaginatedDocument; isOptimistic?: boolean }
   | { type: "CLEAR_SPLIT_NODE_ID" }
-  | { type: "MERGE_PARAGRAPH"; nodeId: string; text?: string; history?: HistoryEntry; precomputed?: PrecomputedMergeParagraphResult; precomputedDocValidation?: PrecomputedDocValidation; paginated?: PaginatedDocument }
+  | { type: "MERGE_PARAGRAPH"; nodeId: string; text?: string; history?: HistoryEntry; precomputed?: PrecomputedMergeParagraphResult; precomputedDocValidation?: PrecomputedDocValidation; paginated?: PaginatedDocument; isOptimistic?: boolean }
   | { type: "CLEAR_MERGE_RESULT" }
   | { type: "EXIT_LIST_ITEM"; nodeId: string; text?: string; history?: HistoryEntry }
   | { type: "CLEAR_LIST_EXIT_NODE_ID" }
@@ -757,7 +757,7 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       const finalState = {
         ...nextState,
         paginated: action.paginated ?? nextState.paginated,
-        lastSplitNodeId: result.newNodeId,
+        ...(action.isOptimistic ? {} : { lastSplitNodeId: result.newNodeId }),
       }
       finishStructuralReducerAttribution(attribution, "reducer-total", reducerStartedAt, {
         validationMode: canUseShellPrevalidatedDoc ? "prevalidated" : "full",
@@ -805,10 +805,12 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
         const finalState = {
           ...nextState,
           paginated: action.paginated ?? nextState.paginated,
-          mergeResult: {
-            prevNodeId: action.precomputed.prevNodeId,
-            caretIndex: action.precomputed.caretIndex,
-          },
+          ...(action.isOptimistic ? {} : {
+            mergeResult: {
+              prevNodeId: action.precomputed.prevNodeId,
+              caretIndex: action.precomputed.caretIndex,
+            }
+          }),
         }
         finishStructuralReducerAttribution(attribution, "reducer-total", reducerStartedAt, {
           validationMode: canUseShellPrevalidatedDoc ? "prevalidated" : "full",
@@ -883,7 +885,9 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
       const finalState = {
         ...nextState,
         paginated: action.paginated ?? nextState.paginated,
-        mergeResult: { prevNodeId: result.prevNodeId, caretIndex: result.caretIndex },
+        ...(action.isOptimistic ? {} : {
+          mergeResult: { prevNodeId: result.prevNodeId, caretIndex: result.caretIndex }
+        }),
       }
       finishStructuralReducerAttribution(attribution, "reducer-total", reducerStartedAt, {
         validationMode: "full",

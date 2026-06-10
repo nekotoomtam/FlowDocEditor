@@ -8,7 +8,7 @@ import {
   normalizeWysiwygTextInputKey,
   WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID,
 } from "./useWysiwygTextSession"
-import type { WysiwygTextInputKey, WysiwygTextSelection } from "./useWysiwygTextSession"
+import type { WysiwygLocalDraftSnapshot, WysiwygTextInputKey, WysiwygTextSelection } from "./useWysiwygTextSession"
 import type { WysiwygTextReflowDecision } from "./wysiwygReflow"
 import type { WysiwygDraftSyncPayload } from "./wysiwygDraftSyncState"
 import type { ParagraphTextSurfaceStructuralEditGuard } from "./structuralEdit/paragraphTextSurfaceFallbackBridge"
@@ -67,7 +67,7 @@ interface WysiwygNativeEditLayerProps {
   onEndEdit?: (nodeId: string, reason?: "blur" | "keyboard") => void
   onExitListItem?: (nodeId: string, text?: string) => void
   onMergeParagraph?: (nodeId: string, text?: string) => void
-  onRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
+  onRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey, overrideSnapshot?: WysiwygLocalDraftSnapshot) => boolean
   onSplitParagraph?: (nodeId: string, splitIndex: number, text?: string) => void
   pageKey: string
   relaxNativeEditClip: boolean

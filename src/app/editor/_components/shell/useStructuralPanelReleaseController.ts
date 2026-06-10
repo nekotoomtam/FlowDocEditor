@@ -362,11 +362,11 @@ export function useStructuralPanelReleaseController({
         active: true,
       })
     }
-    window.addEventListener("keydown", markInputDuringPanelDeferral, true)
-    window.addEventListener("beforeinput", markInputDuringPanelDeferral, true)
+    window.addEventListener("keydown", markInputDuringPanelDeferral, { capture: true, passive: true })
+    window.addEventListener("beforeinput", markInputDuringPanelDeferral, { capture: true, passive: true })
     return () => {
-      window.removeEventListener("keydown", markInputDuringPanelDeferral, true)
-      window.removeEventListener("beforeinput", markInputDuringPanelDeferral, true)
+      window.removeEventListener("keydown", markInputDuringPanelDeferral, { capture: true })
+      window.removeEventListener("beforeinput", markInputDuringPanelDeferral, { capture: true })
     }
   }, [deferredStructuralPanelRelease?.pending, panelDeferralRuntime, recordStructuralPanelReleaseEvent])
 

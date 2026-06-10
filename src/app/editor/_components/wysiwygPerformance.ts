@@ -7,6 +7,7 @@ import {
 import type { EditorPerformanceMetricDefinition } from "./runtime/editorPerformanceRuntime"
 
 export type WysiwygPerfEventKind =
+  | "structural-operation-handler-execute"
   | "inline-edit-draft-update"
   | "inline-edit-start"
   | "inline-edit-selection-update"
@@ -53,6 +54,12 @@ export type WysiwygPerfEventKind =
   | "optimistic-refocus-stale-settle-ignored"
   | "structural-refocus-settled-pagination"
   | "inline-edit-end"
+  | "flowdoc-island-focus"
+  | "flowdoc-island-lifecycle"
+  | "flowdoc-island-config"
+  | "editor-shell-draft-change-enter"
+  | "editor-shell-draft-change-exit"
+
 
 export interface WysiwygPerfEvent {
   kind: WysiwygPerfEventKind
@@ -97,6 +104,8 @@ export interface WysiwygPerfEvent {
   action?: string
   operation?: string
   attemptedOperation?: string
+  status?: string
+  reason?: string
   token?: number
   key?: string
   active?: boolean

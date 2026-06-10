@@ -28,6 +28,7 @@ for older line-by-line work-log detail.
 
 | Date | Area | Durable result | Verification anchor |
 |---|---|---|---|
+| 2026-06-09 | Editor Operation Architecture Phase 1-3A | Extracted paragraph split/merge plans and split handlers from the controller without changing flushSync boundaries or behavior. | type-check, WYSIWYG smoothness smoke, editor shell tests |
 | 2026-06-08 | Release `0.6.31` | Active documentation cleanup accepted: compact work logs, single-source agent docs, shorter docs index, and concise frontend runtime architecture reference. | stale-reference scan, docs diff check, project version marker test |
 | 2026-06-08 | Release `0.6.30` | Large-document boot and pagination performance hardening accepted: raw localStorage parse reuse and pagination measurement-cache hardening. | focused profile coverage |
 | 2026-06-07 | Release `0.6.29` | WYSIWYG history/re-enter fixes and large-document performance hardening accepted as the current baseline. | type-check, focused app regressions, perf baseline, WYSIWYG smoothness smoke, `git diff --check` |

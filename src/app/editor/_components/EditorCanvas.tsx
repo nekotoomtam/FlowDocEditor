@@ -3843,6 +3843,87 @@ function recordStructuralPageComparatorTiming(
   })
 }
 
+export function arePageFragmentsStructurallyEqual(a: PageFragment[], b: PageFragment[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const fA = a[i]
+    const fB = b[i]
+    if (
+      fA.nodeId !== fB.nodeId ||
+      fA.nodeType !== fB.nodeType ||
+      fA.x !== fB.x ||
+      fA.y !== fB.y ||
+      fA.width !== fB.width ||
+      fA.height !== fB.height ||
+      fA.lineStart !== fB.lineStart ||
+      fA.lineEnd !== fB.lineEnd ||
+      fA.isContinued !== fB.isContinued ||
+      fA.fragmentIndex !== fB.fragmentIndex ||
+      fA.nodeTextVersion !== fB.nodeTextVersion
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+function arePagesStructurallyEqual(a: PaginatedPage, b: PaginatedPage): boolean {
+  if (a === b) return true
+  if (a.index !== b.index) return false
+  if (a.width !== b.width) return false
+  if (a.height !== b.height) return false
+
+  // contentBox comparison
+  if (
+    a.contentBox.x !== b.contentBox.x ||
+    a.contentBox.y !== b.contentBox.y ||
+    a.contentBox.width !== b.contentBox.width ||
+    a.contentBox.height !== b.contentBox.height
+  ) {
+    return false
+  }
+
+  // headerZoneBox comparison
+  if (a.headerZoneBox !== b.headerZoneBox) {
+    if (!a.headerZoneBox || !b.headerZoneBox) return false
+    if (
+      a.headerZoneBox.x !== b.headerZoneBox.x ||
+      a.headerZoneBox.y !== b.headerZoneBox.y ||
+      a.headerZoneBox.width !== b.headerZoneBox.width ||
+      a.headerZoneBox.height !== b.headerZoneBox.height
+    ) {
+      return false
+    }
+  }
+
+  // footerZoneBox comparison
+  if (a.footerZoneBox !== b.footerZoneBox) {
+    if (!a.footerZoneBox || !b.footerZoneBox) return false
+    if (
+      a.footerZoneBox.x !== b.footerZoneBox.x ||
+      a.footerZoneBox.y !== b.footerZoneBox.y ||
+      a.footerZoneBox.width !== b.footerZoneBox.width ||
+      a.footerZoneBox.height !== b.footerZoneBox.height
+    ) {
+      return false
+    }
+  }
+
+  // Body fragments comparison
+  if (a.fragments.length !== b.fragments.length) return false
+  if (!arePageFragmentsStructurallyEqual(a.fragments, b.fragments)) return false
+
+  // Header fragments comparison
+  if (a.headerFragments.length !== b.headerFragments.length) return false
+  if (!arePageFragmentsStructurallyEqual(a.headerFragments, b.headerFragments)) return false
+
+  // Footer fragments comparison
+  if (a.footerFragments.length !== b.footerFragments.length) return false
+  if (!arePageFragmentsStructurallyEqual(a.footerFragments, b.footerFragments)) return false
+
+  return true
+}
+
 function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<PageViewProps>): boolean {
   const comparatorStartedAt = startWysiwygPerfSpan()
   const finishComparator = (equal: boolean, reason: string): boolean => {
@@ -3851,7 +3932,10 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
   }
   const ignoreStructuralSnapshotChange = canIgnoreStructuralSnapshotChangeForUnrelatedPage(prev, next)
   for (const key of Object.keys(prev) as Array<keyof PageViewProps>) {
-    if ((key === "doc" || key === "page") && ignoreStructuralSnapshotChange) continue
+    if (key === "doc" || key === "page") {
+      if (ignoreStructuralSnapshotChange) continue
+      if (arePagesStructurallyEqual(prev.page, next.page)) continue
+    }
     if (key === "isLayoutLoading" && ignoreStructuralSnapshotChange) continue
     if (PAGE_VIEW_TRANSIENT_PROP_KEYS.includes(key)) continue
     if (PAGE_VIEW_SCOPED_EDIT_PROP_KEYS.includes(key)) continue
@@ -4088,7 +4172,6 @@ function EditorCanvasPageSlot({
       unaffectedPage: !pageAffectedByStructuralIsland,
     })
   }, [page.fragments.length, page.index, pageAffectedByStructuralIsland, structuralIsland])
-  const pageView = <MemoizedPageView {...pageViewProps} />
 
   return (
     <div>
@@ -4101,11 +4184,15 @@ function EditorCanvasPageSlot({
         setPageFrameRef={setPageFrameRef}
         setPageOverlayRef={setPageOverlayRef}
       >
-        {structuralTraceActive ? (
-          <Profiler id={`page-view-${page.index}`} onRender={handlePageViewProfilerRender}>
-            {pageView}
-          </Profiler>
-        ) : pageView}
+        {rendered ? (
+          structuralTraceActive ? (
+            <Profiler id={`page-view-${page.index}`} onRender={handlePageViewProfilerRender}>
+              <MemoizedPageView {...pageViewProps} />
+            </Profiler>
+          ) : (
+            <MemoizedPageView {...pageViewProps} />
+          )
+        ) : null}
       </LazyPageFrame>
     </div>
   )
@@ -4126,8 +4213,10 @@ function areEditorCanvasPageSlotPropsEqual(
   }
   const ignoreStructuralSnapshotChange = canIgnoreStructuralSnapshotChangeForUnrelatedPage(prev, next)
   if (prev.page !== next.page && !ignoreStructuralSnapshotChange) {
-    recordStructuralPageMemoMiss(prev, next, "slot-page")
-    return finishComparator(false, "slot-page")
+    if (!arePagesStructurallyEqual(prev.page, next.page)) {
+      recordStructuralPageMemoMiss(prev, next, "slot-page")
+      return finishComparator(false, "slot-page")
+    }
   }
   if (prev.pageKey !== next.pageKey) {
     recordStructuralPageMemoMiss(prev, next, "slot-page-key")

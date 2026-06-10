@@ -154,6 +154,7 @@ export interface PageFragment {
   continuesFrom?: boolean  // true if a previous fragment exists for this paragraph
   isContinued?: boolean    // true if a subsequent fragment exists for this paragraph
   warnings?: PageFragmentWarning[]
+  nodeTextVersion?: number // explicit text version to prevent stale renders
 }
 
 export type PageFragmentWarningCode =

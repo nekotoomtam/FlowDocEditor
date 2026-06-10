@@ -19,6 +19,8 @@ import {
   type DraftPreviewShellMutationPlan,
 } from "../structuralEdit/previewSettleShellAdapter"
 
+import { flushAllWysiwygDrafts } from "./wysiwygDraftStore"
+
 export function useEditorDocumentSnapshotActions({
   docRef,
   richWysiwygDraftSessionStateRef,
@@ -30,6 +32,7 @@ export function useEditorDocumentSnapshotActions({
 }) {
   const getPersistableDocumentSnapshot = useCallback(() => {
     try {
+      flushAllWysiwygDrafts()
       if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED) {
         const richSession = richWysiwygDraftSessionStateRef.current
         if (richSession.nodeId && richSession.draft) {

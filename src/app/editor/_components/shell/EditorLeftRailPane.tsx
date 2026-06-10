@@ -72,7 +72,7 @@ export function EditorLeftRailPane({
         data-outline-selection-deferred={deferOutlineSelection ? "true" : "false"}
         style={{ display: "flex", flexShrink: 0, pointerEvents: deferLeftRailForStructuralPaint ? "none" : "auto" }}
       >
-        <StructuralPaintDeferredSubtree defer={deferLeftRailForStructuralPaint}>
+        <StructuralPaintDeferredSubtree defer={deferLeftRailForStructuralPaint || deferOutlineSelection}>
           <EditorLeftRail
             {...leftRailProps}
             selectedNodeId={renderedOutlineSelection.selectedNodeId}

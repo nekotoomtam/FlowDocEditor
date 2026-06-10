@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { getSmokeBrowserConfig, launchSmokeBrowser, smokeBrowserLabel } from "./smoke-browser.mjs"
@@ -8,7 +9,9 @@ import { getSmokeBrowserConfig, launchSmokeBrowser, smokeBrowserLabel } from "./
 // differently after leaving WYSIWYG edit mode and entering it again.
 
 const DEFAULT_PORT = 4018
-const TARGET_NODE_ID = "stage3-boundary-target"
+const stressFilePath = process.env.FLOWDOC_STRESS_FILE ?? process.env.FLOWDOC_PROBE_FILE ?? null
+const TARGET_NODE_ID = process.env.PROBE_TARGET_NODE_ID ?? process.env.STRESS_TARGET_NODE_ID ?? "stage3-boundary-target"
+const targetPageIndex = Number(process.env.STRESS_PAGE_INDEX ?? process.env.PROBE_TARGET_PAGE_INDEX ?? 14)
 const SCENARIO_ID = "wysiwyg-stage3-boundary"
 const FIRST_MARKER = "REENTER_A_MARKER"
 const SECOND_MARKER = "REENTER_B_MARKER"
@@ -62,7 +65,9 @@ function buildInsertText(marker, prefix, wordCount) {
 
 function scenarioUrl() {
   const url = new URL(baseEditorUrl)
-  url.searchParams.set("flowdocTestScenario", SCENARIO_ID)
+  if (!stressFilePath) {
+    url.searchParams.set("flowdocTestScenario", SCENARIO_ID)
+  }
   url.searchParams.set("flowdocWysiwygPerfTrace", "1")
   return url.toString()
 }
@@ -406,15 +411,16 @@ async function waitForStableSnapshot(page, label, options = {}) {
 
   while (Date.now() - startedAt < timeoutMs) {
     latest = await captureSnapshot(page, label, { nodeId })
-    const hasFragments = latest.fragments.length > 0 && latest.fragments.every((fragment) => fragment.lines.length > 0)
     const isEditing = latest.activeIsland?.active === true || latest.fragments.some((fragment) => fragment.isEditing)
+    const hasFragments = latest.fragments.length > 0 && latest.fragments.every((fragment) => isEditing || fragment.isEditing ? true : fragment.lines.length > 0)
+    const hasIslandLines = !isEditing || (latest.activeIsland?.lines?.length ?? 0) > 0 || latest.activeIsland?.lineCount > 0
     const editingMatches = expectEditing === null || isEditing === expectEditing
     const liveEchoSettled = !requireNoLiveEcho || latest.liveEchoCount === 0
     const key = snapshotKey(latest)
     stableCount = key === previousKey ? stableCount + 1 : 1
     previousKey = key
 
-    if (hasFragments && editingMatches && liveEchoSettled && stableCount >= stableSamples) {
+    if (hasFragments && hasIslandLines && editingMatches && liveEchoSettled && stableCount >= stableSamples) {
       return latest
     }
     await page.waitForTimeout(sampleDelayMs)
@@ -741,17 +747,43 @@ async function insertTextAtCurrentCaret(page, { marker, text }) {
 }
 
 async function openScenario(page) {
+  if (stressFilePath) {
+    const rawDocument = await readFile(path.resolve(repoRoot, stressFilePath), "utf8")
+    await page.context().addInitScript(({ rawDocument }) => {
+      if (location.origin === "null") return
+      try {
+        localStorage.clear()
+        sessionStorage.clear()
+        localStorage.setItem("flowdoc_document", rawDocument)
+        localStorage.setItem("flowdoc.wysiwygPerfTrace", "1")
+      } catch (error) {
+        window.__flowDocStressLifecycleStorageError = `${error?.name ?? "Error"}: ${error?.message ?? String(error)}`
+      }
+    }, { rawDocument })
+  }
+
   await page.goto(scenarioUrl(), { waitUntil: "domcontentloaded" })
   const shell = page.locator(shellSelector)
-  await shell.waitFor({ state: "visible", timeout: 15000 })
-  assert(await shell.getAttribute("data-editor-test-scenario") === SCENARIO_ID, "expected Stage 3 boundary scenario")
+  await shell.waitFor({ state: "visible", timeout: 30000 })
+  if (!stressFilePath) {
+    assert(await shell.getAttribute("data-editor-test-scenario") === SCENARIO_ID, "expected Stage 3 boundary scenario")
+  }
   assert(await shell.getAttribute("data-wysiwyg-text-engine-enabled") === "true", "text engine flag is not enabled")
   const runtimePerfTraceEnabled = await page.evaluate(() => (
     new URLSearchParams(window.location.search).get("flowdocWysiwygPerfTrace") === "1" ||
     window.__flowDocWysiwygPerfTraceEnabled === true
   ))
   assert(runtimePerfTraceEnabled || await shell.getAttribute("data-wysiwyg-perf-trace-enabled") === "true", "perf trace flag is not enabled")
-  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: 15000 })
+
+  if (stressFilePath) {
+    const pageSelector = `[data-testid="editor-page-frame"][data-page-index="${targetPageIndex}"]`
+    await page.waitForSelector(pageSelector, { timeout: 30000 })
+    await page.evaluate((selector) => {
+      document.querySelector(selector)?.scrollIntoView({ block: "start" })
+    }, pageSelector)
+  }
+
+  await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: 30000 })
   await expectNoLayoutError(page)
 }
 

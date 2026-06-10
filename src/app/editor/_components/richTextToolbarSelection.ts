@@ -1,6 +1,7 @@
 import type { WysiwygTextSelection } from "./useWysiwygTextSession"
 
-export const RICH_TEXT_TOOLBAR_SELECTION_DEBOUNCE_MS = 96
+export const RICH_TEXT_TOOLBAR_SELECTION_DEBOUNCE_MS = 120
+export const RICH_TEXT_TOOLBAR_SELECTION_MAX_WAIT_MS = 250
 
 export interface RichTextToolbarSelectionSnapshot {
   nodeId: string | null
