@@ -1,7 +1,7 @@
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
-import { defaultTextMeasurer } from "@/layout"
+import { defaultTextMeasurer, type TextMeasurer } from "@/layout"
 import { resolveFragmentBoxLayoutPrimitives, type PaginatedDocument, type PaginatedPage, type PageFragment, type ParagraphRenderProps } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import {
@@ -21,6 +21,7 @@ import {
   type ActiveOutOfCanvasStructuralIsland,
 } from "../EditorCanvas"
 import type { DragState } from "../editorReducer"
+import { createWysiwygDraftParagraphLayoutCache } from "../wysiwygDraftParagraphLayout"
 
 const renderProps: ParagraphRenderProps = {
   align: "left",
@@ -104,6 +105,27 @@ function boundarySafeIsland(nodeId = "p2", overrides: Partial<ActiveOutOfCanvasS
 
 function countMarkup(markup: string, needle: string): number {
   return markup.split(needle).length - 1
+}
+
+function makeCountingMeasurer(): {
+  measurer: TextMeasurer
+  totalCalls: () => number
+} {
+  let textCalls = 0
+  let lineHeightCalls = 0
+  return {
+    measurer: {
+      measureText: (text) => {
+        textCalls += 1
+        return { width: text.length * 10 }
+      },
+      measureLineHeight: (_fontFamilyKey, fontSize, lineHeightRatio) => {
+        lineHeightCalls += 1
+        return fontSize * lineHeightRatio
+      },
+    },
+    totalCalls: () => textCalls + lineHeightCalls,
+  }
 }
 
 function expectNativeEditLayerMarkup(markup: string, text?: string): void {
@@ -2058,6 +2080,31 @@ describe("EditorCanvas table-cell WYSIWYG draft visual preview", () => {
     expect(chrome.map((fragment) => fragment.nodeType)).toEqual(["flow-table", "flow-table-row", "flow-table-cell"])
     expect(chrome.every((fragment) => fragment.continuesFrom)).toBe(true)
     expect(chrome.every((fragment) => fragment.height === preview?.fragments[1].height)).toBe(true)
+  })
+
+  it("reuses cached canvas-owned draft preview measurements for identical inputs", () => {
+    const draftLayoutCache = createWysiwygDraftParagraphLayoutCache()
+    const counting = makeCountingMeasurer()
+    const input = {
+      paginated: makeTableCellPaginated(),
+      doc: makeTableCellDoc(),
+      nodeId: "cell-p",
+      draftText: "A\nB\nC",
+      caretOffset: 5,
+      textMeasurer: counting.measurer,
+      draftLayoutCache,
+    }
+
+    const first = buildWysiwygDraftVisualPreview(input)
+    const callsAfterFirst = counting.totalCalls()
+    if (first?.fragments[0]?.lines?.[0]) first.fragments[0].lines[0].text = "mutated"
+    const second = buildWysiwygDraftVisualPreview(input)
+
+    expect(first).not.toBeNull()
+    expect(second).not.toBeNull()
+    expect(counting.totalCalls()).toBe(callsAfterFirst)
+    expect(second?.fragments[0]?.lines?.[0]?.text).toBe("A")
+    expect(second).not.toBe(first)
   })
 
   it("extends source-page table-cell chrome to the split slice height", () => {

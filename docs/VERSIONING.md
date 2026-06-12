@@ -3,7 +3,7 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.32`: suitable for self-use with accepted
+The current baseline is `0.6.33`: suitable for self-use with accepted
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -66,6 +66,11 @@ cadence telemetry, repeated-grapheme width reuse, text-changing parent-sync
 debounce, page-boundary height-preview handoff coalescing, and first editor
 operation architecture groundwork, while keeping no-wait Thai stress typing
 above the accepted smoothness gate as a documented risk,
+plus render/action ownership hardening, structural operation handler extraction,
+render invalidation contracts, page render churn guards, detached WYSIWYG island
+live-layer dev/test promotion, split typing-vs-safety trace windows, page-boundary
+selection safety gates, and draft-store-driven accessibility status updates
+without waking the Shell/canvas render path,
 but not yet a general-user `v1`.
 
 ## Version Meaning
@@ -108,6 +113,7 @@ but not yet a general-user `v1`.
 | `0.6.30` | Patch baseline for large-document boot and pagination performance hardening: raw localStorage parse reuse, word-segmentation cache counters, per-pagination paragraph measurement cache reuse across flow layout/page packing/row/flow-row/Flow Table placement, and focused profile coverage without changing persisted document or package schema versions. |
 | `0.6.31` | Patch baseline for active documentation cleanup: compact work logs, single-source agent docs, a shorter docs index, and a concise frontend runtime architecture reference without changing persisted document/package schema versions or editor/runtime behavior. |
 | `0.6.32` | Patch baseline for WYSIWYG paragraph smoothness investigation and hardening: FlowDoc Draft Editor Island profiling, draft scope/cadence telemetry, repeated-grapheme width reuse, parent-sync and boundary-height handoff coalescing, and first editor operation architecture groundwork, with no persisted document/package schema change and remaining no-wait Thai stress smoothness risk documented. |
+| `0.6.33` | Patch baseline for editor render/action separation and WYSIWYG island render-scope hardening: operation ownership mapping, render invalidation contracts, structural handler extraction, page render churn guards, detached island live-layer dev/test defaulting, split typing-vs-safety trace reporting, page-boundary selection safety coverage, and draft-store accessibility-status updates without changing persisted document/package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

@@ -1,7 +1,10 @@
 "use client"
 
 import {
+  createContext,
+  memo,
   Profiler,
+  useContext,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -16,18 +19,20 @@ import {
   type PointerEvent,
   type ProfilerOnRenderCallback,
   type FocusEvent,
+  type ReactNode,
 } from "react"
 import { createPortal } from "react-dom"
 
 import { getTextRunParagraphText } from "@/document"
 import type { TextMeasurer } from "@/layout"
-import type { PageFragment, PaginatedPage } from "@/pagination"
+import type { PageFragment, PaginatedPage, ParagraphRenderProps } from "@/pagination"
 import type { ParagraphNode } from "@/schema"
 import { buildSplitEditInput } from "./inlineEditSurfaceState"
 import {
   buildCachedWysiwygDraftParagraphLayout,
   createWysiwygDraftParagraphLayoutCacheKey,
   createWysiwygDraftParagraphLayoutCache,
+  type WysiwygDraftParagraphLayout,
 } from "./wysiwygDraftParagraphLayout"
 import {
   resolveWysiwygPointerSelectionState,
@@ -71,15 +76,38 @@ import {
   type WysiwygLocalDraftSnapshot,
 } from "./useWysiwygTextSession"
 import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
-import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
+import {
+  WYSIWYG_ISLAND_REACT_LIVE_ATTRS_ENABLED,
+  WYSIWYG_ISLAND_SURFACE_LIVE_LAYER_ENABLED,
+  WYSIWYG_PERF_TRACE_ENABLED,
+} from "./wysiwygInlineEditConfig"
 import { splitWysiwygDraftVisualFragments } from "./wysiwygDraftVisualPreview"
+import {
+  classifyWysiwygDraftFragmentSplitTelemetry,
+  resolveWysiwygDraftFragmentSplitReuse,
+  type WysiwygDraftFragmentSplitReuseState,
+  type WysiwygDraftFragmentSplitTraceState,
+} from "./wysiwygDraftFragmentSplitTelemetry"
+import {
+  classifyWysiwygDraftIslandRootRenderTelemetry,
+  type WysiwygDraftIslandRootRenderTraceState,
+} from "./wysiwygDraftIslandRootRenderTelemetry"
+import {
+  classifyWysiwygDraftIslandSurfaceRenderTelemetry,
+  type WysiwygDraftIslandSurfaceRenderTraceState,
+} from "./wysiwygDraftIslandSurfaceRenderTelemetry"
 import {
   classifyWysiwygTextReflow,
   shouldPatchPlainParagraphBoundaryHeightPreview,
   type WysiwygTextReflowDecision,
 } from "./wysiwygReflow"
-import { registerWysiwygDraftFlushHandler } from "./shell/wysiwygDraftStore"
 import {
+  registerWysiwygDraftFlushHandler,
+  useWysiwygDraftStoreForNode,
+  wysiwygDraftStore,
+} from "./shell/wysiwygDraftStore"
+import {
+  recordWysiwygPerfAttributionEvent,
   recordWysiwygPerfEvent,
   finishWysiwygPerfSpan,
   startWysiwygPerfSpan,
@@ -137,6 +165,146 @@ interface DraftIslandSurface {
   fragment: PageFragment
 }
 
+interface DraftIslandVisualLinesProps {
+  surfaceFragment: PageFragment
+  renderProps: ParagraphRenderProps | undefined
+}
+
+type DraftIslandSurfaceAnchorMode = "page-overlay" | "inline-fallback"
+type DraftIslandSurfaceLiveLayerMode = "inline" | "detached"
+
+interface DraftIslandSurfaceViewProps {
+  surface: DraftIslandSurface
+  surfaceIndex: number
+  sourceFragment: PageFragment
+  renderProps: ParagraphRenderProps | undefined
+  scale: number
+  nodeId: string
+  draftRevision: number
+  draftTextLength: number
+  draftCaretOffset: number | null
+  selectionStart: number | undefined
+  selectionEnd: number | undefined
+  selectionAnchorOffset: number | null
+  selectionFocusOffset: number | null
+  selectedDraftTextLength: number
+  totalSelectionOverlayCount: number
+  totalLineCount: number
+  draftSurfaceCount: number
+  isPageBoundaryPreview: boolean
+  reflowKind: string | undefined
+  reflowReason: string | undefined
+  committing: boolean
+  anchorMode: DraftIslandSurfaceAnchorMode
+  textMeasurer: TextMeasurer
+  onKeyDown: (event: KeyboardEvent<Element>) => void
+  onClick: (event: MouseEvent<SVGSVGElement>) => void
+  onDoubleClick: (event: MouseEvent<SVGSVGElement>) => void
+  onPointerDown: (event: PointerEvent<SVGSVGElement>) => void
+  onPointerMove: (event: PointerEvent<SVGSVGElement>) => void
+  onPointerUp: (event: PointerEvent<SVGSVGElement>) => void
+  onPointerCancel: (event: PointerEvent<SVGSVGElement>) => void
+  onPaste: (event: ReactClipboardEvent<Element>) => void
+  onCopy: (event: ReactClipboardEvent<Element>) => void
+  onCut: (event: ReactClipboardEvent<Element>) => void
+  onBlur: (event: FocusEvent<Element>) => void
+  onFocus: () => void
+  onIslandSurfaceRender: ProfilerOnRenderCallback
+  liveLayerMode: DraftIslandSurfaceLiveLayerMode
+}
+
+interface DraftIslandSurfaceChromeProps {
+  surfaceKey: string
+  nodeId: string
+  pageIndex: number
+  x: number
+  y: number
+  width: number
+  surfaceHeightPt: number
+  surfaceChromeHeightPt: number
+}
+
+type DraftIslandCaretGeometry = ReturnType<typeof resolveCollapsedCaretOverlayInFragment>
+
+interface DraftIslandCaretOverlayProps {
+  surfaceKey: string
+  nodeId: string
+  pageIndex: number
+  caret: DraftIslandCaretGeometry
+}
+
+interface DraftIslandSurfaceLiveLayerProps {
+  surface: DraftIslandSurface
+  renderProps: ParagraphRenderProps | undefined
+  nodeId: string
+  draftRevision: number
+  draftTextLength: number
+  draftCaretOffset: number | null
+  selectionStart: number | undefined
+  selectionEnd: number | undefined
+  selectionAnchorOffset: number | null
+  selectionFocusOffset: number | null
+  selectedDraftTextLength: number
+  totalSelectionOverlayCount: number
+  totalLineCount: number
+  textMeasurer: TextMeasurer
+  surfaceElement?: DraftIslandSurfaceLiveAttributeSyncTarget | null
+  surfaceElementRef?: { current: DraftIslandSurfaceLiveAttributeSyncTarget | null }
+}
+
+interface DraftIslandSurfaceLiveLayerContextValue {
+  surfacesByKey: Record<string, DraftIslandSurface>
+  renderProps: ParagraphRenderProps | undefined
+  nodeId: string
+  draftRevision: number
+  draftTextLength: number
+  draftCaretOffset: number | null
+  selectionStart: number | undefined
+  selectionEnd: number | undefined
+  selectionAnchorOffset: number | null
+  selectionFocusOffset: number | null
+  selectedDraftTextLength: number
+  totalSelectionOverlayCount: number
+  totalLineCount: number
+  textMeasurer: TextMeasurer
+}
+
+interface DraftIslandSurfaceLiveAttributesInput {
+  lineCount: number
+  totalLineCount: number
+  draftTextLength: number
+  draftCaretOffset: number | null
+  selectionStart: number | undefined
+  selectionEnd: number | undefined
+  selectedDraftTextLength: number
+  selectionCollapsed: boolean
+  caretVisible: boolean
+  totalSelectionOverlayCount: number
+  surfaceSelectionOverlayCount: number
+  draftRevision: number
+}
+
+export type DraftIslandSurfaceLiveAttributes = {
+  "data-wysiwyg-line-count": number
+  "data-wysiwyg-flowdoc-draft-line-count": number
+  "data-wysiwyg-flowdoc-draft-total-line-count": number
+  "data-wysiwyg-flowdoc-draft-text-length": number
+  "data-wysiwyg-flowdoc-draft-caret-offset": number | undefined
+  "data-wysiwyg-flowdoc-draft-selection-start": number | undefined
+  "data-wysiwyg-flowdoc-draft-selection-end": number | undefined
+  "data-wysiwyg-flowdoc-draft-selected-text-length": number
+  "data-wysiwyg-flowdoc-draft-selection-collapsed": string
+  "data-wysiwyg-custom-caret-visible": "true" | undefined
+  "data-wysiwyg-flowdoc-draft-selection-overlay-count": number
+  "data-wysiwyg-flowdoc-draft-surface-selection-overlay-count": number
+  "data-wysiwyg-island-revision": number
+}
+
+export interface DraftIslandSurfaceLiveAttributeSyncTarget {
+  setAttribute(name: string, value: string): void
+  removeAttribute(name: string): void
+}
+
 type DraftIslandAnchorLookup = Record<string, HTMLElement>
 
 export interface DraftIslandHeightPreviewState {
@@ -157,6 +325,792 @@ export const ISLAND_TEXT_INPUT_PARENT_SYNC_DEBOUNCE_MS = 1000
 export const ISLAND_BOUNDARY_HEIGHT_PREVIEW_DEBOUNCE_MS = 120
 const INPUT_BRIDGE_BEFOREINPUT_SUPPRESSION_MS = 1000
 const ISLAND_Z_INDEX = 8000
+const EMPTY_DRAFT_LINES: NonNullable<PageFragment["lines"]> = []
+const EMPTY_DRAFT_SURFACE_LIVE_ATTRIBUTES: Partial<DraftIslandSurfaceLiveAttributes> = {}
+const DraftIslandSurfaceLiveLayerContext = createContext<DraftIslandSurfaceLiveLayerContextValue | null>(null)
+
+export function areDraftIslandVisualLinesPropsEqual(
+  previous: DraftIslandVisualLinesProps,
+  next: DraftIslandVisualLinesProps,
+): boolean {
+  return previous.surfaceFragment === next.surfaceFragment && previous.renderProps === next.renderProps
+}
+
+function DraftIslandVisualLines({
+  surfaceFragment,
+  renderProps,
+}: DraftIslandVisualLinesProps) {
+  const draftLines = surfaceFragment.lines ?? EMPTY_DRAFT_LINES
+  const draftLineRanges = useMemo(() => resolveDraftLineRangeAttrs(draftLines), [draftLines])
+  const surfaceKey = draftIslandSurfaceKey(surfaceFragment)
+  const handleVisualLinesRender = useCallback<ProfilerOnRenderCallback>((
+    id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-visual-lines-react-commit",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      nodeId: surfaceFragment.nodeId,
+      pageIndex: surfaceFragment.pageIndex,
+      lineCount: draftLines.length,
+      paragraphHeight: surfaceFragment.height,
+      pageIndexes: String(surfaceFragment.pageIndex),
+      componentName: id,
+      source: phase,
+    })
+  }, [
+    draftLines.length,
+    surfaceFragment.height,
+    surfaceFragment.nodeId,
+    surfaceFragment.pageIndex,
+  ])
+
+  return (
+    <Profiler
+      id={`flowdoc-draft-editor-island-visual-lines-v2:${surfaceKey}`}
+      onRender={handleVisualLinesRender}
+    >
+      <g data-wysiwyg-flowdoc-draft-lines="true" pointerEvents="none">
+        {draftLines.map((line, index) => renderDraftLine({
+          line,
+          index,
+          renderProps,
+          range: draftLineRanges[index],
+        }))}
+      </g>
+    </Profiler>
+  )
+}
+
+const MemoizedDraftIslandVisualLines = memo(DraftIslandVisualLines, areDraftIslandVisualLinesPropsEqual)
+MemoizedDraftIslandVisualLines.displayName = "MemoizedDraftIslandVisualLines"
+
+export function areDraftIslandSurfaceChromePropsEqual(
+  previous: DraftIslandSurfaceChromeProps,
+  next: DraftIslandSurfaceChromeProps,
+): boolean {
+  return (
+    previous.surfaceKey === next.surfaceKey &&
+    previous.nodeId === next.nodeId &&
+    previous.pageIndex === next.pageIndex &&
+    previous.x === next.x &&
+    previous.y === next.y &&
+    previous.width === next.width &&
+    previous.surfaceHeightPt === next.surfaceHeightPt &&
+    previous.surfaceChromeHeightPt === next.surfaceChromeHeightPt
+  )
+}
+
+function DraftIslandSurfaceChrome({
+  surfaceKey,
+  nodeId,
+  pageIndex,
+  x,
+  y,
+  width,
+  surfaceHeightPt,
+  surfaceChromeHeightPt,
+}: DraftIslandSurfaceChromeProps) {
+  const handleChromeRender = useCallback<ProfilerOnRenderCallback>((
+    id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-surface-chrome-react-commit",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      nodeId,
+      pageIndex,
+      paragraphHeight: surfaceChromeHeightPt,
+      componentName: id,
+      source: phase,
+    })
+  }, [
+    nodeId,
+    pageIndex,
+    surfaceChromeHeightPt,
+  ])
+
+  return (
+    <Profiler
+      id={`flowdoc-draft-editor-island-surface-chrome-v2:${surfaceKey}`}
+      onRender={handleChromeRender}
+    >
+      <g data-wysiwyg-island-static-chrome="true">
+        <rect
+          data-wysiwyg-out-of-canvas-cover="true"
+          x={x}
+          y={y}
+          width={width}
+          height={surfaceChromeHeightPt}
+          fill="#ffffff"
+          pointerEvents="none"
+        />
+        <rect
+          data-wysiwyg-hit-area="true"
+          data-wysiwyg-draft-editor-island-hit-area="true"
+          x={x}
+          y={y}
+          width={width}
+          height={surfaceHeightPt}
+          fill="transparent"
+          pointerEvents="all"
+        />
+        <rect
+          data-wysiwyg-draft-editor-island-outline="true"
+          x={x}
+          y={y}
+          width={width}
+          height={surfaceChromeHeightPt}
+          fill="none"
+          stroke="#2563eb"
+          strokeWidth={1}
+          opacity={0.42}
+          pointerEvents="none"
+        />
+      </g>
+    </Profiler>
+  )
+}
+
+const MemoizedDraftIslandSurfaceChrome = memo(DraftIslandSurfaceChrome, areDraftIslandSurfaceChromePropsEqual)
+MemoizedDraftIslandSurfaceChrome.displayName = "MemoizedDraftIslandSurfaceChrome"
+
+function areDraftIslandCaretGeometriesEqual(
+  previous: DraftIslandCaretGeometry,
+  next: DraftIslandCaretGeometry,
+): boolean {
+  if (previous === next) return true
+  if (!previous || !next) return previous === next
+  return (
+    previous.x1 === next.x1 &&
+    previous.y1 === next.y1 &&
+    previous.x2 === next.x2 &&
+    previous.y2 === next.y2
+  )
+}
+
+export function areDraftIslandCaretOverlayPropsEqual(
+  previous: DraftIslandCaretOverlayProps,
+  next: DraftIslandCaretOverlayProps,
+): boolean {
+  return (
+    previous.surfaceKey === next.surfaceKey &&
+    previous.nodeId === next.nodeId &&
+    previous.pageIndex === next.pageIndex &&
+    areDraftIslandCaretGeometriesEqual(previous.caret, next.caret)
+  )
+}
+
+function DraftIslandCaretOverlay({
+  surfaceKey,
+  nodeId,
+  pageIndex,
+  caret,
+}: DraftIslandCaretOverlayProps) {
+  const handleCaretRender = useCallback<ProfilerOnRenderCallback>((
+    id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-caret-react-commit",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      nodeId,
+      pageIndex,
+      active: caret != null,
+      componentName: id,
+      source: phase,
+    })
+  }, [
+    caret,
+    nodeId,
+    pageIndex,
+  ])
+
+  return (
+    <Profiler
+      id={`flowdoc-draft-editor-island-caret-v2:${surfaceKey}`}
+      onRender={handleCaretRender}
+    >
+      {caret ? (
+        <line
+          data-wysiwyg-caret="true"
+          x1={caret.x1}
+          y1={caret.y1}
+          x2={caret.x2}
+          y2={caret.y2}
+          stroke="#2563eb"
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+        />
+      ) : null}
+    </Profiler>
+  )
+}
+
+const MemoizedDraftIslandCaretOverlay = memo(DraftIslandCaretOverlay, areDraftIslandCaretOverlayPropsEqual)
+MemoizedDraftIslandCaretOverlay.displayName = "MemoizedDraftIslandCaretOverlay"
+
+export function resolveDraftIslandSurfaceLiveAttributes({
+  lineCount,
+  totalLineCount,
+  draftTextLength,
+  draftCaretOffset,
+  selectionStart,
+  selectionEnd,
+  selectedDraftTextLength,
+  selectionCollapsed,
+  caretVisible,
+  totalSelectionOverlayCount,
+  surfaceSelectionOverlayCount,
+  draftRevision,
+}: DraftIslandSurfaceLiveAttributesInput): DraftIslandSurfaceLiveAttributes {
+  return {
+    "data-wysiwyg-line-count": lineCount,
+    "data-wysiwyg-flowdoc-draft-line-count": lineCount,
+    "data-wysiwyg-flowdoc-draft-total-line-count": totalLineCount,
+    "data-wysiwyg-flowdoc-draft-text-length": draftTextLength,
+    "data-wysiwyg-flowdoc-draft-caret-offset": draftCaretOffset ?? undefined,
+    "data-wysiwyg-flowdoc-draft-selection-start": selectionStart,
+    "data-wysiwyg-flowdoc-draft-selection-end": selectionEnd,
+    "data-wysiwyg-flowdoc-draft-selected-text-length": selectedDraftTextLength,
+    "data-wysiwyg-flowdoc-draft-selection-collapsed": String(selectionCollapsed),
+    "data-wysiwyg-custom-caret-visible": caretVisible ? "true" : undefined,
+    "data-wysiwyg-flowdoc-draft-selection-overlay-count": totalSelectionOverlayCount,
+    "data-wysiwyg-flowdoc-draft-surface-selection-overlay-count": surfaceSelectionOverlayCount,
+    "data-wysiwyg-island-revision": draftRevision,
+  }
+}
+
+export function syncDraftIslandSurfaceLiveAttributes(
+  target: DraftIslandSurfaceLiveAttributeSyncTarget,
+  attributes: DraftIslandSurfaceLiveAttributes,
+): void {
+  for (const [name, value] of Object.entries(attributes)) {
+    if (value == null) {
+      target.removeAttribute(name)
+      continue
+    }
+    target.setAttribute(name, String(value))
+  }
+}
+
+function areDraftIslandSurfaceShellFragmentsEqual(
+  previous: PageFragment,
+  next: PageFragment,
+): boolean {
+  return (
+    previous.nodeId === next.nodeId &&
+    previous.nodeType === next.nodeType &&
+    previous.pageIndex === next.pageIndex &&
+    previous.fragmentIndex === next.fragmentIndex &&
+    previous.lineStart === next.lineStart &&
+    previous.lineEnd === next.lineEnd &&
+    previous.continuesFrom === next.continuesFrom &&
+    previous.isContinued === next.isContinued &&
+    previous.x === next.x &&
+    previous.y === next.y &&
+    previous.width === next.width &&
+    previous.height === next.height
+  )
+}
+
+function areDraftIslandSourceShellFragmentsEqual(
+  previous: PageFragment,
+  next: PageFragment,
+): boolean {
+  return (
+    previous.pageIndex === next.pageIndex &&
+    previous.height === next.height
+  )
+}
+
+function areDraftIslandSurfaceShellsEqual(
+  previous: DraftIslandSurface,
+  next: DraftIslandSurface,
+): boolean {
+  return (
+    previous.key === next.key &&
+    previous.pageKey === next.pageKey &&
+    areDraftIslandSurfaceShellFragmentsEqual(previous.fragment, next.fragment)
+  )
+}
+
+function areDraftIslandSurfaceViewPropsFullyEqual(
+  previous: DraftIslandSurfaceViewProps,
+  next: DraftIslandSurfaceViewProps,
+): boolean {
+  return (
+    previous.surface === next.surface &&
+    previous.surfaceIndex === next.surfaceIndex &&
+    previous.sourceFragment === next.sourceFragment &&
+    previous.renderProps === next.renderProps &&
+    previous.scale === next.scale &&
+    previous.nodeId === next.nodeId &&
+    previous.draftRevision === next.draftRevision &&
+    previous.draftTextLength === next.draftTextLength &&
+    previous.draftCaretOffset === next.draftCaretOffset &&
+    previous.selectionStart === next.selectionStart &&
+    previous.selectionEnd === next.selectionEnd &&
+    previous.selectionAnchorOffset === next.selectionAnchorOffset &&
+    previous.selectionFocusOffset === next.selectionFocusOffset &&
+    previous.selectedDraftTextLength === next.selectedDraftTextLength &&
+    previous.totalSelectionOverlayCount === next.totalSelectionOverlayCount &&
+    previous.totalLineCount === next.totalLineCount &&
+    previous.draftSurfaceCount === next.draftSurfaceCount &&
+    previous.isPageBoundaryPreview === next.isPageBoundaryPreview &&
+    previous.reflowKind === next.reflowKind &&
+    previous.reflowReason === next.reflowReason &&
+    previous.committing === next.committing &&
+    previous.anchorMode === next.anchorMode &&
+    previous.textMeasurer === next.textMeasurer &&
+    previous.onKeyDown === next.onKeyDown &&
+    previous.onClick === next.onClick &&
+    previous.onDoubleClick === next.onDoubleClick &&
+    previous.onPointerDown === next.onPointerDown &&
+    previous.onPointerMove === next.onPointerMove &&
+    previous.onPointerUp === next.onPointerUp &&
+    previous.onPointerCancel === next.onPointerCancel &&
+    previous.onPaste === next.onPaste &&
+    previous.onCopy === next.onCopy &&
+    previous.onCut === next.onCut &&
+    previous.onBlur === next.onBlur &&
+    previous.onFocus === next.onFocus &&
+    previous.onIslandSurfaceRender === next.onIslandSurfaceRender &&
+    previous.liveLayerMode === next.liveLayerMode
+  )
+}
+
+function areDraftIslandSurfaceViewShellPropsEqual(
+  previous: DraftIslandSurfaceViewProps,
+  next: DraftIslandSurfaceViewProps,
+): boolean {
+  return (
+    areDraftIslandSurfaceShellsEqual(previous.surface, next.surface) &&
+    previous.surfaceIndex === next.surfaceIndex &&
+    areDraftIslandSourceShellFragmentsEqual(previous.sourceFragment, next.sourceFragment) &&
+    previous.scale === next.scale &&
+    previous.nodeId === next.nodeId &&
+    previous.draftSurfaceCount === next.draftSurfaceCount &&
+    previous.isPageBoundaryPreview === next.isPageBoundaryPreview &&
+    previous.reflowKind === next.reflowKind &&
+    previous.reflowReason === next.reflowReason &&
+    previous.committing === next.committing &&
+    previous.anchorMode === next.anchorMode &&
+    previous.onKeyDown === next.onKeyDown &&
+    previous.onClick === next.onClick &&
+    previous.onDoubleClick === next.onDoubleClick &&
+    previous.onPointerDown === next.onPointerDown &&
+    previous.onPointerMove === next.onPointerMove &&
+    previous.onPointerUp === next.onPointerUp &&
+    previous.onPointerCancel === next.onPointerCancel &&
+    previous.onPaste === next.onPaste &&
+    previous.onCopy === next.onCopy &&
+    previous.onCut === next.onCut &&
+    previous.onBlur === next.onBlur &&
+    previous.onFocus === next.onFocus &&
+    previous.onIslandSurfaceRender === next.onIslandSurfaceRender &&
+    previous.liveLayerMode === next.liveLayerMode
+  )
+}
+
+export function areDraftIslandSurfaceViewPropsEqual(
+  previous: DraftIslandSurfaceViewProps,
+  next: DraftIslandSurfaceViewProps,
+): boolean {
+  if (previous.liveLayerMode !== "detached" || next.liveLayerMode !== "detached") {
+    return areDraftIslandSurfaceViewPropsFullyEqual(previous, next)
+  }
+  return areDraftIslandSurfaceViewShellPropsEqual(previous, next)
+}
+
+function DraftIslandSurfaceLiveLayer({
+  surface,
+  renderProps,
+  nodeId,
+  draftRevision,
+  draftTextLength,
+  draftCaretOffset,
+  selectionStart,
+  selectionEnd,
+  selectionAnchorOffset,
+  selectionFocusOffset,
+  selectedDraftTextLength,
+  totalSelectionOverlayCount,
+  totalLineCount,
+  textMeasurer,
+  surfaceElement,
+  surfaceElementRef,
+}: DraftIslandSurfaceLiveLayerProps) {
+  const surfaceFragment = surface.fragment
+  const selectionActive = selectionAnchorOffset != null &&
+    selectionFocusOffset != null &&
+    selectionAnchorOffset !== selectionFocusOffset
+  const caret = resolveCollapsedCaretOverlayInFragment(
+    surfaceFragment,
+    draftCaretOffset ?? draftTextLength,
+    { textMeasurer },
+  )
+  const selectionRects = selectionActive
+    ? resolveSelectionOverlayRectsInFragment(surfaceFragment, selectionAnchorOffset, selectionFocusOffset, { textMeasurer })
+    : []
+  const selectionCollapsed = !selectionActive
+  const liveAttributes = resolveDraftIslandSurfaceLiveAttributes({
+    lineCount: surfaceFragment.lines?.length ?? 0,
+    totalLineCount,
+    draftTextLength,
+    draftCaretOffset,
+    selectionStart,
+    selectionEnd,
+    selectedDraftTextLength,
+    selectionCollapsed,
+    caretVisible: caret != null,
+    totalSelectionOverlayCount,
+    surfaceSelectionOverlayCount: selectionRects.length,
+    draftRevision,
+  })
+  useLayoutEffect(() => {
+    const element = surfaceElement ?? surfaceElementRef?.current ?? null
+    if (!element) return
+    syncDraftIslandSurfaceLiveAttributes(element, liveAttributes)
+  }, [liveAttributes, surfaceElement, surfaceElementRef])
+  const handleLiveLayerRender = useCallback<ProfilerOnRenderCallback>((
+    id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-surface-live-layer-react-commit",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      nodeId,
+      pageIndex: surfaceFragment.pageIndex,
+      draftVersion: draftRevision,
+      textLength: draftTextLength,
+      lineCount: surfaceFragment.lines?.length ?? 0,
+      paragraphHeight: surfaceFragment.height,
+      selectionCollapsed,
+      selectionRangeLength: selectionCollapsed || selectionAnchorOffset == null || selectionFocusOffset == null
+        ? 0
+        : Math.abs(selectionFocusOffset - selectionAnchorOffset),
+      overlayRectCount: selectionRects.length,
+      componentName: id,
+      source: phase,
+    })
+  }, [
+    draftRevision,
+    draftTextLength,
+    nodeId,
+    selectionAnchorOffset,
+    selectionCollapsed,
+    selectionFocusOffset,
+    selectionRects.length,
+    surfaceFragment.height,
+    surfaceFragment.lines?.length,
+    surfaceFragment.pageIndex,
+  ])
+
+  return (
+    <Profiler
+      id={`flowdoc-draft-editor-island-surface-live-layer-v2:${surface.key}`}
+      onRender={handleLiveLayerRender}
+    >
+      <>
+        {selectionRects.length > 0 ? (
+          <g data-wysiwyg-selection-overlay="true" pointerEvents="none">
+            {selectionRects.map((rect, index) => (
+              <rect
+                key={index}
+                x={rect.x}
+                y={rect.y}
+                width={rect.width}
+                height={rect.height}
+                fill="#bfdbfe"
+                opacity={0.58}
+              />
+            ))}
+          </g>
+        ) : null}
+        <MemoizedDraftIslandVisualLines
+          surfaceFragment={surfaceFragment}
+          renderProps={renderProps}
+        />
+        <MemoizedDraftIslandCaretOverlay
+          surfaceKey={surface.key}
+          nodeId={nodeId}
+          pageIndex={surfaceFragment.pageIndex}
+          caret={caret}
+        />
+      </>
+    </Profiler>
+  )
+}
+
+function DraftIslandSurfaceLiveLayerContextConsumer({
+  surfaceKey,
+  surfaceElementRef,
+}: {
+  surfaceKey: string
+  surfaceElementRef: { current: DraftIslandSurfaceLiveAttributeSyncTarget | null }
+}) {
+  const context = useContext(DraftIslandSurfaceLiveLayerContext)
+  if (!context) return null
+  const surface = context.surfacesByKey[surfaceKey]
+  if (!surface) return null
+  return (
+    <DraftIslandSurfaceLiveLayer
+      surface={surface}
+      renderProps={context.renderProps}
+      nodeId={context.nodeId}
+      draftRevision={context.draftRevision}
+      draftTextLength={context.draftTextLength}
+      draftCaretOffset={context.draftCaretOffset}
+      selectionStart={context.selectionStart}
+      selectionEnd={context.selectionEnd}
+      selectionAnchorOffset={context.selectionAnchorOffset}
+      selectionFocusOffset={context.selectionFocusOffset}
+      selectedDraftTextLength={context.selectedDraftTextLength}
+      totalSelectionOverlayCount={context.totalSelectionOverlayCount}
+      totalLineCount={context.totalLineCount}
+      textMeasurer={context.textMeasurer}
+      surfaceElementRef={surfaceElementRef}
+    />
+  )
+}
+
+function DraftIslandSurfaceView({
+  surface,
+  surfaceIndex,
+  sourceFragment,
+  renderProps,
+  scale,
+  nodeId,
+  draftRevision,
+  draftTextLength,
+  draftCaretOffset,
+  selectionStart,
+  selectionEnd,
+  selectionAnchorOffset,
+  selectionFocusOffset,
+  selectedDraftTextLength,
+  totalSelectionOverlayCount,
+  totalLineCount,
+  draftSurfaceCount,
+  isPageBoundaryPreview,
+  reflowKind,
+  reflowReason,
+  committing,
+  anchorMode,
+  textMeasurer,
+  onKeyDown,
+  onClick,
+  onDoubleClick,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
+  onPaste,
+  onCopy,
+  onCut,
+  onBlur,
+  onFocus,
+  onIslandSurfaceRender,
+  liveLayerMode,
+}: DraftIslandSurfaceViewProps) {
+  const surfaceElementRef = useRef<SVGSVGElement | null>(null)
+  const surfaceFragment = surface.fragment
+  const surfaceHeightPt = resolveDraftIslandSurfaceHeightPt(sourceFragment, surfaceFragment)
+  const surfaceChromeHeightPt = resolveDraftIslandSurfaceChromeHeightPt(sourceFragment, surfaceFragment)
+  const selectionActive = selectionAnchorOffset != null &&
+    selectionFocusOffset != null &&
+    selectionAnchorOffset !== selectionFocusOffset
+  const caret = resolveCollapsedCaretOverlayInFragment(
+    surfaceFragment,
+    draftCaretOffset ?? draftTextLength,
+    { textMeasurer },
+  )
+  const selectionRects = selectionActive
+    ? resolveSelectionOverlayRectsInFragment(surfaceFragment, selectionAnchorOffset, selectionFocusOffset, { textMeasurer })
+    : []
+  const svgStyle: CSSProperties = {
+    ...islandSvgStyle,
+    left: surfaceFragment.x * scale,
+    top: surfaceFragment.y * scale,
+    width: Math.max(1, surfaceFragment.width * scale),
+    height: Math.max(1, surfaceHeightPt * scale),
+    display: "block",
+  }
+  const viewBox = `${surfaceFragment.x} ${surfaceFragment.y} ${surfaceFragment.width} ${surfaceHeightPt}`
+  const selectionCollapsed = !selectionActive
+  const liveAttributes = resolveDraftIslandSurfaceLiveAttributes({
+    lineCount: surfaceFragment.lines?.length ?? 0,
+    totalLineCount,
+    draftTextLength,
+    draftCaretOffset,
+    selectionStart,
+    selectionEnd,
+    selectedDraftTextLength,
+    selectionCollapsed,
+    caretVisible: caret != null,
+    totalSelectionOverlayCount,
+    surfaceSelectionOverlayCount: selectionRects.length,
+    draftRevision,
+  })
+  useLayoutEffect(() => {
+    if (liveLayerMode === "detached") return
+    const element = surfaceElementRef.current
+    if (!element) return
+    syncDraftIslandSurfaceLiveAttributes(element, liveAttributes)
+  }, [liveAttributes, liveLayerMode])
+  const reactLiveAttributes = WYSIWYG_ISLAND_REACT_LIVE_ATTRS_ENABLED
+    ? liveAttributes
+    : EMPTY_DRAFT_SURFACE_LIVE_ATTRIBUTES
+  const surfaceChrome = (
+    <MemoizedDraftIslandSurfaceChrome
+      surfaceKey={surface.key}
+      nodeId={nodeId}
+      pageIndex={surfaceFragment.pageIndex}
+      x={surfaceFragment.x}
+      y={surfaceFragment.y}
+      width={surfaceFragment.width}
+      surfaceHeightPt={surfaceHeightPt}
+      surfaceChromeHeightPt={surfaceChromeHeightPt}
+    />
+  )
+  const inlineSurfaceLiveLayer = (
+    <DraftIslandSurfaceLiveLayer
+      surface={surface}
+      renderProps={renderProps}
+      nodeId={nodeId}
+      draftRevision={draftRevision}
+      draftTextLength={draftTextLength}
+      draftCaretOffset={draftCaretOffset}
+      selectionStart={selectionStart}
+      selectionEnd={selectionEnd}
+      selectionAnchorOffset={selectionAnchorOffset}
+      selectionFocusOffset={selectionFocusOffset}
+      selectedDraftTextLength={selectedDraftTextLength}
+      totalSelectionOverlayCount={totalSelectionOverlayCount}
+      totalLineCount={totalLineCount}
+      textMeasurer={textMeasurer}
+      surfaceElementRef={surfaceElementRef}
+    />
+  )
+  const renderSurfaceSvg = (children: ReactNode) => (
+      <svg
+        ref={surfaceElementRef}
+        data-wysiwyg-draft-editor-island="true"
+        data-wysiwyg-out-of-canvas-island="true"
+        data-wysiwyg-island-anchor={anchorMode}
+        data-wysiwyg-text-engine-layer="true"
+        data-wysiwyg-active-visual-mode="flowdoc-draft-editor-island"
+        data-wysiwyg-active-visual-detail="out-of-canvas-v2"
+        data-wysiwyg-island-surface-key={surface.key}
+        data-wysiwyg-island-page-key={surface.pageKey}
+        data-page-index={surfaceFragment.pageIndex}
+        data-line-start={surfaceFragment.lineStart ?? undefined}
+        data-line-end={surfaceFragment.lineEnd ?? undefined}
+        data-wysiwyg-island-surface-index={surfaceIndex}
+        data-wysiwyg-island-fragment-count={draftSurfaceCount}
+        data-wysiwyg-pointer-fragment-count={draftSurfaceCount}
+        data-wysiwyg-island-page-boundary-preview={isPageBoundaryPreview ? "true" : "false"}
+        data-wysiwyg-island-reflow-kind={reflowKind}
+        data-wysiwyg-island-reflow-reason={reflowReason}
+        data-wysiwyg-island-committing={committing ? "true" : undefined}
+        {...reactLiveAttributes}
+        data-wysiwyg-native-visible-text="false"
+        data-wysiwyg-hidden-input-bridge="true"
+        data-wysiwyg-flowdoc-draft-clipboard="true"
+        data-wysiwyg-visible-pointer-owner="flowdoc-draft-island-v2"
+        data-wysiwyg-flowdoc-draft-pointer-selection="true"
+        data-wysiwyg-live-echo-suppressed="true"
+        data-wysiwyg-draft-text-replacement-active={undefined}
+        data-inline-edit-node-id={nodeId}
+        data-inline-edit-visual-mode="flowdoc-draft-editor-island"
+        data-wysiwyg-island-parent-sync-debounce-ms={ISLAND_PARENT_SYNC_DEBOUNCE_MS}
+        data-wysiwyg-island-text-parent-sync-debounce-ms={ISLAND_TEXT_INPUT_PARENT_SYNC_DEBOUNCE_MS}
+        data-wysiwyg-island-boundary-height-preview-debounce-ms={ISLAND_BOUNDARY_HEIGHT_PREVIEW_DEBOUNCE_MS}
+        data-wysiwyg-island-surface-height-pt={surfaceHeightPt}
+        data-wysiwyg-island-surface-chrome-height-pt={surfaceChromeHeightPt}
+        data-wysiwyg-island-continuation-boundary-clearance-pt={surfaceFragment.continuesFrom === true ? ISLAND_CONTINUATION_BOUNDARY_CLEARANCE_PT : undefined}
+        viewBox={viewBox}
+        style={svgStyle}
+        tabIndex={surfaceIndex === 0 ? 0 : -1}
+        role="textbox"
+        aria-multiline="true"
+        onKeyDown={onKeyDown}
+        onClick={onClick}
+        onDoubleClick={onDoubleClick}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onLostPointerCapture={onPointerCancel}
+        onPaste={onPaste}
+        onCopy={onCopy}
+        onCut={onCut}
+        onBlur={onBlur}
+        onFocus={onFocus}
+      >
+        {children}
+      </svg>
+  )
+
+  if (liveLayerMode === "detached") {
+    return renderSurfaceSvg(
+      <>
+        {surfaceChrome}
+        <DraftIslandSurfaceLiveLayerContextConsumer
+          surfaceKey={surface.key}
+          surfaceElementRef={surfaceElementRef}
+        />
+      </>,
+    )
+  }
+
+  return (
+    <Profiler
+      id={`flowdoc-draft-editor-island-surface-v2:${surface.key}`}
+      onRender={onIslandSurfaceRender}
+    >
+      {renderSurfaceSvg(
+        <>
+          {surfaceChrome}
+          {inlineSurfaceLiveLayer}
+        </>,
+      )}
+    </Profiler>
+  )
+}
+
+const MemoizedDraftIslandSurfaceView = memo(DraftIslandSurfaceView, areDraftIslandSurfaceViewPropsEqual)
+MemoizedDraftIslandSurfaceView.displayName = "MemoizedDraftIslandSurfaceView"
 
 const islandSvgStyle: CSSProperties = {
   position: "absolute",
@@ -200,6 +1154,20 @@ function draftIslandPageIndexes(fragments: PageFragment[]): number[] {
 function draftIslandPageIndexSummary(fragments: PageFragment[]): string | undefined {
   const pageIndexes = draftIslandPageIndexes(fragments)
   return pageIndexes.length > 0 ? pageIndexes.join(",") : undefined
+}
+
+function draftIslandPagesSplitSignature(pages: PaginatedPage[] | null | undefined): string {
+  if (!pages || pages.length === 0) return "no-pages"
+  return pages.map((page) => [
+    page.index,
+    numericDraftIslandSignatureValue(page.contentBox.y),
+    numericDraftIslandSignatureValue(page.contentBox.height),
+  ].join(":")).join(";")
+}
+
+function numericDraftIslandSignatureValue(value: number): string {
+  if (!Number.isFinite(value)) return String(value)
+  return String(Math.round(value * 1000) / 1000)
 }
 
 function collapsedSelection(caretOffset: number | null): WysiwygTextSelection | null {
@@ -258,6 +1226,7 @@ function createDraftIslandState(input: {
   draftText: string | null
   caretOffset: number | null
   selection: WysiwygTextSelection | null
+  revision?: number
 }): DraftIslandState {
   const baseText = getTextRunParagraphText(input.paragraph) ?? ""
   const text = input.draftText ?? baseText
@@ -267,7 +1236,7 @@ function createDraftIslandState(input: {
     text,
     caretOffset,
     selection: input.selection ?? collapsedSelection(caretOffset),
-    revision: 0,
+    revision: input.revision ?? 0,
   }
 }
 
@@ -347,7 +1316,40 @@ export function isFocusStillInsideDraftIsland(
   return owner?.getAttribute("data-inline-edit-node-id") === nodeId
 }
 
-export function FlowdocDraftEditorIslandRoot({
+export function areDraftIslandRuntimePropsEqual(
+  previous: FlowdocDraftEditorIslandRootProps,
+  next: FlowdocDraftEditorIslandRootProps,
+): boolean {
+  return (
+    previous.active === next.active &&
+    previous.nodeId === next.nodeId &&
+    previous.paragraph === next.paragraph &&
+    previous.fragment === next.fragment &&
+    previous.pageKey === next.pageKey &&
+    previous.pages === next.pages &&
+    previous.scale === next.scale &&
+    previous.textMeasurer === next.textMeasurer &&
+    previous.draftText === next.draftText &&
+    previous.caretOffset === next.caretOffset &&
+    previous.selection === next.selection &&
+    previous.getPageElement === next.getPageElement &&
+    previous.getPageKeyByPageIndex === next.getPageKeyByPageIndex &&
+    previous.onDraftChange === next.onDraftChange &&
+    previous.onHeightChange === next.onHeightChange &&
+    previous.onReflowDecision === next.onReflowDecision &&
+    previous.onRichTextShortcut === next.onRichTextShortcut &&
+    previous.onEndEdit === next.onEndEdit &&
+    previous.onSplitParagraph === next.onSplitParagraph &&
+    previous.onMergeParagraph === next.onMergeParagraph &&
+    previous.onRequestUndo === next.onRequestUndo &&
+    previous.onCompositionChange === next.onCompositionChange &&
+    previous.structuralRefocusStartedAt === next.structuralRefocusStartedAt &&
+    previous.onStructuralRefocusPainted === next.onStructuralRefocusPainted &&
+    previous.structuralEditRuntime === next.structuralEditRuntime
+  )
+}
+
+function FlowdocDraftEditorIslandRuntime({
   active,
   nodeId,
   paragraph,
@@ -374,6 +1376,10 @@ export function FlowdocDraftEditorIslandRoot({
   onStructuralRefocusPainted,
   structuralEditRuntime,
 }: FlowdocDraftEditorIslandRootProps) {
+  const draftStoreSession = useWysiwygDraftStoreForNode(nodeId)
+  const resolvedDraftText = draftStoreSession ? draftStoreSession.text : draftText
+  const resolvedCaretOffset = draftStoreSession ? draftStoreSession.caretIndex : caretOffset
+  const resolvedSelection = draftStoreSession ? draftStoreSession.selection : selection
   const inputBridgeRef = useRef<HTMLTextAreaElement | null>(null)
   const lastBeforeInputChangeRef = useRef<{ insertedText: string; nextText: string } | null>(null)
   const lastBeforeInputClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -381,6 +1387,12 @@ export function FlowdocDraftEditorIslandRoot({
   const inputBridgeEchoSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestDraftRef = useRef<DraftIslandState | null>(null)
   const draftLayoutCacheRef = useRef(createWysiwygDraftParagraphLayoutCache())
+  const lastDraftLayoutResultRef = useRef<{ cacheKey: string; layout: WysiwygDraftParagraphLayout | null } | null>(null)
+  const lastDraftFragmentSplitResultRef = useRef<{ key: string; fragments: PageFragment[] } | null>(null)
+  const draftFragmentSplitTraceRef = useRef<WysiwygDraftFragmentSplitTraceState | null>(null)
+  const draftFragmentSplitReuseRef = useRef<WysiwygDraftFragmentSplitReuseState | null>(null)
+  const draftIslandRootRenderTraceRef = useRef<WysiwygDraftIslandRootRenderTraceState | null>(null)
+  const draftIslandSurfaceRenderTraceRef = useRef<Record<string, WysiwygDraftIslandSurfaceRenderTraceState>>({})
   const parentSyncedRevisionRef = useRef<number>(-1)
   const parentSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const parentSyncScheduledDelayMsRef = useRef<number | null>(null)
@@ -430,10 +1442,22 @@ export function FlowdocDraftEditorIslandRoot({
 
   const [draftState, setDraftState] = useState<DraftIslandState | null>(() => (
     active && nodeId && paragraph
-      ? createDraftIslandState({ nodeId, paragraph, draftText, caretOffset, selection })
+      ? createDraftIslandState({
+          nodeId,
+          paragraph,
+          draftText: resolvedDraftText,
+          caretOffset: resolvedCaretOffset,
+          selection: resolvedSelection,
+        })
       : null
   ))
   const [anchorElementsByPageKey, setAnchorElementsByPageKey] = useState<DraftIslandAnchorLookup>({})
+  const anchorElementsByPageKeyRef = useRef<DraftIslandAnchorLookup>({})
+  const draftSurfaceLiveLayerMode: DraftIslandSurfaceLiveLayerMode = (
+    typeof window !== "undefined" && WYSIWYG_ISLAND_SURFACE_LIVE_LAYER_ENABLED
+      ? "detached"
+      : "inline"
+  )
   const [committing, setCommitting] = useState(false)
 
   const recordStructuralGuardEvent = useCallback((input: {
@@ -588,6 +1612,12 @@ export function FlowdocDraftEditorIslandRoot({
       clearStructuralEditGuard("inactive", "props-inactive", nodeId)
       latestDraftRef.current = null
       parentSyncedRevisionRef.current = -1
+      lastDraftLayoutResultRef.current = null
+      lastDraftFragmentSplitResultRef.current = null
+      draftFragmentSplitTraceRef.current = null
+      draftFragmentSplitReuseRef.current = null
+      draftIslandRootRenderTraceRef.current = null
+      draftIslandSurfaceRenderTraceRef.current = {}
       endEditRequestedRef.current = false
       allowUnmountParentSyncRef.current = false
       setCommitting(false)
@@ -604,15 +1634,45 @@ export function FlowdocDraftEditorIslandRoot({
     }
     setCommitting(false)
     setDraftState((current) => {
-      if (current?.nodeId === nodeId) return current
+      const next = createDraftIslandState({
+        nodeId,
+        paragraph,
+        draftText: resolvedDraftText,
+        caretOffset: resolvedCaretOffset,
+        selection: resolvedSelection,
+      })
+      if (
+        current?.nodeId === nodeId &&
+        current.text === next.text &&
+        current.caretOffset === next.caretOffset &&
+        areWysiwygTextSelectionsEqual(current.selection, next.selection)
+      ) {
+        return current
+      }
+      if (current?.nodeId === nodeId) {
+        const synced = {
+          ...next,
+          revision: current.revision + 1,
+        }
+        latestDraftRef.current = synced
+        parentSyncedRevisionRef.current = synced.revision
+        return synced
+      }
       endEditRequestedRef.current = false
       allowUnmountParentSyncRef.current = false
-      const next = createDraftIslandState({ nodeId, paragraph, draftText, caretOffset, selection })
       latestDraftRef.current = next
       parentSyncedRevisionRef.current = next.revision
       return next
     })
-  }, [active, caretOffset, clearStructuralEditGuard, draftText, nodeId, paragraph, selection])
+  }, [
+    active,
+    clearStructuralEditGuard,
+    nodeId,
+    paragraph,
+    resolvedCaretOffset,
+    resolvedDraftText,
+    resolvedSelection,
+  ])
 
   useEffect(() => () => {
     clearStructuralEditGuard("unmount", "component-unmount", nodeId)
@@ -626,7 +1686,7 @@ export function FlowdocDraftEditorIslandRoot({
     latestDraftRef.current = draftState
   }, [draftState])
 
-  const draftLayout = useMemo(() => {
+  const draftLayoutResult = useMemo(() => {
     if (!active || !fragment || !paragraph || !draftState) return null
     if (draftState.nodeId !== nodeId) return null
     const startedAt = startWysiwygPerfSpan()
@@ -641,7 +1701,7 @@ export function FlowdocDraftEditorIslandRoot({
       draftLayoutCache.textMeasurer === textMeasurer &&
       draftLayoutCache.entries.has(cacheKey)
     )
-    const layout = buildCachedWysiwygDraftParagraphLayout(
+    const resolvedLayout = buildCachedWysiwygDraftParagraphLayout(
       draftLayoutCache,
       fragment,
       paragraph,
@@ -649,8 +1709,19 @@ export function FlowdocDraftEditorIslandRoot({
       textMeasurer,
       measureOptions,
     )
+    const previousLayoutResult = lastDraftLayoutResultRef.current
+    const draftLayoutIdentityReused = (
+      draftLayoutCacheHit &&
+      previousLayoutResult?.cacheKey === cacheKey
+    )
+    const layout = draftLayoutIdentityReused
+      ? previousLayoutResult.layout
+      : resolvedLayout
+    if (!draftLayoutIdentityReused) {
+      lastDraftLayoutResultRef.current = { cacheKey, layout }
+    }
     const durationMs = Math.max(0, startWysiwygPerfSpan() - startedAt)
-    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+    const draftMeasureEvent = {
       kind: "flowdoc-island-draft-measure",
       startedAt,
       durationMs,
@@ -661,13 +1732,27 @@ export function FlowdocDraftEditorIslandRoot({
       lineCount: layout?.lines.length ?? 0,
       availableWidth: fragment.width,
       paragraphHeight: layout?.height ?? fragment.height,
+      draftLayoutCacheHit,
+      draftLayoutIdentityReused,
       source: "out-of-canvas-v2",
-    })
-    return layout
+    } as const
+    if (draftLayoutCacheHit) {
+      recordWysiwygPerfAttributionEvent(WYSIWYG_PERF_TRACE_ENABLED, draftMeasureEvent)
+    } else {
+      recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, draftMeasureEvent)
+    }
+    return { cacheKey, layout }
   }, [active, draftState, fragment, nodeId, paragraph, textMeasurer])
+  const draftLayout = draftLayoutResult?.layout ?? null
 
   const draftFragments = useMemo<PageFragment[]>(() => {
     if (!fragment || !draftLayout) return []
+    const splitKey = [
+      draftLayoutResult?.cacheKey ?? "no-layout-key",
+      draftIslandPagesSplitSignature(pages),
+    ].join("||")
+    const previousSplitResult = lastDraftFragmentSplitResultRef.current
+    if (previousSplitResult?.key === splitKey) return previousSplitResult.fragments
     const startedAt = startWysiwygPerfSpan()
     const fragments = pages && pages.length > 0
       ? splitWysiwygDraftVisualFragments({
@@ -681,8 +1766,33 @@ export function FlowdocDraftEditorIslandRoot({
         height: draftLayout.height,
         lines: draftLayout.lines,
       }]
-    const pageIndexes = draftIslandPageIndexes(fragments)
-    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+    const source = pages && pages.length > 0 ? "split-pages" : "single-fragment-fallback"
+    const surfaceKeySignature = fragments.map(draftIslandSurfaceKey).join(";")
+    const splitTelemetry = classifyWysiwygDraftFragmentSplitTelemetry(
+      draftFragmentSplitTraceRef.current,
+      {
+        nodeId: fragment.nodeId,
+        draftVersion: draftState?.revision,
+        textLength: draftState?.text.length,
+        lineCount: draftLayout.lines.length,
+        paragraphHeight: draftLayout.height,
+        candidatePageCount: pages?.length ?? 0,
+        source,
+        sourceFragment: fragment,
+        fragments,
+        surfaceKeySignature,
+      },
+    )
+    draftFragmentSplitTraceRef.current = splitTelemetry.nextState
+    const reuseDecision = resolveWysiwygDraftFragmentSplitReuse(
+      draftFragmentSplitReuseRef.current,
+      splitTelemetry,
+      fragments,
+    )
+    draftFragmentSplitReuseRef.current = reuseDecision.nextState
+    const visualFragments = reuseDecision.fragments
+    const pageIndexes = draftIslandPageIndexes(visualFragments)
+    const fragmentSplitEvent = {
       kind: "flowdoc-island-fragment-split",
       startedAt,
       durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
@@ -692,14 +1802,22 @@ export function FlowdocDraftEditorIslandRoot({
       textLength: draftState?.text.length,
       lineCount: draftLayout.lines.length,
       paragraphHeight: draftLayout.height,
-      draftFragmentCount: fragments.length,
+      draftFragmentCount: visualFragments.length,
       draftPageCount: pageIndexes.length,
       draftCandidatePageCount: pages?.length ?? 0,
       pageIndexes: pageIndexes.length > 0 ? pageIndexes.join(",") : undefined,
-      source: pages && pages.length > 0 ? "split-pages" : "single-fragment-fallback",
-    })
-    return fragments
-  }, [draftLayout, draftState?.revision, draftState?.text.length, fragment, pages])
+      source,
+      ...splitTelemetry.metadata,
+      ...reuseDecision.metadata,
+    } as const
+    if (splitTelemetry.shouldEmitEvent) {
+      recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, fragmentSplitEvent)
+    } else {
+      recordWysiwygPerfAttributionEvent(WYSIWYG_PERF_TRACE_ENABLED, fragmentSplitEvent)
+    }
+    lastDraftFragmentSplitResultRef.current = { key: splitKey, fragments: visualFragments }
+    return visualFragments
+  }, [draftLayout, draftLayoutResult?.cacheKey, fragment, pages])
 
   const draftReflowDecision = useMemo(() => {
     if (!fragment || !draftLayout) return null
@@ -747,6 +1865,22 @@ export function FlowdocDraftEditorIslandRoot({
   useEffect(() => {
     latestSurfacesRef.current = draftSurfaces
   }, [draftSurfaces])
+
+  const draftSurfaceSignature = useMemo(() => (
+    draftSurfaces.map((surface) => [
+      surface.key,
+      surface.pageKey,
+      surface.fragment.pageIndex,
+      surface.fragment.fragmentIndex ?? "null",
+      surface.fragment.lineStart ?? "null",
+      surface.fragment.lineEnd ?? "null",
+      surface.fragment.lines?.length ?? 0,
+      surface.fragment.x,
+      surface.fragment.y,
+      surface.fragment.width,
+      surface.fragment.height,
+    ].join(":")).join(";")
+  ), [draftSurfaces])
 
   const activeDraftFragment = useMemo(() => (
     resolveDraftIslandFragmentForCaret(draftFragments, draftState?.caretOffset ?? null)
@@ -845,6 +1979,8 @@ export function FlowdocDraftEditorIslandRoot({
 
   useLayoutEffect(() => {
     if (!active || draftSurfaces.length === 0) {
+      if (Object.keys(anchorElementsByPageKeyRef.current).length === 0) return undefined
+      anchorElementsByPageKeyRef.current = {}
       setAnchorElementsByPageKey({})
       return undefined
     }
@@ -853,17 +1989,17 @@ export function FlowdocDraftEditorIslandRoot({
       const anchor = getPageElement(surface.pageKey)
       if (anchor) nextRecord[surface.pageKey] = anchor
     }
-    setAnchorElementsByPageKey((current) => {
-      const currentKeys = Object.keys(current)
-      const nextKeys = Object.keys(nextRecord)
-      if (
-        currentKeys.length === nextKeys.length &&
-        nextKeys.every((key) => current[key] === nextRecord[key])
-      ) {
-        return current
-      }
-      return nextRecord
-    })
+    const current = anchorElementsByPageKeyRef.current
+    const currentKeys = Object.keys(current)
+    const nextKeys = Object.keys(nextRecord)
+    if (
+      currentKeys.length === nextKeys.length &&
+      nextKeys.every((key) => current[key] === nextRecord[key])
+    ) {
+      return undefined
+    }
+    anchorElementsByPageKeyRef.current = nextRecord
+    setAnchorElementsByPageKey(nextRecord)
     return undefined
   }, [active, draftSurfaces, getPageElement])
 
@@ -1093,8 +2229,17 @@ export function FlowdocDraftEditorIslandRoot({
       selection: nextSelection,
       revision: current.revision + 1,
     }
-    latestDraftRef.current = next
+    if (draftStoreSession) {
+      wysiwygDraftStore.setState({
+        nodeId: current.nodeId,
+        text: change.text,
+        caretIndex: nextCaretOffset,
+        selection: nextSelection,
+        source,
+      })
+    }
     setDraftState(next)
+    latestDraftRef.current = next
     lastInputStartedAtRef.current = startedAt
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "flowdoc-island-input",
@@ -1108,7 +2253,7 @@ export function FlowdocDraftEditorIslandRoot({
     })
     scheduleParentSync(source, textChanged)
     return true
-  }, [scheduleParentSync])
+  }, [draftStoreSession, scheduleParentSync])
 
   const resetVerticalCaretMemory = useCallback(() => {
     verticalCaretXRef.current = null
@@ -2111,6 +3256,28 @@ export function FlowdocDraftEditorIslandRoot({
   ) => {
     const current = latestDraftRef.current
     const inputStartedAt = lastInputStartedAtRef.current
+    const rootRenderTelemetry = classifyWysiwygDraftIslandRootRenderTelemetry(
+      draftIslandRootRenderTraceRef.current,
+      {
+        nodeId: current?.nodeId ?? null,
+        draftRevision: current?.revision,
+        textLength: current?.text.length,
+        caretOffset: current?.caretOffset,
+        selectionAnchorOffset: current?.selection?.anchorOffset,
+        selectionFocusOffset: current?.selection?.focusOffset,
+        lineCount: totalLineCount,
+        paragraphHeight: activeDraftFragment?.height,
+        draftFragmentCount,
+        draftPageCount,
+        draftSurfaceCount,
+        draftMissingSurfaceCount,
+        pageIndexes: draftPageIndexes,
+        surfaceSignature: draftSurfaceSignature,
+        anchorsReady: draftSurfaceAnchorsReady,
+        inputToVisibleActive: inputStartedAt !== null,
+      },
+    )
+    draftIslandRootRenderTraceRef.current = rootRenderTelemetry.nextState
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "flowdoc-island-react-commit",
       startedAt: startTime,
@@ -2128,6 +3295,7 @@ export function FlowdocDraftEditorIslandRoot({
       draftMissingSurfaceCount,
       pageIndexes: draftPageIndexes,
       source: phase,
+      ...rootRenderTelemetry.metadata,
     })
     if (inputStartedAt !== null && current) {
       recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
@@ -2154,7 +3322,84 @@ export function FlowdocDraftEditorIslandRoot({
     draftMissingSurfaceCount,
     draftPageCount,
     draftPageIndexes,
+    draftSurfaceAnchorsReady,
     draftSurfaceCount,
+    draftSurfaceSignature,
+    totalLineCount,
+  ])
+
+  const handleIslandSurfaceRender = useCallback<ProfilerOnRenderCallback>((
+    id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    const current = latestDraftRef.current
+    const selectionAnchorOffset = current?.selection?.anchorOffset ?? null
+    const selectionFocusOffset = current?.selection?.focusOffset ?? null
+    const selectionCollapsed = (
+      selectionAnchorOffset == null ||
+      selectionFocusOffset == null ||
+      selectionAnchorOffset === selectionFocusOffset
+    )
+    const surfaceRenderTelemetry = classifyWysiwygDraftIslandSurfaceRenderTelemetry(
+      draftIslandSurfaceRenderTraceRef.current[id] ?? null,
+      {
+        nodeId: current?.nodeId ?? null,
+        componentName: id,
+        draftRevision: current?.revision,
+        textLength: current?.text.length,
+        caretOffset: current?.caretOffset,
+        selectionAnchorOffset,
+        selectionFocusOffset,
+        lineCount: totalLineCount,
+        paragraphHeight: activeDraftFragment?.height,
+        draftFragmentCount,
+        draftPageCount,
+        draftSurfaceCount,
+        draftMissingSurfaceCount,
+        pageIndexes: draftPageIndexes,
+        surfaceSignature: draftSurfaceSignature,
+        anchorsReady: draftSurfaceAnchorsReady,
+        inputToVisibleActive: lastInputStartedAtRef.current !== null,
+      },
+    )
+    draftIslandSurfaceRenderTraceRef.current[id] = surfaceRenderTelemetry.nextState
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-surface-react-commit",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      nodeId: current?.nodeId,
+      draftVersion: current?.revision,
+      textLength: current?.text.length,
+      lineCount: totalLineCount,
+      paragraphHeight: activeDraftFragment?.height,
+      draftFragmentCount,
+      draftPageCount,
+      draftSurfaceCount,
+      draftMissingSurfaceCount,
+      pageIndexes: draftPageIndexes,
+      componentName: id,
+      selectionCollapsed,
+      selectionRangeLength: selectionCollapsed || selectionAnchorOffset == null || selectionFocusOffset == null
+        ? 0
+        : Math.abs(selectionFocusOffset - selectionAnchorOffset),
+      source: phase,
+      ...surfaceRenderTelemetry.metadata,
+    })
+  }, [
+    activeDraftFragment?.height,
+    draftFragmentCount,
+    draftMissingSurfaceCount,
+    draftPageCount,
+    draftPageIndexes,
+    draftSurfaceAnchorsReady,
+    draftSurfaceCount,
+    draftSurfaceSignature,
     totalLineCount,
   ])
 
@@ -2227,6 +3472,24 @@ export function FlowdocDraftEditorIslandRoot({
       sum + resolveSelectionOverlayRectsInFragment(surface.fragment, draftState.selection!.anchorOffset, draftState.selection!.focusOffset, { textMeasurer }).length
     ), 0)
     : 0
+  const draftSurfaceLiveLayerContextValue: DraftIslandSurfaceLiveLayerContextValue = {
+    surfacesByKey: Object.fromEntries(
+      draftSurfaces.map((surface) => [surface.key, surface]),
+    ),
+    renderProps,
+    nodeId,
+    draftRevision: draftState.revision,
+    draftTextLength: draftState.text.length,
+    draftCaretOffset: draftState.caretOffset,
+    selectionStart,
+    selectionEnd,
+    selectionAnchorOffset: draftState.selection?.anchorOffset ?? null,
+    selectionFocusOffset: draftState.selection?.focusOffset ?? null,
+    selectedDraftTextLength,
+    totalSelectionOverlayCount,
+    totalLineCount,
+    textMeasurer,
+  }
   const inputBridgeStyle: CSSProperties = {
     ...hiddenInputBridgeStyle,
   }
@@ -2234,7 +3497,7 @@ export function FlowdocDraftEditorIslandRoot({
 
   return (
     <Profiler id="flowdoc-draft-editor-island-v2" onRender={handleIslandRender}>
-      <>
+      <DraftIslandSurfaceLiveLayerContext.Provider value={draftSurfaceLiveLayerContextValue}>
         <textarea
           ref={inputBridgeRef}
           data-wysiwyg-input-bridge="true"
@@ -2263,79 +3526,35 @@ export function FlowdocDraftEditorIslandRoot({
           onFocus={handleFocusIn}
         />
         {draftSurfaces.map((surface, surfaceIndex) => {
-          const surfaceFragment = surface.fragment
-          const surfaceHeightPt = resolveDraftIslandSurfaceHeightPt(fragment, surfaceFragment)
-          const surfaceChromeHeightPt = resolveDraftIslandSurfaceChromeHeightPt(fragment, surfaceFragment)
           const anchorElement = resolveDraftIslandAnchorElement(surface.pageKey, anchorElementsByPageKey, getPageElement)
           if (!anchorElement && !allowInlineFallback) return null
-          const caret = resolveCollapsedCaretOverlayInFragment(surfaceFragment, draftState.caretOffset ?? draftState.text.length, { textMeasurer })
-          const selectionRects = draftState.selection && draftState.selection.anchorOffset !== draftState.selection.focusOffset
-            ? resolveSelectionOverlayRectsInFragment(surfaceFragment, draftState.selection.anchorOffset, draftState.selection.focusOffset, { textMeasurer })
-            : []
-          const draftLineRanges = resolveDraftLineRangeAttrs(surfaceFragment.lines ?? [])
-          const svgStyle: CSSProperties = {
-            ...islandSvgStyle,
-            left: surfaceFragment.x * scale,
-            top: surfaceFragment.y * scale,
-            width: Math.max(1, surfaceFragment.width * scale),
-            height: Math.max(1, surfaceHeightPt * scale),
-            display: "block",
-          }
-          const viewBox = `${surfaceFragment.x} ${surfaceFragment.y} ${surfaceFragment.width} ${surfaceHeightPt}`
+
           const islandSurface = (
-            <svg
+            <MemoizedDraftIslandSurfaceView
               key={surface.key}
-              data-wysiwyg-draft-editor-island="true"
-              data-wysiwyg-out-of-canvas-island="true"
-              data-wysiwyg-island-anchor={anchorElement ? "page-overlay" : "inline-fallback"}
-              data-wysiwyg-text-engine-layer="true"
-              data-wysiwyg-active-visual-mode="flowdoc-draft-editor-island"
-              data-wysiwyg-active-visual-detail="out-of-canvas-v2"
-              data-wysiwyg-island-surface-key={surface.key}
-              data-wysiwyg-island-page-key={surface.pageKey}
-              data-page-index={surfaceFragment.pageIndex}
-              data-line-start={surfaceFragment.lineStart ?? undefined}
-              data-line-end={surfaceFragment.lineEnd ?? undefined}
-              data-wysiwyg-island-surface-index={surfaceIndex}
-              data-wysiwyg-island-fragment-count={draftSurfaces.length}
-              data-wysiwyg-pointer-fragment-count={draftSurfaces.length}
-              data-wysiwyg-island-page-boundary-preview={isPageBoundaryPreview ? "true" : "false"}
-              data-wysiwyg-island-reflow-kind={draftReflowDecision?.kind ?? undefined}
-              data-wysiwyg-island-reflow-reason={draftReflowDecision?.reason ?? undefined}
-              data-wysiwyg-island-committing={committing ? "true" : undefined}
-              data-wysiwyg-line-count={surfaceFragment.lines?.length ?? 0}
-              data-wysiwyg-flowdoc-draft-line-count={surfaceFragment.lines?.length ?? 0}
-              data-wysiwyg-flowdoc-draft-total-line-count={totalLineCount}
-              data-wysiwyg-flowdoc-draft-text-length={draftState.text.length}
-              data-wysiwyg-flowdoc-draft-caret-offset={draftState.caretOffset ?? undefined}
-              data-wysiwyg-flowdoc-draft-selection-start={selectionStart}
-              data-wysiwyg-flowdoc-draft-selection-end={selectionEnd}
-              data-wysiwyg-flowdoc-draft-selected-text-length={selectedDraftTextLength}
-              data-wysiwyg-flowdoc-draft-selection-collapsed={String(!draftState.selection || draftState.selection.anchorOffset === draftState.selection.focusOffset)}
-              data-wysiwyg-native-visible-text="false"
-              data-wysiwyg-custom-caret-visible={caret ? "true" : undefined}
-              data-wysiwyg-hidden-input-bridge="true"
-              data-wysiwyg-flowdoc-draft-clipboard="true"
-              data-wysiwyg-visible-pointer-owner="flowdoc-draft-island-v2"
-              data-wysiwyg-flowdoc-draft-pointer-selection="true"
-              data-wysiwyg-flowdoc-draft-selection-overlay-count={totalSelectionOverlayCount}
-              data-wysiwyg-flowdoc-draft-surface-selection-overlay-count={selectionRects.length}
-              data-wysiwyg-live-echo-suppressed="true"
-              data-wysiwyg-draft-text-replacement-active={undefined}
-              data-inline-edit-node-id={nodeId}
-              data-inline-edit-visual-mode="flowdoc-draft-editor-island"
-              data-wysiwyg-island-revision={draftState.revision}
-              data-wysiwyg-island-parent-sync-debounce-ms={ISLAND_PARENT_SYNC_DEBOUNCE_MS}
-              data-wysiwyg-island-text-parent-sync-debounce-ms={ISLAND_TEXT_INPUT_PARENT_SYNC_DEBOUNCE_MS}
-              data-wysiwyg-island-boundary-height-preview-debounce-ms={ISLAND_BOUNDARY_HEIGHT_PREVIEW_DEBOUNCE_MS}
-              data-wysiwyg-island-surface-height-pt={surfaceHeightPt}
-              data-wysiwyg-island-surface-chrome-height-pt={surfaceChromeHeightPt}
-              data-wysiwyg-island-continuation-boundary-clearance-pt={surfaceFragment.continuesFrom === true ? ISLAND_CONTINUATION_BOUNDARY_CLEARANCE_PT : undefined}
-              viewBox={viewBox}
-              style={svgStyle}
-              tabIndex={surfaceIndex === 0 ? 0 : -1}
-              role="textbox"
-              aria-multiline="true"
+              surface={surface}
+              surfaceIndex={surfaceIndex}
+              sourceFragment={fragment}
+              renderProps={renderProps}
+              scale={scale}
+              nodeId={nodeId}
+              draftRevision={draftState.revision}
+              draftTextLength={draftState.text.length}
+              draftCaretOffset={draftState.caretOffset}
+              selectionStart={selectionStart}
+              selectionEnd={selectionEnd}
+              selectionAnchorOffset={draftState.selection?.anchorOffset ?? null}
+              selectionFocusOffset={draftState.selection?.focusOffset ?? null}
+              selectedDraftTextLength={selectedDraftTextLength}
+              totalSelectionOverlayCount={totalSelectionOverlayCount}
+              totalLineCount={totalLineCount}
+              draftSurfaceCount={draftSurfaces.length}
+              isPageBoundaryPreview={isPageBoundaryPreview}
+              reflowKind={draftReflowDecision?.kind ?? undefined}
+              reflowReason={draftReflowDecision?.reason ?? undefined}
+              committing={committing}
+              anchorMode={anchorElement ? "page-overlay" : "inline-fallback"}
+              textMeasurer={textMeasurer}
               onKeyDown={handleKeyDown}
               onClick={handleClick}
               onDoubleClick={handleDoubleClick}
@@ -2343,80 +3562,28 @@ export function FlowdocDraftEditorIslandRoot({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerCancel}
-              onLostPointerCapture={handlePointerCancel}
               onPaste={handlePaste}
               onCopy={handleCopy}
               onCut={handleCut}
               onBlur={handleBlur}
               onFocus={handleFocusIn}
-            >
-              <rect
-                data-wysiwyg-out-of-canvas-cover="true"
-                x={surfaceFragment.x}
-                y={surfaceFragment.y}
-                width={surfaceFragment.width}
-                height={surfaceChromeHeightPt}
-                fill="#ffffff"
-                pointerEvents="none"
-              />
-              <rect
-                data-wysiwyg-hit-area="true"
-                data-wysiwyg-draft-editor-island-hit-area="true"
-                x={surfaceFragment.x}
-                y={surfaceFragment.y}
-                width={surfaceFragment.width}
-                height={surfaceHeightPt}
-                fill="transparent"
-                pointerEvents="all"
-              />
-              <rect
-                data-wysiwyg-draft-editor-island-outline="true"
-                x={surfaceFragment.x}
-                y={surfaceFragment.y}
-                width={surfaceFragment.width}
-                height={surfaceChromeHeightPt}
-                fill="none"
-                stroke="#2563eb"
-                strokeWidth={1}
-                opacity={0.42}
-                pointerEvents="none"
-              />
-              {selectionRects.length > 0 ? (
-                <g data-wysiwyg-selection-overlay="true" pointerEvents="none">
-                  {selectionRects.map((rect, index) => (
-                    <rect
-                      key={index}
-                      x={rect.x}
-                      y={rect.y}
-                      width={rect.width}
-                      height={rect.height}
-                      fill="#bfdbfe"
-                      opacity={0.58}
-                    />
-                  ))}
-                </g>
-              ) : null}
-              <g data-wysiwyg-flowdoc-draft-lines="true" pointerEvents="none">
-                {surfaceFragment.lines?.map((line, index) => renderDraftLine({ line, index, renderProps, range: draftLineRanges[index] }))}
-              </g>
-              {caret ? (
-                <line
-                  data-wysiwyg-caret="true"
-                  x1={caret.x1}
-                  y1={caret.y1}
-                  x2={caret.x2}
-                  y2={caret.y2}
-                  stroke="#2563eb"
-                  strokeWidth={1}
-                  vectorEffect="non-scaling-stroke"
-                  pointerEvents="none"
-                />
-              ) : null}
-            </svg>
+              onIslandSurfaceRender={handleIslandSurfaceRender}
+              liveLayerMode={draftSurfaceLiveLayerMode}
+            />
           )
           return anchorElement ? createPortal(islandSurface, anchorElement, surface.key) : islandSurface
         })}
-      </>
+      </DraftIslandSurfaceLiveLayerContext.Provider>
     </Profiler>
   )
+}
+
+const MemoizedFlowdocDraftEditorIslandRuntime = memo(
+  FlowdocDraftEditorIslandRuntime,
+  areDraftIslandRuntimePropsEqual,
+)
+MemoizedFlowdocDraftEditorIslandRuntime.displayName = "MemoizedFlowdocDraftEditorIslandRuntime"
+
+export function FlowdocDraftEditorIslandRoot(props: FlowdocDraftEditorIslandRootProps) {
+  return <MemoizedFlowdocDraftEditorIslandRuntime {...props} />
 }

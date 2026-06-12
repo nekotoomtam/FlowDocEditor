@@ -66,7 +66,7 @@ import {
   shouldUseWysiwygTextEngineLayer,
 } from "./inlineEditSurfaceState"
 import type { ContinuationEditState } from "./inlineEditSurfaceState"
-import { useWysiwygDraftStoreForNode } from "./shell/wysiwygDraftStore"
+import { useWysiwygDraftSnapshotForNode } from "./shell/wysiwygDraftStore"
 import { WysiwygTextLayer } from "./WysiwygTextLayer"
 
 export type { WysiwygCaretVisualMode } from "./WysiwygTextRenderPrimitives"
@@ -88,6 +88,7 @@ interface Props {
   wysiwygTextDraftText?: string | null
   wysiwygTextCaretOffset?: number | null
   wysiwygTextSelection?: WysiwygTextSelection | null
+  useWysiwygDraftStoreSnapshot?: boolean
   wysiwygTextVisualDraftLines?: PaginatedLine[] | null
   wysiwygTextPointerFragments?: WysiwygTextPointerFragmentTarget[]
   wysiwygTextDraftPaginationActive?: boolean
@@ -128,6 +129,7 @@ function areParagraphTextSurfacePropsEqual(prev: Props, next: Props): boolean {
     prev.wysiwygTextDraftText === next.wysiwygTextDraftText &&
     prev.wysiwygTextCaretOffset === next.wysiwygTextCaretOffset &&
     prev.wysiwygTextSelection === next.wysiwygTextSelection &&
+    prev.useWysiwygDraftStoreSnapshot === next.useWysiwygDraftStoreSnapshot &&
     prev.wysiwygTextVisualDraftLines === next.wysiwygTextVisualDraftLines &&
     prev.wysiwygTextPointerFragments === next.wysiwygTextPointerFragments &&
     prev.wysiwygTextDraftPaginationActive === next.wysiwygTextDraftPaginationActive &&
@@ -169,6 +171,7 @@ function ParagraphTextSurfaceImpl({
   wysiwygTextDraftText,
   wysiwygTextCaretOffset,
   wysiwygTextSelection,
+  useWysiwygDraftStoreSnapshot = false,
   wysiwygTextVisualDraftLines,
   wysiwygTextPointerFragments,
   wysiwygTextDraftPaginationActive = false,
@@ -189,11 +192,11 @@ function ParagraphTextSurfaceImpl({
   onWysiwygRichTextShortcut,
   onWysiwygTextReflowDecision,
 }: Props) {
-  const draftStore = useWysiwygDraftStoreForNode(fragment.nodeId)
-  const isDraftIslandActive = draftStore != null
-  const resolvedWysiwygTextDraftText = isDraftIslandActive ? draftStore.text : wysiwygTextDraftText
-  const resolvedWysiwygTextCaretOffset = isDraftIslandActive ? draftStore.caretIndex : wysiwygTextCaretOffset
-  const resolvedWysiwygTextSelection = isDraftIslandActive ? draftStore.selection : wysiwygTextSelection
+  const draftStore = useWysiwygDraftSnapshotForNode(useWysiwygDraftStoreSnapshot ? fragment.nodeId : null)
+  const isDraftStoreActive = useWysiwygDraftStoreSnapshot && draftStore.active
+  const resolvedWysiwygTextDraftText = isDraftStoreActive ? draftStore.text : wysiwygTextDraftText
+  const resolvedWysiwygTextCaretOffset = isDraftStoreActive ? draftStore.caretIndex : wysiwygTextCaretOffset
+  const resolvedWysiwygTextSelection = isDraftStoreActive ? draftStore.selection : wysiwygTextSelection
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const pointerSelectionAnchorRef = useRef<number | null>(null)

@@ -248,6 +248,173 @@ or preview layout status on large documents.
   because that probe measures keypress-to-paint and render jank rather than the
   lifecycle/undo path.
 
+### WYSIWYG DevTools Trace
+
+Use when changing active-typing render scope, page memoization, draft layout
+measurement, or React commit churn.
+
+- Windows PowerShell compact run:
+  `$env:TRACE_WRITE_RAW='0'; $env:TRACE_COMPACT='1'; $env:TRACE_TOP_LIMIT='4'; node scripts/wysiwyg-devtools-trace.mjs`.
+- The script starts a flagged dev server unless `SMOKE_BASE_URL` points at an
+  already-running `/editor` server with WYSIWYG text-engine and perf trace flags
+  enabled.
+- Default scenario is `wysiwyg-stage3-boundary`, target node
+  `stage3-boundary-target`, 80 keys, and 10ms between keys. Override with
+  `PROBE_TARGET_NODE_ID`, `PROBE_BURST_LENGTH`, or `PROBE_INTERVAL_MS` when a
+  patch intentionally changes the measured path.
+- Set `TRACE_WRITE_RAW=1` to write raw Chrome trace JSON under
+  `tmp/devtools-traces/`; those files are local diagnostic artifacts and should
+  not be committed.
+- `appPerf` reports the measured typing window only. When
+  `TRACE_DETACHED_LIVE_LAYER_SAFETY=1` is enabled, post-trace interaction costs
+  are reported separately under `postTraceSafetyAppPerf`, and the combined view
+  remains available under `totalAppPerf`. Use `perfWindows` to confirm the event
+  split before comparing counts across runs.
+- Treat `CpuProfiler::StartProfiling` and React dev scheduler frames as
+  diagnostic overhead unless a trace also points at a FlowDoc source function or
+  a reproducible app perf regression.
+- Review `appPerf.editorCanvasCommit.byRenderReason` before accepting a runtime
+  patch. The count split is the gate for whether churn is input, parent-sync,
+  selection, structural, visual, pagination, or unattributed.
+- Review `appPerf.pageSlotAttribution` next. `memoMissCount` means active
+  WYSIWYG props reached page slot render scope; `count: 0` means the canvas
+  commit stayed above or outside page slot memo comparison.
+- Review `appPerf.editorCanvasCommit.visualCorrelation` when visual commits are
+  high. `islandAndFragmentSplit` points at nested draft-island React commits;
+  `fragmentSplitOnly` points at visual split work inside the canvas profiler
+  window without a matching island profiler commit.
+- Review `appPerf.editorCanvasCommit.visualUnchangedCorrelation.subtreePathCounts`
+  when `visual-unchanged` is high. `island+surface+fragmentSplit` points at the
+  draft island surface subtree; `fragmentSplit` means the canvas commit was
+  attributed to split work without a matching island or surface profiler commit.
+- Review `appPerf.fragmentSplit` before changing render behavior. A high
+  `outputUnchangedCount` means split geometry repeated; use
+  `fragmentSplit.visualSignature` to tell whether rendered line content changed
+  before changing pagination, page memoization, or draft rendering.
+- For sampled split telemetry, compare `appPerf.fragmentSplit.emittedCount`
+  with `observedCount`, `attributionHintCount`, and
+  `suppressedOutputUnchangedCount`. `emittedCount` is the main perf-buffer
+  count; `observedCount` includes hidden attribution hints used to classify
+  canvas commits.
+- Review `appPerf.fragmentSplit.identity` before memoizing draft split output.
+  `array-new/surface-keys-same` means fragment references churn while the
+  surface keys stay stable. Do not treat stable surface keys alone as safe reuse;
+  line text and style can still change while geometry and keys stay the same.
+  `arrayReusedCount` and `resultReusedCount` report the guarded final split
+  result passed downstream after reuse, not the freshly generated pre-reuse
+  array. Still compare island/surface React commit counts before claiming
+  render churn fell.
+- `flowdoc-island-visible-lines` is input-to-island-visible timing emitted from
+  the draft island root commit. Do not use it alone as proof that a child
+  visual-lines memo patch reduced React work; compare canvas, island, and
+  surface commit counts.
+- Review `appPerf.draftIslandMeasure` before claiming draft measurement churn.
+  `emittedCount` is the main perf-buffer count and should track true cache
+  misses/measurement work; `observedCount` also includes cache-hit attribution
+  hints from dev render resolves. Use `cacheMissCount` and `cacheHitCount`
+  together rather than treating every observed cache hit as a new measurement.
+  `identityReusedCount` reports cache-hit resolves where the draft island kept
+  the previous layout object for downstream memo/split stability; compare it
+  with `fragmentSplit.observedCount` before claiming repeated split work fell.
+- Review `appPerf.visualLinesCommit` after visual-lines memo changes. Compare
+  its count with `appPerf.fragmentSplit.visualSignature.visualChangedCount` and
+  `visualSameCount`; a lower visual-lines commit count can confirm the child
+  subtree is no longer committing for every visual-same repeat even if the
+  surface/root commit counts remain high.
+- After draft island surface memo changes, compare
+  `flowdoc-island-surface-react-commit` against `flowdoc-island-react-commit`,
+  `appPerf.visualLinesCommit.count`, and
+  `appPerf.fragmentSplit.visualSignature.visualChangedCount`. Do not claim a
+  root/input-lane win from a surface-count reduction alone.
+- Review `appPerf.islandSurfaceCommit` before splitting caret or selection
+  overlays out of the surface view. `selectionChangedCount` tracks active range
+  selection, while collapsed typing should primarily appear as
+  `revision+text-length+caret`; do not optimize selection overlay code when the
+  trace points at collapsed caret/text metadata instead.
+- Review `appPerf.islandSurfaceChromeCommit` after static-chrome memo patches.
+  For plain collapsed typing, the chrome child should usually mount once and
+  stay quiet while `islandSurfaceCommit` continues to track live caret/text
+  metadata. Do not move surface data attributes off the island SVG without
+  checking probes that read `data-wysiwyg-flowdoc-draft-*` from that element.
+- Review `appPerf.islandCaretCommit` after caret overlay patches. The caret
+  child should track rendered caret geometry, while the island surface wrapper
+  may still commit for live SVG data attributes. A low caret duration with high
+  `islandSurfaceCommit.revision+text-length+caret` means the remaining work is
+  the live-attribute/surface contract, not the caret line subtree.
+- Before any ref-based island SVG attr sync, update or verify
+  `resolveDraftIslandSurfaceLiveAttributes` tests. Probes read
+  `data-wysiwyg-flowdoc-draft-*`, `data-wysiwyg-custom-caret-visible`, and
+  `data-wysiwyg-island-revision` from the island SVG itself; the helper is the
+  source-of-truth contract for those live attributes.
+- After enabling ref-based island SVG attr sync, verify absent live values are
+  removed, not left stale. In particular, range selection may remove
+  `data-wysiwyg-flowdoc-draft-caret-offset` and
+  `data-wysiwyg-custom-caret-visible`; collapsed typing should restore both
+  through the same helper output. Keep React-rendered attrs as fallback until a
+  separate trace proves removing them from React diff preserves probe timing.
+- To run the ref-sync-only island attr experiment, set
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_ISLAND_REACT_LIVE_ATTRS=0` before
+  `scripts/wysiwyg-devtools-trace.mjs`. Verify `action.islandReactLiveAttrs`
+  reports `0` and `activeIslandSurfaceAttrs` has current `textLength`,
+  `caretOffset`, collapsed selection, custom caret visibility, revision, and
+  line count after the typing burst. This validates the attr contract but does
+  not by itself prove surface commits fell.
+- The detached island live layer now defaults on for active text-engine
+  development/test lanes and stays off by default in production. Explicit
+  `NEXT_PUBLIC_FLOWDOC_WYSIWYG_ISLAND_SURFACE_LIVE_LAYER=0` keeps the legacy
+  inline surface baseline available, and `=1` still forces the detached path.
+  The trace runner also passes `=1` to its managed dev server when the env var
+  is not explicitly set so historical trace runs remain comparable. Verify
+  `action.islandSurfaceLiveLayer` reports `1` in ordinary trace runs,
+  measured `appPerf.islandSurfaceCommit.count` is `0`, the static chrome stays
+  near one mount, and `appPerf.islandSurfaceLiveLayerCommit` carries the live
+  typing work.
+- Add `TRACE_DETACHED_LIVE_LAYER_SAFETY=1` to the same detached run before
+  treating it as a promotion candidate. The script will perform keyboard range
+  selection, long keyboard selection, pointer collapse, composition probing,
+  page-boundary expansion/selection, and outside-click blur after the measured
+  typing burst. The safety summary must report `ok: true`; keyboard selection
+  should keep only the hidden input bridge, show non-zero selected text and
+  overlay counts, long keyboard selection should select a larger span and, when
+  the island has multiple lines, report multiple surface-selection overlay
+  rects, pointer collapse should restore a collapsed selection with bridge-only
+  editing, composition probing should keep text length/selection stable while
+  clearing bridge echo text, page-boundary expansion should create at least two
+  island surfaces on at least two pages without mounting a native textarea, the
+  page-boundary selection should report selected overlays on at least two
+  surfaces/pages, and blur should remove the bridge without mounting a native
+  textarea. The page-boundary expansion uses a synthetic plain-text paste
+  payload after the measured trace is already stopped; override the payload size
+  with `TRACE_PAGE_BOUNDARY_SAFETY_LINE_COUNT` only when debugging this gate.
+  Compare safety-only costs through `postTraceSafetyAppPerf`; do not use
+  `totalAppPerf` as the typing baseline for default-promotion decisions.
+- Review `appPerf.islandRootCommit` before changing the draft island root or
+  local draft state path. `draftChangedCount` and
+  `inputToVisibleActiveCount` show active local-draft/input commits;
+  `layoutChangedCount`, `surfaceChangedCount`, and `anchorChangedCount` show
+  whether the root churn is actually geometry, surface identity, or anchoring.
+- After the root/runtime extraction, `flowdoc-island-react-commit` still
+  measures the runtime island subtree for compatibility. Treat it as runtime
+  child churn, not proof that the exported static wrapper re-rendered.
+- Before publishing every local draft input into `wysiwygDraftStore`, compare
+  `editor-canvas-react-commit`, island/surface commit counts, and
+  `pageSlotAttribution.count`. The current safe contract keeps per-input draft
+  truth local to the island and uses the store as a versioned session snapshot;
+  per-key global publication must not wake canvas paragraph subscribers.
+- When per-key store publication is enabled, verify draft/session subscriber
+  separation. Draft snapshots may update on every input for explicit live
+  consumers, but session snapshots must remain stable until the active node
+  changes. Toolbar selection UI should subscribe/debounce outside shell render,
+  while toolbar commands must read the latest selection from the store getter at
+  command time.
+- Review `appPerf.fragmentSplit.visualSignature` before narrowing render
+  attribution or reusing draft split output. `output-same/visual-changed` means
+  geometry stayed stable while rendered line content changed; only
+  `output-same/visual-same` is a candidate for unchanged-output reuse.
+- Treat `editorCanvasCommit.byRenderReason.visual-unchanged` as repeated visual
+  split work whose matched split event had unchanged visual signature, not as
+  proof that the canvas/page visual output changed.
+
 ### WYSIWYG Text Engine Stage 3 Stress
 
 Use before closing the FlowDoc-owned Stage 3 text-engine lane.
@@ -258,13 +425,15 @@ Use before closing the FlowDoc-owned Stage 3 text-engine lane.
   shell.
 - Confirm the target paragraph `stage3-boundary-target` starts as one fragment.
 - Click the target paragraph and confirm `data-wysiwyg-input-bridge="true"` is
-  present while `textarea[data-inline-edit-node-id]` is absent.
+  present while non-bridge `textarea[data-inline-edit-node-id]` and visible
+  native textarea fallback are absent.
 - Use real keypresses on the bridge, not clipboard-backed `fill()` / `type()`.
 - Press End, then enough Enter/text keys to overflow the target across the page
   boundary. Confirm the target has at least two fragments, the marker is
   visible, and no layout error badge appears.
 - Backspace the inserted marker/newlines until the target returns to one
-  fragment. Confirm the marker is gone and no inline textarea appears.
+  fragment. Confirm the marker is gone and no non-bridge inline textarea
+  appears.
 - Type a small marker, exit edit, then Undo and Redo. Confirm the marker
   disappears and returns with no layout error.
 
@@ -279,11 +448,14 @@ Use while hardening the FlowDoc-owned Stage 4 selection lane.
 - Open `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`.
 - Confirm the target paragraph `stage3-boundary-target` starts as one fragment.
 - Click the target paragraph and confirm `data-wysiwyg-input-bridge="true"` is
-  present while `textarea[data-inline-edit-node-id]` is absent.
+  present while non-bridge `textarea[data-inline-edit-node-id]` and visible
+  native textarea fallback are absent.
 - Press End, then Shift+ArrowLeft one or more times. Confirm
-  `data-wysiwyg-selection="true"` appears and the text remains SVG-rendered.
+  `data-wysiwyg-selection="true"` or `data-wysiwyg-selection-overlay="true"`
+  appears and the text remains SVG-rendered.
 - Double-click inside the active text-engine paragraph. Confirm
-  `data-wysiwyg-selection="true"` appears and no inline textarea mounts.
+  `data-wysiwyg-selection="true"` or `data-wysiwyg-selection-overlay="true"`
+  appears and no non-bridge inline textarea mounts.
 - After the target paragraph crosses a page boundary, use Shift+Home/End or an
   equivalent full-paragraph selection and confirm selection overlays appear on
   the active fragment and at least one continuation fragment without mounting a
@@ -341,7 +513,8 @@ Manual equivalent:
 - Open `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`.
 - Confirm the target paragraph `stage3-boundary-target` starts as one fragment.
 - Click the target paragraph and confirm `data-wysiwyg-input-bridge="true"` is
-  present while `textarea[data-inline-edit-node-id]` is absent.
+  present while non-bridge `textarea[data-inline-edit-node-id]` and visible
+  native textarea fallback are absent.
 - Put a heavy plain-text clipboard payload on the system clipboard: include
   Thai/English text, multiple newlines, a long unbroken token, and a final cut
   marker such as `CUTME4C`.

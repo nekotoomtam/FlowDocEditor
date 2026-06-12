@@ -49,6 +49,32 @@ export function resolveWysiwygRichTextDraftEnabled(
   return false
 }
 
+export function resolveWysiwygIslandReactLiveAttrsEnabled(
+  rawValue: string | undefined = process.env.NEXT_PUBLIC_FLOWDOC_WYSIWYG_ISLAND_REACT_LIVE_ATTRS,
+): boolean {
+  const normalized = rawValue?.trim().toLowerCase()
+  if (normalized && ENABLED_VALUES.has(normalized)) return true
+  if (normalized && DISABLED_VALUES.has(normalized)) return false
+  return true
+}
+
+export function resolveWysiwygIslandSurfaceLiveLayerEnabled(
+  rawValue: string | undefined = process.env.NEXT_PUBLIC_FLOWDOC_WYSIWYG_ISLAND_SURFACE_LIVE_LAYER,
+  textEngineEnabled: boolean = resolveWysiwygTextEngineEnabled(),
+  nodeEnv: string | undefined = process.env.NODE_ENV,
+): boolean {
+  const normalized = rawValue?.trim().toLowerCase()
+  if (normalized && ENABLED_VALUES.has(normalized)) return true
+  if (normalized && DISABLED_VALUES.has(normalized)) return false
+  if (normalized) return false
+  return textEngineEnabled && nodeEnv !== "production"
+}
+
 export const WYSIWYG_TEXT_ENGINE_ENABLED = resolveWysiwygTextEngineEnabled()
 export const WYSIWYG_PERF_TRACE_ENABLED = resolveWysiwygPerfTraceEnabled()
 export const WYSIWYG_RICH_TEXT_DRAFT_ENABLED = resolveWysiwygRichTextDraftEnabled(undefined, WYSIWYG_TEXT_ENGINE_ENABLED)
+export const WYSIWYG_ISLAND_REACT_LIVE_ATTRS_ENABLED = resolveWysiwygIslandReactLiveAttrsEnabled()
+export const WYSIWYG_ISLAND_SURFACE_LIVE_LAYER_ENABLED = resolveWysiwygIslandSurfaceLiveLayerEnabled(
+  undefined,
+  WYSIWYG_TEXT_ENGINE_ENABLED,
+)

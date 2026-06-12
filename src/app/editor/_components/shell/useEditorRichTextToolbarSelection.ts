@@ -7,25 +7,39 @@ import {
   shouldDebounceRichTextToolbarSelection,
   type RichTextToolbarSelectionSnapshot,
 } from "../richTextToolbarSelection"
-import { useWysiwygDraftSelection, wysiwygDraftStore } from "./wysiwygDraftStore"
+import { wysiwygDraftStore } from "./wysiwygDraftStore"
+
+function getWysiwygDraftToolbarSelectionSnapshot(): RichTextToolbarSelectionSnapshot | null {
+  const state = wysiwygDraftStore.getState()
+  return resolveRichTextToolbarSelectionSnapshot(state.nodeId, state.selection)
+}
 
 export function useEditorRichTextToolbarSelection() {
-  const storeSelection = useWysiwygDraftSelection()
   const debounceRef = useRef<{ timeoutId: ReturnType<typeof setTimeout> | null, lastInvokeTime: number }>({ timeoutId: null, lastInvokeTime: 0 })
-  const richTextToolbarLiveSelection = useMemo(
-    () => resolveRichTextToolbarSelectionSnapshot(storeSelection.nodeId, storeSelection.selection),
-    [storeSelection.nodeId, storeSelection.selection],
-  )
-  const [richTextToolbarSelection, setRichTextToolbarSelection] = useState<RichTextToolbarSelectionSnapshot | null>(richTextToolbarLiveSelection)
+  const pendingSelectionRef = useRef<RichTextToolbarSelectionSnapshot | null>(null)
+  const [richTextToolbarSelection, setRichTextToolbarSelection] = useState<RichTextToolbarSelectionSnapshot | null>(() => (
+    getWysiwygDraftToolbarSelectionSnapshot()
+  ))
 
   const getRichTextToolbarLiveSelection = useCallback(() => {
-    return resolveRichTextToolbarSelectionSnapshot(wysiwygDraftStore.getState().nodeId, wysiwygDraftStore.getState().selection)
+    return getWysiwygDraftToolbarSelectionSnapshot()
   }, [])
 
-  useEffect(() => {
+  const applySelection = useCallback((selection: RichTextToolbarSelectionSnapshot | null) => {
+    setRichTextToolbarSelection((current) => (
+      areRichTextToolbarSelectionsEqual(current, selection)
+        ? current
+        : selection
+    ))
+  }, [])
+  const applySelectionRef = useRef(applySelection)
+  applySelectionRef.current = applySelection
+
+  const queueSelection = useCallback((selection: RichTextToolbarSelectionSnapshot | null) => {
     const time = Date.now()
     const state = debounceRef.current
-    
+    pendingSelectionRef.current = selection
+
     if (state.timeoutId) {
       clearTimeout(state.timeoutId)
       state.timeoutId = null
@@ -33,45 +47,43 @@ export function useEditorRichTextToolbarSelection() {
       state.lastInvokeTime = time
     }
 
-    const applySelection = () => {
+    const flushSelection = () => {
       state.timeoutId = null
       state.lastInvokeTime = 0
-      setRichTextToolbarSelection((current) => (
-        areRichTextToolbarSelectionsEqual(current, richTextToolbarLiveSelection)
-          ? current
-          : richTextToolbarLiveSelection
-      ))
+      applySelectionRef.current(pendingSelectionRef.current)
     }
 
-    if (!shouldDebounceRichTextToolbarSelection(richTextToolbarLiveSelection)) {
-      applySelection()
+    if (!shouldDebounceRichTextToolbarSelection(selection)) {
+      flushSelection()
       return
     }
 
     const timeSinceLastInvoke = time - state.lastInvokeTime
     if (timeSinceLastInvoke >= RICH_TEXT_TOOLBAR_SELECTION_MAX_WAIT_MS) {
-      applySelection()
+      flushSelection()
       state.lastInvokeTime = time
     } else {
       state.timeoutId = setTimeout(() => {
-        applySelection()
+        flushSelection()
       }, RICH_TEXT_TOOLBAR_SELECTION_DEBOUNCE_MS)
     }
+  }, [])
 
+  useEffect(() => {
+    const unsubscribe = wysiwygDraftStore.subscribeDraft(() => {
+      queueSelection(getWysiwygDraftToolbarSelectionSnapshot())
+    })
     return () => {
-      if (state.timeoutId) {
-        clearTimeout(state.timeoutId)
-        state.timeoutId = null
-      }
+      unsubscribe()
     }
-  }, [richTextToolbarLiveSelection])
+  }, [queueSelection])
 
   useEffect(() => () => {
     if (debounceRef.current.timeoutId) {
       clearTimeout(debounceRef.current.timeoutId)
       debounceRef.current.timeoutId = null
     }
-  }, [richTextToolbarLiveSelection])
+  }, [])
 
   return {
     richTextToolbarSelection,

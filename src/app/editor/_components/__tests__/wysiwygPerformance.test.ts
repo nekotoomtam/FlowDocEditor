@@ -303,6 +303,132 @@ describe("finishWysiwygPerfSpan", () => {
     expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
   })
 
+  it("records draft island surface commit metadata without draft content", () => {
+    vi.stubGlobal("window", {})
+
+    recordWysiwygPerfEvent(true, {
+      kind: "flowdoc-island-surface-react-commit",
+      startedAt: 100,
+      durationMs: 1.25,
+      baseDurationMs: 2.5,
+      commitTime: 104,
+      nodeId: "p1",
+      draftVersion: 3,
+      textLength: 220,
+      lineCount: 12,
+      draftFragmentCount: 2,
+      draftPageCount: 2,
+      draftSurfaceCount: 2,
+      draftMissingSurfaceCount: 0,
+      componentName: "flowdoc-draft-editor-island-surface-v2:p1-0",
+      selectionCollapsed: true,
+      selectionRangeLength: 0,
+      draftSurfaceRevisionChanged: true,
+      draftSurfaceTextLengthChanged: true,
+      draftSurfaceCaretChanged: true,
+      draftSurfaceSelectionChanged: false,
+      draftSurfaceLayoutChanged: false,
+      draftSurfaceSurfaceChanged: false,
+      draftSurfaceAnchorChanged: false,
+      draftSurfaceCommitReason: "revision+text-length+caret",
+      source: "update",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "flowdoc-island-surface-react-commit",
+      nodeId: "p1",
+      draftVersion: 3,
+      draftSurfaceCount: 2,
+      componentName: "flowdoc-draft-editor-island-surface-v2:p1-0",
+      draftSurfaceCommitReason: "revision+text-length+caret",
+      source: "update",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
+  it("records draft island visual-lines commit metadata without draft content", () => {
+    vi.stubGlobal("window", {})
+
+    recordWysiwygPerfEvent(true, {
+      kind: "flowdoc-island-visual-lines-react-commit",
+      startedAt: 100,
+      durationMs: 0.75,
+      baseDurationMs: 1.5,
+      commitTime: 104,
+      nodeId: "p1",
+      pageIndex: 14,
+      lineCount: 12,
+      paragraphHeight: 72,
+      pageIndexes: "14",
+      componentName: "flowdoc-draft-editor-island-visual-lines-v2:p1-0",
+      source: "update",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "flowdoc-island-visual-lines-react-commit",
+      nodeId: "p1",
+      pageIndex: 14,
+      lineCount: 12,
+      componentName: "flowdoc-draft-editor-island-visual-lines-v2:p1-0",
+      source: "update",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
+  it("records draft island static chrome commit metadata without draft content", () => {
+    vi.stubGlobal("window", {})
+
+    recordWysiwygPerfEvent(true, {
+      kind: "flowdoc-island-surface-chrome-react-commit",
+      startedAt: 100,
+      durationMs: 0.3,
+      baseDurationMs: 0.6,
+      commitTime: 104,
+      nodeId: "p1",
+      pageIndex: 14,
+      paragraphHeight: 72,
+      componentName: "flowdoc-draft-editor-island-surface-chrome-v2:p1-0",
+      source: "mount",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "flowdoc-island-surface-chrome-react-commit",
+      nodeId: "p1",
+      pageIndex: 14,
+      paragraphHeight: 72,
+      componentName: "flowdoc-draft-editor-island-surface-chrome-v2:p1-0",
+      source: "mount",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
+  it("records draft island caret commit metadata without draft content", () => {
+    vi.stubGlobal("window", {})
+
+    recordWysiwygPerfEvent(true, {
+      kind: "flowdoc-island-caret-react-commit",
+      startedAt: 100,
+      durationMs: 0.2,
+      baseDurationMs: 0.4,
+      commitTime: 104,
+      nodeId: "p1",
+      pageIndex: 14,
+      active: true,
+      componentName: "flowdoc-draft-editor-island-caret-v2:p1-0",
+      source: "update",
+    })
+
+    expect(window.__flowDocWysiwygPerfEvents?.[0]).toMatchObject({
+      kind: "flowdoc-island-caret-react-commit",
+      nodeId: "p1",
+      pageIndex: 14,
+      active: true,
+      componentName: "flowdoc-draft-editor-island-caret-v2:p1-0",
+      source: "update",
+    })
+    expect(JSON.stringify(window.__flowDocWysiwygPerfEvents)).not.toContain("paragraph text")
+  })
+
   it("records editor action classification metadata without document content", () => {
     vi.stubGlobal("window", {})
 

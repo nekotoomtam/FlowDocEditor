@@ -4,10 +4,12 @@ import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode, TextRun } 
 import type { PageFragment, PaginatedDocument, PaginatedLine, ParagraphBoxRenderProps, ParagraphRenderProps } from "@/pagination"
 import type { EditorAction } from "./editorReducer"
 import type { EditorActionClassification } from "./editorActionClassifier"
+import type { EditorRenderInvalidationPlan } from "./operations/editorRenderInvalidation"
 
 interface VisualOnlyPaginatedUpdateInput {
   action: EditorAction | null | undefined
   classification: EditorActionClassification | null | undefined
+  renderInvalidationPlan?: EditorRenderInvalidationPlan | null | undefined
   currentPaginated: PaginatedDocument
   nextPreviewDoc: DocumentNode
 }
@@ -220,11 +222,15 @@ function isSupportedVisualOnlyAction(action: EditorAction): boolean {
 export function tryApplyVisualOnlyPaginatedUpdate({
   action,
   classification,
+  renderInvalidationPlan,
   currentPaginated,
   nextPreviewDoc,
 }: VisualOnlyPaginatedUpdateInput): VisualOnlyPaginatedUpdate | null {
   if (!action || !classification) return null
   if (classification.uiImpact !== "visual" || classification.layoutScope !== "none") return null
+  if (renderInvalidationPlan && (!renderInvalidationPlan.mayUseVisualFastLane || renderInvalidationPlan.invalidatesPagination)) {
+    return null
+  }
   if (!isSupportedVisualOnlyAction(action)) return null
 
   const affectedIds = collectAffectedParagraphIds(action, nextPreviewDoc)

@@ -18,6 +18,7 @@ export type WysiwygPerfEventKind =
   | "text-engine-selection-overlay"
   | "editor-canvas-react-commit"
   | "editor-action-dispatch"
+  | "editor-canvas-page-slot-attribution"
   | "inline-edit-finalize"
   | "inline-edit-exit-pagination"
   | "inline-edit-height-preview"
@@ -35,6 +36,11 @@ export type WysiwygPerfEventKind =
   | "flowdoc-island-fragment-split"
   | "flowdoc-island-visible-lines"
   | "flowdoc-island-react-commit"
+  | "flowdoc-island-surface-react-commit"
+  | "flowdoc-island-surface-live-layer-react-commit"
+  | "flowdoc-island-surface-chrome-react-commit"
+  | "flowdoc-island-caret-react-commit"
+  | "flowdoc-island-visual-lines-react-commit"
   | "flowdoc-island-parent-sync"
   | "flowdoc-island-pointer-hit-test"
   | "flowdoc-island-structural-edit"
@@ -65,7 +71,7 @@ export interface WysiwygPerfEvent {
   kind: WysiwygPerfEventKind
   startedAt: number
   durationMs: number
-  nodeId?: string
+  nodeId?: string | null
   previousNodeId?: string | null
   sourceNodeId?: string | null
   expectedActiveNodeId?: string | null
@@ -96,6 +102,48 @@ export interface WysiwygPerfEvent {
   draftSurfaceCount?: number
   draftMissingSurfaceCount?: number
   draftCandidatePageCount?: number
+  draftFragmentInputChanged?: boolean
+  draftFragmentOutputChanged?: boolean
+  draftFragmentVisualChanged?: boolean
+  draftFragmentSameInputRepeatCount?: number
+  draftFragmentSameOutputRepeatCount?: number
+  draftFragmentSameVisualRepeatCount?: number
+  draftFragmentArrayReused?: boolean
+  draftFragmentSameArrayRepeatCount?: number
+  draftSurfaceKeysChanged?: boolean
+  draftSurfaceSameKeyRepeatCount?: number
+  draftFragmentReuseCandidate?: boolean
+  draftFragmentResultReused?: boolean
+  draftFragmentSameResultReuseRepeatCount?: number
+  draftFragmentTelemetrySampled?: boolean
+  draftFragmentSuppressedOutputUnchangedCount?: number
+  draftFragmentOutputUnchangedSampleInterval?: number
+  draftRootDraftChanged?: boolean
+  draftRootLayoutChanged?: boolean
+  draftRootSurfaceChanged?: boolean
+  draftRootAnchorChanged?: boolean
+  draftRootInputToVisibleActive?: boolean
+  draftRootSameDraftRepeatCount?: number
+  draftRootSameLayoutRepeatCount?: number
+  draftRootSameSurfaceRepeatCount?: number
+  draftRootSameAnchorRepeatCount?: number
+  draftRootCommitReason?: string
+  draftSurfaceRevisionChanged?: boolean
+  draftSurfaceTextLengthChanged?: boolean
+  draftSurfaceCaretChanged?: boolean
+  draftSurfaceSelectionChanged?: boolean
+  draftSurfaceLayoutChanged?: boolean
+  draftSurfaceSurfaceChanged?: boolean
+  draftSurfaceAnchorChanged?: boolean
+  draftSurfaceInputToVisibleActive?: boolean
+  draftSurfaceSameRevisionRepeatCount?: number
+  draftSurfaceSameTextLengthRepeatCount?: number
+  draftSurfaceSameCaretRepeatCount?: number
+  draftSurfaceSameSelectionRepeatCount?: number
+  draftSurfaceSameLayoutRepeatCount?: number
+  draftSurfaceSameSurfaceRepeatCount?: number
+  draftSurfaceSameAnchorRepeatCount?: number
+  draftSurfaceCommitReason?: string
   draftLayoutCacheHit?: boolean
   requestedDelayMs?: number
   scheduledDelayMs?: number
@@ -130,6 +178,11 @@ export interface WysiwygPerfEvent {
   priority?: string
   styleFields?: string
   layoutAffecting?: boolean
+  renderInvalidationLane?: string
+  renderInvalidationPageScope?: string
+  renderInvalidationInvalidatesPagination?: boolean
+  renderInvalidationAffectedPageCount?: number
+  renderInvalidationAffectedPages?: string
   localStylePreview?: boolean
   richDraft?: boolean
   selectionCollapsed?: boolean
@@ -156,6 +209,14 @@ export interface WysiwygPerfEvent {
   unaffectedPage?: boolean
   componentName?: string
   renderReason?: string
+  pageSlotMemoEqual?: boolean
+  pageSlotWouldRender?: boolean
+  pageScopedEditAffected?: boolean
+  commitAttributionKind?: WysiwygPerfEventKind
+  commitAttributionAction?: string
+  commitAttributionSource?: string
+  commitAttributionDelayMs?: number
+  commitAttributionLookbackMs?: number
   comparatorCount?: number
   derivedValueCount?: number
   optimisticFragmentCount?: number
@@ -203,6 +264,7 @@ export function getWysiwygPerformanceMetricDefinition(
 declare global {
   interface Window {
     __flowDocWysiwygPerfEvents?: WysiwygPerfEvent[]
+    __flowDocWysiwygPerfAttributionEvents?: WysiwygPerfEvent[]
     __flowDocWysiwygPerfTraceEnabled?: boolean
     __flowDocPaginationProfileEnabled?: boolean
     __flowDocEditorSmokeState?: {
@@ -218,6 +280,7 @@ declare global {
 }
 
 const MAX_WYSIWYG_PERF_EVENTS = 2000
+const MAX_WYSIWYG_ATTRIBUTION_EVENTS = 200
 const WYSIWYG_PERF_TRACE_QUERY_PARAM = "flowdocWysiwygPerfTrace"
 const WYSIWYG_PERF_TRACE_STORAGE_KEY = "flowdoc.wysiwygPerfTrace"
 const PAGINATION_PROFILE_QUERY_PARAM = "flowdocProfilePagination"
@@ -381,6 +444,19 @@ export function recordWysiwygPerfEvent(
   window.__FLOWDOC_PERF_EVENTS__ = appendWysiwygPerfEvent(
     window.__FLOWDOC_PERF_EVENTS__ ?? [],
     toFlowDocPerfEvent(event),
+  )
+}
+
+export function recordWysiwygPerfAttributionEvent(
+  enabled: boolean,
+  event: WysiwygPerfEvent,
+): void {
+  if (!isWysiwygPerfTraceRuntimeEnabled(enabled)) return
+  if (typeof window === "undefined") return
+  window.__flowDocWysiwygPerfAttributionEvents = appendWysiwygPerfEvent(
+    window.__flowDocWysiwygPerfAttributionEvents ?? [],
+    event,
+    MAX_WYSIWYG_ATTRIBUTION_EVENTS,
   )
 }
 

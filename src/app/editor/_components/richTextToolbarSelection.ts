@@ -35,5 +35,5 @@ export function areRichTextToolbarSelectionsEqual(
 export function shouldDebounceRichTextToolbarSelection(
   selection: RichTextToolbarSelectionSnapshot | null | undefined,
 ): boolean {
-  return Boolean(selection && selection.anchorOffset !== selection.focusOffset)
+  return Boolean(selection)
 }

@@ -19,7 +19,12 @@ import type { DragSource } from "@/placement/types"
 import type { DragState, ResizeDrag, MinHeightDrag, MarginDrag, MarginEditMode, HeaderFooterEditMode, HeaderFooterReservedDrag } from "./editorInteractionTypes"
 import type { FragmentDrift } from "./comparePagination"
 import { getRowGeometry } from "@/placement/geometry"
-import { buildWysiwygDraftParagraphLayout } from "./wysiwygDraftParagraphLayout"
+import {
+  buildCachedWysiwygDraftParagraphLayout,
+  buildWysiwygDraftParagraphLayout,
+  createWysiwygDraftParagraphLayoutCache,
+  type WysiwygDraftParagraphLayoutCache,
+} from "./wysiwygDraftParagraphLayout"
 import { ParagraphTextSurface } from "./ParagraphTextSurface"
 import type { WysiwygTextPointerFragmentTarget } from "./wysiwygTextSelectionState"
 import type { ParagraphTextSurfaceStructuralEditGuard } from "./structuralEdit/paragraphTextSurfaceFallbackBridge"
@@ -59,6 +64,7 @@ import {
   shouldSuppressStalePageBreakForActiveWysiwygIslandBridge,
   type CanvasViewportBridgeStructuralIsland,
 } from "./canvasViewportBridge"
+import type { EditorRenderInvalidationPlan } from "./operations/editorRenderInvalidation"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1770,6 +1776,7 @@ function ZoneFragments({
             wysiwygTextDraftText={wysiwygTextDraftNodeId === fragment.nodeId ? wysiwygTextDraftText : null}
             wysiwygTextCaretOffset={wysiwygTextDraftNodeId === fragment.nodeId ? wysiwygTextCaretOffset : null}
             wysiwygTextSelection={wysiwygTextDraftNodeId === fragment.nodeId ? wysiwygTextSelection : null}
+            useWysiwygDraftStoreSnapshot={wysiwygTextDraftNodeId === fragment.nodeId}
             wysiwygTextPointerFragments={wysiwygTextDraftNodeId === fragment.nodeId ? wysiwygTextPointerFragments : undefined}
             wysiwygTextDraftPaginationActive={wysiwygTextDraftNodeId === fragment.nodeId && wysiwygTextDraftPaginationActive}
             showTextSegments={showTextSegments}
@@ -2232,6 +2239,7 @@ function PageView({
   showDrift: boolean
   driftMap: Map<string, FragmentDrift> | null
   pageScopedEditAffected: boolean
+  renderInvalidationPageAffected: boolean | null
   wysiwygInlineEditEnabled: boolean
   wysiwygTextEngineEnabled: boolean
   wysiwygTextDraftNodeId: string | null
@@ -2914,6 +2922,7 @@ function PageView({
             wysiwygTextDraftText={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextDraftText : null}
             wysiwygTextCaretOffset={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextCaretOffset : null}
             wysiwygTextSelection={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextSelection : null}
+            useWysiwygDraftStoreSnapshot={wysiwygTextDraftNodeId === f.nodeId}
             wysiwygTextVisualDraftLines={wysiwygTextDraftNodeId === f.nodeId ? visualDraftFragmentForPage?.lines ?? null : null}
             wysiwygTextPointerFragments={wysiwygTextDraftNodeId === f.nodeId ? wysiwygTextPointerFragments : undefined}
             wysiwygTextDraftPaginationActive={wysiwygTextDraftNodeId === f.nodeId && (wysiwygTextDraftPaginationActive || visualDraftFragmentForPage !== null)}
@@ -3646,8 +3655,9 @@ function PageView({
   )
 }
 
-type PageViewProps = Parameters<typeof PageView>[0]
+export type PageViewProps = Parameters<typeof PageView>[0]
 const PAGE_VIEW_TRANSIENT_PROP_KEYS: Array<keyof PageViewProps> = ["resizeDrag", "minHeightDrag", "marginDrag", "marginEditMode", "headerFooterEditMode", "headerFooterReservedDrag", "headerFooterZoneScroll"]
+const PAGE_VIEW_COMPARATOR_ONLY_PROP_KEYS: Array<keyof PageViewProps> = ["renderInvalidationPageAffected"]
 const PAGE_VIEW_SCOPED_EDIT_PROP_KEYS: Array<keyof PageViewProps> = [
   "selectedNodeId",
   "selectionAnchorNodeId",
@@ -3843,6 +3853,68 @@ function recordStructuralPageComparatorTiming(
   })
 }
 
+function hasWysiwygPageSlotTraceScope(
+  prev: Readonly<PageViewProps>,
+  next: Readonly<PageViewProps>,
+): boolean {
+  return (
+    prev.wysiwygTextDraftNodeId != null ||
+    next.wysiwygTextDraftNodeId != null ||
+    prev.wysiwygDraftVisualPreview != null ||
+    next.wysiwygDraftVisualPreview != null ||
+    (prev.wysiwygTextPointerFragments?.length ?? 0) > 0 ||
+    (next.wysiwygTextPointerFragments?.length ?? 0) > 0
+  )
+}
+
+export function buildEditorCanvasPageSlotAttributionEvent(
+  prev: Readonly<PageViewProps>,
+  next: Readonly<PageViewProps>,
+  equal: boolean,
+  reason: string,
+  startedAt: number,
+): WysiwygPerfEvent | null {
+  if (!hasWysiwygPageSlotTraceScope(prev, next)) return null
+  const page = next.page ?? prev.page
+  const nodeId =
+    next.wysiwygTextDraftNodeId ??
+    prev.wysiwygTextDraftNodeId ??
+    next.inlineEditNodeId ??
+    prev.inlineEditNodeId ??
+    null
+  const pageScopedEditAffected = Boolean(prev.pageScopedEditAffected || next.pageScopedEditAffected)
+  return {
+    kind: "editor-canvas-page-slot-attribution",
+    startedAt,
+    durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
+    nodeId,
+    pageIndex: page.index,
+    fragmentCount: page.fragments.length,
+    componentName: "EditorCanvasPageSlotMemo",
+    source: "EditorCanvasPageSlotMemo",
+    action: equal ? "memo-hit" : "memo-miss",
+    renderReason: reason,
+    comparatorCount: 1,
+    active: !equal,
+    unaffectedPage: !pageScopedEditAffected,
+    pageSlotMemoEqual: equal,
+    pageSlotWouldRender: !equal,
+    pageScopedEditAffected,
+  }
+}
+
+function recordEditorCanvasPageSlotAttribution(
+  prev: Readonly<PageViewProps>,
+  next: Readonly<PageViewProps>,
+  equal: boolean,
+  reason: string,
+  startedAt: number,
+): void {
+  const event = buildEditorCanvasPageSlotAttributionEvent(prev, next, equal, reason, startedAt)
+  if (!event) return
+  recordWysiwygPerfEvent(false, event)
+}
+
 export function arePageFragmentsStructurallyEqual(a: PageFragment[], b: PageFragment[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
@@ -3865,6 +3937,233 @@ export function arePageFragmentsStructurallyEqual(a: PageFragment[], b: PageFrag
     }
   }
   return true
+}
+
+export function arePageFragmentsPaintEqual(a: PageFragment[], b: PageFragment[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue
+    if (!arePageFragmentPaintFieldsEqual(a[i], b[i])) {
+      return false
+    }
+  }
+  return true
+}
+
+function arePageFragmentPaintFieldsEqual(a: PageFragment, b: PageFragment): boolean {
+  return (
+    nullableEqual(a.renderProps, b.renderProps, areParagraphRenderPropsEqual) &&
+    nullableEqual(a.listMarker, b.listMarker, areListMarkerRenderPropsEqual) &&
+    nullableEqual(a.dividerRenderProps, b.dividerRenderProps, areDividerRenderPropsEqual) &&
+    nullableEqual(a.boxRenderProps, b.boxRenderProps, areParagraphBoxRenderPropsEqual) &&
+    nullableEqual(a.flowTableGridProps, b.flowTableGridProps, areFlowTableGridPropsEqual) &&
+    nullableEqual(a.flowTableCellGridProps, b.flowTableCellGridProps, areFlowTableCellGridPropsEqual) &&
+    nullableArrayEqual(a.lines, b.lines, arePaginatedLinePaintEqual)
+  )
+}
+
+function nullableEqual<T>(a: T | null | undefined, b: T | null | undefined, equal: (a: T, b: T) => boolean): boolean {
+  if (a === b) return true
+  if (a == null || b == null) return false
+  return equal(a, b)
+}
+
+function nullableArrayEqual<T>(
+  a: readonly T[] | null | undefined,
+  b: readonly T[] | null | undefined,
+  equal: (a: T, b: T) => boolean,
+): boolean {
+  if (a === b) return true
+  if (a == null || b == null) return false
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue
+    if (!equal(a[i], b[i])) return false
+  }
+  return true
+}
+
+function numberArrayEqual(a: readonly number[], b: readonly number[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+function areBorderSidesEqual(a: ResolvedBorderSide | undefined, b: ResolvedBorderSide | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return (
+    a.style === b.style &&
+    a.width === b.width &&
+    a.color === b.color
+  )
+}
+
+function areCellBordersEqual(
+  a: NonNullable<PageFragment["boxRenderProps"]>["border"],
+  b: NonNullable<PageFragment["boxRenderProps"]>["border"],
+): boolean {
+  return (
+    areBorderSidesEqual(a.top, b.top) &&
+    areBorderSidesEqual(a.right, b.right) &&
+    areBorderSidesEqual(a.bottom, b.bottom) &&
+    areBorderSidesEqual(a.left, b.left)
+  )
+}
+
+function areParagraphBoxRenderPropsEqual(
+  a: NonNullable<PageFragment["boxRenderProps"]>,
+  b: NonNullable<PageFragment["boxRenderProps"]>,
+): boolean {
+  return (
+    a.fill === b.fill &&
+    a.padding.top === b.padding.top &&
+    a.padding.right === b.padding.right &&
+    a.padding.bottom === b.padding.bottom &&
+    a.padding.left === b.padding.left &&
+    areCellBordersEqual(a.border, b.border)
+  )
+}
+
+function areParagraphRenderPropsEqual(a: ParagraphRenderProps, b: ParagraphRenderProps): boolean {
+  return (
+    a.fontSize === b.fontSize &&
+    a.fontFamilyKey === b.fontFamilyKey &&
+    (a as { fontFamily?: string }).fontFamily === (b as { fontFamily?: string }).fontFamily &&
+    a.textColor === b.textColor &&
+    a.fontWeight === b.fontWeight &&
+    a.fontStyle === b.fontStyle &&
+    a.textDecoration === b.textDecoration &&
+    a.strikethrough === b.strikethrough &&
+    a.align === b.align &&
+    a.lineHeight === b.lineHeight &&
+    a.spacingBefore === b.spacingBefore &&
+    a.spacingAfter === b.spacingAfter &&
+    a.textIndent === b.textIndent &&
+    a.indentLeft === b.indentLeft &&
+    a.indentRight === b.indentRight &&
+    nullableEqual(a.box, b.box, areParagraphBoxRenderPropsEqual)
+  )
+}
+
+function areListMarkerRenderPropsEqual(
+  a: NonNullable<PageFragment["listMarker"]>,
+  b: NonNullable<PageFragment["listMarker"]>,
+): boolean {
+  return (
+    a.text === b.text &&
+    a.level === b.level &&
+    a.ordinal === b.ordinal &&
+    a.instanceId === b.instanceId &&
+    a.styleId === b.styleId &&
+    a.itemId === b.itemId &&
+    a.markerIndent === b.markerIndent &&
+    a.bodyIndent === b.bodyIndent &&
+    a.markerX === b.markerX &&
+    a.bodyX === b.bodyX
+  )
+}
+
+function areDividerRenderPropsEqual(
+  a: NonNullable<PageFragment["dividerRenderProps"]>,
+  b: NonNullable<PageFragment["dividerRenderProps"]>,
+): boolean {
+  return (
+    a.color === b.color &&
+    a.thickness === b.thickness &&
+    a.marginBefore === b.marginBefore &&
+    a.marginAfter === b.marginAfter &&
+    a.style === b.style
+  )
+}
+
+function areFlowTableGridPropsEqual(
+  a: NonNullable<PageFragment["flowTableGridProps"]>,
+  b: NonNullable<PageFragment["flowTableGridProps"]>,
+): boolean {
+  return numberArrayEqual(a.columnWidths, b.columnWidths)
+}
+
+function areFlowTableCellGridPropsEqual(
+  a: NonNullable<PageFragment["flowTableCellGridProps"]>,
+  b: NonNullable<PageFragment["flowTableCellGridProps"]>,
+): boolean {
+  return (
+    a.columnIndex === b.columnIndex &&
+    a.colspan === b.colspan &&
+    a.rowspan === b.rowspan
+  )
+}
+
+function areTextRunLayoutStylesEqual(
+  a: NonNullable<NonNullable<PaginatedLine["runs"]>[number]["style"]> | NonNullable<NonNullable<PaginatedLine["segments"]>[number]["style"]> | undefined,
+  b: NonNullable<NonNullable<PaginatedLine["runs"]>[number]["style"]> | NonNullable<NonNullable<PaginatedLine["segments"]>[number]["style"]> | undefined,
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return (
+    a.fontSize === b.fontSize &&
+    a.fontFamilyKey === b.fontFamilyKey &&
+    (a as { fontFamily?: string }).fontFamily === (b as { fontFamily?: string }).fontFamily &&
+    a.textColor === b.textColor &&
+    a.fontWeight === b.fontWeight &&
+    a.fontStyle === b.fontStyle &&
+    a.textDecoration === b.textDecoration &&
+    a.strikethrough === b.strikethrough &&
+    a.fontVariant === b.fontVariant &&
+    a.lineHeight === b.lineHeight
+  )
+}
+
+function areLineSegmentsEqual(
+  a: NonNullable<PaginatedLine["segments"]>[number],
+  b: NonNullable<PaginatedLine["segments"]>[number],
+): boolean {
+  return (
+    a.text === b.text &&
+    a.start === b.start &&
+    a.end === b.end &&
+    a.x === b.x &&
+    a.width === b.width &&
+    a.kind === b.kind &&
+    a.breakableAfter === b.breakableAfter &&
+    a.sourceId === b.sourceId &&
+    a.sourceType === b.sourceType &&
+    areTextRunLayoutStylesEqual(a.style, b.style)
+  )
+}
+
+function areLineRunsEqual(
+  a: NonNullable<PaginatedLine["runs"]>[number],
+  b: NonNullable<PaginatedLine["runs"]>[number],
+): boolean {
+  return (
+    a.text === b.text &&
+    a.start === b.start &&
+    a.end === b.end &&
+    a.x === b.x &&
+    a.width === b.width &&
+    a.sourceId === b.sourceId &&
+    a.sourceType === b.sourceType &&
+    areTextRunLayoutStylesEqual(a.style, b.style)
+  )
+}
+
+function arePaginatedLinePaintEqual(a: PaginatedLine, b: PaginatedLine): boolean {
+  return (
+    a.text === b.text &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.fontSize === b.fontSize &&
+    nullableArrayEqual(a.segments, b.segments, areLineSegmentsEqual) &&
+    nullableArrayEqual(a.runs, b.runs, areLineRunsEqual)
+  )
 }
 
 function arePagesStructurallyEqual(a: PaginatedPage, b: PaginatedPage): boolean {
@@ -3924,20 +4223,101 @@ function arePagesStructurallyEqual(a: PaginatedPage, b: PaginatedPage): boolean 
   return true
 }
 
-function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<PageViewProps>): boolean {
+function arePagesPaintEqual(a: PaginatedPage, b: PaginatedPage): boolean {
+  if (!arePageFragmentsPaintEqual(a.fragments, b.fragments)) return false
+  if (!arePageFragmentsPaintEqual(a.headerFragments, b.headerFragments)) return false
+  if (!arePageFragmentsPaintEqual(a.footerFragments, b.footerFragments)) return false
+  return true
+}
+
+export function shouldSkipPagePaintCompareForRenderInvalidation(
+  renderInvalidationPageAffected: boolean | null,
+): boolean {
+  return renderInvalidationPageAffected === false
+}
+
+export function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<PageViewProps>): boolean {
   const comparatorStartedAt = startWysiwygPerfSpan()
   const finishComparator = (equal: boolean, reason: string): boolean => {
     recordStructuralPageComparatorTiming(prev, next, "PageViewMemo", comparatorStartedAt, reason)
     return equal
   }
   const ignoreStructuralSnapshotChange = canIgnoreStructuralSnapshotChangeForUnrelatedPage(prev, next)
+  const scopedEditPropsChanged = PAGE_VIEW_SCOPED_EDIT_PROP_KEYS.some((key) => prev[key] !== next[key])
+  if (prev.isLayoutLoading !== next.isLayoutLoading && !ignoreStructuralSnapshotChange) {
+    recordStructuralPageMemoMiss(prev, next, "prop:isLayoutLoading")
+    return finishComparator(false, "prop:isLayoutLoading")
+  }
+  if (scopedEditPropsChanged && (
+    pageViewScopedEditPropsAffectPage(prev.page, prev) ||
+    pageViewScopedEditPropsAffectPage(next.page, next)
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "scoped-edit-props")
+    return finishComparator(false, "scoped-edit-props")
+  }
+  if (prev.resizeDrag !== next.resizeDrag && (
+    resizeDragAffectsPage(prev.page, prev.resizeDrag) ||
+    resizeDragAffectsPage(next.page, next.resizeDrag)
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "resize-drag")
+    return finishComparator(false, "resize-drag")
+  }
+  if (prev.minHeightDrag !== next.minHeightDrag && (
+    minHeightDragAffectsPage(prev.page, prev.minHeightDrag) ||
+    minHeightDragAffectsPage(next.page, next.minHeightDrag)
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "min-height-drag")
+    return finishComparator(false, "min-height-drag")
+  }
+  if (prev.marginDrag !== next.marginDrag && (
+    marginDragAffectsPage(prev.sectionIndex, prev.marginDrag) ||
+    marginDragAffectsPage(next.sectionIndex, next.marginDrag)
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "margin-drag")
+    return finishComparator(false, "margin-drag")
+  }
+  if (prev.marginEditMode !== next.marginEditMode && (
+    marginEditModeAffectsPage(prev.sectionIndex, prev.marginEditMode) ||
+    marginEditModeAffectsPage(next.sectionIndex, next.marginEditMode)
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "margin-edit-mode")
+    return finishComparator(false, "margin-edit-mode")
+  }
+  if (prev.headerFooterEditMode !== next.headerFooterEditMode && (
+    headerFooterEditModeAffectsPage(prev.sectionIndex, prev.headerFooterEditMode) ||
+    headerFooterEditModeAffectsPage(next.sectionIndex, next.headerFooterEditMode)
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "header-footer-edit-mode")
+    return finishComparator(false, "header-footer-edit-mode")
+  }
+  if (prev.headerFooterReservedDrag !== next.headerFooterReservedDrag && (
+    headerFooterReservedDragAffectsPage(prev.sectionIndex, prev.headerFooterReservedDrag) ||
+    headerFooterReservedDragAffectsPage(next.sectionIndex, next.headerFooterReservedDrag)
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "header-footer-reserved-drag")
+    return finishComparator(false, "header-footer-reserved-drag")
+  }
+  if (prev.headerFooterZoneScroll !== next.headerFooterZoneScroll && (
+    headerFooterZoneScrollAffectsPage(prev.sectionIndex, prev.headerFooterZoneScroll) ||
+    headerFooterZoneScrollAffectsPage(next.sectionIndex, next.headerFooterZoneScroll)
+  )) {
+    recordStructuralPageMemoMiss(prev, next, "header-footer-zone-scroll")
+    return finishComparator(false, "header-footer-zone-scroll")
+  }
   for (const key of Object.keys(prev) as Array<keyof PageViewProps>) {
     if (key === "doc" || key === "page") {
       if (ignoreStructuralSnapshotChange) continue
-      if (arePagesStructurallyEqual(prev.page, next.page)) continue
+      if (prev.page === next.page) continue
+      if (arePagesStructurallyEqual(prev.page, next.page)) {
+        if (shouldSkipPagePaintCompareForRenderInvalidation(next.renderInvalidationPageAffected)) continue
+        if (arePagesPaintEqual(prev.page, next.page)) continue
+        recordStructuralPageMemoMiss(prev, next, "page-paint")
+        return finishComparator(false, "page-paint")
+      }
     }
     if (key === "isLayoutLoading" && ignoreStructuralSnapshotChange) continue
     if (PAGE_VIEW_TRANSIENT_PROP_KEYS.includes(key)) continue
+    if (PAGE_VIEW_COMPARATOR_ONLY_PROP_KEYS.includes(key)) continue
     if (PAGE_VIEW_SCOPED_EDIT_PROP_KEYS.includes(key)) continue
     if (prev[key] !== next[key]) {
       const reason = `prop:${String(key)}`
@@ -3946,20 +4326,12 @@ function arePageViewPropsEqual(prev: Readonly<PageViewProps>, next: Readonly<Pag
     }
   }
 
-  const scopedEditPropsChanged = PAGE_VIEW_SCOPED_EDIT_PROP_KEYS.some((key) => prev[key] !== next[key])
   if (
     scopedEditPropsChanged &&
     !prev.pageScopedEditAffected &&
     !next.pageScopedEditAffected
   ) {
     return finishComparator(true, "scoped-edit-unaffected")
-  }
-  if (scopedEditPropsChanged && (
-    pageViewScopedEditPropsAffectPage(prev.page, prev) ||
-    pageViewScopedEditPropsAffectPage(next.page, next)
-  )) {
-    recordStructuralPageMemoMiss(prev, next, "scoped-edit-props")
-    return finishComparator(false, "scoped-edit-props")
   }
 
   if (prev.resizeDrag !== next.resizeDrag && (
@@ -4040,6 +4412,20 @@ export function shouldRenderLazyPageFrame(input: {
   forcedPageKeys: ReadonlySet<string>
 }): boolean {
   return shouldRenderLazyPageFrameBridge(input)
+}
+
+function buildRenderInvalidationAffectedPageIndexes(
+  renderInvalidationPlan: EditorRenderInvalidationPlan | null | undefined,
+): Set<number> | null {
+  if (!renderInvalidationPlan) return null
+  if (
+    renderInvalidationPlan.pageScope !== "affected-node-pages" &&
+    renderInvalidationPlan.pageScope !== "from-first-affected-page"
+  ) {
+    return null
+  }
+  if (renderInvalidationPlan.affectedPageIndexes == null) return null
+  return new Set(renderInvalidationPlan.affectedPageIndexes)
 }
 
 function LazyPagePlaceholder({ page, scale }: { page: PaginatedPage; scale: number }) {
@@ -4205,18 +4591,12 @@ function areEditorCanvasPageSlotPropsEqual(
   const comparatorStartedAt = startWysiwygPerfSpan()
   const finishComparator = (equal: boolean, reason: string): boolean => {
     recordStructuralPageComparatorTiming(prev, next, "EditorCanvasPageSlotMemo", comparatorStartedAt, reason)
+    recordEditorCanvasPageSlotAttribution(prev, next, equal, reason, comparatorStartedAt)
     return equal
   }
   if (prev.rendered !== next.rendered) {
     recordStructuralPageMemoMiss(prev, next, "slot-rendered")
     return finishComparator(false, "slot-rendered")
-  }
-  const ignoreStructuralSnapshotChange = canIgnoreStructuralSnapshotChangeForUnrelatedPage(prev, next)
-  if (prev.page !== next.page && !ignoreStructuralSnapshotChange) {
-    if (!arePagesStructurallyEqual(prev.page, next.page)) {
-      recordStructuralPageMemoMiss(prev, next, "slot-page")
-      return finishComparator(false, "slot-page")
-    }
   }
   if (prev.pageKey !== next.pageKey) {
     recordStructuralPageMemoMiss(prev, next, "slot-page-key")
@@ -4307,6 +4687,7 @@ interface Props {
   wysiwygTextDraftPaginationActive: boolean
   suppressedCanvasTextNodeIds?: ReadonlySet<string>
   activeOutOfCanvasStructuralIsland?: ActiveOutOfCanvasStructuralIsland | null
+  renderInvalidationPlan?: EditorRenderInvalidationPlan | null
   onWysiwygTextDraftChange: (nodeId: string, text: string, caretIndex: number | null, selection?: { anchorOffset: number; focusOffset: number } | null) => void
   onWysiwygRichTextShortcut?: (nodeId: string, input: WysiwygTextInputKey) => boolean
   onWysiwygTextReflowDecision: (nodeId: string, reflow: WysiwygTextReflowDecision) => void
@@ -4320,6 +4701,7 @@ export function buildWysiwygDraftVisualPreview(input: {
   draftParagraph?: ParagraphNode | null
   caretOffset: number | null
   textMeasurer: TextMeasurer
+  draftLayoutCache?: WysiwygDraftParagraphLayoutCache | null
   draftPaginationActive?: boolean
 }): WysiwygDraftVisualPreview | null {
   const paragraph = input.draftParagraph ?? findParagraphNode(input.doc, input.nodeId)
@@ -4351,13 +4733,23 @@ export function buildWysiwygDraftVisualPreview(input: {
     if (isParagraphInsideFlowStack(input.doc, input.nodeId, sourceFragment.parentNodeId)) return null
     const isTableCellParagraph = isTableCellId(input.doc, sourceFragment.parentNodeId)
 
-    const draftLayout = buildWysiwygDraftParagraphLayout(
-      sourceFragment,
-      paragraph,
-      draftText,
-      input.textMeasurer,
-      { allowContinuedFirstFragment: true },
-    )
+    const draftLayoutOptions = { allowContinuedFirstFragment: true }
+    const draftLayout = input.draftLayoutCache
+      ? buildCachedWysiwygDraftParagraphLayout(
+        input.draftLayoutCache,
+        sourceFragment,
+        paragraph,
+        draftText,
+        input.textMeasurer,
+        draftLayoutOptions,
+      )
+      : buildWysiwygDraftParagraphLayout(
+        sourceFragment,
+        paragraph,
+        draftText,
+        input.textMeasurer,
+        draftLayoutOptions,
+      )
     if (!draftLayout) return null
 
     const draftFragments = splitWysiwygDraftVisualFragments({
@@ -4415,6 +4807,7 @@ export function EditorCanvas({
   wysiwygTextDraftPaginationActive,
   suppressedCanvasTextNodeIds = EMPTY_SUPPRESSED_NODE_IDS,
   activeOutOfCanvasStructuralIsland = null,
+  renderInvalidationPlan = null,
   onWysiwygTextDraftChange,
   onWysiwygRichTextShortcut,
   onWysiwygTextReflowDecision,
@@ -4422,6 +4815,7 @@ export function EditorCanvas({
   const containerRef = useRef<HTMLDivElement>(null)
   const pageFrameRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const pageVisibilityObserverRef = useRef<IntersectionObserver | null>(null)
+  const wysiwygDraftVisualPreviewLayoutCacheRef = useRef(createWysiwygDraftParagraphLayoutCache())
   const [headerFooterZoneScroll, setHeaderFooterZoneScroll] = useState<HeaderFooterZoneScrollState | null>(null)
   const [lazyVisiblePageKeys, setLazyVisiblePageKeys] = useState<Set<string>>(() => new Set())
   const tableCellVisualPreviewTraceRef = useRef<WysiwygTableCellLifecycleTraceState | null>(null)
@@ -4626,6 +5020,7 @@ export function EditorCanvas({
           draftParagraph: hasDraftParagraphChange ? wysiwygTextDraftParagraph ?? null : null,
           caretOffset: wysiwygTextCaretOffset,
           textMeasurer,
+          draftLayoutCache: wysiwygDraftVisualPreviewLayoutCacheRef.current,
           draftPaginationActive: wysiwygTextDraftPaginationActive || wysiwygTextExistingSplitActive,
         })
       },
@@ -4846,6 +5241,10 @@ export function EditorCanvas({
     wysiwygTextDraftNodeId,
     wysiwygTextPointerFragments,
   ])
+  const renderInvalidationAffectedPageIndexes = useMemo(
+    () => buildRenderInvalidationAffectedPageIndexes(renderInvalidationPlan),
+    [renderInvalidationPlan],
+  )
 
   const forcedPageKeys = useMemo(() => (
     captureStructuralCanvasRenderValue(
@@ -5127,6 +5526,7 @@ export function EditorCanvas({
                   onMinHeightResizeStart={stableOnMinHeightResizeStart}
                   sectionIndex={si}
                   pageScopedEditAffected={pageScopedEditAffectedPageIndexes.has(page.index)}
+                  renderInvalidationPageAffected={renderInvalidationAffectedPageIndexes?.has(page.index) ?? null}
                   marginDrag={marginDrag}
                   marginEditMode={marginEditMode}
                   headerFooterEditMode={headerFooterEditMode}

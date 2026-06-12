@@ -38,6 +38,8 @@ import {
   type BrowserPreviewShellMutationPlan,
 } from "../structuralEdit/previewSettleShellAdapter"
 import { tryApplyVisualOnlyPaginatedUpdate } from "../editorVisualOnlyPagination"
+import { createEditorOperationFromAction } from "../operations/editorOperationFromAction"
+import { resolveEditorRenderInvalidation, type EditorRenderInvalidationPlan } from "../operations/editorRenderInvalidation"
 import type { EditorPreviewLayoutState } from "../editorPreviewLayoutStatus"
 import {
   markEditorPreviewLayoutFull,
@@ -157,6 +159,7 @@ export function useEditorPaginationLifecycleController({
   setMarginDrag,
   setMinHeightDrag,
   setPartialPreviewPaginated,
+  setRenderInvalidationPlanForCanvas,
   setResizeDrag,
   showDriftRef,
   structuralEditRuntime,
@@ -195,6 +198,10 @@ export function useEditorPaginationLifecycleController({
   setMarginDrag: (value: MarginDrag | null) => void
   setMinHeightDrag: (value: MinHeightDrag | null) => void
   setPartialPreviewPaginated: Dispatch<SetStateAction<EditorPartialPreviewPaginated | null>>
+  setRenderInvalidationPlanForCanvas: Dispatch<SetStateAction<{
+    plan: EditorRenderInvalidationPlan | null
+    paginated: PaginatedDocument
+  } | null>>
   setResizeDrag: (value: ResizeDrag | null) => void
   showDriftRef: MutableCurrentRef<boolean>
   structuralEditRuntime: StructuralEditRuntime
@@ -436,9 +443,16 @@ export function useEditorPaginationLifecycleController({
 
     const pendingActionClassification = pendingEditorActionClassificationRef.current
     pendingEditorActionClassificationRef.current = null
+    const renderInvalidationPlan = pendingActionClassification
+      ? resolveEditorRenderInvalidation({
+        operation: createEditorOperationFromAction(pendingActionClassification.action),
+        paginated: paginatedRef.current,
+      })
+      : null
     const visualOnlyUpdate = tryApplyVisualOnlyPaginatedUpdate({
       action: pendingActionClassification?.action,
       classification: pendingActionClassification?.classification,
+      renderInvalidationPlan,
       currentPaginated: paginatedRef.current,
       nextPreviewDoc: previewDoc,
     })
@@ -453,6 +467,7 @@ export function useEditorPaginationLifecycleController({
         return () => undefined
       }
       const startedAt = startWysiwygPerfSpan()
+      setRenderInvalidationPlanForCanvas({ plan: renderInvalidationPlan, paginated: visualOnlyUpdate.paginated })
       applyVisualOnlyBrowserPreviewShellMutation({
         plan: shellMutationPlan,
         optimisticLayout: { doc: previewDoc, paginated: visualOnlyUpdate.paginated },
@@ -477,6 +492,11 @@ export function useEditorPaginationLifecycleController({
         source: "visual-only-fast-lane",
         commandType: pendingActionClassification?.action.type,
         layoutAffecting: false,
+        renderInvalidationLane: renderInvalidationPlan?.lane,
+        renderInvalidationPageScope: renderInvalidationPlan?.pageScope,
+        renderInvalidationInvalidatesPagination: renderInvalidationPlan?.invalidatesPagination,
+        renderInvalidationAffectedPageCount: renderInvalidationPlan?.affectedPageIndexes?.length,
+        renderInvalidationAffectedPages: renderInvalidationPlan?.affectedPageIndexes?.join(","),
         ...summarizePaginatedForWysiwygPerf(visualOnlyUpdate.paginated),
       })
       return () => undefined
@@ -596,6 +616,7 @@ export function useEditorPaginationLifecycleController({
             }
             return
           }
+          setRenderInvalidationPlanForCanvas({ plan: renderInvalidationPlan, paginated })
           applyPaginatedOutputBrowserPreviewShellMutation({
             plan: shellMutationPlan,
             optimisticLayout: { doc: previewDoc, paginated },
@@ -732,6 +753,7 @@ export function useEditorPaginationLifecycleController({
                 if (partialShellMutationPlan.action === "ignore") {
                   return
                 }
+                setRenderInvalidationPlanForCanvas({ plan: renderInvalidationPlan, paginated: response.paginated })
                 applyPartialWorkerBrowserPreviewShellMutation({
                   plan: partialShellMutationPlan,
                   partialPreview: {
@@ -853,6 +875,7 @@ export function useEditorPaginationLifecycleController({
     recordPreviewSettleShellMutationPlan,
     setBrowserPreviewLayout,
     setPartialPreviewPaginated,
+    setRenderInvalidationPlanForCanvas,
     structuralEditRuntime,
   ])
 

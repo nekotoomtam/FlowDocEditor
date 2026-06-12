@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   applyParagraphTextStyle,
+  createParagraphNode,
   createDefaultDocument,
   patchParagraphStyleDefinition,
   TOR_BODY_PARAGRAPH_STYLE_ID,
@@ -9,9 +10,14 @@ import {
 } from "@/document"
 import { defaultTextMeasurer } from "@/layout"
 import { paginateDocument, type PageFragment, type PaginatedDocument } from "@/pagination"
-import type { DocumentNode } from "@/schema"
+import type { BodyNode, DocumentNode } from "@/schema"
 import { classifyEditorAction } from "../editorActionClassifier"
 import { tryApplyVisualOnlyPaginatedUpdate } from "../editorVisualOnlyPagination"
+import { createEditorOperationFromAction } from "../operations/editorOperationFromAction"
+import {
+  EDITOR_RENDER_ACTION_OWNERSHIP,
+  resolveEditorRenderInvalidation,
+} from "../operations/editorRenderInvalidation"
 import { replaceEditableParagraphTextInDocument } from "../wysiwygTextCommit"
 
 function firstParagraphId(doc: DocumentNode): string {
@@ -39,6 +45,70 @@ function plainParagraphDocument(): { doc: DocumentNode; paragraphId: string } {
   return { doc, paragraphId }
 }
 
+function paginatedPage(index: number, fragments: PageFragment[]): PaginatedDocument["sections"][number]["pages"][number] {
+  return {
+    index,
+    width: 600,
+    height: 800,
+    contentBox: { x: 40, y: 40, width: 520, height: 720 },
+    fragments,
+    headerFragments: [],
+    footerFragments: [],
+  }
+}
+
+function paragraphFragment(nodeId: string, pageIndex: number): PageFragment {
+  return {
+    nodeId,
+    nodeType: "paragraph",
+    pageIndex,
+    x: 40,
+    y: 60,
+    width: 300,
+    height: 24,
+    renderProps: {
+      fontSize: 12,
+      fontFamily: "Arial",
+      lineHeight: 1.2,
+      textColor: "000000",
+      textDecoration: "none",
+      strikethrough: false,
+      align: "left",
+    },
+  } as unknown as PageFragment
+}
+
+function twoParagraphDocument(): {
+  doc: DocumentNode
+  firstParagraphId: string
+  secondParagraphId: string
+} {
+  const doc = createDefaultDocument("Visual page identity")
+  const section = doc.document.sections[0]
+  const body = section.nodes[section.bodyRootId] as BodyNode
+  const firstId = firstParagraphId(doc)
+  const secondParagraph = createParagraphNode("Second paragraph")
+  const nextSection = {
+    ...section,
+    nodes: {
+      ...section.nodes,
+      [body.id]: { ...body, childIds: [firstId, secondParagraph.id] },
+      [secondParagraph.id]: secondParagraph,
+    },
+  }
+  return {
+    doc: {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [nextSection, ...doc.document.sections.slice(1)],
+      },
+    },
+    firstParagraphId: firstId,
+    secondParagraphId: secondParagraph.id,
+  }
+}
+
 describe("editorVisualOnlyPagination", () => {
   it("patches paragraph text color and decoration without changing fragment geometry", () => {
     const { doc, paragraphId } = plainParagraphDocument()
@@ -57,6 +127,10 @@ describe("editorVisualOnlyPagination", () => {
     const result = tryApplyVisualOnlyPaginatedUpdate({
       action,
       classification: classifyEditorAction(action),
+      renderInvalidationPlan: resolveEditorRenderInvalidation({
+        operation: createEditorOperationFromAction(action),
+        paginated: currentPaginated,
+      }),
       currentPaginated,
       nextPreviewDoc: nextDoc,
     })
@@ -74,6 +148,79 @@ describe("editorVisualOnlyPagination", () => {
       textDecoration: "underline",
       strikethrough: true,
     })
+  })
+
+  it("refuses the fast lane when the render invalidation plan is layout-affecting", () => {
+    const { doc, paragraphId } = plainParagraphDocument()
+    const currentPaginated = paginateDocument(doc, defaultTextMeasurer)
+    const nextDoc = applyParagraphTextStyle(doc, paragraphId, {
+      textColor: "DC2626",
+    })
+    const action = {
+      type: "UPDATE_PARAGRAPH_TEXT_STYLE",
+      nodeId: paragraphId,
+      changes: { textColor: "DC2626" },
+    } as const
+
+    const result = tryApplyVisualOnlyPaginatedUpdate({
+      action,
+      classification: classifyEditorAction(action),
+      renderInvalidationPlan: {
+        lane: "node-layout",
+        pageScope: "affected-node-pages",
+        affectedNodeIds: [paragraphId],
+        affectedPageIndexes: [0],
+        invalidatesPagination: true,
+        mayUseVisualFastLane: false,
+        requiresPreviewSettle: true,
+        requiresHistoryEntry: true,
+        ownership: EDITOR_RENDER_ACTION_OWNERSHIP,
+        reason: "test:layout-affecting",
+      },
+      currentPaginated,
+      nextPreviewDoc: nextDoc,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  it("keeps unaffected page objects stable when patching one visual-only page", () => {
+    const { doc, firstParagraphId, secondParagraphId } = twoParagraphDocument()
+    const currentPaginated: PaginatedDocument = {
+      tocEntries: [],
+      sections: [
+        {
+          sectionId: "section-1",
+          pages: [
+            paginatedPage(0, [paragraphFragment(firstParagraphId, 0)]),
+            paginatedPage(1, [paragraphFragment(secondParagraphId, 1)]),
+          ],
+        },
+      ],
+    }
+    const nextDoc = updateNodeProps(doc, firstParagraphId, {
+      styleOverrides: { textColor: "DC2626" },
+    })
+    const action = {
+      type: "PATCH_PARAGRAPH_STYLE_OVERRIDES",
+      nodeId: firstParagraphId,
+      changes: { textColor: "DC2626" },
+    } as const
+
+    const result = tryApplyVisualOnlyPaginatedUpdate({
+      action,
+      classification: classifyEditorAction(action),
+      renderInvalidationPlan: resolveEditorRenderInvalidation({
+        operation: createEditorOperationFromAction(action),
+        paginated: currentPaginated,
+      }),
+      currentPaginated,
+      nextPreviewDoc: nextDoc,
+    })
+
+    expect(result?.changed).toBe(true)
+    expect(result?.paginated.sections[0].pages[0]).not.toBe(currentPaginated.sections[0].pages[0])
+    expect(result?.paginated.sections[0].pages[1]).toBe(currentPaginated.sections[0].pages[1])
   })
 
   it("patches paragraph box fill using the existing fragment rectangle", () => {

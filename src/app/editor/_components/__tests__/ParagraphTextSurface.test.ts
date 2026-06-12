@@ -58,14 +58,21 @@ import {
   paragraphWithWysiwygFragmentRenderProps,
 } from "../wysiwygDraftParagraphLayout"
 import {
+  areDraftIslandCaretOverlayPropsEqual,
+  areDraftIslandRuntimePropsEqual,
+  areDraftIslandSurfaceChromePropsEqual,
+  areDraftIslandSurfaceViewPropsEqual,
+  areDraftIslandVisualLinesPropsEqual,
   FlowdocDraftEditorIslandRoot,
   ISLAND_BOUNDARY_HEIGHT_PREVIEW_DEBOUNCE_MS,
   ISLAND_PARENT_SYNC_DEBOUNCE_MS,
   ISLAND_TEXT_INPUT_PARENT_SYNC_DEBOUNCE_MS,
+  resolveDraftIslandSurfaceLiveAttributes,
   resolveDraftIslandHeightPreviewDelayMs,
   resolveDraftIslandParentSyncDelayMs,
   shouldQueueDraftIslandPageBoundaryReflow,
   shouldReportDraftIslandHeightPreview,
+  syncDraftIslandSurfaceLiveAttributes,
 } from "../FlowdocDraftEditorIslandRoot"
 import {
   resolveDraftIslandStructuralGuardUnlockReason,
@@ -73,9 +80,14 @@ import {
   type DraftIslandStructuralEditGuard,
 } from "../flowdocDraftIslandStructuralGuard"
 import { createOptimisticMergeRefocusPaginated, createOptimisticSplitRefocusPaginated } from "../optimisticStructuralRefocus"
-import type { PageFragment, PaginatedDocument, PaginatedPage } from "@/pagination"
+import type { PageFragment, PaginatedDocument, PaginatedPage, ParagraphRenderProps } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import type { TextMeasurer } from "@/layout"
+import {
+  getWysiwygDraftSessionForNode,
+  getWysiwygDraftSnapshotForNode,
+  wysiwygDraftStore,
+} from "../shell/wysiwygDraftStore"
 
 function makeFragment(overrides: Partial<PageFragment> = {}): PageFragment {
   return {
@@ -345,6 +357,515 @@ function expectFlowdocDraftLinesMarkup(markup: string, text?: string): void {
 }
 
 describe("FlowdocDraftEditorIslandRoot", () => {
+  it("keeps draft store snapshots scoped and stable for node subscribers", () => {
+    const inactiveBefore = getWysiwygDraftSnapshotForNode("p1")
+    wysiwygDraftStore.setState({
+      nodeId: "p2",
+      text: "Other node draft",
+      caretIndex: 4,
+      selection: { anchorOffset: 4, focusOffset: 4 },
+      source: "test",
+    })
+    expect(getWysiwygDraftSnapshotForNode("p1")).toBe(inactiveBefore)
+
+    const activeBefore = getWysiwygDraftSnapshotForNode("p2")
+    wysiwygDraftStore.setState({
+      nodeId: "p2",
+      text: "Other node draft",
+      caretIndex: 4,
+      selection: { anchorOffset: 4, focusOffset: 4 },
+      source: "same-payload",
+    })
+    expect(getWysiwygDraftSnapshotForNode("p2")).toBe(activeBefore)
+
+    wysiwygDraftStore.setState({
+      nodeId: "p2",
+      text: "Other node draft!",
+      caretIndex: 5,
+      selection: { anchorOffset: 5, focusOffset: 5 },
+      source: "changed-payload",
+    })
+    const activeAfter = getWysiwygDraftSnapshotForNode("p2")
+    expect(activeAfter).not.toBe(activeBefore)
+    expect(activeAfter.version).toBeGreaterThan(activeBefore.version)
+  })
+
+  it("splits draft and session store notifications", () => {
+    let draftNotifications = 0
+    let sessionNotifications = 0
+    const unsubscribeDraft = wysiwygDraftStore.subscribeDraft(() => {
+      draftNotifications += 1
+    })
+    const unsubscribeSession = wysiwygDraftStore.subscribeSession(() => {
+      sessionNotifications += 1
+    })
+
+    wysiwygDraftStore.setState({
+      nodeId: "p1",
+      text: "Session draft",
+      caretIndex: 3,
+      selection: { anchorOffset: 3, focusOffset: 3 },
+      source: "test-start",
+    })
+    expect(draftNotifications).toBe(1)
+    expect(sessionNotifications).toBe(1)
+    const firstSession = getWysiwygDraftSessionForNode("p1")
+    expect(firstSession?.text).toBe("Session draft")
+
+    draftNotifications = 0
+    sessionNotifications = 0
+    wysiwygDraftStore.setState({
+      text: "Session draft!",
+      caretIndex: 4,
+      selection: { anchorOffset: 4, focusOffset: 4 },
+      source: "test-input",
+    })
+    expect(draftNotifications).toBe(1)
+    expect(sessionNotifications).toBe(0)
+    expect(getWysiwygDraftSessionForNode("p1")).toBe(firstSession)
+    expect(getWysiwygDraftSnapshotForNode("p1").text).toBe("Session draft!")
+
+    draftNotifications = 0
+    sessionNotifications = 0
+    wysiwygDraftStore.setState({
+      nodeId: "p2",
+      text: "Other session",
+      caretIndex: 2,
+      selection: { anchorOffset: 2, focusOffset: 2 },
+      source: "test-switch",
+    })
+    expect(draftNotifications).toBe(1)
+    expect(sessionNotifications).toBe(1)
+    expect(getWysiwygDraftSessionForNode("p2")?.text).toBe("Other session")
+
+    unsubscribeDraft()
+    unsubscribeSession()
+  })
+
+  it("keeps visual-line memoization scoped to reused fragment and render-prop identities", () => {
+    const renderProps: ParagraphRenderProps = {
+      fontFamilyKey: "default",
+      fontSize: 12,
+      align: "left",
+      lineHeight: 12,
+      textColor: "111827",
+      spacingBefore: 0,
+      spacingAfter: 0,
+      textIndent: 0,
+      indentLeft: 0,
+      indentRight: 0,
+    }
+    const surfaceFragment = makeFragment({
+      renderProps,
+      lines: [{
+        text: "FlowDoc",
+        x: 0,
+        y: 0,
+        width: 48,
+        height: 12,
+      }],
+    })
+
+    expect(areDraftIslandVisualLinesPropsEqual(
+      { surfaceFragment, renderProps },
+      { surfaceFragment, renderProps },
+    )).toBe(true)
+    expect(areDraftIslandVisualLinesPropsEqual(
+      { surfaceFragment, renderProps },
+      { surfaceFragment: { ...surfaceFragment }, renderProps },
+    )).toBe(false)
+    expect(areDraftIslandVisualLinesPropsEqual(
+      { surfaceFragment, renderProps },
+      { surfaceFragment, renderProps: { ...renderProps } },
+    )).toBe(false)
+  })
+
+  it("keeps static surface chrome memoization scoped to geometry", () => {
+    const props = {
+      surfaceKey: "0:0:0:1:source:final",
+      nodeId: "p1",
+      pageIndex: 0,
+      x: 12,
+      y: 24,
+      width: 200,
+      surfaceHeightPt: 48,
+      surfaceChromeHeightPt: 48,
+    }
+
+    expect(areDraftIslandSurfaceChromePropsEqual(props, { ...props })).toBe(true)
+    expect(areDraftIslandSurfaceChromePropsEqual(props, {
+      ...props,
+      surfaceHeightPt: 60,
+    })).toBe(false)
+    expect(areDraftIslandSurfaceChromePropsEqual(props, {
+      ...props,
+      surfaceKey: "0:0:0:1:from:continued",
+    })).toBe(false)
+  })
+
+  it("keeps caret overlay memoization scoped to rendered caret geometry", () => {
+    const props = {
+      surfaceKey: "0:0:0:1:source:final",
+      nodeId: "p1",
+      pageIndex: 0,
+      caret: {
+        offset: 4,
+        pageIndex: 0,
+        x1: 12,
+        y1: 24,
+        x2: 12,
+        y2: 36,
+      },
+    }
+
+    expect(areDraftIslandCaretOverlayPropsEqual(props, {
+      ...props,
+      caret: { ...props.caret },
+    })).toBe(true)
+    expect(areDraftIslandCaretOverlayPropsEqual(props, {
+      ...props,
+      caret: { ...props.caret, x1: 13, x2: 13 },
+    })).toBe(false)
+    expect(areDraftIslandCaretOverlayPropsEqual(props, {
+      ...props,
+      caret: null,
+    })).toBe(false)
+  })
+
+  it("keeps the island surface live attribute contract explicit for collapsed typing", () => {
+    expect(resolveDraftIslandSurfaceLiveAttributes({
+      lineCount: 2,
+      totalLineCount: 3,
+      draftTextLength: 18,
+      draftCaretOffset: 18,
+      selectionStart: 18,
+      selectionEnd: 18,
+      selectedDraftTextLength: 0,
+      selectionCollapsed: true,
+      caretVisible: true,
+      totalSelectionOverlayCount: 0,
+      surfaceSelectionOverlayCount: 0,
+      draftRevision: 7,
+    })).toEqual({
+      "data-wysiwyg-line-count": 2,
+      "data-wysiwyg-flowdoc-draft-line-count": 2,
+      "data-wysiwyg-flowdoc-draft-total-line-count": 3,
+      "data-wysiwyg-flowdoc-draft-text-length": 18,
+      "data-wysiwyg-flowdoc-draft-caret-offset": 18,
+      "data-wysiwyg-flowdoc-draft-selection-start": 18,
+      "data-wysiwyg-flowdoc-draft-selection-end": 18,
+      "data-wysiwyg-flowdoc-draft-selected-text-length": 0,
+      "data-wysiwyg-flowdoc-draft-selection-collapsed": "true",
+      "data-wysiwyg-custom-caret-visible": "true",
+      "data-wysiwyg-flowdoc-draft-selection-overlay-count": 0,
+      "data-wysiwyg-flowdoc-draft-surface-selection-overlay-count": 0,
+      "data-wysiwyg-island-revision": 7,
+    })
+  })
+
+  it("keeps the island surface live attribute contract explicit for active selection", () => {
+    expect(resolveDraftIslandSurfaceLiveAttributes({
+      lineCount: 1,
+      totalLineCount: 2,
+      draftTextLength: 24,
+      draftCaretOffset: null,
+      selectionStart: 4,
+      selectionEnd: 12,
+      selectedDraftTextLength: 8,
+      selectionCollapsed: false,
+      caretVisible: false,
+      totalSelectionOverlayCount: 3,
+      surfaceSelectionOverlayCount: 2,
+      draftRevision: 8,
+    })).toMatchObject({
+      "data-wysiwyg-flowdoc-draft-caret-offset": undefined,
+      "data-wysiwyg-flowdoc-draft-selection-start": 4,
+      "data-wysiwyg-flowdoc-draft-selection-end": 12,
+      "data-wysiwyg-flowdoc-draft-selected-text-length": 8,
+      "data-wysiwyg-flowdoc-draft-selection-collapsed": "false",
+      "data-wysiwyg-custom-caret-visible": undefined,
+      "data-wysiwyg-flowdoc-draft-selection-overlay-count": 3,
+      "data-wysiwyg-flowdoc-draft-surface-selection-overlay-count": 2,
+      "data-wysiwyg-island-revision": 8,
+    })
+  })
+
+  it("syncs island surface live attributes by setting present values and removing absent values", () => {
+    const attributes = new Map<string, string>([
+      ["data-wysiwyg-flowdoc-draft-caret-offset", "12"],
+      ["data-wysiwyg-custom-caret-visible", "true"],
+    ])
+    const target = {
+      setAttribute: (name: string, value: string) => {
+        attributes.set(name, value)
+      },
+      removeAttribute: (name: string) => {
+        attributes.delete(name)
+      },
+    }
+
+    syncDraftIslandSurfaceLiveAttributes(target, resolveDraftIslandSurfaceLiveAttributes({
+      lineCount: 1,
+      totalLineCount: 2,
+      draftTextLength: 24,
+      draftCaretOffset: null,
+      selectionStart: 4,
+      selectionEnd: 12,
+      selectedDraftTextLength: 8,
+      selectionCollapsed: false,
+      caretVisible: false,
+      totalSelectionOverlayCount: 3,
+      surfaceSelectionOverlayCount: 2,
+      draftRevision: 8,
+    }))
+
+    expect(attributes.get("data-wysiwyg-flowdoc-draft-text-length")).toBe("24")
+    expect(attributes.get("data-wysiwyg-flowdoc-draft-selection-collapsed")).toBe("false")
+    expect(attributes.get("data-wysiwyg-island-revision")).toBe("8")
+    expect(attributes.has("data-wysiwyg-flowdoc-draft-caret-offset")).toBe(false)
+    expect(attributes.has("data-wysiwyg-custom-caret-visible")).toBe(false)
+  })
+
+  it("keeps surface memoization sensitive to caret selection and handler identity", () => {
+    const noop = () => undefined
+    const renderProps: ParagraphRenderProps = {
+      fontFamilyKey: "default",
+      fontSize: 12,
+      align: "left",
+      lineHeight: 12,
+      textColor: "111827",
+      spacingBefore: 0,
+      spacingAfter: 0,
+      textIndent: 0,
+      indentLeft: 0,
+      indentRight: 0,
+    }
+    const surfaceFragment = makeFragment({
+      renderProps,
+      lines: [{
+        text: "FlowDoc",
+        x: 0,
+        y: 0,
+        width: 48,
+        height: 12,
+      }],
+    })
+    const surface = {
+      key: "0:0:0:1:source:final",
+      pageKey: "0-0",
+      fragment: surfaceFragment,
+    }
+    const props = {
+      surface,
+      surfaceIndex: 0,
+      sourceFragment: surfaceFragment,
+      renderProps,
+      scale: 1,
+      nodeId: "p1",
+      draftRevision: 3,
+      draftTextLength: 7,
+      draftCaretOffset: 4,
+      selectionStart: 4,
+      selectionEnd: 4,
+      selectionAnchorOffset: 4,
+      selectionFocusOffset: 4,
+      selectedDraftTextLength: 0,
+      totalSelectionOverlayCount: 0,
+      totalLineCount: 1,
+      draftSurfaceCount: 1,
+      isPageBoundaryPreview: false,
+      reflowKind: undefined,
+      reflowReason: undefined,
+      committing: false,
+      anchorMode: "inline-fallback" as const,
+      textMeasurer: fixedMeasurer,
+      onKeyDown: noop,
+      onClick: noop,
+      onDoubleClick: noop,
+      onPointerDown: noop,
+      onPointerMove: noop,
+      onPointerUp: noop,
+      onPointerCancel: noop,
+      onPaste: noop,
+      onCopy: noop,
+      onCut: noop,
+      onBlur: noop,
+      onFocus: noop,
+      onIslandSurfaceRender: noop,
+      liveLayerMode: "inline" as const,
+    }
+
+    expect(areDraftIslandSurfaceViewPropsEqual(props, props)).toBe(true)
+    expect(areDraftIslandSurfaceViewPropsEqual(props, {
+      ...props,
+      draftCaretOffset: 5,
+    })).toBe(false)
+    expect(areDraftIslandSurfaceViewPropsEqual(props, {
+      ...props,
+      selectionFocusOffset: 6,
+      selectionEnd: 6,
+      selectedDraftTextLength: 2,
+    })).toBe(false)
+    expect(areDraftIslandSurfaceViewPropsEqual(props, {
+      ...props,
+      surface: { ...surface },
+    })).toBe(false)
+    expect(areDraftIslandSurfaceViewPropsEqual(props, {
+      ...props,
+      onKeyDown: () => undefined,
+    })).toBe(false)
+  })
+
+  it("allows detached live draft updates to skip the surface shell comparator", () => {
+    const noop = () => undefined
+    const renderProps: ParagraphRenderProps = {
+      fontFamilyKey: "default",
+      fontSize: 12,
+      align: "left",
+      lineHeight: 12,
+      textColor: "111827",
+      spacingBefore: 0,
+      spacingAfter: 0,
+      textIndent: 0,
+      indentLeft: 0,
+      indentRight: 0,
+    }
+    const surfaceFragment = makeFragment({
+      renderProps,
+      height: 24,
+      lines: [{
+        text: "FlowDoc",
+        x: 0,
+        y: 0,
+        width: 48,
+        height: 12,
+      }],
+    })
+    const surface = {
+      key: "0:0:0:1:source:final",
+      pageKey: "0-0",
+      fragment: surfaceFragment,
+    }
+    const props = {
+      surface,
+      surfaceIndex: 0,
+      sourceFragment: surfaceFragment,
+      renderProps,
+      scale: 1,
+      nodeId: "p1",
+      draftRevision: 3,
+      draftTextLength: 7,
+      draftCaretOffset: 4,
+      selectionStart: 4,
+      selectionEnd: 4,
+      selectionAnchorOffset: 4,
+      selectionFocusOffset: 4,
+      selectedDraftTextLength: 0,
+      totalSelectionOverlayCount: 0,
+      totalLineCount: 1,
+      draftSurfaceCount: 1,
+      isPageBoundaryPreview: false,
+      reflowKind: undefined,
+      reflowReason: undefined,
+      committing: false,
+      anchorMode: "page-overlay" as const,
+      textMeasurer: fixedMeasurer,
+      onKeyDown: noop,
+      onClick: noop,
+      onDoubleClick: noop,
+      onPointerDown: noop,
+      onPointerMove: noop,
+      onPointerUp: noop,
+      onPointerCancel: noop,
+      onPaste: noop,
+      onCopy: noop,
+      onCut: noop,
+      onBlur: noop,
+      onFocus: noop,
+      onIslandSurfaceRender: noop,
+      liveLayerMode: "detached" as const,
+    }
+
+    expect(areDraftIslandSurfaceViewPropsEqual(props, {
+      ...props,
+      draftRevision: 4,
+      draftTextLength: 8,
+      draftCaretOffset: 5,
+      selectionStart: 5,
+      selectionEnd: 5,
+      totalLineCount: 2,
+      renderProps: { ...renderProps, textColor: "2563eb" },
+      surface: {
+        ...surface,
+        fragment: {
+          ...surfaceFragment,
+          lines: [{
+            text: "FlowDoc!",
+            x: 0,
+            y: 0,
+            width: 54,
+            height: 12,
+          }],
+        },
+      },
+    })).toBe(true)
+    expect(areDraftIslandSurfaceViewPropsEqual(props, {
+      ...props,
+      surface: {
+        ...surface,
+        fragment: {
+          ...surfaceFragment,
+          height: 36,
+        },
+      },
+    })).toBe(false)
+    expect(areDraftIslandSurfaceViewPropsEqual(props, {
+      ...props,
+      onKeyDown: () => undefined,
+    })).toBe(false)
+  })
+
+  it("keeps the runtime boundary sensitive to active draft props", () => {
+    const doc = makeDoc("FlowDoc island text")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment()
+    const noop = () => undefined
+    const props = {
+      active: true,
+      nodeId: "p1",
+      paragraph,
+      fragment,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      draftText: "FlowDoc island text",
+      caretOffset: 7,
+      selection: { anchorOffset: 7, focusOffset: 7 },
+      getPageElement: () => null,
+      getPageKeyByPageIndex: () => null,
+      onDraftChange: noop,
+      onEndEdit: noop,
+    }
+
+    expect(areDraftIslandRuntimePropsEqual(props, props)).toBe(true)
+    expect(areDraftIslandRuntimePropsEqual(props, {
+      ...props,
+      draftText: "FlowDoc island text!",
+    })).toBe(false)
+    expect(areDraftIslandRuntimePropsEqual(props, {
+      ...props,
+      caretOffset: 8,
+    })).toBe(false)
+    expect(areDraftIslandRuntimePropsEqual(props, {
+      ...props,
+      fragment: { ...fragment },
+    })).toBe(false)
+    expect(areDraftIslandRuntimePropsEqual(props, {
+      ...props,
+      onDraftChange: () => undefined,
+    })).toBe(false)
+  })
+
   it("uses a longer parent sync debounce for held text input without delaying caret-only sync", () => {
     expect(resolveDraftIslandParentSyncDelayMs({
       textChanged: true,
@@ -958,14 +1479,14 @@ describe("FlowdocDraftEditorIslandRoot", () => {
     })).toBe(true)
 
     expect(shouldReportDraftIslandHeightPreview({
-      previous: { key: "p1:0", height: 36 },
+      previous: { key: "p1:0", height: 36, lineCount: 1, draftPageCount: 1 },
       key: "p1:0",
       nextHeight: 36.25,
       fragmentHeight: 36,
     })).toBe(false)
 
     expect(shouldReportDraftIslandHeightPreview({
-      previous: { key: "p1:0", height: 36 },
+      previous: { key: "p1:0", height: 36, lineCount: 1, draftPageCount: 1 },
       key: "p1:0",
       nextHeight: 48,
       fragmentHeight: 36,
@@ -1055,6 +1576,56 @@ describe("FlowdocDraftEditorIslandRoot", () => {
     expect(markup).not.toContain("data-wysiwyg-native-edit-textarea=\"true\"")
     expect(markup).not.toContain("data-wysiwyg-live-echo=\"true\"")
     expect(markup).not.toContain("data-wysiwyg-draft-text-replacement=\"true\"")
+  })
+
+  it("prefers the active local draft store snapshot over null island draft props", () => {
+    const doc = makeDoc("Original paragraph text")
+    const paragraph = doc.document.sections[0].nodes.p1 as ParagraphNode
+    const fragment = makeFragment({
+      x: 36,
+      y: 48,
+      width: 120,
+      height: 24,
+      renderProps: {
+        fontFamilyKey: "default",
+        fontSize: 12,
+        align: "left",
+        lineHeight: 12,
+        textColor: "111827",
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    const storeDraft = "Store-owned draft text"
+    wysiwygDraftStore.setState({
+      nodeId: "p1",
+      text: storeDraft,
+      caretIndex: storeDraft.length,
+      selection: { anchorOffset: storeDraft.length, focusOffset: storeDraft.length },
+      source: "test",
+    })
+
+    const markup = renderToStaticMarkup(createElement(FlowdocDraftEditorIslandRoot, {
+      active: true,
+      nodeId: "p1",
+      paragraph,
+      fragment,
+      pageKey: "0-0",
+      scale: 1,
+      textMeasurer: fixedMeasurer,
+      draftText: null,
+      caretOffset: null,
+      selection: null,
+      getPageElement: () => null,
+      onDraftChange: () => undefined,
+      onEndEdit: () => undefined,
+    }))
+
+    expect(markup).toContain(`data-wysiwyg-flowdoc-draft-text-length="${storeDraft.length}"`)
+    expect(markup).toContain(`data-wysiwyg-flowdoc-draft-caret-offset="${storeDraft.length}"`)
   })
 
   it("renders V2 island range selection as FlowDoc overlay geometry", () => {
@@ -1159,6 +1730,13 @@ describe("FlowdocDraftEditorIslandRoot", () => {
 })
 
 afterEach(() => {
+  wysiwygDraftStore.setState({
+    nodeId: null,
+    text: "",
+    caretIndex: null,
+    selection: null,
+    source: "test-cleanup",
+  })
   vi.unstubAllGlobals()
 })
 
@@ -2244,6 +2822,91 @@ describe("ParagraphTextSurface inline edit visual parity", () => {
     expect(markup).toContain("data-wysiwyg-native-height-handoff=\"true\"")
     expect(markup).toContain("data-wysiwyg-native-edit-clip-mode=\"relaxed\"")
     expect(markup).not.toContain("data-wysiwyg-caret-blink=\"true\"")
+  })
+
+  it("does not read the draft store unless the surface store snapshot flag is enabled", () => {
+    const fragment = makeFragment({
+      width: 140,
+      height: 24,
+      lines: [{
+        text: "DocumentOnlyToken",
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 14,
+        segments: [{
+          kind: "word",
+          text: "DocumentOnlyToken",
+          start: 0,
+          end: 17,
+          x: 0,
+          width: 120,
+          breakableAfter: false,
+        }],
+      }],
+      renderProps: {
+        align: "left",
+        fontFamilyKey: "default",
+        fontSize: 12,
+        lineHeight: 14,
+        spacingBefore: 0,
+        spacingAfter: 0,
+        textIndent: 0,
+        indentLeft: 0,
+        indentRight: 0,
+      },
+    })
+    wysiwygDraftStore.setState({
+      nodeId: "p1",
+      text: "StoreOnlyToken",
+      caretIndex: 14,
+      selection: { anchorOffset: 14, focusOffset: 14 },
+      source: "test",
+    })
+
+    const fallbackMarkup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("DocumentOnlyToken"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      showTextSegments: false,
+      initialCaretIndex: 5,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+    expectNativeEditLayerMarkup(fallbackMarkup, "DocumentOnlyToken")
+    expect(fallbackMarkup).not.toContain("StoreOnlyToken")
+
+    const storeMarkup = renderToStaticMarkup(createElement("svg", null, createElement(ParagraphTextSurface, {
+      fragment,
+      doc: makeDoc("DocumentOnlyToken"),
+      pageKey: "0-0",
+      scale: 1,
+      isEditing: true,
+      isVisualFresh: true,
+      wysiwygInlineEditEnabled: false,
+      wysiwygTextEngineEnabled: true,
+      useWysiwygDraftStoreSnapshot: true,
+      showTextSegments: false,
+      initialCaretIndex: 5,
+      onChange: () => undefined,
+      onCaretChange: () => undefined,
+      onUserEditInteraction: () => undefined,
+      onHeightChange: () => undefined,
+      onEndEdit: () => undefined,
+      onSplitParagraph: () => undefined,
+      onMergeParagraph: () => undefined,
+    })))
+    expectNativeEditLayerMarkup(storeMarkup, "StoreOnlyToken")
   })
 
   it("uses a threshold before handing native height changes to local preview", () => {

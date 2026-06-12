@@ -16,6 +16,7 @@ import {
   normalizeWysiwygTextInputKey,
   startWysiwygTextSessionState,
 } from "../useWysiwygTextSession"
+import { describeWysiwygDraftStoreAccessibilityStatus } from "../shell/wysiwygDraftAccessibilityStatus"
 
 describe("clampWysiwygTextOffset", () => {
   it("clamps offsets to the current draft text", () => {
@@ -223,6 +224,31 @@ describe("WYSIWYG text session state", () => {
 
     expect(moveWysiwygTextSessionCaret(active, 2)).toBe(active)
     expect(moveWysiwygTextSessionCaret(active, 2, { anchorOffset: 2, focusOffset: 2 })).toBe(active)
+  })
+})
+
+describe("WYSIWYG draft store accessibility status", () => {
+  it("describes active draft-store caret and selection state without Shell session renders", () => {
+    expect(describeWysiwygDraftStoreAccessibilityStatus({
+      nodeId: null,
+      text: "",
+      caretIndex: null,
+      selection: null,
+    })).toBeNull()
+
+    expect(describeWysiwygDraftStoreAccessibilityStatus({
+      nodeId: "p1",
+      text: "Alpha beta",
+      caretIndex: 5,
+      selection: { anchorOffset: 5, focusOffset: 5 },
+    })).toBe("Editing paragraph text. Caret at 5 of 10.")
+
+    expect(describeWysiwygDraftStoreAccessibilityStatus({
+      nodeId: "p1",
+      text: "Alpha beta",
+      caretIndex: 10,
+      selection: { anchorOffset: 6, focusOffset: 10 },
+    })).toBe("Editing paragraph text. 4 characters selected, 6 to 10 of 10.")
   })
 })
 

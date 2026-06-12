@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
   resolveWysiwygInlineEditEnabled,
+  resolveWysiwygIslandReactLiveAttrsEnabled,
+  resolveWysiwygIslandSurfaceLiveLayerEnabled,
   resolveWysiwygPerfTraceEnabled,
   resolveWysiwygRichTextDraftEnabled,
   resolveWysiwygTextEngineEnabled,
@@ -84,5 +86,42 @@ describe("resolveWysiwygRichTextDraftEnabled", () => {
   it("allows explicit opt-out even when the base text engine is enabled", () => {
     expect(resolveWysiwygRichTextDraftEnabled("off", true)).toBe(false)
     expect(resolveWysiwygRichTextDraftEnabled(" unknown ", true)).toBe(false)
+  })
+})
+
+describe("resolveWysiwygIslandReactLiveAttrsEnabled", () => {
+  it("keeps React-rendered island live attributes enabled by default as fallback", () => {
+    expect(resolveWysiwygIslandReactLiveAttrsEnabled(undefined)).toBe(true)
+    expect(resolveWysiwygIslandReactLiveAttrsEnabled("unknown")).toBe(true)
+  })
+
+  it("allows explicit trace experiments to rely on ref-synced live attributes", () => {
+    expect(resolveWysiwygIslandReactLiveAttrsEnabled("0")).toBe(false)
+    expect(resolveWysiwygIslandReactLiveAttrsEnabled("off")).toBe(false)
+    expect(resolveWysiwygIslandReactLiveAttrsEnabled("enabled")).toBe(true)
+  })
+})
+
+describe("resolveWysiwygIslandSurfaceLiveLayerEnabled", () => {
+  it("keeps the detached surface live layer disabled when the text engine is inactive", () => {
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled(undefined, false, "development")).toBe(false)
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled(undefined, false, "test")).toBe(false)
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled("unknown", true, "development")).toBe(false)
+  })
+
+  it("defaults the detached surface live layer on for active text-engine dev and test lanes", () => {
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled(undefined, true, "development")).toBe(true)
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled(undefined, true, "test")).toBe(true)
+  })
+
+  it("keeps the detached surface live layer production default disabled", () => {
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled(undefined, true, "production")).toBe(false)
+  })
+
+  it("allows explicit overrides to detach or inline live children from the surface shell", () => {
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled("1", false, "production")).toBe(true)
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled("enabled", false, "development")).toBe(true)
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled("off", true, "development")).toBe(false)
+    expect(resolveWysiwygIslandSurfaceLiveLayerEnabled("0", true, "test")).toBe(false)
   })
 })

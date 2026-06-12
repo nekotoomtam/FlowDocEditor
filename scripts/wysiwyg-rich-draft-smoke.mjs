@@ -269,8 +269,10 @@ async function expectNoLayoutError(page) {
 }
 
 async function expectNoTextarea(page) {
-  const textareaCount = await page.locator("textarea[data-inline-edit-node-id]").count()
-  assert(textareaCount === 0, `expected no inline textarea, found ${textareaCount}`)
+  const nonBridgeTextareaCount = await page.locator('textarea[data-inline-edit-node-id]:not([data-wysiwyg-input-bridge="true"])').count()
+  const visibleNativeTextareaCount = await page.locator('textarea[data-wysiwyg-native-edit-textarea="true"][data-wysiwyg-native-visible-text="true"]').count()
+  assert(nonBridgeTextareaCount === 0, `expected no non-bridge inline textarea, found ${nonBridgeTextareaCount}`)
+  assert(visibleNativeTextareaCount === 0, `expected no visible native inline textarea, found ${visibleNativeTextareaCount}`)
 }
 
 async function openSeededEditor(page) {
@@ -457,7 +459,8 @@ async function styleSelectedRangeWithToolbarAndCommit(page) {
     { start: "Range ".length, end: "Range ".length + RANGE_TARGET_TEXT.length },
     { timeout: 10000 },
   )
-  assert(await page.locator('[data-wysiwyg-selection="true"]').count() > 0, "selected range overlay is not visible")
+  const selectionOverlayCount = await page.locator('[data-wysiwyg-selection="true"], [data-wysiwyg-selection-overlay="true"]').count()
+  assert(selectionOverlayCount > 0, "selected range overlay is not visible")
   assert(await toolbar.getAttribute("data-style-mode") === "range", "toolbar did not enter range style mode")
   assert(await page.getByTestId("rich-text-toolbar-scope").getAttribute("data-scope") === "range", "selected range should show range toolbar scope")
   await page.getByTestId("rich-text-toolbar-bold").click()

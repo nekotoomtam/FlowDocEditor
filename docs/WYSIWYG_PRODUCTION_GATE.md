@@ -26,6 +26,12 @@ below is fully PASS.
 In development and test, `NEXT_PUBLIC_FLOWDOC_WYSIWYG_TEXT_ENGINE=1` is enough
 to run the experimental lane for verification.
 
+When the text engine is enabled in development or test, the detached island
+surface live layer defaults on so the dev/test lane exercises the current render
+separation path. Production builds keep that live-layer default off unless
+`NEXT_PUBLIC_FLOWDOC_WYSIWYG_ISLAND_SURFACE_LIVE_LAYER=1` is explicitly set,
+and the text engine itself still requires the production acknowledgement below.
+
 For local self-use, prefer a local env file or a dedicated dev command so the
 editor does not silently fall back to the legacy textarea path after restarting
 the dev server. Before using any screenshot or manual repro as WYSIWYG parity

@@ -200,11 +200,58 @@ async function readWysiwygPerfEvents(page) {
 }
 
 async function expectAccessibilityStatusContains(page, text) {
-  await page.waitForFunction(
-    ({ selector, expectedText }) => document.querySelector(selector)?.textContent?.includes(expectedText),
-    { selector: accessibilityStatusSelector, expectedText: text },
-    { timeout: 5000 },
-  )
+  try {
+    await page.waitForFunction(
+      ({ selector, expectedText }) => document.querySelector(selector)?.textContent?.includes(expectedText),
+      { selector: accessibilityStatusSelector, expectedText: text },
+      { timeout: 5000 },
+    )
+  } catch (error) {
+    const snapshot = await readAccessibilityStatusSnapshot(page)
+    throw new Error(
+      `expected accessibility status to include ${JSON.stringify(text)}:\n${JSON.stringify(snapshot, null, 2)}\n${error.message}`,
+    )
+  }
+}
+
+async function readAccessibilityStatusSnapshot(page) {
+  return page.evaluate(({ statusSelector, targetNodeId, overlaySelector }) => {
+    const numberAttr = (element, name) => {
+      const value = element.getAttribute(name)
+      if (value == null) return null
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+    const surfaces = Array.from(document.querySelectorAll(
+      `[data-wysiwyg-draft-editor-island="true"][data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]`,
+    ))
+    const selectedSurfaces = surfaces
+      .map((surface) => ({
+        pageIndex: surface.getAttribute("data-page-index"),
+        surfaceKey: surface.getAttribute("data-wysiwyg-island-surface-key"),
+        selectedTextLength: numberAttr(surface, "data-wysiwyg-flowdoc-draft-selected-text-length"),
+        selectionCollapsed: surface.getAttribute("data-wysiwyg-flowdoc-draft-selection-collapsed"),
+        surfaceSelectionOverlayCount: numberAttr(surface, "data-wysiwyg-flowdoc-draft-surface-selection-overlay-count"),
+        selectionOverlayElementCount: surface.querySelectorAll('[data-wysiwyg-selection-overlay="true"]').length,
+      }))
+      .filter((surface) => (
+        (surface.selectedTextLength ?? 0) > 0 ||
+        (surface.surfaceSelectionOverlayCount ?? 0) > 0 ||
+        (surface.selectionOverlayElementCount ?? 0) > 0
+      ))
+    return {
+      statusText: document.querySelector(statusSelector)?.textContent ?? null,
+      overlayElementCount: document.querySelectorAll(overlaySelector).length,
+      bridgeCount: document.querySelectorAll(`[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]`).length,
+      nonBridgeTextareaCount: document.querySelectorAll(`textarea[data-inline-edit-node-id="${CSS.escape(targetNodeId)}"]:not([data-wysiwyg-input-bridge="true"])`).length,
+      islandCount: surfaces.length,
+      selectedSurfaces,
+    }
+  }, {
+    statusSelector: accessibilityStatusSelector,
+    targetNodeId: TARGET_NODE_ID,
+    overlaySelector: selectionOverlaySelector,
+  })
 }
 
 async function expectTargetFragmentCount(page, expectedCount) {

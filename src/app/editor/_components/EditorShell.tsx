@@ -114,6 +114,7 @@ import {
   type PendingEditorActionClassification,
   type WorkflowMode,
 } from "./shell/editorShellTypes"
+import type { EditorRenderInvalidationPlan } from "./operations/editorRenderInvalidation"
 import { useEditorZoomController } from "./shell/useEditorZoomController"
 import { useRightRailController } from "./shell/useRightRailController"
 import { useEditorAutosave } from "./shell/useEditorAutosave"
@@ -167,6 +168,11 @@ import {
 
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
+type RenderInvalidationPlanForCanvas = {
+  plan: EditorRenderInvalidationPlan | null
+  paginated: PaginatedDocument
+}
+
 const editorShellNoop = () => {}
 
 export default function EditorShell() {
@@ -214,6 +220,7 @@ export default function EditorShell() {
   } = useEditorTextMeasurerController()
   const [browserPreviewLayout, setBrowserPreviewLayout] = useState(createEditorPreviewPlaceholderLayoutState)
   const [partialPreviewPaginated, setPartialPreviewPaginated] = useState<EditorPartialPreviewPaginated | null>(null)
+  const [renderInvalidationPlanForCanvas, setRenderInvalidationPlanForCanvas] = useState<RenderInvalidationPlanForCanvas | null>(null)
   const [mode, setMode] = useState<"template" | "fill">("template")
   const {
     dataSnapshot,
@@ -372,6 +379,14 @@ export default function EditorShell() {
     partialPreviewPaginated,
     previewLayout: browserPreviewLayout,
   }), [browserPreviewLayout, partialPreviewPaginated, state.paginated])
+  const activeRenderInvalidationPlanForCanvas = renderInvalidationPlanForCanvas?.paginated === displayPaginated
+    ? renderInvalidationPlanForCanvas.plan
+    : null
+  useEffect(() => {
+    if (!renderInvalidationPlanForCanvas) return
+    if (renderInvalidationPlanForCanvas.paginated !== displayPaginated) return
+    setRenderInvalidationPlanForCanvas(null)
+  }, [displayPaginated, renderInvalidationPlanForCanvas])
 
   const {
     nodeId: inlineEditNodeId,
@@ -936,7 +951,7 @@ export default function EditorShell() {
   ])
 
   // ─── Auto-save ───────────────────────────────────────────────────────────────
-  const { localSaveStatusLabel, localSaveStatusTone } = useEditorAutosave({
+  useEditorAutosave({
     disabled: Boolean(initialTestScenario),
     dataSnapshot,
     dataSnapshotRef,
@@ -1147,6 +1162,7 @@ export default function EditorShell() {
     setMarginDrag,
     setMinHeightDrag,
     setPartialPreviewPaginated,
+    setRenderInvalidationPlanForCanvas,
     setResizeDrag,
     showDriftRef,
     structuralEditRuntime,
@@ -1181,6 +1197,7 @@ export default function EditorShell() {
     scheduleDeferredStructuralPanelRelease,
     structuralEditRuntime,
     wysiwygTextSessionNodeId: wysiwygTextSessionState.nodeId,
+    wysiwygTextSessionGeneration: wysiwygDraftSessionIdentityRef.current?.generation ?? null,
   }), [
     captureStructuralShellRenderValue,
     deferredStructuralPanelReleaseRef,
@@ -1196,6 +1213,7 @@ export default function EditorShell() {
     pushStructuralShellRenderAttributionEvent,
     scheduleDeferredStructuralPanelRelease,
     structuralEditRuntime,
+    wysiwygDraftSessionIdentityRef.current?.generation,
     wysiwygTextSessionState.nodeId,
   ])
 
@@ -1498,8 +1516,7 @@ export default function EditorShell() {
           onDragStart={startPaletteDrag}
         />
         <EditorCanvasColumn
-          saveStatusLabel={localSaveStatusLabel}
-          saveStatusTone={localSaveStatusTone}
+          saveStatusDisabled={Boolean(initialTestScenario)}
           sectionLabel={canvasSectionLabel}
           contextLabel={selectedContextLabel}
           pageItems={editorPageItems}
@@ -1531,6 +1548,7 @@ export default function EditorShell() {
                 canvasProps={{
                   paginated: displayPaginated,
                   doc: previewDoc,
+                  renderInvalidationPlan: activeRenderInvalidationPlanForCanvas,
                   drag: isTemplateMode ? state.drag : null,
                   scale: scale,
                   activePageIndex: currentCanvasPageIndex,
@@ -1603,9 +1621,9 @@ export default function EditorShell() {
                 islandProps={{
                   scale,
                   textMeasurer: editorTextMeasurer,
-                  draftText: wysiwygTextSessionState.draftText,
-                  caretOffset: wysiwygTextSessionState.caretOffset,
-                  selection: wysiwygTextSessionState.selection,
+                  draftText: null, // Out-of-canvas island reads the local draft via wysiwygDraftStore.
+                  caretOffset: null,
+                  selection: null,
                   getPageElement: getPageOverlayElement,
                   getPageKeyByPageIndex: (pageIndex) => editorPageNavigation.pageKeyByPageIndex.get(pageIndex) ?? null,
                   onDraftChange: handleWysiwygTextDraftChange,

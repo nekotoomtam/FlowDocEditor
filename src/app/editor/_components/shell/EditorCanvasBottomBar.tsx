@@ -1,12 +1,12 @@
 import type { CSSProperties } from "react"
 import type { EditorPageNavItem, EditorPageThumbnailFragment } from "./editorCanvasNavigation"
+import { useEditorAutosaveStatus } from "./editorAutosaveStatusStore"
 
 type SaveStatusTone = "neutral" | "success"
 type ZoomMode = "fit" | "manual"
 
 export interface EditorCanvasBottomBarProps {
-  saveStatusLabel: string
-  saveStatusTone: SaveStatusTone
+  saveStatusDisabled: boolean
   sectionLabel: string
   contextLabel: string
   pageItems: EditorPageNavItem[]
@@ -333,8 +333,7 @@ function PageMiniature({
 }
 
 export function EditorCanvasBottomBar({
-  saveStatusLabel,
-  saveStatusTone,
+  saveStatusDisabled,
   sectionLabel,
   contextLabel,
   pageItems,
@@ -350,6 +349,7 @@ export function EditorCanvasBottomBar({
   onResetZoom,
   onFitZoom,
 }: EditorCanvasBottomBarProps) {
+  const { localSaveStatusLabel, localSaveStatusTone } = useEditorAutosaveStatus(saveStatusDisabled)
   const currentPosition = Math.max(0, pageItems.findIndex((page) => page.pageIndex === currentPageIndex))
   const currentPage = pageItems[currentPosition] ?? pageItems[0] ?? null
   const previousPage = currentPosition > 0 ? pageItems[currentPosition - 1] : null
@@ -373,7 +373,7 @@ export function EditorCanvasBottomBar({
       )}
       <div data-testid="editor-bottom-bar" style={editorBottomBarStyle}>
         <div style={editorBottomStatusGroupStyle}>
-          <span style={editorBottomChipStyle(saveStatusTone)}>{saveStatusLabel}</span>
+          <span style={editorBottomChipStyle(localSaveStatusTone)}>{localSaveStatusLabel}</span>
           <span style={editorBottomChipStyle()}>{sectionLabel}</span>
           <span style={editorBottomChipStyle()} title={contextLabel}>{contextLabel}</span>
         </div>

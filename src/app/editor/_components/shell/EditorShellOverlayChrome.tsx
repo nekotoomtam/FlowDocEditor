@@ -4,6 +4,8 @@ import type { DocumentPrepareOverlayStep } from "../documentLibrary"
 import { WYSIWYG_TEXT_ACCESSIBILITY_STATUS_ID } from "../useWysiwygTextSession"
 import { SCREEN_READER_ONLY_STYLE } from "./editorShellConstants"
 import type { EditorPrepareOverlayStatus } from "./editorShellTypes"
+import { describeWysiwygDraftStoreAccessibilityStatus } from "./wysiwygDraftAccessibilityStatus"
+import { useWysiwygDraftStore } from "./wysiwygDraftStore"
 
 interface EditorShellOverlayChromeProps {
   showDocumentPrepareOverlay: boolean
@@ -56,8 +58,13 @@ export function EditorShellOverlayChrome({
         aria-atomic="true"
         style={SCREEN_READER_ONLY_STYLE}
       >
-        {wysiwygTextAccessibilityStatus ?? ""}
+        <WysiwygDraftAccessibilityStatus fallbackStatus={wysiwygTextAccessibilityStatus} />
       </div>
     </>
   )
+}
+
+function WysiwygDraftAccessibilityStatus({ fallbackStatus }: { fallbackStatus: string | null }) {
+  const draftStore = useWysiwygDraftStore()
+  return <>{describeWysiwygDraftStoreAccessibilityStatus(draftStore) ?? fallbackStatus ?? ""}</>
 }

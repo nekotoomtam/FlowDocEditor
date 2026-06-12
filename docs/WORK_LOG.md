@@ -16,7 +16,7 @@ for older line-by-line work-log detail.
 
 ## Current Baseline
 
-- Latest project readiness marker: `0.6.31` on 2026-06-08.
+- Latest project readiness marker: `0.6.33` on 2026-06-12.
 - Persisted document schema remains `DocumentNode` v1.
 - FlowDoc package/localStorage default remains package v2.
 - PDF remains the authoritative export target.
@@ -28,6 +28,7 @@ for older line-by-line work-log detail.
 
 | Date | Area | Durable result | Verification anchor |
 |---|---|---|---|
+| 2026-06-12 | Release `0.6.33` | Editor render/action separation and WYSIWYG island render-scope hardening accepted: ownership/invalidation contracts, structural handler extraction, page render churn guards, detached island live-layer dev/test defaulting, split trace windows, page-boundary selection safety gates, and draft-store accessibility status updates without schema/package-version changes. | type-check, focused app tests, Stage4C smoke, detached safety trace, project version marker test |
 | 2026-06-09 | Editor Operation Architecture Phase 1-3A | Extracted paragraph split/merge plans and split handlers from the controller without changing flushSync boundaries or behavior. | type-check, WYSIWYG smoothness smoke, editor shell tests |
 | 2026-06-08 | Release `0.6.31` | Active documentation cleanup accepted: compact work logs, single-source agent docs, shorter docs index, and concise frontend runtime architecture reference. | stale-reference scan, docs diff check, project version marker test |
 | 2026-06-08 | Release `0.6.30` | Large-document boot and pagination performance hardening accepted: raw localStorage parse reuse and pagination measurement-cache hardening. | focused profile coverage |

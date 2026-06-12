@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef } from "react"
 import type { DataSnapshotV1 } from "@/dataSnapshot"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DocumentNode } from "@/schema"
 import { saveToStorage } from "./editorDocumentDataState"
-
-type LocalSaveStatus = "saved" | "saving"
+import { setEditorAutosaveStatusSnapshot } from "./editorAutosaveStatusStore"
 
 interface UseEditorAutosaveInput {
   disabled: boolean
@@ -29,17 +28,16 @@ export function useEditorAutosave({
   wysiwygTextSessionNodeId,
   getPersistableDocumentSnapshot,
 }: UseEditorAutosaveInput) {
-  const [localSaveStatus, setLocalSaveStatus] = useState<LocalSaveStatus>("saved")
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (disabled) return
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
-    setLocalSaveStatus("saving")
+    setEditorAutosaveStatusSnapshot("saving")
     saveTimeoutRef.current = setTimeout(() => {
       saveToStorage(getPersistableDocumentSnapshot(), packageFieldRegistry, dataSnapshot)
       saveTimeoutRef.current = null
-      setLocalSaveStatus("saved")
+      setEditorAutosaveStatusSnapshot("saved")
     }, 500)
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current) }
   }, [
@@ -60,7 +58,7 @@ export function useEditorAutosave({
         saveTimeoutRef.current = null
       }
       saveToStorage(getPersistableDocumentSnapshot(), packageFieldRegistryRef.current, dataSnapshotRef.current)
-      setLocalSaveStatus("saved")
+      setEditorAutosaveStatusSnapshot("saved")
     }
     const flushWhenHidden = () => {
       if (document.visibilityState === "hidden") flushDraftToStorage()
@@ -73,13 +71,5 @@ export function useEditorAutosave({
     }
   }, [disabled, getPersistableDocumentSnapshot, packageFieldRegistryRef, dataSnapshotRef])
 
-  return {
-    localSaveStatus,
-    localSaveStatusLabel: disabled
-      ? "Test doc"
-      : localSaveStatus === "saving"
-        ? "Saving"
-        : "Saved",
-    localSaveStatusTone: localSaveStatus === "saved" ? "success" as const : "neutral" as const,
-  }
+  return null
 }

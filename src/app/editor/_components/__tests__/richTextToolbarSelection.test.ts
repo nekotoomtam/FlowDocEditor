@@ -34,13 +34,13 @@ describe("rich text toolbar selection helpers", () => {
     )).toBe(false)
   })
 
-  it("debounces only non-collapsed range selections", () => {
+  it("debounces active selection snapshots", () => {
     expect(shouldDebounceRichTextToolbarSelection(null)).toBe(false)
     expect(shouldDebounceRichTextToolbarSelection({
       nodeId: "p1",
       anchorOffset: 2,
       focusOffset: 2,
-    })).toBe(false)
+    })).toBe(true)
     expect(shouldDebounceRichTextToolbarSelection({
       nodeId: "p1",
       anchorOffset: 2,

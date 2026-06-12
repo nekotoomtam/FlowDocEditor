@@ -33,6 +33,7 @@ For a new session:
 | Test strategy | `docs/TEST_STRATEGY.md` |
 | Browser smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Editor UX | `docs/EDITOR_UX_CONTRACT.md` |
+| Editor render/action ownership | `docs/EDITOR_RENDER_ACTION_OWNERSHIP.md` |
 | Paragraph box styling | `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md` |
 | Paragraph/text style presets | `docs/PARAGRAPH_STYLE_CONTRACT.md` |
 | Style manager | `docs/STYLE_MANAGER_CONTRACT.md` |
@@ -67,6 +68,8 @@ Agent or review work:
 WYSIWYG or inline editing:
 
 - `docs/EDITOR_UX_CONTRACT.md`
+- `docs/EDITOR_RENDER_ACTION_OWNERSHIP.md` when render invalidation,
+  operation ownership, or page render scope is in scope
 - `docs/WYSIWYG_EDITOR_ROADMAP.md`
 - `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
 - `docs/WYSIWYG_PARAGRAPH_INTERACTION_CHECKLIST.md` when paragraph typing,
@@ -80,6 +83,8 @@ WYSIWYG or inline editing:
 
 Layout, pagination, or cross-page behavior:
 
+- `docs/EDITOR_RENDER_ACTION_OWNERSHIP.md` when editor action invalidation or
+  render ownership is in scope
 - `docs/LAYOUT_ENGINE_SPEC.md`
 - `docs/CROSS_PAGE_BEHAVIOR.md`
 - `docs/LAZY_PAGINATION_PLAN.md` when checkpointing or partial preview is in
