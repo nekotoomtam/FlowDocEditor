@@ -3,7 +3,10 @@
 FlowDocEditor uses project versions as release-readiness markers, not as a
 promise that every internal behavior is stable.
 
-The current baseline is `0.6.33`: suitable for self-use with accepted
+The current baseline is `0.6.34`: suitable for self-use with accepted
+Outline/list reorder stability hardening, blocked invalid-list drop feedback,
+active-draft finalize coverage through blocked and valid Outline reorder
+smokes, repeat smoke coverage for intermittent browser regressions, plus
 `flow-row` / `flow-stack` static pagination, Flow Table rowspan continuation
 hardening, WYSIWYG caret/edit stability work, flow-stack drag/resize UX polish,
 conservative editor/layout refactoring guardrails, and the first project-owned
@@ -114,6 +117,7 @@ but not yet a general-user `v1`.
 | `0.6.31` | Patch baseline for active documentation cleanup: compact work logs, single-source agent docs, a shorter docs index, and a concise frontend runtime architecture reference without changing persisted document/package schema versions or editor/runtime behavior. |
 | `0.6.32` | Patch baseline for WYSIWYG paragraph smoothness investigation and hardening: FlowDoc Draft Editor Island profiling, draft scope/cadence telemetry, repeated-grapheme width reuse, parent-sync and boundary-height handoff coalescing, and first editor operation architecture groundwork, with no persisted document/package schema change and remaining no-wait Thai stress smoothness risk documented. |
 | `0.6.33` | Patch baseline for editor render/action separation and WYSIWYG island render-scope hardening: operation ownership mapping, render invalidation contracts, structural handler extraction, page render churn guards, detached island live-layer dev/test defaulting, split typing-vs-safety trace reporting, page-boundary selection safety coverage, and draft-store accessibility-status updates without changing persisted document/package schema versions. |
+| `0.6.34` | Patch baseline for Outline/list reorder stability: core list hierarchy guard, blocked invalid-list drop feedback, active-draft finalize preservation through blocked and valid reorder paths, reducer no-op history coverage, and focused/repeat Outline browser smokes without changing persisted document/package schema versions. |
 | `0.5.x` | Patch fixes and edge-case hardening for the `flow-row` / `flow-stack` milestone. |
 | `0.6.x` | Patch fixes and edge-case hardening for the font/export milestone. |
 | `0.7.0+` | Later pre-v1 milestones with user-visible stability or workflow gains. |

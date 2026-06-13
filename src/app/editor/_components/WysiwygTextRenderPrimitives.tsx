@@ -205,7 +205,7 @@ export function renderListMarker(
   renderProps: ParagraphRenderProps | undefined,
   pageKey: string,
   scale: number,
-  clipPathId?: string,
+  clipPathId?: string | null,
 ) {
   const marker = fragment.listMarker
   const firstLine = fragment.lines?.[0]

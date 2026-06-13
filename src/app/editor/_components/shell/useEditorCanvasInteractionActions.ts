@@ -484,11 +484,20 @@ export function useEditorCanvasInteractionActions({
   }, [dispatchEditorAction, setRightRailMode, setSelectedStyleResource])
 
   const reorderLeftRailBodyChild = useCallback((request: OutlineBodyChildReorder) => {
-    finalizeInlineEditBeforeActionRef.current()
+    const hadActiveInlineEdit = inlineEditNodeId !== null || wysiwygTextSessionNodeId !== null
+    const finalized = finalizeInlineEditBeforeActionRef.current()
+    if (hadActiveInlineEdit && !finalized) return
     setSelectedStyleResource(null)
     dispatchEditorAction({ type: "REORDER_BODY_CHILD", ...request })
     setRightRailMode("properties")
-  }, [dispatchEditorAction, finalizeInlineEditBeforeActionRef, setRightRailMode, setSelectedStyleResource])
+  }, [
+    dispatchEditorAction,
+    finalizeInlineEditBeforeActionRef,
+    inlineEditNodeId,
+    setRightRailMode,
+    setSelectedStyleResource,
+    wysiwygTextSessionNodeId,
+  ])
 
   const startCloneDragPointerDown = useCallback((nodeId: string, event: ReactPointerEvent<SVGGElement>) => {
     startNodePointerDown({ source: "document-copy", nodeId }, event)

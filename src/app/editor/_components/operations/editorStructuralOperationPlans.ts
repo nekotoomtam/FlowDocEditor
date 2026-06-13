@@ -51,6 +51,7 @@ export interface ParagraphSplitOperationPlan {
   newText?: string;
   optimisticLayout?: { doc: DocumentNode; paginated: PaginatedDocument };
   optimisticFragment?: PageFragment;
+  isTableCellParagraph?: boolean;
   mode?: "same-page" | "boundary-safe";
   overflowedPage?: boolean;
   suppressedPageBreakNodeId?: string | null;
@@ -278,6 +279,7 @@ export function createParagraphSplitOperationPlan(ctx: ParagraphSplitOperationPl
     newText,
     optimisticLayout: { doc: result.doc, paginated: optimistic.paginated },
     optimisticFragment: optimistic.newFragment,
+    isTableCellParagraph: isParagraphInsideTableCell(result.doc, newNodeId, optimistic.newFragment.parentNodeId),
     mode: optimistic.mode,
     overflowedPage: optimistic.overflowedPage,
     suppressedPageBreakNodeId,

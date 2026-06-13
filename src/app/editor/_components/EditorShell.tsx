@@ -1,7 +1,7 @@
 "use client"
 
 import { startTransition, useReducer, useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo } from "react"
-import { assertDocument, createUniqueListPresetInstanceId, normalizeDocument, resolveParagraphListContext } from "@/document"
+import { assertDocument, createUniqueListPresetInstanceId, indentListItem, normalizeDocument, outdentListItem, resolveParagraphListContext } from "@/document"
 import type { FlowDocListStylePresetId } from "@/document"
 import type { DocumentNode } from "@/schema"
 import type { PaginatedDocument } from "@/pagination"
@@ -95,6 +95,7 @@ import { editorStructuralIslandStore } from "./shell/editorStructuralIslandStore
 import { EditorCanvasStructuralIslandWrapper } from "./EditorCanvasStructuralIslandWrapper"
 import { EditorRightRail } from "./shell/EditorRightRail"
 import { EditorLeftRailPane } from "./shell/EditorLeftRailPane"
+import type { OutlineEditRelease } from "./OutlinePanel"
 import {
   FLOW_STACK_BOUNDARY_DRAFT_PAGINATION_DEBOUNCE_MS,
   MAX_SCALE,
@@ -484,6 +485,20 @@ export default function EditorShell() {
     wysiwygDraftRuntime,
     wysiwygDraftSessionIdentityRef,
   })
+  const activeOutlineEditingNodeId = wysiwygTextSessionState.nodeId ?? inlineEditNodeId
+  const previousActiveOutlineEditingNodeIdRef = useRef<string | null>(null)
+  const outlineEditReleaseTokenRef = useRef(0)
+  const outlineEditReleaseRef = useRef<OutlineEditRelease | null>(null)
+  if (activeOutlineEditingNodeId) {
+    previousActiveOutlineEditingNodeIdRef.current = activeOutlineEditingNodeId
+  } else if (previousActiveOutlineEditingNodeIdRef.current) {
+    outlineEditReleaseTokenRef.current += 1
+    outlineEditReleaseRef.current = {
+      nodeId: previousActiveOutlineEditingNodeIdRef.current,
+      token: outlineEditReleaseTokenRef.current,
+    }
+    previousActiveOutlineEditingNodeIdRef.current = null
+  }
   const lastProcessedWysiwygDraftRevisionRef = useRef<number>(-1)
   useEffect(() => {
     lastProcessedWysiwygDraftRevisionRef.current = -1
@@ -644,7 +659,7 @@ export default function EditorShell() {
     paginatedRef,
     pendingBoundarySafeInlineEditEndRef,
     resetInlineEditStateForDocumentReplace,
-    richWysiwygDraftSessionState,
+    richWysiwygDraftSessionStateRef,
     startInlineEditSession,
     startWysiwygTextSession,
     suppressNextLayoutLoadingOverlayRef,
@@ -1002,6 +1017,7 @@ export default function EditorShell() {
   })
 
   const {
+    handleDeleteEmptyTableCellParagraph,
     handleMergeParagraph,
     handleSplitParagraph,
     optimisticStructuralPreviewSettleGraceUntilRef,
@@ -1042,19 +1058,28 @@ export default function EditorShell() {
     dispatchEditorAction({ type: "EXIT_LIST_ITEM", nodeId, text, history })
   }, [consumeInlineEditHistory, dispatchEditorAction])
 
+  const canChangeListItemLevel = useCallback((nodeId: string, direction: ListLevelChangeDirection): boolean => {
+    const doc = state.doc
+    const nextDoc = direction === "indent"
+      ? indentListItem(doc, nodeId)
+      : outdentListItem(doc, nodeId)
+    return nextDoc !== doc
+  }, [state.doc])
+
   const handleChangeListItemLevel = useCallback((
     nodeId: string,
     direction: ListLevelChangeDirection,
     text?: string,
     caretIndex?: number | null,
   ) => {
+    if (!canChangeListItemLevel(nodeId, direction)) return
     const history = consumeInlineEditHistory(nodeId)
     if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId) {
       clearWysiwygDraftPagination()
       endWysiwygTextSession()
     }
     dispatchEditorAction({ type: "CHANGE_LIST_ITEM_LEVEL", nodeId, direction, text, caretIndex, history })
-  }, [clearWysiwygDraftPagination, consumeInlineEditHistory, dispatchEditorAction, endWysiwygTextSession])
+  }, [canChangeListItemLevel, clearWysiwygDraftPagination, consumeInlineEditHistory, dispatchEditorAction, endWysiwygTextSession])
 
   const handleBackspaceListItemAtStart = useCallback((nodeId: string, text?: string, caretIndex?: number | null) => {
     const history = consumeInlineEditHistory(nodeId)
@@ -1150,11 +1175,13 @@ export default function EditorShell() {
     optimisticStructuralPreviewSettleGraceUntilRef,
     optimisticStructuralSettleRef,
     paginatedRef,
+    partialPreviewPaginated,
     pendingEditorActionClassificationRef,
     precomputedBrowserPaginationRef,
     previewDoc,
     previewSettleRuntime,
     recordPreviewSettleShellMutationPlan,
+    renderInvalidationPlanForCanvas,
     resizeDragRef,
     setBrowserPreviewLayout,
     setDriftReport,
@@ -1474,6 +1501,7 @@ export default function EditorShell() {
         doc={state.doc}
         selectedNodeId={state.selectedNodeId}
         selectionAnchorNodeId={state.selectionAnchorNodeId}
+        listToolbarNodeId={wysiwygTextSessionState.nodeId ?? inlineEditNodeId}
         isTemplateMode={isTemplateMode}
         deferNonCriticalPanelsForStructuralPaint={deferNonCriticalPanelsForStructuralPaint}
         wysiwygPerfTraceActive={wysiwygPerfTraceActive}
@@ -1502,6 +1530,8 @@ export default function EditorShell() {
           outlineDoc={leftRailOutlineDoc}
           styleDoc={leftRailStyleDoc}
           selectedNodeId={outlineSelectionState.selectedNodeId}
+          activeOutlineEditingNodeId={activeOutlineEditingNodeId}
+          outlineEditRelease={outlineEditReleaseRef.current}
           selectedStyleResource={selectedStyleResource}
           activeOutlineListGroupId={outlineSelectionState.activeListGroupId}
           registry={packageFieldRegistry}
@@ -1633,6 +1663,9 @@ export default function EditorShell() {
                   onEndEdit: handleFlowdocDraftIslandEndEdit,
                   onSplitParagraph: handleSplitParagraph,
                   onMergeParagraph: handleMergeParagraph,
+                  onDeleteEmptyTableCellParagraph: handleDeleteEmptyTableCellParagraph,
+                  onCanChangeListItemLevel: canChangeListItemLevel,
+                  onChangeListItemLevel: handleChangeListItemLevel,
                   onRequestUndo: handleUndo,
                   onCompositionChange: handleWysiwygDraftCompositionChange,
                   structuralEditRuntime,

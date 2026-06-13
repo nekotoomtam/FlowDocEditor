@@ -252,6 +252,148 @@ Expected:
 - Re-entering edit does not reuse stale hidden bridge text.
 - Thai committed output does not duplicate across sessions.
 
+## Current Editor Lifecycle Addendum
+
+Run this addendum when a patch touches blur commit, structural Enter, list
+level, table-cell editing, or Outline rendering/reorder behavior. These rows do
+not replace the eight required Stage 4C cases above; they narrow the real-IME
+UNKNOWNs for the current editor lifecycle risks.
+
+### Addendum A: Stress Thai Paragraph Blur
+
+Automated preflight:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/flowdoc-stress-mock.flowdoc.json"
+$env:PROBE_TARGET_NODE_ID="p_00104"
+$env:PROBE_TARGET_PAGE_INDEX="12"
+$env:PROBE_MODE="blur-handoff"
+$env:PROBE_READY_TIMEOUT_MS="240000"
+npm.cmd run smoke:wysiwyg-smoothness
+```
+
+Expected automated result:
+
+- `ok=true`.
+- `blurHandoff.appendedTextCommitted=true`.
+- `console.errors` and `console.pageErrors` are empty.
+- If Outline perf tracing is enabled, the largest Outline commit records
+  `outlineVirtualized=true`, a high `outlineFlatRowCount`, and a much smaller
+  `outlineRenderedRowCount`.
+
+Manual real-IME follow-up:
+
+1. Use the same flagged editor build.
+2. Enter a large Thai document or the stress mock through the available local
+   mock/document loader.
+3. Edit a paragraph near a page boundary.
+4. Type committed Thai text through the Windows Thai IME.
+5. Click outside the paragraph.
+
+Expected:
+
+- The committed Thai text remains visible after blur.
+- The hidden input bridge does not keep stale text after commit.
+- Outline keeps the stable label while editing and updates after blur.
+- No layout error, console error, or page error appears.
+
+### Addendum B: Table Cell Thai Blur
+
+Automated preflight:
+
+```powershell
+npm.cmd run smoke:wysiwyg-table-cell-boundary
+```
+
+Expected automated result:
+
+- `ok=true`.
+- The target cell paragraph splits across at least two pages/fragments.
+- The active visual mode is `flowdoc-draft-editor-island` with exactly one
+  hidden input bridge and no native or legacy textarea fallback.
+- `console.errors` and `console.pageErrors` are empty.
+
+Steps:
+
+1. Open `/editor?flowdocTestScenario=wysiwyg-stage3-boundary`.
+2. Edit `stage3-table-cell-target` inside the table cell.
+3. Type Thai text through the Windows Thai IME.
+4. Click outside the cell and then undo/redo once.
+
+Expected:
+
+- The cell paragraph commits the Thai text exactly once.
+- The table cell remains the selection/property-panel owner.
+- Undo/redo operates as one intentional edit entry.
+- No body-paragraph page-boundary preview is used as table truth.
+
+### Addendum C: List Level Thai Draft
+
+Automated preflight:
+
+```powershell
+npm.cmd run smoke:wysiwyg-list-level-draft
+npm.cmd test -- src/app/editor/_components/__tests__/wysiwygTextInteraction.test.ts src/app/editor/_components/__tests__/ListToolbar.test.ts src/app/editor/_components/__tests__/editorReducerRichText.test.ts
+```
+
+Expected automated result:
+
+- Browser smoke starts an active rich draft on a list item, inserts text,
+  changes list level through the toolbar, resumes editing, blurs, and verifies
+  undo/redo around the post-level-change edit. It then resumes the same list
+  draft and verifies `Shift+Tab` outdent plus `Tab` indent through the keyboard
+  path, including no-op `Tab`/`Shift+Tab` cases at clamped list boundaries.
+- Reducer coverage preserves latest draft text and caret through
+  `CHANGE_LIST_ITEM_LEVEL`.
+- Interaction coverage keeps Tab/native keyboard handling separate from
+  explicit list-level commands.
+
+Steps:
+
+1. Create or select a list item in the active document.
+2. Type Thai text through the Windows Thai IME without leaving edit mode.
+3. Change level with the list indent/outdent command.
+4. Continue typing, then blur.
+
+Expected:
+
+- Draft Thai text is preserved before and after the level change.
+- The visible marker is derived from list metadata, not inserted into paragraph
+  text.
+- Refocus returns to the same logical list item with the expected caret.
+- One level-change action does not duplicate undo history for the typed text.
+
+### Addendum D: Outline Reorder After Edit
+
+Automated preflight:
+
+```powershell
+npm.cmd run smoke:outline-panel
+```
+
+Expected automated result:
+
+- `ok=true`.
+- The stress Outline is virtualized and renders far fewer rows than the total
+  row count.
+- Reordering `cover_project` after `cover_note` updates persisted body order.
+- `console.errors`, `console.pageErrors`, and resource errors are empty.
+
+Steps:
+
+1. Finish an active paragraph edit with Thai committed text.
+2. Drag a direct body child in the Outline before or after another direct body
+   child in the same body.
+3. Undo and redo the reorder.
+
+Expected:
+
+- The active edit is finalized before reorder.
+- The reorder request stays inside the same section/body.
+- Self-drops or cross-body drops do nothing.
+- Undo/redo restores document order and selection without changing paragraph
+  text.
+
 ## Evidence Template
 
 Use this block for each browser/input-method row:

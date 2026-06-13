@@ -74,7 +74,7 @@ export function useEditorInlineEditLifecycleController({
   paginatedRef,
   pendingBoundarySafeInlineEditEndRef,
   resetInlineEditStateForDocumentReplace,
-  richWysiwygDraftSessionState,
+  richWysiwygDraftSessionStateRef,
   startInlineEditSession,
   startWysiwygTextSession,
   suppressNextLayoutLoadingOverlayRef,
@@ -104,7 +104,7 @@ export function useEditorInlineEditLifecycleController({
   paginatedRef: MutableCurrentRef<PaginatedDocument>
   pendingBoundarySafeInlineEditEndRef: MutableCurrentRef<DeferredInlineEditEnd | null>
   resetInlineEditStateForDocumentReplace: () => void
-  richWysiwygDraftSessionState: WysiwygRichTextDraftSessionState
+  richWysiwygDraftSessionStateRef: MutableCurrentRef<WysiwygRichTextDraftSessionState>
   startInlineEditSession: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => void
   startWysiwygTextSession: (nodeId: string, caretIndex?: number | null, pageIndex?: number | null) => unknown
   suppressNextLayoutLoadingOverlayRef: MutableCurrentRef<boolean>
@@ -121,7 +121,7 @@ export function useEditorInlineEditLifecycleController({
     flushAllWysiwygDrafts()
     const useResponsivePreview = mode === "responsive-preview"
     if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED) {
-      const richSession = richWysiwygDraftSessionState
+      const richSession = richWysiwygDraftSessionStateRef.current
       if (WYSIWYG_TEXT_ENGINE_ENABLED && richSession.nodeId && richSession.draft) {
         const richDraft = richSession.draft
         const draftRuntimeSession = getCurrentWysiwygDraftRuntimeSession(richSession.nodeId)
@@ -250,7 +250,7 @@ export function useEditorInlineEditLifecycleController({
     paginatePreviewDoc,
     paginatedRef,
     resetInlineEditStateForDocumentReplace,
-    richWysiwygDraftSessionState,
+    richWysiwygDraftSessionStateRef,
     suppressNextLayoutLoadingOverlayRef,
     wysiwygDraftRuntime,
     wysiwygDraftSessionIdentityRef,

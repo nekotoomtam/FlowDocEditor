@@ -78,6 +78,7 @@ export function EditorLeftRailPane({
             selectedNodeId={renderedOutlineSelection.selectedNodeId}
             activeOutlineListGroupId={renderedOutlineSelection.activeOutlineListGroupId}
             deferOutlineContent={deferOutlineContent}
+            perfTraceActive={wysiwygPerfTraceActive}
           />
         </StructuralPaintDeferredSubtree>
       </div>

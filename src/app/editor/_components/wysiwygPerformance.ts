@@ -17,6 +17,8 @@ export type WysiwygPerfEventKind =
   | "text-engine-pointer-selection-apply"
   | "text-engine-selection-overlay"
   | "editor-canvas-react-commit"
+  | "outline-panel-model"
+  | "outline-panel-react-commit"
   | "editor-action-dispatch"
   | "editor-canvas-page-slot-attribution"
   | "inline-edit-finalize"
@@ -209,6 +211,16 @@ export interface WysiwygPerfEvent {
   unaffectedPage?: boolean
   componentName?: string
   renderReason?: string
+  outlineStructureCacheHit?: boolean
+  outlineLabelSnapshotUsed?: boolean
+  outlineSingleLabelUpdated?: boolean
+  outlineFullLabelRefresh?: boolean
+  outlineLabelNodeCount?: number
+  outlineSectionCount?: number
+  outlineItemCount?: number
+  outlineFlatRowCount?: number
+  outlineRenderedRowCount?: number
+  outlineVirtualized?: boolean
   pageSlotMemoEqual?: boolean
   pageSlotWouldRender?: boolean
   pageScopedEditAffected?: boolean

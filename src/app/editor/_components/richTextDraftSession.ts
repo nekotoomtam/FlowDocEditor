@@ -300,6 +300,7 @@ export function useWysiwygRichTextDraftSession({
 
   return {
     state: stateRef.current,
+    stateRef,
     isActive: nodeId !== null,
     isLayoutFresh: isWysiwygRichTextDraftSessionLayoutFresh(stateRef.current),
     start,

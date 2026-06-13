@@ -39,13 +39,14 @@ import {
 } from "../structuralEdit/previewSettleShellAdapter"
 import { tryApplyVisualOnlyPaginatedUpdate } from "../editorVisualOnlyPagination"
 import { createEditorOperationFromAction } from "../operations/editorOperationFromAction"
-import { resolveEditorRenderInvalidation, type EditorRenderInvalidationPlan } from "../operations/editorRenderInvalidation"
+import { resolveEditorRenderInvalidation } from "../operations/editorRenderInvalidation"
 import type { EditorPreviewLayoutState } from "../editorPreviewLayoutStatus"
 import {
   markEditorPreviewLayoutFull,
   markEditorPreviewLayoutPartial,
   markEditorPreviewLayoutSettling,
   markEditorPreviewLayoutSettlingFromCurrent,
+  shouldApplyEditorPreviewLayoutState,
   shouldBlockEditorPreviewCanvas,
 } from "../editorPreviewLayoutStatus"
 import type { EditorPartialPreviewPaginated } from "../editorPreviewDisplay"
@@ -69,6 +70,13 @@ import type {
   ResizeDrag,
 } from "../editorInteractionTypes"
 import { createBrowserPaginationWorker, prewarmBrowserPaginationWorkerMeasurer } from "./browserPaginationWorkerClient"
+import {
+  shouldApplyCanvasRenderInvalidationState,
+  shouldApplyPartialPreviewPaginated,
+  shouldClearPartialPreviewPaginated,
+  type CanvasRenderInvalidationState,
+} from "./editorPreviewLifecycleGuards"
+import { shouldApplyServerLayoutWarnings } from "./editorServerLayoutReadinessGuards"
 import {
   BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES,
   FLOWDOC_FONT_FALLBACK_VALUE,
@@ -147,11 +155,13 @@ export function useEditorPaginationLifecycleController({
   optimisticStructuralPreviewSettleGraceUntilRef,
   optimisticStructuralSettleRef,
   paginatedRef,
+  partialPreviewPaginated,
   pendingEditorActionClassificationRef,
   precomputedBrowserPaginationRef,
   previewDoc,
   previewSettleRuntime,
   recordPreviewSettleShellMutationPlan,
+  renderInvalidationPlanForCanvas,
   resizeDragRef,
   setBrowserPreviewLayout,
   setDriftReport,
@@ -186,11 +196,13 @@ export function useEditorPaginationLifecycleController({
   optimisticStructuralPreviewSettleGraceUntilRef: MutableCurrentRef<number>
   optimisticStructuralSettleRef: OptimisticStructuralSettleRef
   paginatedRef: MutableCurrentRef<PaginatedDocument>
+  partialPreviewPaginated: EditorPartialPreviewPaginated | null
   pendingEditorActionClassificationRef: MutableCurrentRef<PendingEditorActionClassification | null>
   precomputedBrowserPaginationRef: MutableCurrentRef<OptimisticLayoutSnapshot | null>
   previewDoc: DocumentNode
   previewSettleRuntime: PreviewSettleRuntime
   recordPreviewSettleShellMutationPlan: (plan: BrowserPreviewShellMutationPlan, detail?: Record<string, unknown>) => void
+  renderInvalidationPlanForCanvas: CanvasRenderInvalidationState | null
   resizeDragRef: MutableCurrentRef<ResizeDrag | null>
   setBrowserPreviewLayout: Dispatch<SetStateAction<EditorPreviewLayoutState>>
   setDriftReport: Dispatch<SetStateAction<DriftReport | null>>
@@ -198,10 +210,7 @@ export function useEditorPaginationLifecycleController({
   setMarginDrag: (value: MarginDrag | null) => void
   setMinHeightDrag: (value: MinHeightDrag | null) => void
   setPartialPreviewPaginated: Dispatch<SetStateAction<EditorPartialPreviewPaginated | null>>
-  setRenderInvalidationPlanForCanvas: Dispatch<SetStateAction<{
-    plan: EditorRenderInvalidationPlan | null
-    paginated: PaginatedDocument
-  } | null>>
+  setRenderInvalidationPlanForCanvas: Dispatch<SetStateAction<CanvasRenderInvalidationState | null>>
   setResizeDrag: (value: ResizeDrag | null) => void
   showDriftRef: MutableCurrentRef<boolean>
   structuralEditRuntime: StructuralEditRuntime
@@ -214,6 +223,12 @@ export function useEditorPaginationLifecycleController({
   const [fontFallback, setFontFallback] = useState(false)
   const [layoutError, setLayoutError] = useState(false)
   const [suppressLayoutLoadingOverlay, setSuppressLayoutLoadingOverlay] = useState(false)
+  const isLayoutLoadingRef = useRef(isLayoutLoading)
+  const layoutStatusRef = useRef(layoutStatus)
+  const serverCheckedPreviewDocRef = useRef(serverCheckedPreviewDoc)
+  const serverLayoutWarningsRef = useRef(serverLayoutWarnings)
+  const layoutErrorRef = useRef(layoutError)
+  const suppressLayoutLoadingOverlayRef = useRef(suppressLayoutLoadingOverlay)
   const wasInlineEditingRef = useRef(false)
   const interactiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const serverPaginationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -221,8 +236,87 @@ export function useEditorPaginationLifecycleController({
   const browserPaginationWorkerRef = useRef<Worker | null>(null)
   const browserPaginationWorkerMeasurerPrewarmedRef = useRef(false)
   const browserPaginationWorkerRequestIdRef = useRef(0)
+  const browserPreviewLayoutRef = useRef(browserPreviewLayout)
   const currentCanvasPageIndexRef = useRef(currentCanvasPageIndex)
+  const partialPreviewPaginatedRef = useRef(partialPreviewPaginated)
+  const renderInvalidationPlanForCanvasRef = useRef(renderInvalidationPlanForCanvas)
+  isLayoutLoadingRef.current = isLayoutLoading
+  layoutStatusRef.current = layoutStatus
+  serverCheckedPreviewDocRef.current = serverCheckedPreviewDoc
+  serverLayoutWarningsRef.current = serverLayoutWarnings
+  layoutErrorRef.current = layoutError
+  suppressLayoutLoadingOverlayRef.current = suppressLayoutLoadingOverlay
+  browserPreviewLayoutRef.current = browserPreviewLayout
   currentCanvasPageIndexRef.current = currentCanvasPageIndex
+  partialPreviewPaginatedRef.current = partialPreviewPaginated
+  renderInvalidationPlanForCanvasRef.current = renderInvalidationPlanForCanvas
+
+  const setIsLayoutLoadingIfChanged = useCallback((next: boolean) => {
+    if (isLayoutLoadingRef.current === next) return
+    isLayoutLoadingRef.current = next
+    setIsLayoutLoading(next)
+  }, [])
+
+  const setLayoutStatusIfChanged = useCallback((next: LayoutStatus) => {
+    if (layoutStatusRef.current === next) return
+    layoutStatusRef.current = next
+    setLayoutStatus(next)
+  }, [])
+
+  const setServerCheckedPreviewDocIfChanged = useCallback((next: DocumentNode | null) => {
+    if (serverCheckedPreviewDocRef.current === next) return
+    serverCheckedPreviewDocRef.current = next
+    setServerCheckedPreviewDoc(next)
+  }, [])
+
+  const setServerLayoutWarningsIfChanged = useCallback((next: LayoutWarningSummary[]) => {
+    if (!shouldApplyServerLayoutWarnings(serverLayoutWarningsRef.current, next)) return
+    serverLayoutWarningsRef.current = next
+    setServerLayoutWarnings(next)
+  }, [])
+
+  const setLayoutErrorIfChanged = useCallback((next: boolean) => {
+    if (layoutErrorRef.current === next) return
+    layoutErrorRef.current = next
+    setLayoutError(next)
+  }, [])
+
+  const setSuppressLayoutLoadingOverlayIfChanged = useCallback((next: boolean) => {
+    if (suppressLayoutLoadingOverlayRef.current === next) return
+    suppressLayoutLoadingOverlayRef.current = next
+    setSuppressLayoutLoadingOverlay(next)
+  }, [])
+
+  const setBrowserPreviewLayoutIfChanged = useCallback((next: EditorPreviewLayoutState) => {
+    if (!shouldApplyEditorPreviewLayoutState(browserPreviewLayoutRef.current, next)) return
+    browserPreviewLayoutRef.current = next
+    setBrowserPreviewLayout(next)
+  }, [setBrowserPreviewLayout])
+
+  const markBrowserPreviewLayoutSettlingFromCurrentIfChanged = useCallback((generation: number) => {
+    const next = markEditorPreviewLayoutSettlingFromCurrent(generation, browserPreviewLayoutRef.current)
+    if (!shouldApplyEditorPreviewLayoutState(browserPreviewLayoutRef.current, next)) return
+    browserPreviewLayoutRef.current = next
+    setBrowserPreviewLayout(next)
+  }, [setBrowserPreviewLayout])
+
+  const clearPartialPreviewPaginated = useCallback(() => {
+    if (!shouldClearPartialPreviewPaginated(partialPreviewPaginatedRef.current)) return
+    partialPreviewPaginatedRef.current = null
+    setPartialPreviewPaginated(null)
+  }, [setPartialPreviewPaginated])
+
+  const setPartialPreviewPaginatedIfChanged = useCallback((next: EditorPartialPreviewPaginated) => {
+    if (!shouldApplyPartialPreviewPaginated(partialPreviewPaginatedRef.current, next)) return
+    partialPreviewPaginatedRef.current = next
+    setPartialPreviewPaginated(next)
+  }, [setPartialPreviewPaginated])
+
+  const setCanvasRenderInvalidationPlan = useCallback((next: CanvasRenderInvalidationState) => {
+    if (!shouldApplyCanvasRenderInvalidationState(renderInvalidationPlanForCanvasRef.current, next)) return
+    renderInvalidationPlanForCanvasRef.current = next
+    setRenderInvalidationPlanForCanvas(next)
+  }, [setRenderInvalidationPlanForCanvas])
 
   const {
     serverLayoutCheckedForCurrentPreview,
@@ -266,7 +360,7 @@ export function useEditorPaginationLifecycleController({
     wasInlineEditingRef.current = inlineEditNodeId !== null
     if (!wasInlineEditing || inlineEditNodeId !== null) return
     if (WYSIWYG_TEXT_ENGINE_ENABLED) {
-      setPartialPreviewPaginated(null)
+      clearPartialPreviewPaginated()
       return
     }
     const startedAt = startWysiwygPerfSpan()
@@ -276,8 +370,8 @@ export function useEditorPaginationLifecycleController({
       ...summarizePaginatedForWysiwygPerf(paginated),
     })
     optimisticLayoutRef.current = { doc: previewDoc, paginated }
-    setPartialPreviewPaginated(null)
-    setBrowserPreviewLayout(markEditorPreviewLayoutFull(getCurrentPreviewSettleGenerationBridge(previewSettleRuntime)))
+    clearPartialPreviewPaginated()
+    setBrowserPreviewLayoutIfChanged(markEditorPreviewLayoutFull(getCurrentPreviewSettleGenerationBridge(previewSettleRuntime)))
     dispatch({ type: "SET_PAGINATED", paginated })
   }, [
     dispatch,
@@ -286,14 +380,14 @@ export function useEditorPaginationLifecycleController({
     optimisticLayoutRef,
     previewDoc,
     previewSettleRuntime,
-    setBrowserPreviewLayout,
-    setPartialPreviewPaginated,
+    setBrowserPreviewLayoutIfChanged,
+    clearPartialPreviewPaginated,
   ])
 
   useEffect(() => {
     if (interactiveDebounceRef.current) clearTimeout(interactiveDebounceRef.current)
 
-    setPartialPreviewPaginated(null)
+    clearPartialPreviewPaginated()
     const inlineEditNodeIdAtSchedule = inlineEditNodeIdRef.current
     const inlineEditDraftVersionAtSchedule = inlineEditNodeIdAtSchedule
       ? inlineEditDraftVersionRef.current
@@ -429,8 +523,8 @@ export function useEditorPaginationLifecycleController({
           writeOptimisticLayout: (layout) => {
             optimisticLayoutRef.current = layout
           },
-          clearPartialPreview: () => setPartialPreviewPaginated(null),
-          setBrowserPreviewLayout,
+          clearPartialPreview: clearPartialPreviewPaginated,
+          setBrowserPreviewLayout: setBrowserPreviewLayoutIfChanged,
           markPreviewSettleLifecycle: () => {
             markPreviewSettleStartedBridge(previewSettleRuntime, previewSettleRequest)
             markPreviewSettleCompletedBridge(previewSettleRuntime, previewSettleRequest)
@@ -467,7 +561,7 @@ export function useEditorPaginationLifecycleController({
         return () => undefined
       }
       const startedAt = startWysiwygPerfSpan()
-      setRenderInvalidationPlanForCanvas({ plan: renderInvalidationPlan, paginated: visualOnlyUpdate.paginated })
+      setCanvasRenderInvalidationPlan({ plan: renderInvalidationPlan, paginated: visualOnlyUpdate.paginated })
       applyVisualOnlyBrowserPreviewShellMutation({
         plan: shellMutationPlan,
         optimisticLayout: { doc: previewDoc, paginated: visualOnlyUpdate.paginated },
@@ -479,8 +573,8 @@ export function useEditorPaginationLifecycleController({
         writePaginatedRef: (paginated) => {
           paginatedRef.current = paginated
         },
-        clearPartialPreview: () => setPartialPreviewPaginated(null),
-        setBrowserPreviewLayout,
+        clearPartialPreview: clearPartialPreviewPaginated,
+        setBrowserPreviewLayout: setBrowserPreviewLayoutIfChanged,
         dispatchSetPaginated: (paginated) => dispatch({ type: "SET_PAGINATED", paginated }),
         markPreviewSettleLifecycle: () => {
           markPreviewSettleStartedBridge(previewSettleRuntime, previewSettleRequest)
@@ -502,7 +596,7 @@ export function useEditorPaginationLifecycleController({
       return () => undefined
     }
 
-    setBrowserPreviewLayout((current) => markEditorPreviewLayoutSettlingFromCurrent(generation, current))
+    markBrowserPreviewLayoutSettlingFromCurrentIfChanged(generation)
     if (!isEditorTextMeasurerReady(editorTextMeasurerStatus)) {
       recordFlowDocPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
         name: "pre-pagination:browser-pagination-deferred-for-font-readiness",
@@ -616,7 +710,7 @@ export function useEditorPaginationLifecycleController({
             }
             return
           }
-          setRenderInvalidationPlanForCanvas({ plan: renderInvalidationPlan, paginated })
+          setCanvasRenderInvalidationPlan({ plan: renderInvalidationPlan, paginated })
           applyPaginatedOutputBrowserPreviewShellMutation({
             plan: shellMutationPlan,
             optimisticLayout: { doc: previewDoc, paginated },
@@ -630,8 +724,8 @@ export function useEditorPaginationLifecycleController({
             writePaginatedRef: (nextPaginated) => {
               paginatedRef.current = nextPaginated
             },
-            clearPartialPreview: () => setPartialPreviewPaginated(null),
-            setBrowserPreviewLayout,
+            clearPartialPreview: clearPartialPreviewPaginated,
+            setBrowserPreviewLayout: setBrowserPreviewLayoutIfChanged,
             dispatchSetPaginated: (nextPaginated) => dispatch({ type: "SET_PAGINATED", paginated: nextPaginated }),
             markPreviewSettleLifecycle: () => {
               markPreviewSettleAppliedBridge(previewSettleRuntime, previewSettleRequest)
@@ -753,7 +847,7 @@ export function useEditorPaginationLifecycleController({
                 if (partialShellMutationPlan.action === "ignore") {
                   return
                 }
-                setRenderInvalidationPlanForCanvas({ plan: renderInvalidationPlan, paginated: response.paginated })
+                setCanvasRenderInvalidationPlan({ plan: renderInvalidationPlan, paginated: response.paginated })
                 applyPartialWorkerBrowserPreviewShellMutation({
                   plan: partialShellMutationPlan,
                   partialPreview: {
@@ -762,8 +856,8 @@ export function useEditorPaginationLifecycleController({
                     paginated: response.paginated,
                   },
                   createPartialBrowserPreviewLayout: markEditorPreviewLayoutPartial,
-                  setPartialPreview: setPartialPreviewPaginated,
-                  setBrowserPreviewLayout,
+                  setPartialPreview: setPartialPreviewPaginatedIfChanged,
+                  setBrowserPreviewLayout: setBrowserPreviewLayoutIfChanged,
                 })
                 return
               }
@@ -873,9 +967,11 @@ export function useEditorPaginationLifecycleController({
     previewDoc,
     previewSettleRuntime,
     recordPreviewSettleShellMutationPlan,
-    setBrowserPreviewLayout,
-    setPartialPreviewPaginated,
-    setRenderInvalidationPlanForCanvas,
+    clearPartialPreviewPaginated,
+    markBrowserPreviewLayoutSettlingFromCurrentIfChanged,
+    setBrowserPreviewLayoutIfChanged,
+    setCanvasRenderInvalidationPlan,
+    setPartialPreviewPaginatedIfChanged,
     structuralEditRuntime,
   ])
 
@@ -887,12 +983,12 @@ export function useEditorPaginationLifecycleController({
       cancelled = true
       controller?.abort()
     }
-    setServerCheckedPreviewDoc(null)
-    setServerLayoutWarnings([])
-    setLayoutStatus("optimistic")
+    setServerCheckedPreviewDocIfChanged(null)
+    setServerLayoutWarningsIfChanged([])
+    setLayoutStatusIfChanged("optimistic")
     const suppressLoadingOverlay = suppressNextLayoutLoadingOverlayRef.current
     suppressNextLayoutLoadingOverlayRef.current = false
-    setSuppressLayoutLoadingOverlay(suppressLoadingOverlay)
+    setSuppressLayoutLoadingOverlayIfChanged(suppressLoadingOverlay)
 
     if (serverPaginationDebounceRef.current) clearTimeout(serverPaginationDebounceRef.current)
 
@@ -928,8 +1024,8 @@ export function useEditorPaginationLifecycleController({
       })
       controller = new AbortController()
       const activeController = controller
-      setIsLayoutLoading(true)
-      setLayoutStatus("reconciling")
+      setIsLayoutLoadingIfChanged(true)
+      setLayoutStatusIfChanged("reconciling")
 
       const requestBuildStartedAt = startWysiwygPerfSpan()
       const requestBody = JSON.stringify(previewDoc)
@@ -966,8 +1062,8 @@ export function useEditorPaginationLifecycleController({
           if (cancelled) return
           if (activeController.signal.aborted) return
           if (layoutVersion !== layoutVersionRef.current) return
-          setLayoutError(false)
-          setServerLayoutWarnings(collectPaginatedLayoutWarnings(paginated))
+          setLayoutErrorIfChanged(false)
+          setServerLayoutWarningsIfChanged(collectPaginatedLayoutWarnings(paginated))
           const optimisticLayout = resolveSamePreviewOptimisticLayout(
             optimisticLayoutRef.current,
             previewDoc,
@@ -992,8 +1088,8 @@ export function useEditorPaginationLifecycleController({
             }
             console.groupEnd()
           }
-          setServerCheckedPreviewDoc(previewDoc)
-          setLayoutStatus("server-checked")
+          setServerCheckedPreviewDocIfChanged(previewDoc)
+          setLayoutStatusIfChanged("server-checked")
         })
         .catch((error) => {
           if (cancelled) return
@@ -1006,15 +1102,15 @@ export function useEditorPaginationLifecycleController({
           ) return
           if (layoutVersion !== layoutVersionRef.current) return
           console.error("server pagination failed:", error)
-          setServerCheckedPreviewDoc(null)
-          setServerLayoutWarnings([])
-          setLayoutStatus("optimistic")
-          setLayoutError(true)
+          setServerCheckedPreviewDocIfChanged(null)
+          setServerLayoutWarningsIfChanged([])
+          setLayoutStatusIfChanged("optimistic")
+          setLayoutErrorIfChanged(true)
         })
         .finally(() => {
           if (layoutVersion === layoutVersionRef.current) {
-            setIsLayoutLoading(false)
-            setSuppressLayoutLoadingOverlay(false)
+            setIsLayoutLoadingIfChanged(false)
+            setSuppressLayoutLoadingOverlayIfChanged(false)
           }
         })
     }, inlineEditNodeId ? 500 : 120)
@@ -1032,6 +1128,12 @@ export function useEditorPaginationLifecycleController({
     paginatedRef,
     previewDoc,
     setDriftReport,
+    setIsLayoutLoadingIfChanged,
+    setLayoutErrorIfChanged,
+    setLayoutStatusIfChanged,
+    setServerCheckedPreviewDocIfChanged,
+    setServerLayoutWarningsIfChanged,
+    setSuppressLayoutLoadingOverlayIfChanged,
     showDriftRef,
     suppressNextLayoutLoadingOverlayRef,
   ])

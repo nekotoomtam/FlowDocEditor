@@ -5,10 +5,14 @@ new session starts. Do not paste full task transcripts here.
 
 ## Latest Accepted Baseline
 
-Release/readiness marker `0.6.33` was accepted on 2026-06-12.
+Release/readiness marker `0.6.34` was accepted on 2026-06-13.
 
 Accepted facts:
 
+- Outline/list reorder has a core list hierarchy guard, blocked invalid-list
+  drop feedback, active-draft finalize preservation through blocked and valid
+  reorder paths, reducer no-op history coverage, and valid/invalid repeat
+  browser smokes.
 - Editor render/action separation now has ownership/invalidation contracts,
   structural handler extraction, page render churn guards, and WYSIWYG draft
   island trace coverage.

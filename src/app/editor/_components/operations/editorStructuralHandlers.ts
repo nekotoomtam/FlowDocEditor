@@ -193,6 +193,7 @@ export function executeParagraphSplitOperationPlan(
     fragment: optimistic.newFragment,
     pageKey,
     pages: optimistic.paginated.sections.flatMap((section: any) => section.pages),
+    isTableCellParagraph: plan.isTableCellParagraph === true,
     mode: optimistic.mode,
     suppressedPageBreakNodeId,
   })
@@ -376,6 +377,7 @@ export function executeParagraphMergeOperationPlan(
       fragment: optimistic.mergedFragment,
       pageKey: plan.pageKey,
       pages: optimistic.paginated.sections.flatMap((section: any) => section.pages),
+      isTableCellParagraph: false,
       mode: optimistic.mode,
       settleRemovedNodeId: plan.sourceNodeId,
     })

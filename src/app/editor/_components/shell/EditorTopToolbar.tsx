@@ -17,6 +17,7 @@ interface EditorTopToolbarProps extends Omit<EditorToolbarProps, "children"> {
   doc: DocumentNode
   selectedNodeId: string | null
   selectionAnchorNodeId: string | null
+  listToolbarNodeId: string | null
   isTemplateMode: boolean
   deferNonCriticalPanelsForStructuralPaint: boolean
   wysiwygPerfTraceActive: boolean
@@ -38,6 +39,7 @@ export function EditorTopToolbar({
   doc,
   selectedNodeId,
   selectionAnchorNodeId,
+  listToolbarNodeId,
   isTemplateMode,
   deferNonCriticalPanelsForStructuralPaint,
   wysiwygPerfTraceActive,
@@ -67,7 +69,7 @@ export function EditorTopToolbar({
               <>
                 <ListToolbar
                   doc={doc}
-                  selectedNodeId={selectionAnchorNodeId ?? selectedNodeId}
+                  selectedNodeId={listToolbarNodeId ?? selectionAnchorNodeId ?? selectedNodeId}
                   editable={isTemplateMode}
                   onToggleListPreset={onToggleListPreset}
                   onChangeListItemLevel={onChangeListItemLevel}

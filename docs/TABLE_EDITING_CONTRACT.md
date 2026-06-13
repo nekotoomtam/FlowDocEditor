@@ -61,6 +61,11 @@ The canvas should make the table structure directly editable.
 - Paragraphs inside `flow-table-cell` use the same flagged WYSIWYG text-engine
   edit lane as body paragraphs. Table-specific boundary rules, including
   Backspace at the true start of a cell paragraph, remain separate.
+- Backspace at the true start of an empty `flow-table-cell` paragraph may call
+  the dedicated table-cell delete operation only when a previous paragraph
+  remains in the same cell. It removes only that empty paragraph from
+  `flow-table-cell.childIds` and refocuses the previous cell paragraph. If the
+  paragraph is the only child of the cell, Backspace remains a no-op.
 - Active `flow-table-cell` text-engine edits use responsive draft pagination for
   line-count and page-boundary changes. Same-page row/cell height patching
   remains guarded so the editor does not show table geometry that the paginator

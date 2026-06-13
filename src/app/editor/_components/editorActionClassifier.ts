@@ -179,6 +179,7 @@ export function classifyEditorAction(action: EditorAction): EditorActionClassifi
     case "DUPLICATE_NODE":
     case "SPLIT_PARAGRAPH":
     case "MERGE_PARAGRAPH":
+    case "DELETE_EMPTY_TABLE_CELL_PARAGRAPH":
     case "EXIT_LIST_ITEM":
     case "CHANGE_LIST_ITEM_LEVEL":
     case "BACKSPACE_LIST_ITEM_AT_START":

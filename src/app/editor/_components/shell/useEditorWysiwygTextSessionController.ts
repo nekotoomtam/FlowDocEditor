@@ -55,6 +55,7 @@ export function useEditorWysiwygTextSessionController({
 
   const {
     state: richWysiwygDraftSessionState,
+    stateRef: richWysiwygDraftSessionStateRef,
     start: startRichWysiwygDraftSession,
     changeDraft: changeRichWysiwygDraft,
     moveCaret: moveRichWysiwygDraftCaret,
@@ -73,7 +74,6 @@ export function useEditorWysiwygTextSessionController({
     ? richWysiwygTextSessionProjection
     : plainWysiwygTextSessionState
   const wysiwygTextSessionStateRef = useRef(wysiwygTextSessionState)
-  const richWysiwygDraftSessionStateRef = useRef(richWysiwygDraftSessionState)
 
   const beginWysiwygDraftRuntimeSession = useCallback((input: {
     nodeId: string
@@ -164,7 +164,7 @@ export function useEditorWysiwygTextSessionController({
       selection: change.selection ?? null,
       source: "session-draft-change",
     })
-    if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionState.nodeId) {
+    if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionStateRef.current.nodeId) {
       changeRichWysiwygDraft(change)
       return
     }
@@ -172,7 +172,7 @@ export function useEditorWysiwygTextSessionController({
   }, [
     changePlainWysiwygTextDraft,
     changeRichWysiwygDraft,
-    richWysiwygDraftSessionState.nodeId,
+    richWysiwygDraftSessionStateRef,
   ])
 
   const moveWysiwygTextCaret = useCallback((caretOffset: number | null, selection?: Parameters<typeof movePlainWysiwygTextCaret>[1]) => {
@@ -181,7 +181,7 @@ export function useEditorWysiwygTextSessionController({
       selection: selection ?? null,
       source: "session-caret-move",
     })
-    if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionState.nodeId) {
+    if (WYSIWYG_RICH_TEXT_DRAFT_ENABLED && richWysiwygDraftSessionStateRef.current.nodeId) {
       moveRichWysiwygDraftCaret(caretOffset, selection)
       return
     }
@@ -189,7 +189,7 @@ export function useEditorWysiwygTextSessionController({
   }, [
     movePlainWysiwygTextCaret,
     moveRichWysiwygDraftCaret,
-    richWysiwygDraftSessionState.nodeId,
+    richWysiwygDraftSessionStateRef,
   ])
 
   const endWysiwygTextSession = useCallback(() => {
@@ -212,7 +212,6 @@ export function useEditorWysiwygTextSessionController({
     [wysiwygTextSessionState],
   )
   useEffect(() => { wysiwygTextSessionStateRef.current = wysiwygTextSessionState }, [wysiwygTextSessionState])
-  useEffect(() => { richWysiwygDraftSessionStateRef.current = richWysiwygDraftSessionState }, [richWysiwygDraftSessionState])
 
   return {
     richWysiwygDraftSessionState,

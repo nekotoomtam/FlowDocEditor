@@ -4,6 +4,7 @@ import type { PaginatedDocument } from "@/pagination"
 import type { DocumentNode } from "@/schema"
 import {
   createParagraphNode,
+  deleteEmptyFlowTableCellParagraph,
 } from "@/document"
 import type { OptimisticLayoutSnapshot } from "../layoutReconciliation"
 import {
@@ -16,6 +17,7 @@ import {
   executePostCommitOptimisticSplitRefocus,
 } from "../operations/editorStructuralPostCommitRefocus"
 import { resolveOptimisticMergeSourceDocument } from "../operations/editorStructuralMergeSource"
+import { replaceEditableParagraphTextInDocument } from "../wysiwygTextCommit"
 import {
   executeParagraphSplitOperationPlan,
   executeParagraphMergeOperationPlan,
@@ -224,6 +226,7 @@ export function useEditorOptimisticStructuralRefocusController({
     splitIndex: number,
     text?: string,
     history?: SplitParagraphHistory,
+    activeWysiwygTextSessionNodeId?: string | null,
   ): boolean => {
     const plan = createParagraphSplitOperationPlan({
       doc: docRef.current,
@@ -233,7 +236,7 @@ export function useEditorOptimisticStructuralRefocusController({
       text,
       history,
       newNodeId: pending.newNodeId,
-      wysiwygTextSessionStateNodeId: wysiwygTextSessionStateRef.current.nodeId,
+      wysiwygTextSessionStateNodeId: activeWysiwygTextSessionNodeId ?? wysiwygTextSessionStateRef.current.nodeId,
       inlineEditPageIndex: inlineEditPageIndexRef.current,
       editorPageNavigation,
       editorTextMeasurer,
@@ -290,12 +293,19 @@ export function useEditorOptimisticStructuralRefocusController({
   const handleSplitParagraph = useCallback((nodeId: string, splitIndex: number, text?: string) => {
     const history = consumeInlineEditHistory(nodeId)
     const optimisticPending = prepareOptimisticSplitRefocus(nodeId)
-    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId) {
+    const activeWysiwygTextSessionNodeId = wysiwygTextSessionStateRef.current.nodeId
+    if (WYSIWYG_TEXT_ENGINE_ENABLED && activeWysiwygTextSessionNodeId === nodeId) {
       clearWysiwygDraftPagination()
       endWysiwygTextSession()
     }
     const optimisticStarted = optimisticPending
-      ? startOptimisticSplitRefocusBeforeDispatch(optimisticPending, splitIndex, text, history)
+      ? startOptimisticSplitRefocusBeforeDispatch(
+        optimisticPending,
+        splitIndex,
+        text,
+        history,
+        activeWysiwygTextSessionNodeId,
+      )
       : false
     if (!optimisticPending || !optimisticStarted) {
       pendingOptimisticSplitRefocusRef.current = optimisticPending
@@ -351,6 +361,32 @@ export function useEditorOptimisticStructuralRefocusController({
     endWysiwygTextSession,
     optimisticLayoutRef,
     startOptimisticMergeRefocusBeforeDispatch,
+    wysiwygTextSessionStateRef,
+  ])
+
+  const handleDeleteEmptyTableCellParagraph = useCallback((nodeId: string, text?: string): boolean => {
+    const sourceDoc = text === undefined
+      ? docRef.current
+      : replaceEditableParagraphTextInDocument(docRef.current, nodeId, text)
+    const result = deleteEmptyFlowTableCellParagraph(sourceDoc, nodeId)
+    if (!result) return false
+    const history = consumeInlineEditHistory(nodeId)
+    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
+    }
+    if (pendingOptimisticSplitRefocusRef.current?.newNodeId === nodeId) {
+      pendingOptimisticSplitRefocusRef.current = null
+    }
+    pendingOptimisticMergeRefocusRef.current = null
+    dispatchEditorAction({ type: "DELETE_EMPTY_TABLE_CELL_PARAGRAPH", nodeId, text, history })
+    return true
+  }, [
+    clearWysiwygDraftPagination,
+    consumeInlineEditHistory,
+    dispatchEditorAction,
+    docRef,
+    endWysiwygTextSession,
     wysiwygTextSessionStateRef,
   ])
 
@@ -485,6 +521,7 @@ export function useEditorOptimisticStructuralRefocusController({
   }, [dispatch, listLevelChangeResult, startInlineEditAfterModelStructuralChange])
 
   return {
+    handleDeleteEmptyTableCellParagraph,
     handleMergeParagraph,
     handleSplitParagraph,
     optimisticStructuralPreviewSettleGraceUntilRef,

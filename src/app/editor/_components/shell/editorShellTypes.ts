@@ -70,6 +70,7 @@ export interface OptimisticStructuralIslandOverride {
   fragment: PageFragment
   pageKey: string
   pages: PaginatedDocument["sections"][number]["pages"]
+  isTableCellParagraph: boolean
   mode: OptimisticSplitRefocusMode
   suppressedPageBreakNodeId?: string | null
   settleRemovedNodeId?: string

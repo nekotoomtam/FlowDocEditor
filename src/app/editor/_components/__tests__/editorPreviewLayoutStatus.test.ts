@@ -7,6 +7,7 @@ import {
   markEditorPreviewLayoutSettling,
   markEditorPreviewLayoutSettlingFromCurrent,
   shouldBlockEditorPreviewCanvas,
+  shouldApplyEditorPreviewLayoutState,
 } from "../editorPreviewLayoutStatus"
 
 describe("editor preview layout status", () => {
@@ -62,5 +63,34 @@ describe("editor preview layout status", () => {
     expect(shouldBlockEditorPreviewCanvas(full)).toBe(false)
     expect(isEditorPreviewLayoutFull(partial.status)).toBe(false)
     expect(isEditorPreviewLayoutFull(full.status)).toBe(true)
+  })
+
+  it("suppresses repeated settling generation churn without changing canvas blocking", () => {
+    expect(shouldApplyEditorPreviewLayoutState(
+      markEditorPreviewLayoutSettling(3, { blocksCanvas: false }),
+      markEditorPreviewLayoutSettling(4, { blocksCanvas: false }),
+    )).toBe(false)
+
+    expect(shouldApplyEditorPreviewLayoutState(
+      markEditorPreviewLayoutSettling(3, { blocksCanvas: true }),
+      markEditorPreviewLayoutSettling(4, { blocksCanvas: false }),
+    )).toBe(true)
+  })
+
+  it("keeps generation changes meaningful for partial and full preview states", () => {
+    expect(shouldApplyEditorPreviewLayoutState(
+      markEditorPreviewLayoutPartial(3),
+      markEditorPreviewLayoutPartial(4),
+    )).toBe(true)
+
+    expect(shouldApplyEditorPreviewLayoutState(
+      markEditorPreviewLayoutFull(3),
+      markEditorPreviewLayoutFull(4),
+    )).toBe(true)
+
+    expect(shouldApplyEditorPreviewLayoutState(
+      markEditorPreviewLayoutFull(4),
+      markEditorPreviewLayoutFull(4),
+    )).toBe(false)
   })
 })

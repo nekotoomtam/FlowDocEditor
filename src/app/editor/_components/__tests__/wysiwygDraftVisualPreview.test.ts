@@ -174,6 +174,37 @@ describe("wysiwygDraftVisualPreview", () => {
     })
   })
 
+  it("preserves generated list marker metadata on the first draft visual fragment", () => {
+    const fragments = splitWysiwygDraftVisualFragments({
+      sourceFragment: fragment({
+        listMarker: {
+          text: "2.",
+          level: 0,
+          ordinal: 2,
+          instanceId: "list-a",
+          styleId: "tor-clause",
+          itemId: "item-a",
+          markerIndent: 0,
+          bodyIndent: 28,
+          markerX: 10,
+          bodyX: 38,
+        },
+      }),
+      draftLines: [
+        line("one", 70, 0, 3),
+        line("two", 80, 4, 7),
+      ],
+      draftHeight: 26,
+      pages: [page(0), page(1)],
+    })
+
+    expect(fragments[0].listMarker).toMatchObject({
+      text: "2.",
+      level: 0,
+      bodyX: 38,
+    })
+  })
+
   it("resolves caret ownership to the overflow visual fragment", () => {
     const fragments = splitWysiwygDraftVisualFragments({
       sourceFragment: fragment(),

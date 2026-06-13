@@ -1,28 +1,29 @@
 "use client"
 
-import { memo, useState } from "react"
-import { buildStyleManagerState, resolveListMarkers } from "@/document"
-import type { StyleManagerListGroupItem } from "@/document"
-import type { DocumentNode, LayoutNode } from "@/schema"
-import { buildOutlineModel } from "./outlineModel"
+import { Profiler, memo, useCallback, useEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from "react"
+import { orderedSectionParagraphs, type StyleManagerListGroupItem } from "@/document"
+import type { DocumentNode, DocumentSection } from "@/schema"
 import type { OutlineItem, OutlineNodeItem } from "./outlineModel"
+import {
+  buildOutlinePanelModel,
+  type OutlineLabelUpdatePolicy,
+  type OutlinePanelModel,
+  type OutlinePanelModelCache,
+  type OutlinePanelModelStats,
+} from "./outlinePanelModel"
+import {
+  flattenOutlinePanelRows,
+  OUTLINE_VIRTUALIZATION_MIN_ROW_COUNT,
+  OUTLINE_VIRTUALIZATION_OVERSCAN_ROWS,
+  resolveOutlineVisibleWindow,
+  toggleOutlineRowExpanded,
+  type OutlineFlatRow,
+} from "./outlinePanelWindowing"
 import { RightRailPanelHeader, rightRailPanelBody, rightRailPanelShell } from "./RightRailPanel"
+import { WYSIWYG_PERF_TRACE_ENABLED } from "./wysiwygInlineEditConfig"
+import { recordWysiwygPerfEvent, startWysiwygPerfSpan } from "./wysiwygPerformance"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function getParaText(node: LayoutNode): string {
-  if (node.type !== "paragraph") return ""
-  return node.children
-    .filter((c) => c.type === "text")
-    .map((c) => (c as { text: string }).text)
-    .join("")
-    .trim()
-}
-
-function getTableSize(node: LayoutNode): string {
-  if (node.type !== "flow-table") return ""
-  return `${node.rowIds.length}×${node.columns.length}`
-}
 
 export type OutlineReorderPosition = "before" | "after"
 
@@ -33,7 +34,19 @@ export interface OutlineBodyChildReorder {
   position: OutlineReorderPosition
 }
 
-interface OutlineReorderItem {
+export type OutlineReorderBlockedReason = "invalid-list-hierarchy"
+
+export interface OutlineBodyChildReorderDrop {
+  request: OutlineBodyChildReorder | null
+  blockedReason: OutlineReorderBlockedReason | null
+}
+
+export interface OutlineEditRelease {
+  nodeId: string
+  token: number
+}
+
+export interface OutlineReorderItem {
   sectionId: string
   bodyId: string
   nodeId: string
@@ -43,6 +56,7 @@ interface OutlineDragState {
   source: OutlineReorderItem
   targetNodeId: string | null
   position: OutlineReorderPosition | null
+  blockedReason: OutlineReorderBlockedReason | null
   pointer: { x: number; y: number } | null
   ghost: { label: string; icon: string; depth: number }
 }
@@ -80,6 +94,11 @@ function dragPointerFromEvent(event: React.DragEvent): { x: number; y: number } 
 
 function dragEventTargetElement(event: React.DragEvent): Element | null {
   return event.target instanceof Element ? event.target : null
+}
+
+function outlineReorderBlockedReasonLabel(reason: OutlineReorderBlockedReason | null): string {
+  if (reason === "invalid-list-hierarchy") return "วางตรงนี้ไม่ได้ เพราะลำดับรายการจะไม่ถูกต้อง"
+  return ""
 }
 
 const outlineDepthBackgrounds = [
@@ -159,6 +178,18 @@ const outlineRowGripDot: React.CSSProperties = {
   background: "#94a3b8",
 }
 
+const outlineScreenReaderOnly: React.CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+}
+
 function RowGrip({
   draggable,
   onDragStart,
@@ -192,31 +223,178 @@ function RowGrip({
   )
 }
 
-function NodeRow({
+type NodeRowProps = {
+  label: string; icon: string; depth: number; nodeId: string
+  selectedNodeId: string | null; activeEditingNodeId: string | null; onClick: (id: string) => void
+  hasChildren?: boolean
+  expanded?: boolean
+  onToggleExpanded?: () => void
+  reorderItem?: OutlineReorderItem
+  dragState: OutlineDragState | null
+  onDragStateChange: (state: OutlineDragState | null) => void
+  onReorder?: (request: OutlineBodyChildReorder) => void
+  resolveReorderDrop?: (target: OutlineReorderItem, position: OutlineReorderPosition | null) => OutlineBodyChildReorderDrop
+  children?: React.ReactNode
+}
+
+function reorderItemSignature(item: OutlineReorderItem | undefined): string {
+  return item ? `${item.sectionId}:${item.bodyId}:${item.nodeId}` : ""
+}
+
+function rowDragSignature(props: Pick<NodeRowProps, "nodeId" | "reorderItem" | "dragState">): string {
+  const { nodeId, reorderItem, dragState } = props
+  if (!dragState) return ""
+  const source = dragState.source.nodeId === nodeId ? "source" : ""
+  const canDrop = Boolean(
+    reorderItem &&
+    dragState.source.sectionId === reorderItem.sectionId &&
+    dragState.source.bodyId === reorderItem.bodyId &&
+    dragState.source.nodeId !== reorderItem.nodeId,
+  )
+  const target = canDrop && dragState.targetNodeId === reorderItem?.nodeId
+    ? `target:${dragState.position ?? ""}`
+    : ""
+  const blocked = target && dragState.blockedReason ? `blocked:${dragState.blockedReason}` : ""
+  return `${source}|${target}|${blocked}`
+}
+
+export function resolveOutlineBodyChildReorderRequest(
+  source: OutlineReorderItem,
+  target: OutlineReorderItem,
+  position: OutlineReorderPosition | null,
+): OutlineBodyChildReorder | null {
+  if (!position) return null
+  if (source.sectionId !== target.sectionId || source.bodyId !== target.bodyId) return null
+  if (source.nodeId === target.nodeId) return null
+  return {
+    sectionId: source.sectionId,
+    sourceNodeId: source.nodeId,
+    targetNodeId: target.nodeId,
+    position,
+  }
+}
+
+function moveOutlineBodyChildIds(
+  childIds: string[],
+  sourceNodeId: string,
+  targetNodeId: string,
+  position: OutlineReorderPosition,
+): string[] | null {
+  if (sourceNodeId === targetNodeId) return null
+
+  const sourceIndex = childIds.indexOf(sourceNodeId)
+  const targetIndex = childIds.indexOf(targetNodeId)
+  if (sourceIndex < 0 || targetIndex < 0) return null
+
+  const withoutSource = childIds.filter((id) => id !== sourceNodeId)
+  const targetIndexAfterRemoval = withoutSource.indexOf(targetNodeId)
+  if (targetIndexAfterRemoval < 0) return null
+
+  const insertIndex = position === "before" ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
+  const nextChildIds = [...withoutSource]
+  nextChildIds.splice(insertIndex, 0, sourceNodeId)
+  return nextChildIds
+}
+
+function hasValidOutlineListHierarchyOrder(sections: DocumentSection[]): boolean {
+  const previousLevelByInstance = new Map<string, number>()
+
+  for (const section of sections) {
+    for (const paragraph of orderedSectionParagraphs(section)) {
+      const list = paragraph.props.list
+      if (!list) continue
+
+      const previousLevel = previousLevelByInstance.get(list.instanceId)
+      if (previousLevel == null) {
+        if (list.level > 0) return false
+      } else if (list.level > previousLevel + 1) {
+        return false
+      }
+      previousLevelByInstance.set(list.instanceId, list.level)
+    }
+  }
+
+  return true
+}
+
+export function resolveOutlineBodyChildReorderDrop(
+  doc: DocumentNode,
+  source: OutlineReorderItem,
+  target: OutlineReorderItem,
+  position: OutlineReorderPosition | null,
+): OutlineBodyChildReorderDrop {
+  const request = resolveOutlineBodyChildReorderRequest(source, target, position)
+  if (!request || !position) return { request: null, blockedReason: null }
+
+  const nextSections = doc.document.sections.map((section) => {
+    if (section.id !== source.sectionId) return section
+
+    const body = section.nodes[source.bodyId]
+    if (body?.type !== "body") return section
+
+    const nextChildIds = moveOutlineBodyChildIds(body.childIds, source.nodeId, target.nodeId, position)
+    if (!nextChildIds) return section
+
+    return {
+      ...section,
+      nodes: {
+        ...section.nodes,
+        [body.id]: { ...body, childIds: nextChildIds },
+      },
+    }
+  })
+
+  return {
+    request,
+    blockedReason: hasValidOutlineListHierarchyOrder(nextSections) ? null : "invalid-list-hierarchy",
+  }
+}
+
+function areNodeRowPropsEqual(previous: NodeRowProps, next: NodeRowProps): boolean {
+  if (previous.children || next.children) return false
+  return (
+    previous.label === next.label &&
+    previous.icon === next.icon &&
+    previous.depth === next.depth &&
+    previous.nodeId === next.nodeId &&
+    (previous.nodeId === previous.selectedNodeId) === (next.nodeId === next.selectedNodeId) &&
+    (previous.nodeId === previous.activeEditingNodeId) === (next.nodeId === next.activeEditingNodeId) &&
+    previous.hasChildren === next.hasChildren &&
+    previous.expanded === next.expanded &&
+    previous.onToggleExpanded === next.onToggleExpanded &&
+    reorderItemSignature(previous.reorderItem) === reorderItemSignature(next.reorderItem) &&
+    rowDragSignature(previous) === rowDragSignature(next) &&
+    previous.onClick === next.onClick &&
+    previous.onDragStateChange === next.onDragStateChange &&
+    previous.onReorder === next.onReorder &&
+    previous.resolveReorderDrop === next.resolveReorderDrop
+  )
+}
+
+const NodeRow = memo(function NodeRow({
   label,
   icon,
   depth,
   nodeId,
   selectedNodeId,
+  activeEditingNodeId,
   onClick,
+  hasChildren: hasChildrenOverride,
+  expanded: controlledExpanded,
+  onToggleExpanded,
   reorderItem,
   dragState,
   onDragStateChange,
   onReorder,
+  resolveReorderDrop,
   children,
-}: {
-  label: string; icon: string; depth: number; nodeId: string
-  selectedNodeId: string | null; onClick: (id: string) => void
-  reorderItem?: OutlineReorderItem
-  dragState: OutlineDragState | null
-  onDragStateChange: (state: OutlineDragState | null) => void
-  onReorder?: (request: OutlineBodyChildReorder) => void
-  children?: React.ReactNode
-}) {
+}: NodeRowProps) {
   const [expanded, setExpanded] = useState(true)
   const [hovered, setHovered] = useState(false)
   const isSelected = nodeId === selectedNodeId
-  const hasChildren = !!children
+  const isEditing = nodeId === activeEditingNodeId
+  const hasChildren = hasChildrenOverride ?? !!children
+  const isExpanded = controlledExpanded ?? expanded
   const canDrag = reorderItem != null && onReorder != null
   const isDraggingSource = dragState?.source.nodeId === nodeId
   const canDrop = Boolean(
@@ -227,14 +405,21 @@ function NodeRow({
   )
   const isDropTarget = canDrop && dragState?.targetNodeId === reorderItem?.nodeId
   const dropPosition = isDropTarget ? dragState?.position : null
-  const rowBackground = isDropTarget
+  const dropBlockedReason = isDropTarget ? dragState?.blockedReason ?? null : null
+  const isDropBlocked = dropBlockedReason != null
+  const blockedLabel = outlineReorderBlockedReasonLabel(dropBlockedReason)
+  const rowBackground = isDropBlocked
+    ? "#fffbeb"
+    : isDropTarget
     ? "#eff6ff"
     : isSelected
       ? "#dbeafe"
       : isDraggingSource
         ? "#f8fafc"
         : outlineDepthBackground(depth, hovered)
-  const rowBorder = isDropTarget
+  const rowBorder = isDropBlocked
+    ? "1px solid #f59e0b"
+    : isDropTarget
     ? "1px solid #bfdbfe"
     : isDraggingSource
       ? "1px dashed #cbd5e1"
@@ -250,38 +435,57 @@ function NodeRow({
       <div
         data-testid="outline-node-row"
         data-outline-drop-row="true"
+        data-outline-node-id={nodeId}
         data-outline-body-child={canDrag ? "true" : undefined}
         data-outline-section-id={reorderItem?.sectionId}
         data-outline-body-id={reorderItem?.bodyId}
         data-outline-reorderable={canDrag ? "true" : undefined}
         data-outline-drag-source={isDraggingSource ? "true" : undefined}
+        data-outline-drop-target={isDropTarget ? "true" : undefined}
+        data-outline-drop-position={dropPosition ?? undefined}
+        data-outline-drop-blocked={isDropBlocked ? dropBlockedReason : undefined}
+        aria-disabled={isDropBlocked ? true : undefined}
+        title={isDropBlocked ? blockedLabel : undefined}
+        data-outline-editing={isEditing ? "true" : undefined}
         onClick={() => onClick(nodeId)}
         onDragOver={(event) => {
           if (!canDrop || !reorderItem || !dragState) return
           event.preventDefault()
           event.stopPropagation()
-          event.dataTransfer.dropEffect = "move"
           const rect = event.currentTarget.getBoundingClientRect()
           const position: OutlineReorderPosition = event.clientY < rect.top + rect.height / 2 ? "before" : "after"
+          const drop = resolveReorderDrop?.(reorderItem, position) ?? {
+            request: resolveOutlineBodyChildReorderRequest(dragState.source, reorderItem, position),
+            blockedReason: null,
+          }
+          event.dataTransfer.dropEffect = drop.blockedReason ? "none" : "move"
           const pointer = dragPointerFromEvent(event) ?? dragState.pointer
           if (
             dragState.targetNodeId === reorderItem.nodeId &&
             dragState.position === position &&
+            dragState.blockedReason === drop.blockedReason &&
             dragState.pointer?.x === pointer?.x &&
             dragState.pointer?.y === pointer?.y
           ) return
-          onDragStateChange({ ...dragState, targetNodeId: reorderItem.nodeId, position, pointer })
+          onDragStateChange({
+            ...dragState,
+            targetNodeId: reorderItem.nodeId,
+            position,
+            blockedReason: drop.blockedReason,
+            pointer,
+          })
         }}
         onDrop={(event) => {
           if (!canDrop || !reorderItem || !dragState?.position || !onReorder) return
           event.preventDefault()
           event.stopPropagation()
-          onReorder({
-            sectionId: reorderItem.sectionId,
-            sourceNodeId: dragState.source.nodeId,
-            targetNodeId: reorderItem.nodeId,
-            position: dragState.position,
-          })
+          const drop = resolveReorderDrop?.(reorderItem, dragState.position) ?? {
+            request: resolveOutlineBodyChildReorderRequest(dragState.source, reorderItem, dragState.position),
+            blockedReason: null,
+          }
+          // Keep the editor action lifecycle intact: core no-ops blocked list reorders,
+          // while the Shell still finalizes any active draft before dispatch.
+          if (drop.request) onReorder(drop.request)
           onDragStateChange(null)
         }}
         style={{
@@ -289,19 +493,23 @@ function NodeRow({
           display: "flex", alignItems: "center", gap: 6,
           padding: "4px 7px",
           paddingLeft: OUTLINE_DEPTH_BASE_LEFT + depth * OUTLINE_DEPTH_INDENT,
-          cursor: "pointer", fontSize: 11,
+          cursor: isDropBlocked ? "no-drop" : "pointer", fontSize: 11,
           backgroundColor: rowBackground,
           backgroundImage: rowBackgroundImage,
           color: isSelected ? "#1d4ed8" : "#374151",
           border: rowBorder,
           borderRadius: 5,
           opacity: isDraggingSource ? 0.46 : 1,
+          position: "relative",
+          overflow: "hidden",
+          contentVisibility: "auto",
+          containIntrinsicSize: "26px",
           userSelect: "none",
           boxSizing: "border-box",
           boxShadow: dropPosition === "before"
-            ? "inset 0 2px 0 #2563eb"
+            ? `inset 0 2px 0 ${isDropBlocked ? "#f59e0b" : "#2563eb"}`
             : dropPosition === "after"
-              ? "inset 0 -2px 0 #2563eb"
+              ? `inset 0 -2px 0 ${isDropBlocked ? "#f59e0b" : "#2563eb"}`
               : undefined,
         }}
         onMouseEnter={() => setHovered(true)}
@@ -309,10 +517,17 @@ function NodeRow({
       >
         {hasChildren && (
           <span
-            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (onToggleExpanded) {
+                onToggleExpanded()
+              } else {
+                setExpanded((v) => !v)
+              }
+            }}
             style={{ fontSize: 8, color: "#9ca3af", width: 10, flexShrink: 0 }}
           >
-            {expanded ? "▼" : "▶"}
+            {isExpanded ? "▼" : "▶"}
           </span>
         )}
         {!hasChildren && <span style={{ width: 10, flexShrink: 0 }} />}
@@ -328,6 +543,7 @@ function NodeRow({
                 source: reorderItem,
                 targetNodeId: null,
                 position: null,
+                blockedReason: null,
                 pointer: dragPointerFromEvent(event),
                 ghost: { label, icon, depth },
               })
@@ -343,14 +559,40 @@ function NodeRow({
           />
         ) : <span style={{ width: 10, flexShrink: 0 }} />}
         <span style={{ flexShrink: 0, width: 12, textAlign: "center", color: isSelected ? "#1d4ed8" : "#64748b" }}>{icon}</span>
-        <span title={label} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isSelected ? "#1d4ed8" : "#475569" }}>
+        <span title={label} style={{
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          color: isSelected ? "#1d4ed8" : "#475569",
+          paddingRight: isEditing ? 74 : 0,
+        }}>
           {label}
         </span>
+        {isEditing ? (
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              right: 8,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "#2563eb",
+              fontSize: 10,
+              fontWeight: 800,
+              opacity: 0.28,
+              pointerEvents: "none",
+              whiteSpace: "nowrap",
+            }}
+          >
+            กำลังแก้ไข
+          </span>
+        ) : null}
       </div>
-      {hasChildren && expanded ? children : null}
+      {hasChildren && isExpanded ? children : null}
     </>
   )
-}
+}, areNodeRowPropsEqual)
 
 function markerRange(markers: Array<string | undefined>): string {
   const values = markers.filter((value): value is string => Boolean(value))
@@ -365,16 +607,24 @@ function ListGroupRunRow({
   paragraphIds,
   depth,
   listGroupContext,
+  hasChildren: hasChildrenOverride,
+  expanded: controlledExpanded,
+  onToggleExpanded,
   children,
 }: {
   instanceId: string
   paragraphIds: string[]
   depth: number
   listGroupContext: OutlineListGroupContext
+  hasChildren?: boolean
+  expanded?: boolean
+  onToggleExpanded?: () => void
   children: React.ReactNode
 }) {
   const [expanded, setExpanded] = useState(true)
   const [hovered, setHovered] = useState(false)
+  const hasChildren = hasChildrenOverride ?? Boolean(children)
+  const isExpanded = controlledExpanded ?? expanded
   const group = listGroupContext.groupsById.get(instanceId)
   const isSelected = listGroupContext.selectedListGroupId === instanceId
   const range = markerRange(paragraphIds.map((paragraphId) => listGroupContext.markerTextByParagraphId.get(paragraphId)))
@@ -412,19 +662,27 @@ function ListGroupRunRow({
           color: isSelected ? "#0369a1" : "#334155",
           border: isSelected ? "1px solid #7dd3fc" : hovered ? "1px solid #e2e8f0" : "1px solid transparent",
           borderRadius: 5,
+          contentVisibility: "auto",
+          containIntrinsicSize: "28px",
           userSelect: "none",
           boxSizing: "border-box",
         }}
       >
-        <span
-          onClick={(event) => {
-            event.stopPropagation()
-            setExpanded((value) => !value)
-          }}
-          style={{ fontSize: 8, color: "#94a3b8", width: 10, flexShrink: 0 }}
-        >
-          {expanded ? "▼" : "▶"}
-        </span>
+        {hasChildren ? (
+          <span
+            onClick={(event) => {
+              event.stopPropagation()
+              if (onToggleExpanded) {
+                onToggleExpanded()
+              } else {
+                setExpanded((value) => !value)
+              }
+            }}
+            style={{ fontSize: 8, color: "#94a3b8", width: 10, flexShrink: 0 }}
+          >
+            {isExpanded ? "▼" : "▶"}
+          </span>
+        ) : <span style={{ width: 10, flexShrink: 0 }} />}
         <span
           aria-hidden="true"
           style={{
@@ -452,7 +710,7 @@ function ListGroupRunRow({
           </span>
         )}
       </div>
-      {expanded ? children : null}
+      {hasChildren && isExpanded ? children : null}
     </>
   )
 }
@@ -463,20 +721,26 @@ function OutlineItems({
   items,
   depth,
   selectedNodeId,
+  activeEditingNodeId,
   onSelect,
   dragState,
   onDragStateChange,
   onReorder,
+  resolveReorderDrop,
   listGroupContext,
+  labelByNodeId,
 }: {
   items: OutlineItem[]
   depth: number
   selectedNodeId: string | null
+  activeEditingNodeId: string | null
   onSelect: (id: string) => void
   dragState: OutlineDragState | null
   onDragStateChange: (state: OutlineDragState | null) => void
   onReorder?: (request: OutlineBodyChildReorder) => void
+  resolveReorderDrop?: (target: OutlineReorderItem, position: OutlineReorderPosition | null) => OutlineBodyChildReorderDrop
   listGroupContext: OutlineListGroupContext
+  labelByNodeId: Map<string, string>
 }) {
   return (
     <>
@@ -492,11 +756,14 @@ function OutlineItems({
             items={item.children}
             depth={depth + 1}
             selectedNodeId={selectedNodeId}
+            activeEditingNodeId={activeEditingNodeId}
             onSelect={onSelect}
             dragState={dragState}
             onDragStateChange={onDragStateChange}
             onReorder={onReorder}
+            resolveReorderDrop={resolveReorderDrop}
             listGroupContext={listGroupContext}
+            labelByNodeId={labelByNodeId}
           />
         </ListGroupRunRow>
       ) : (
@@ -505,104 +772,153 @@ function OutlineItems({
           item={item}
           depth={depth}
           selectedNodeId={selectedNodeId}
+          activeEditingNodeId={activeEditingNodeId}
           onSelect={onSelect}
           dragState={dragState}
           onDragStateChange={onDragStateChange}
           onReorder={onReorder}
+          resolveReorderDrop={resolveReorderDrop}
           listGroupContext={listGroupContext}
+          labelByNodeId={labelByNodeId}
         />
       ))}
     </>
   )
 }
 
-function OutlineNode({
+type OutlineNodeProps = {
+  item: OutlineNodeItem
+  depth: number
+  selectedNodeId: string | null; activeEditingNodeId: string | null; onSelect: (id: string) => void
+  dragState: OutlineDragState | null
+  onDragStateChange: (state: OutlineDragState | null) => void
+  onReorder?: (request: OutlineBodyChildReorder) => void
+  resolveReorderDrop?: (target: OutlineReorderItem, position: OutlineReorderPosition | null) => OutlineBodyChildReorderDrop
+  listGroupContext: OutlineListGroupContext
+  labelByNodeId: Map<string, string>
+}
+
+function reorderItemForOutlineItem(item: OutlineNodeItem): OutlineReorderItem | undefined {
+  return item.isBodyChild
+    ? { sectionId: item.sectionId, bodyId: item.bodyId, nodeId: item.nodeId }
+    : undefined
+}
+
+function areOutlineNodePropsEqual(previous: OutlineNodeProps, next: OutlineNodeProps): boolean {
+  if (previous.item.children.length > 0 || next.item.children.length > 0) return false
+  if (previous.item !== next.item) return false
+  const nodeId = previous.item.nodeId
+  return (
+    previous.depth === next.depth &&
+    (nodeId === previous.selectedNodeId) === (nodeId === next.selectedNodeId) &&
+    (nodeId === previous.activeEditingNodeId) === (nodeId === next.activeEditingNodeId) &&
+    (previous.labelByNodeId.get(nodeId) ?? null) === (next.labelByNodeId.get(nodeId) ?? null) &&
+    previous.item.labelOverride === next.item.labelOverride &&
+    rowDragSignature({
+      nodeId,
+      reorderItem: reorderItemForOutlineItem(previous.item),
+      dragState: previous.dragState,
+    }) === rowDragSignature({
+      nodeId,
+      reorderItem: reorderItemForOutlineItem(next.item),
+      dragState: next.dragState,
+    }) &&
+    previous.onSelect === next.onSelect &&
+    previous.onDragStateChange === next.onDragStateChange &&
+    previous.onReorder === next.onReorder &&
+    previous.resolveReorderDrop === next.resolveReorderDrop
+  )
+}
+
+const OutlineNode = memo(function OutlineNode({
   item,
   depth,
   selectedNodeId,
+  activeEditingNodeId,
   onSelect,
   dragState,
   onDragStateChange,
   onReorder,
+  resolveReorderDrop,
   listGroupContext,
-}: {
-  item: OutlineNodeItem
-  depth: number
-  selectedNodeId: string | null; onSelect: (id: string) => void
-  dragState: OutlineDragState | null
-  onDragStateChange: (state: OutlineDragState | null) => void
-  onReorder?: (request: OutlineBodyChildReorder) => void
-  listGroupContext: OutlineListGroupContext
-}) {
+  labelByNodeId,
+}: OutlineNodeProps) {
   const node = item.node
-  const reorderItem = item.isBodyChild
-    ? { sectionId: item.sectionId, bodyId: item.bodyId, nodeId: item.nodeId }
-    : undefined
+  const reorderItem = reorderItemForOutlineItem(item)
   const children = item.children.length > 0 ? (
     <OutlineItems
       items={item.children}
       depth={depth + 1}
       selectedNodeId={selectedNodeId}
+      activeEditingNodeId={activeEditingNodeId}
       onSelect={onSelect}
       dragState={dragState}
       onDragStateChange={onDragStateChange}
       onReorder={onReorder}
+      resolveReorderDrop={resolveReorderDrop}
       listGroupContext={listGroupContext}
+      labelByNodeId={labelByNodeId}
     />
   ) : null
 
   if (node.type === "paragraph") {
-    const text = getParaText(node)
+    const text = labelByNodeId.get(item.nodeId) ?? "(ว่าง)"
     return (
-      <NodeRow icon="¶" label={text || "(ว่าง)"} depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+      <NodeRow icon="¶" label={text} depth={depth} nodeId={item.nodeId}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder} />
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop} />
     )
   }
 
   if (node.type === "spacer") {
     return (
       <NodeRow icon="—" label="ช่องว่าง" depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder} />
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop} />
     )
   }
 
   if (node.type === "divider") {
     return (
       <NodeRow icon="-" label="เส้นแบ่ง" depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder} />
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop} />
     )
   }
 
   if (node.type === "page-break") {
     return (
       <NodeRow icon="PB" label="ขึ้นหน้าใหม่" depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder} />
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop} />
     )
   }
 
   if (node.type === "toc") {
     return (
       <NodeRow icon="☰" label="สารบัญ" depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder} />
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop} />
     )
   }
 
   if (node.type === "flow-table") {
     return (
-      <NodeRow icon="▦" label={`Flow table ${getTableSize(node)}`} depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+      <NodeRow icon="▦" label={labelByNodeId.get(item.nodeId) ?? "Flow table"} depth={depth} nodeId={item.nodeId}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder}>
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop}>
         {children}
       </NodeRow>
     )
@@ -611,9 +927,10 @@ function OutlineNode({
   if (node.type === "flow-table-row") {
     return (
       <NodeRow icon="TR" label={item.labelOverride ?? "แถว"} depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder}>
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop}>
         {children}
       </NodeRow>
     )
@@ -622,21 +939,22 @@ function OutlineNode({
   if (node.type === "flow-table-cell") {
     return (
       <NodeRow icon="TC" label={item.labelOverride ?? "เซลล์"} depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder}>
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop}>
         {children}
       </NodeRow>
     )
   }
 
   if (node.type === "row" || node.type === "flow-row") {
-    const stackCount = node.childIds.length
     return (
-      <NodeRow icon="⫿" label={`${stackCount} คอลัมน์`} depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+      <NodeRow icon="⫿" label={labelByNodeId.get(item.nodeId) ?? "คอลัมน์"} depth={depth} nodeId={item.nodeId}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder}>
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop}>
         {children}
       </NodeRow>
     )
@@ -645,15 +963,108 @@ function OutlineNode({
   if (node.type === "stack" || node.type === "flow-stack") {
     return (
       <NodeRow icon="▯" label={item.labelOverride ?? "คอลัมน์"} depth={depth} nodeId={item.nodeId}
-        selectedNodeId={selectedNodeId} onClick={onSelect}
+        selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
-        onDragStateChange={onDragStateChange} onReorder={onReorder}>
+        onDragStateChange={onDragStateChange} onReorder={onReorder}
+        resolveReorderDrop={resolveReorderDrop}>
         {children}
       </NodeRow>
     )
   }
 
   return null
+}, areOutlineNodePropsEqual)
+
+function outlineNodeRowDisplay(item: OutlineNodeItem, labelByNodeId: Map<string, string>): { icon: string; label: string } | null {
+  const node = item.node
+
+  if (node.type === "paragraph") {
+    return { icon: "¶", label: labelByNodeId.get(item.nodeId) ?? "(ว่าง)" }
+  }
+  if (node.type === "spacer") return { icon: "—", label: "ช่องว่าง" }
+  if (node.type === "divider") return { icon: "-", label: "เส้นแบ่ง" }
+  if (node.type === "page-break") return { icon: "PB", label: "ขึ้นหน้าใหม่" }
+  if (node.type === "toc") return { icon: "☰", label: "สารบัญ" }
+  if (node.type === "flow-table") return { icon: "▦", label: labelByNodeId.get(item.nodeId) ?? "Flow table" }
+  if (node.type === "flow-table-row") return { icon: "TR", label: item.labelOverride ?? "แถว" }
+  if (node.type === "flow-table-cell") return { icon: "TC", label: item.labelOverride ?? "เซลล์" }
+  if (node.type === "row" || node.type === "flow-row") return { icon: "⫿", label: labelByNodeId.get(item.nodeId) ?? "คอลัมน์" }
+  if (node.type === "stack" || node.type === "flow-stack") return { icon: "▯", label: item.labelOverride ?? "คอลัมน์" }
+
+  return null
+}
+
+function OutlineFlatRowView({
+  row,
+  selectedNodeId,
+  activeEditingNodeId,
+  onSelect,
+  dragState,
+  onDragStateChange,
+  onReorder,
+  resolveReorderDrop,
+  listGroupContext,
+  labelByNodeId,
+  onToggleExpanded,
+}: {
+  row: OutlineFlatRow
+  selectedNodeId: string | null
+  activeEditingNodeId: string | null
+  onSelect: (id: string) => void
+  dragState: OutlineDragState | null
+  onDragStateChange: (state: OutlineDragState | null) => void
+  onReorder?: (request: OutlineBodyChildReorder) => void
+  resolveReorderDrop?: (target: OutlineReorderItem, position: OutlineReorderPosition | null) => OutlineBodyChildReorderDrop
+  listGroupContext: OutlineListGroupContext
+  labelByNodeId: Map<string, string>
+  onToggleExpanded: (rowKey: string) => void
+}) {
+  if (row.kind === "section-heading") {
+    return (
+      <div style={{ padding: "6px 8px 4px", fontSize: 10, color: "#9ca3af", fontWeight: 700 }}>
+        Section {row.sectionIndex + 1}
+      </div>
+    )
+  }
+
+  if (row.kind === "list-group-run") {
+    return (
+      <ListGroupRunRow
+        instanceId={row.item.instanceId}
+        paragraphIds={row.item.paragraphIds}
+        depth={row.depth}
+        listGroupContext={listGroupContext}
+        hasChildren={row.expandable}
+        expanded={row.expanded}
+        onToggleExpanded={() => onToggleExpanded(row.key)}
+      >
+        {null}
+      </ListGroupRunRow>
+    )
+  }
+
+  const display = outlineNodeRowDisplay(row.item, labelByNodeId)
+  if (!display) return null
+
+  return (
+    <NodeRow
+      icon={display.icon}
+      label={display.label}
+      depth={row.depth}
+      nodeId={row.item.nodeId}
+      selectedNodeId={selectedNodeId}
+      activeEditingNodeId={activeEditingNodeId}
+      onClick={onSelect}
+      hasChildren={row.expandable}
+      expanded={row.expanded}
+      onToggleExpanded={() => onToggleExpanded(row.key)}
+      reorderItem={reorderItemForOutlineItem(row.item)}
+      dragState={dragState}
+      onDragStateChange={onDragStateChange}
+      onReorder={onReorder}
+      resolveReorderDrop={resolveReorderDrop}
+    />
+  )
 }
 
 // ─── Panel ────────────────────────────────────────────────────────────────────
@@ -661,8 +1072,11 @@ function OutlineNode({
 interface Props {
   doc: DocumentNode
   selectedNodeId: string | null
+  activeEditingNodeId?: string | null
+  editRelease?: OutlineEditRelease | null
   selectedListGroupId?: string | null
   deferContent?: boolean
+  perfTraceActive?: boolean
   onSelect: (nodeId: string) => void
   onSelectListGroup?: (instanceId: string) => void
   onAddShortcut?: () => void
@@ -764,20 +1178,215 @@ function findLastBodyChildRow(root: HTMLElement, dragState: OutlineDragState): H
   return rows.length > 0 ? rows[rows.length - 1] : null
 }
 
+function isScrolledToOutlineEnd(root: HTMLElement): boolean {
+  return root.scrollTop + root.clientHeight >= root.scrollHeight - 2
+}
+
+type OutlinePanelMeasuredModel = {
+  model: OutlinePanelModel
+  stats: OutlinePanelModelStats
+  startedAt: number
+  durationMs: number
+}
+
+export function resolveOutlineLabelUpdatePolicy({
+  activeEditingNodeId,
+  previousActiveEditingNodeId,
+  editRelease,
+  consumedEditReleaseToken,
+}: {
+  activeEditingNodeId: string | null
+  previousActiveEditingNodeId: string | null
+  editRelease: OutlineEditRelease | null
+  consumedEditReleaseToken: number | null
+}): OutlineLabelUpdatePolicy {
+  if (editRelease && editRelease.token !== consumedEditReleaseToken) {
+    return { kind: "single-node", nodeId: editRelease.nodeId }
+  }
+  if (
+    activeEditingNodeId &&
+    previousActiveEditingNodeId &&
+    previousActiveEditingNodeId !== activeEditingNodeId
+  ) {
+    return { kind: "single-node", nodeId: previousActiveEditingNodeId }
+  }
+  if (activeEditingNodeId) return { kind: "frozen-active-edit" }
+  if (previousActiveEditingNodeId) return { kind: "single-node", nodeId: previousActiveEditingNodeId }
+  return { kind: "full" }
+}
+
 function OutlinePanelImpl({
   doc,
   selectedNodeId,
+  activeEditingNodeId = null,
+  editRelease = null,
   selectedListGroupId = null,
   deferContent = false,
+  perfTraceActive = false,
   onSelect,
   onSelectListGroup,
   onAddShortcut,
   onReorderBodyChild,
 }: Props) {
   const [dragState, setDragState] = useState<OutlineDragState | null>(null)
+  const [virtualScrollTop, setVirtualScrollTop] = useState(0)
+  const [virtualViewportHeight, setVirtualViewportHeight] = useState(0)
+  const [expandedOutlineRowKeys, setExpandedOutlineRowKeys] = useState<Map<string, boolean>>(() => new Map())
+  const outlineBodyRef = useRef<HTMLDivElement | null>(null)
+  const outlineWindowStatsRef = useRef({ flatRowCount: 0, renderedRowCount: 0, virtualized: false })
+  const outlineModelCacheRef = useRef<OutlinePanelModelCache | null>(null)
+  const previousActiveEditingNodeIdRef = useRef<string | null>(null)
+  const consumedEditReleaseTokenRef = useRef<number | null>(null)
+  const outlinePanelModelResult = useMemo<OutlinePanelMeasuredModel | null>(() => {
+    if (deferContent) return null
+    const previousActiveEditingNodeId = previousActiveEditingNodeIdRef.current
+    const consumedEditReleaseToken = consumedEditReleaseTokenRef.current
+    const shouldConsumeEditRelease = Boolean(
+      !activeEditingNodeId &&
+      editRelease &&
+      editRelease.token !== consumedEditReleaseToken,
+    )
+    const startedAt = startWysiwygPerfSpan()
+    const result = buildOutlinePanelModel(doc, outlineModelCacheRef.current, {
+      labelUpdatePolicy: resolveOutlineLabelUpdatePolicy({
+        activeEditingNodeId,
+        previousActiveEditingNodeId,
+        editRelease,
+        consumedEditReleaseToken,
+      }),
+    })
+    const durationMs = Math.max(0, startWysiwygPerfSpan() - startedAt)
+    outlineModelCacheRef.current = result.cache
+    previousActiveEditingNodeIdRef.current = activeEditingNodeId
+    if (shouldConsumeEditRelease && editRelease) consumedEditReleaseTokenRef.current = editRelease.token
+    return {
+      model: result.model,
+      stats: result.stats,
+      startedAt,
+      durationMs,
+    }
+  }, [activeEditingNodeId, deferContent, doc, editRelease])
+
+  useEffect(() => {
+    const element = outlineBodyRef.current
+    if (!element) return
+
+    const updateViewportHeight = () => {
+      const nextHeight = element.clientHeight
+      setVirtualViewportHeight((current) => current === nextHeight ? current : nextHeight)
+    }
+
+    updateViewportHeight()
+
+    if (typeof ResizeObserver === "undefined") return
+
+    const observer = new ResizeObserver(updateViewportHeight)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [deferContent])
+
+  const handleOutlineBodyScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const nextScrollTop = event.currentTarget.scrollTop
+    setVirtualScrollTop((current) => current === nextScrollTop ? current : nextScrollTop)
+  }, [])
+
+  const handleToggleFlatRowExpanded = useCallback((rowKey: string) => {
+    setExpandedOutlineRowKeys((current) => toggleOutlineRowExpanded(current, rowKey))
+  }, [])
+
+  useEffect(() => {
+    if (!perfTraceActive || !outlinePanelModelResult) return
+    const { stats } = outlinePanelModelResult
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "outline-panel-model",
+      startedAt: outlinePanelModelResult.startedAt,
+      durationMs: outlinePanelModelResult.durationMs,
+      nodeId: activeEditingNodeId,
+      active: Boolean(activeEditingNodeId),
+      componentName: "OutlinePanel",
+      source: stats.structureCacheHit ? "structure-cache-hit" : "structure-cache-miss",
+      action: stats.labelUpdatePolicy,
+      outlineStructureCacheHit: stats.structureCacheHit,
+      outlineLabelSnapshotUsed: stats.labelSnapshotUsed,
+      outlineSingleLabelUpdated: stats.singleLabelUpdated,
+      outlineFullLabelRefresh: stats.fullLabelRefresh,
+      outlineLabelNodeCount: stats.labelNodeCount,
+      outlineSectionCount: stats.outlineSectionCount,
+      outlineItemCount: stats.outlineItemCount,
+    })
+  }, [activeEditingNodeId, outlinePanelModelResult, perfTraceActive])
+
+  const handleOutlineProfilerRender = useCallback<ProfilerOnRenderCallback>((
+    id,
+    phase,
+    actualDuration,
+    baseDuration,
+    startTime,
+    commitTime,
+  ) => {
+    const stats = outlinePanelModelResult?.stats
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "outline-panel-react-commit",
+      startedAt: startTime,
+      durationMs: Math.max(0, actualDuration),
+      baseDurationMs: Math.max(0, baseDuration),
+      commitTime,
+      nodeId: activeEditingNodeId,
+      active: Boolean(activeEditingNodeId),
+      componentName: id,
+      source: phase,
+      action: phase,
+      outlineFlatRowCount: outlineWindowStatsRef.current.flatRowCount,
+      outlineRenderedRowCount: outlineWindowStatsRef.current.renderedRowCount,
+      outlineVirtualized: outlineWindowStatsRef.current.virtualized,
+      ...(stats ? {
+        outlineStructureCacheHit: stats.structureCacheHit,
+        outlineLabelSnapshotUsed: stats.labelSnapshotUsed,
+        outlineSingleLabelUpdated: stats.singleLabelUpdated,
+        outlineFullLabelRefresh: stats.fullLabelRefresh,
+        outlineLabelNodeCount: stats.labelNodeCount,
+        outlineSectionCount: stats.outlineSectionCount,
+        outlineItemCount: stats.outlineItemCount,
+      } : {}),
+    })
+  }, [activeEditingNodeId, outlinePanelModelResult])
+
+  const outlinePanelModel = outlinePanelModelResult?.model ?? null
+  const outlineItemCount = outlinePanelModelResult?.stats.outlineItemCount ?? 0
+  const showSectionHeadings = doc.document.sections.length > 1
+  const outlineFlatRows = useMemo(() => {
+    if (!outlinePanelModel || outlineItemCount < OUTLINE_VIRTUALIZATION_MIN_ROW_COUNT) return null
+    return flattenOutlinePanelRows(outlinePanelModel.outlineSections, {
+      showSectionHeadings,
+      expandedRowKeys: expandedOutlineRowKeys,
+    })
+  }, [expandedOutlineRowKeys, outlineItemCount, outlinePanelModel, showSectionHeadings])
+
+  const outlineVisibleWindow = useMemo(() => {
+    if (!outlineFlatRows) return null
+    return resolveOutlineVisibleWindow(outlineFlatRows, {
+      virtualized: virtualViewportHeight > 0,
+      scrollTop: virtualScrollTop,
+      viewportHeight: virtualViewportHeight,
+      overscanRows: OUTLINE_VIRTUALIZATION_OVERSCAN_ROWS,
+    })
+  }, [outlineFlatRows, virtualScrollTop, virtualViewportHeight])
+  outlineWindowStatsRef.current = {
+    flatRowCount: outlineFlatRows?.length ?? 0,
+    renderedRowCount: outlineVisibleWindow?.visibleRows.length ?? 0,
+    virtualized: outlineVisibleWindow?.virtualized ?? false,
+  }
+  const resolveReorderDrop = useCallback((
+    target: OutlineReorderItem,
+    position: OutlineReorderPosition | null,
+  ): OutlineBodyChildReorderDrop => {
+    if (!dragState) return { request: null, blockedReason: null }
+    return resolveOutlineBodyChildReorderDrop(doc, dragState.source, target, position)
+  }, [doc, dragState])
+  const reorderStatusText = outlineReorderBlockedReasonLabel(dragState?.blockedReason ?? null)
 
   if (deferContent) {
-    return (
+    const deferredPanel = (
       <div style={rightRailPanelShell}>
         <RightRailPanelHeader
           title="Outline"
@@ -796,30 +1405,33 @@ function OutlinePanelImpl({
           ) : undefined}
         />
         <div
+          ref={outlineBodyRef}
           data-outline-content-deferred="true"
           style={{ ...rightRailPanelBody, padding: "8px 8px 12px" }}
         />
       </div>
     )
+    return perfTraceActive ? (
+      <Profiler id="outline-panel" onRender={handleOutlineProfilerRender}>
+        {deferredPanel}
+      </Profiler>
+    ) : deferredPanel
   }
 
-  const listGroupState = buildStyleManagerState(doc).listGroups.items
-  const markerTextByParagraphId = new Map(
-    Array.from(resolveListMarkers(doc).entries()).map(([paragraphId, marker]) => [paragraphId, marker.markerText]),
-  )
+  if (!outlinePanelModel) return null
+
+  const { listGroupState, markerTextByParagraphId, outlineSections, labelByNodeId } = outlinePanelModel
   const listGroupContext: OutlineListGroupContext = {
     selectedListGroupId,
     groupsById: new Map(listGroupState.map((group) => [group.id, group])),
     markerTextByParagraphId,
     ...(onSelectListGroup ? { onSelectListGroup } : {}),
   }
-  const outlineSections = buildOutlineModel(doc, {
-    listGroupIds: listGroupState.map((group) => group.id),
-  })
 
   const handleBodyEndDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     if (!dragState || !onReorderBodyChild) return
     if (dragEventTargetElement(event)?.closest("[data-outline-drop-row='true']")) return
+    if (outlineVisibleWindow?.virtualized && !isScrolledToOutlineEnd(event.currentTarget)) return
 
     const lastRow = findLastBodyChildRow(event.currentTarget, dragState)
     if (!lastRow || event.clientY < lastRow.getBoundingClientRect().bottom) return
@@ -828,13 +1440,18 @@ function OutlinePanelImpl({
     if (!targetNodeId) return
 
     event.preventDefault()
-    event.dataTransfer.dropEffect = "move"
     const pointer = dragPointerFromEvent(event) ?? dragState.pointer
     const nextTargetNodeId = targetNodeId === dragState.source.nodeId ? null : targetNodeId
     const nextPosition = nextTargetNodeId ? "after" : null
+    const targetItem = { ...dragState.source, nodeId: targetNodeId }
+    const drop = nextPosition
+      ? resolveOutlineBodyChildReorderDrop(doc, dragState.source, targetItem, nextPosition)
+      : { request: null, blockedReason: null }
+    event.dataTransfer.dropEffect = drop.blockedReason ? "none" : "move"
     if (
       dragState.targetNodeId === nextTargetNodeId &&
       dragState.position === nextPosition &&
+      dragState.blockedReason === drop.blockedReason &&
       dragState.pointer?.x === pointer?.x &&
       dragState.pointer?.y === pointer?.y
     ) return
@@ -842,6 +1459,7 @@ function OutlinePanelImpl({
       ...dragState,
       targetNodeId: nextTargetNodeId,
       position: nextPosition,
+      blockedReason: drop.blockedReason,
       pointer,
     })
   }
@@ -849,6 +1467,7 @@ function OutlinePanelImpl({
   const handleBodyEndDrop = (event: React.DragEvent<HTMLDivElement>) => {
     if (!dragState || !onReorderBodyChild) return
     if (dragEventTargetElement(event)?.closest("[data-outline-drop-row='true']")) return
+    if (outlineVisibleWindow?.virtualized && !isScrolledToOutlineEnd(event.currentTarget)) return
 
     const lastRow = findLastBodyChildRow(event.currentTarget, dragState)
     if (!lastRow || event.clientY < lastRow.getBoundingClientRect().bottom) return
@@ -858,18 +1477,35 @@ function OutlinePanelImpl({
 
     event.preventDefault()
     event.stopPropagation()
-    if (targetNodeId !== dragState.source.nodeId) {
-      onReorderBodyChild({
-        sectionId: dragState.source.sectionId,
-        sourceNodeId: dragState.source.nodeId,
-        targetNodeId,
-        position: "after",
-      })
+    const drop = resolveOutlineBodyChildReorderDrop(
+      doc,
+      dragState.source,
+      { ...dragState.source, nodeId: targetNodeId },
+      "after",
+    )
+    if (drop.request) {
+      onReorderBodyChild(drop.request)
     }
     setDragState(null)
   }
 
-  return (
+  const renderFlatRow = (row: OutlineFlatRow) => (
+    <OutlineFlatRowView
+      row={row}
+      selectedNodeId={selectedNodeId}
+      activeEditingNodeId={activeEditingNodeId}
+      onSelect={onSelect}
+      dragState={dragState}
+      onDragStateChange={setDragState}
+      onReorder={onReorderBodyChild}
+      resolveReorderDrop={resolveReorderDrop}
+      listGroupContext={listGroupContext}
+      labelByNodeId={labelByNodeId}
+      onToggleExpanded={handleToggleFlatRowExpanded}
+    />
+  )
+
+  const panel = (
     <div style={rightRailPanelShell}>
       <RightRailPanelHeader
         title="Outline"
@@ -888,33 +1524,83 @@ function OutlinePanelImpl({
         ) : undefined}
       />
       <div
+        ref={outlineBodyRef}
+        data-outline-windowed={outlineVisibleWindow?.virtualized ? "true" : undefined}
+        data-outline-row-count={outlineFlatRows?.length}
+        data-outline-rendered-row-count={outlineVisibleWindow?.visibleRows.length}
         style={{ ...rightRailPanelBody, padding: "8px 8px 12px" }}
+        onScroll={handleOutlineBodyScroll}
         onDragOver={handleBodyEndDragOver}
         onDrop={handleBodyEndDrop}
       >
-        {outlineSections.map((sectionModel, si) => (
-          <div key={sectionModel.sectionId}>
-            {doc.document.sections.length > 1 && (
-              <div style={{ padding: "6px 8px 4px", fontSize: 10, color: "#9ca3af", fontWeight: 700 }}>
-                Section {si + 1}
-              </div>
-            )}
-            <OutlineItems
-              items={sectionModel.items}
-              depth={0}
-              selectedNodeId={selectedNodeId}
-              onSelect={onSelect}
-              dragState={dragState}
-              onDragStateChange={setDragState}
-              onReorder={onReorderBodyChild}
-              listGroupContext={listGroupContext}
-            />
-          </div>
-        ))}
+        {outlineVisibleWindow ? (
+          outlineVisibleWindow.virtualized ? (
+            <div
+              data-outline-virtual-scroll-spacer="true"
+              style={{ height: outlineVisibleWindow.totalHeight, position: "relative" }}
+            >
+              {outlineVisibleWindow.visibleRows.map(({ row, top }) => (
+                <div
+                  key={row.key}
+                  style={{
+                    position: "absolute",
+                    top,
+                    left: 0,
+                    right: 0,
+                    height: row.height,
+                  }}
+                >
+                  {renderFlatRow(row)}
+                </div>
+              ))}
+            </div>
+          ) : (
+            outlineVisibleWindow.visibleRows.map(({ row }) => (
+              <div key={row.key}>{renderFlatRow(row)}</div>
+            ))
+          )
+        ) : (
+          outlineSections.map((sectionModel, si) => (
+            <div key={sectionModel.sectionId}>
+              {doc.document.sections.length > 1 && (
+                <div style={{ padding: "6px 8px 4px", fontSize: 10, color: "#9ca3af", fontWeight: 700 }}>
+                  Section {si + 1}
+                </div>
+              )}
+              <OutlineItems
+                items={sectionModel.items}
+                depth={0}
+                selectedNodeId={selectedNodeId}
+                activeEditingNodeId={activeEditingNodeId}
+                onSelect={onSelect}
+                dragState={dragState}
+                onDragStateChange={setDragState}
+                onReorder={onReorderBodyChild}
+                resolveReorderDrop={resolveReorderDrop}
+                listGroupContext={listGroupContext}
+                labelByNodeId={labelByNodeId}
+              />
+            </div>
+          ))
+        )}
+      </div>
+      <div
+        data-testid="outline-reorder-status"
+        role="status"
+        aria-live="polite"
+        style={outlineScreenReaderOnly}
+      >
+        {reorderStatusText}
       </div>
       <OutlineDragGhost dragState={dragState} />
     </div>
   )
+
+  return perfTraceActive ? (
+    <Profiler id="outline-panel" onRender={handleOutlineProfilerRender}>
+      {panel}
+    </Profiler>
+  ) : panel
 }
 
 export const OutlinePanel = memo(OutlinePanelImpl)

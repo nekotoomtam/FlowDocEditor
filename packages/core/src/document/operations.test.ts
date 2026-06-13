@@ -32,6 +32,7 @@ import {
   clearParagraphList,
   clearParagraphStyleId,
   deleteTextRunRange,
+  deleteEmptyFlowTableCellParagraph,
   deleteNode,
   detachParagraphStyle,
   disableSectionReservedZoneIfEmpty,
@@ -144,6 +145,29 @@ function makeFlowTableDoc(paragraph: ParagraphNode): DocumentNode {
       [row.id]: row,
       [cell.id]: cell,
       [paragraph.id]: paragraph,
+    },
+  }
+  return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
+}
+
+function makeFlowTableDocWithParagraphs(paragraphs: ParagraphNode[]): DocumentNode {
+  const cell: FlowTableCellNode = {
+    id: "flow-cell",
+    type: "flow-table-cell",
+    props: {},
+    childIds: paragraphs.map((paragraph) => paragraph.id),
+  }
+  const row: FlowTableRowNode = { id: "flow-row", type: "flow-table-row", props: {}, cellIds: [cell.id] }
+  const table: FlowTableNode = {
+    id: "flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(200) }],
+    rowIds: [row.id],
+    nodes: {
+      [row.id]: row,
+      [cell.id]: cell,
+      ...Object.fromEntries(paragraphs.map((paragraph) => [paragraph.id, paragraph])),
     },
   }
   return makeDoc({ "flow-table": table as unknown as LayoutNode }, ["flow-table"])
@@ -450,6 +474,41 @@ describe("section page settings operations", () => {
 })
 
 describe("body child reorder operations", () => {
+  const reorderListStyle: ListStyleDefinition = {
+    id: "outline-list-style",
+    levels: [0, 1, 2].map((level) => ({
+      level,
+      format: "decimal",
+      pattern: `%${level + 1}.`,
+      startAt: 1,
+      markerIndent: pt(level * 18),
+      bodyIndent: pt((level + 1) * 18),
+    })),
+  }
+
+  function makeListDoc(nodes: Record<string, LayoutNode>, childIds: string[]): DocumentNode {
+    const doc = makeDoc(nodes, childIds)
+    return {
+      ...doc,
+      document: {
+        ...doc.document,
+        listStyles: { [reorderListStyle.id]: reorderListStyle },
+        listInstances: { "outline-list": { id: "outline-list", styleId: reorderListStyle.id } },
+      },
+    }
+  }
+
+  function makeListParagraph(id: string, level: number): ParagraphNode {
+    const paragraph = makeParagraph(id, [{ id: `${id}-text`, type: "text", text: id }])
+    return {
+      ...paragraph,
+      props: {
+        ...paragraph.props,
+        list: { instanceId: "outline-list", level, itemId: `${id}-item` },
+      },
+    }
+  }
+
   it("moves a direct body child before or after another body child", () => {
     const p1 = makeParagraph("p1", [{ id: "t1", type: "text", text: "One" }])
     const p2 = makeParagraph("p2", [{ id: "t2", type: "text", text: "Two" }])
@@ -479,6 +538,35 @@ describe("body child reorder operations", () => {
     expect(reorderBodyChild(doc, "section", "nested", "p1", "before")).toBe(doc)
     expect(reorderBodyChild(doc, "missing-section", "row", "p1", "before")).toBe(doc)
     expect(reorderBodyChild(doc, "section", "row", "missing-target", "after")).toBe(doc)
+  })
+
+  it("refuses list reorders that would create a level jump", () => {
+    const p0 = makeListParagraph("p0", 0)
+    const p1 = makeListParagraph("p1", 1)
+    const p2 = makeListParagraph("p2", 2)
+    const doc = makeListDoc({ p0, p1, p2 }, ["p0", "p1", "p2"])
+
+    const moved = reorderBodyChild(doc, "section", "p1", "p2", "after")
+
+    expect(moved).toBe(doc)
+    assertDocument(doc)
+  })
+
+  it("allows list reorders that preserve the authored hierarchy", () => {
+    const p0 = makeListParagraph("p0", 0)
+    const p1 = makeListParagraph("p1", 1)
+    const p2 = makeListParagraph("p2", 2)
+    const q0 = makeListParagraph("q0", 0)
+    const q1 = makeListParagraph("q1", 1)
+    const q2 = makeListParagraph("q2", 2)
+    const doc = makeListDoc({ p0, p1, p2, q0, q1, q2 }, ["p0", "p1", "p2", "q0", "q1", "q2"])
+
+    const moved = reorderBodyChild(doc, "section", "p2", "q2", "after")
+
+    expect(moved.document.sections[0].nodes.body).toMatchObject({
+      childIds: ["p0", "p1", "q0", "q1", "q2", "p2"],
+    })
+    assertDocument(moved)
   })
 })
 
@@ -847,6 +935,40 @@ describe("paragraph list operations", () => {
     expect(second.props.paragraphStyleId).toBe("custom.body")
     expect(second.props.styleOverrides).toEqual({ fontSize: pt(16) })
     expect(second.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: result.newNodeId })
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("splits a listed paragraph inside a flow-table cell without moving cell children", () => {
+    const p = makeParagraph("cell-p", [
+      { id: "cell-t1", type: "text", text: "Cell ", style: { fontWeight: "bold" } },
+      { id: "cell-t2", type: "text", text: "item", style: { fontStyle: "italic" } },
+    ])
+    let doc = withTorListDefinitions(makeFlowTableDoc(p))
+    doc = applyParagraphList(doc, "cell-p", {
+      instanceId: "tor-main",
+      level: 0,
+      itemId: "cell.item.one",
+    })
+
+    const result = splitListItemAtIndex(doc, "cell-p", "Cell ".length, { itemId: "cell.item.two" })
+    const table = getFlowTable(result.doc)
+    const first = getParagraph(result.doc, "cell-p")
+    const second = getParagraph(result.doc, result.newNodeId)
+
+    expect(result.newNodeId).toBeTruthy()
+    expect(result.doc.document.sections[0].nodes[result.newNodeId]).toBeUndefined()
+    expect(result.doc.document.sections[0].nodes.body?.type === "body" ? result.doc.document.sections[0].nodes.body.childIds : []).toEqual(["flow-table"])
+    expect(flowTableCellParagraphTexts(table, "flow-cell")).toEqual(["Cell ", "item"])
+    expect(textRunSummary(first)).toEqual([
+      { type: "text", text: "Cell ", style: { fontWeight: "bold" } },
+    ])
+    expect(textRunSummary(second)).toEqual([
+      { type: "text", text: "item", style: { fontStyle: "italic" } },
+    ])
+    expect(first.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: "cell.item.one" })
+    expect(second.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: "cell.item.two" })
+    expect(resolveListMarkers(result.doc).get("cell-p")?.markerText).toBe("1.")
+    expect(resolveListMarkers(result.doc).get(result.newNodeId)?.markerText).toBe("2.")
     expect(() => assertDocument(result.doc)).not.toThrow()
   })
 
@@ -1991,6 +2113,28 @@ describe("paragraph text operations", () => {
     expect(() => assertDocument(result.doc)).not.toThrow()
   })
 
+  it("does not reuse a preallocated split paragraph id that collides inside a flow-table", () => {
+    const cellParagraph = makeParagraph("cell-existing", [
+      { id: "cell-t", type: "text", text: "Existing cell paragraph" },
+    ])
+    const result = splitParagraphAtIndex(
+      makeFlowTableDoc(cellParagraph),
+      "cell-existing",
+      "Existing ".length,
+      { newNodeId: "cell-existing" },
+    )
+    const table = getFlowTable(result.doc)
+
+    expect(result.newNodeId).not.toBe("cell-existing")
+    expect(table.nodes["cell-existing"]).toBeDefined()
+    expect(table.nodes[result.newNodeId]?.type).toBe("paragraph")
+    expect(flowTableCellParagraphTexts(table, "flow-cell")).toEqual([
+      "Existing ",
+      "cell paragraph",
+    ])
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
   it("transfers outer paragraph spacing across a plain text split", () => {
     const p = {
       ...makeParagraph("p1", [{ id: "t1", type: "text", text: "Hello world" }]),
@@ -2046,6 +2190,54 @@ describe("paragraph text operations", () => {
     second.props.styleOverrides!.fontSize!.value = 99
     expect(first.props.styleOverrides).toEqual({ fontSize: pt(16) })
     expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("splits a plain text paragraph inside a flow-table cell without moving it to body flow", () => {
+    const p = makeParagraph("cell-p", [
+      { id: "cell-t1", type: "text", text: "Cell " },
+      { id: "cell-t2", type: "text", text: "paragraph" },
+    ])
+    const result = splitParagraphAtIndex(makeFlowTableDoc(p), "cell-p", "Cell ".length)
+    const section = result.doc.document.sections[0]
+    const table = getFlowTable(result.doc)
+
+    expect(result.newNodeId).toBeTruthy()
+    expect(section.nodes[result.newNodeId]).toBeUndefined()
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["flow-table"])
+    expect(flowTableCellParagraphTexts(table, "flow-cell")).toEqual(["Cell ", "paragraph"])
+    expect(table.nodes[result.newNodeId]?.type).toBe("paragraph")
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("deletes an empty flow-table cell paragraph when a previous paragraph remains in the cell", () => {
+    const previous = makeParagraph("cell-p1", [{ id: "cell-t1", type: "text", text: "Previous" }])
+    const empty = makeParagraph("cell-p2", [{ id: "cell-t2", type: "text", text: "" }])
+    const doc = makeFlowTableDocWithParagraphs([previous, empty])
+    const result = deleteEmptyFlowTableCellParagraph(doc, "cell-p2")
+
+    expect(result).not.toBeNull()
+    if (!result) return
+    const table = getFlowTable(result.doc)
+
+    expect(result.prevNodeId).toBe("cell-p1")
+    expect(result.caretIndex).toBe("Previous".length)
+    expect(table.nodes["cell-p2"]).toBeUndefined()
+    expect(flowTableCellParagraphTexts(table, "flow-cell")).toEqual(["Previous"])
+    expect(result.doc.document.sections[0].nodes["cell-p2"]).toBeUndefined()
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("does not delete the only paragraph in a flow-table cell", () => {
+    const empty = makeParagraph("cell-p1", [{ id: "cell-t1", type: "text", text: "" }])
+
+    expect(deleteEmptyFlowTableCellParagraph(makeFlowTableDoc(empty), "cell-p1")).toBeNull()
+  })
+
+  it("does not delete non-empty flow-table cell paragraphs", () => {
+    const previous = makeParagraph("cell-p1", [{ id: "cell-t1", type: "text", text: "Previous" }])
+    const current = makeParagraph("cell-p2", [{ id: "cell-t2", type: "text", text: "Current" }])
+
+    expect(deleteEmptyFlowTableCellParagraph(makeFlowTableDocWithParagraphs([previous, current]), "cell-p2")).toBeNull()
   })
 
   it("overrides style-backed spacing at the new split boundary", () => {
@@ -2142,6 +2334,30 @@ describe("paragraph text operations", () => {
     ])
     expect(textRunSummary(second)).toEqual([
       { type: "text", text: "rld", style: { fontStyle: "italic" } },
+    ])
+    expect(() => assertDocument(result.doc)).not.toThrow()
+  })
+
+  it("splits a styled text-run paragraph inside a flow-table cell", () => {
+    const p = makeParagraph("cell-p", [
+      { id: "cell-t1", type: "text", text: "Cell ", style: { fontWeight: "bold" } },
+      { id: "cell-t2", type: "text", text: "content", style: { fontStyle: "italic" } },
+    ])
+    const result = splitTextRunParagraphAtIndex(makeFlowTableDoc(p), "cell-p", "Cell co".length)
+    const table = getFlowTable(result.doc)
+    const first = table.nodes["cell-p"]
+    const second = table.nodes[result.newNodeId]
+
+    expect(first?.type).toBe("paragraph")
+    expect(second?.type).toBe("paragraph")
+    if (first?.type !== "paragraph" || second?.type !== "paragraph") return
+    expect(flowTableCellParagraphTexts(table, "flow-cell")).toEqual(["Cell co", "ntent"])
+    expect(textRunSummary(first)).toEqual([
+      { type: "text", text: "Cell ", style: { fontWeight: "bold" } },
+      { type: "text", text: "co", style: { fontStyle: "italic" } },
+    ])
+    expect(textRunSummary(second)).toEqual([
+      { type: "text", text: "ntent", style: { fontStyle: "italic" } },
     ])
     expect(() => assertDocument(result.doc)).not.toThrow()
   })

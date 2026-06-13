@@ -12,6 +12,9 @@ const DEFAULT_PAGE_INDEX = 14
 const DEFAULT_MAX_CLICK_SWITCH_MS = 2000
 const DEFAULT_MAX_EXIT_MS = 2000
 const DEFAULT_MAX_RESPONSIVE_FINALIZE_MS = 1000
+const DEFAULT_MAX_PREVIEW_SETTLE_SUPERSEDES = 10
+const DEFAULT_MAX_UNDO_FULL_WAIT_MS = 8000
+const MAXIMUM_UPDATE_DEPTH_PATTERN = /Maximum update depth exceeded/i
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, "..")
@@ -25,10 +28,50 @@ const targetPageIndex = Number(process.env.STRESS_PAGE_INDEX ?? process.env.PROB
 const maxClickSwitchMs = Number(process.env.MAX_CLICK_SWITCH_MS ?? DEFAULT_MAX_CLICK_SWITCH_MS)
 const maxExitMs = Number(process.env.MAX_EXIT_MS ?? DEFAULT_MAX_EXIT_MS)
 const maxResponsiveFinalizeMs = Number(process.env.MAX_RESPONSIVE_FINALIZE_MS ?? DEFAULT_MAX_RESPONSIVE_FINALIZE_MS)
+const maxPreviewSettleSupersedes = readIntegerOption(
+  "max-preview-settle-supersedes",
+  ["STRESS_MAX_PREVIEW_SETTLE_SUPERSEDES", "MAX_PREVIEW_SETTLE_SUPERSEDES"],
+  DEFAULT_MAX_PREVIEW_SETTLE_SUPERSEDES,
+  0,
+)
+const maxUndoFullWaitMs = readIntegerOption(
+  "max-undo-full-wait-ms",
+  ["STRESS_MAX_UNDO_FULL_WAIT_MS", "MAX_UNDO_FULL_WAIT_MS"],
+  DEFAULT_MAX_UNDO_FULL_WAIT_MS,
+  1,
+)
 const platformShortcut = process.platform === "darwin" ? "Meta" : "Control"
+const repeatCount = readIntegerOption("repeat", ["STRESS_REPEAT", "SMOKE_REPEAT"], 1, 1)
+const warmupCount = readIntegerOption("warmup", ["STRESS_WARMUP", "SMOKE_WARMUP"], 0, 0)
+const repeatChild = process.env.STRESS_REPEAT_CHILD === "1"
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
+}
+
+function readCliOption(name) {
+  const exact = `--${name}`
+  const prefix = `${exact}=`
+  for (let index = 2; index < process.argv.length; index += 1) {
+    const arg = process.argv[index]
+    if (arg === exact) return process.argv[index + 1]
+    if (arg.startsWith(prefix)) return arg.slice(prefix.length)
+  }
+  return null
+}
+
+function readIntegerOption(name, envNames, defaultValue, minValue) {
+  const envValue = envNames
+    .map((envName) => process.env[envName])
+    .find((value) => value != null && value !== "")
+  const rawValue = readCliOption(name) ?? envValue
+  if (rawValue == null || rawValue === "") return defaultValue
+  const value = Number(rawValue)
+  assert(
+    Number.isInteger(value) && value >= minValue,
+    `${name} must be an integer >= ${minValue}; received ${JSON.stringify(rawValue)}`,
+  )
+  return value
 }
 
 function now() {
@@ -125,6 +168,25 @@ async function waitForDoubleAnimationFrame(page) {
   await page.evaluate(() => new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve))
   }))
+}
+
+async function readPreviewLayoutStatus(page) {
+  return await page.evaluate(() => (
+    document.querySelector('[data-testid="editor-shell"]')?.getAttribute("data-preview-layout-status") ?? null
+  ))
+}
+
+async function waitForPreviewLayoutFull(page, label, timeoutMs) {
+  const startedAt = now()
+  try {
+    await page.waitForFunction(() => (
+      document.querySelector('[data-testid="editor-shell"]')?.getAttribute("data-preview-layout-status") === "full"
+    ), null, { timeout: timeoutMs })
+  } catch (error) {
+    const status = await readPreviewLayoutStatus(page)
+    throw new Error(`${label}: preview layout did not settle to full within ${timeoutMs}ms; last status=${status}`)
+  }
+  return now() - startedAt
 }
 
 async function waitForReadyEditor(page) {
@@ -316,6 +378,30 @@ function summarizeDurations(events, kind) {
   }
 }
 
+function summarizeConsoleErrorSignatures(errors) {
+  return {
+    total: errors.length,
+    maximumUpdateDepth: errors.filter((error) => MAXIMUM_UPDATE_DEPTH_PATTERN.test(error)).length,
+  }
+}
+
+function summarizePreviewSettleRuntimeEvents(events) {
+  const previewEvents = events.filter((event) => event.kind === "flowdoc-preview-settle-runtime")
+  return {
+    total: previewEvents.length,
+    superseded: previewEvents.filter((event) => event.action === "runtime-superseded").length,
+    scheduled: previewEvents.filter((event) => event.action === "runtime-scheduled").length,
+    started: previewEvents.filter((event) => event.action === "runtime-started").length,
+    completed: previewEvents.filter((event) => event.action === "runtime-completed").length,
+    applied: previewEvents.filter((event) => event.action === "runtime-applied").length,
+    ignoredStale: previewEvents.filter((event) => event.action === "runtime-ignored-stale").length,
+    failed: previewEvents.filter((event) => event.action === "runtime-failed").length,
+    maxSupersededDurationMs: previewEvents
+      .filter((event) => event.action === "runtime-superseded" && Number.isFinite(event.durationMs))
+      .reduce((max, event) => Math.max(max, event.durationMs), 0),
+  }
+}
+
 function summarizeLifecyclePerf(state) {
   const events = state.perfEvents
   return {
@@ -327,6 +413,8 @@ function summarizeLifecyclePerf(state) {
     flowdocIslandParentSync: summarizeDurations(events, "flowdoc-island-parent-sync"),
     flowdocIslandBlurHandoff: summarizeDurations(events, "flowdoc-island-blur-handoff"),
     browserPreviewPagination: summarizeDurations(events, "browser-preview-pagination"),
+    previewSettleRuntime: summarizeDurations(events, "flowdoc-preview-settle-runtime"),
+    previewSettle: summarizePreviewSettleRuntimeEvents(events),
     countByKind: events.reduce((acc, event) => {
       acc[event.kind] = (acc[event.kind] ?? 0) + 1
       return acc
@@ -356,6 +444,14 @@ function assertResponsivePerf(state, label) {
   assert(
     state.perfEvents.every((event) => event.kind !== "inline-edit-exit-pagination"),
     `${label}: synchronous inline-edit-exit-pagination event was recorded`,
+  )
+}
+
+function assertPreviewSettleSupersedeBurst(state, label) {
+  const summary = summarizePreviewSettleRuntimeEvents(state.perfEvents)
+  assert(
+    summary.superseded <= maxPreviewSettleSupersedes,
+    `${label}: preview-settle supersede burst exceeded ${maxPreviewSettleSupersedes} (${summary.superseded})`,
   )
 }
 
@@ -424,6 +520,7 @@ async function runSmoke() {
     assert(clickSwitchMs <= maxClickSwitchMs, `Click switch took ${clickSwitchMs}ms, expected <= ${maxClickSwitchMs}ms`)
     assertNoBlocking(clickSwitchState, "click-switch")
     assertResponsivePerf(clickSwitchState, "click-switch")
+    assertPreviewSettleSupersedeBurst(clickSwitchState, "click-switch")
 
     await clearPerfEvents(page)
     await startLayoutMonitor(page)
@@ -436,6 +533,7 @@ async function runSmoke() {
     assert(exitMs <= maxExitMs, `WYSIWYG exit took ${exitMs}ms, expected <= ${maxExitMs}ms`)
     assertNoBlocking(exitState, "exit")
     assertResponsivePerf(exitState, "exit")
+    assertPreviewSettleSupersedeBurst(exitState, "exit")
 
     await page.keyboard.press("Delete")
     await page.waitForSelector('button[title="Undo (Ctrl+Z)"]:not([disabled])', { timeout: 10000 })
@@ -445,14 +543,29 @@ async function runSmoke() {
     await startLayoutMonitor(page)
     const undoStartedAt = now()
     await page.keyboard.press(`${platformShortcut}+Z`)
-    await page.waitForTimeout(1000)
+    await page.waitForFunction((nodeId) => (
+      document.querySelector(`[data-testid="editor-fragment"][data-node-id="${CSS.escape(nodeId)}"]`) !== null
+    ), secondTarget.nodeId, { timeout: 10000 })
+    await page.waitForFunction(() => (
+      document.querySelector('button[title="Redo (Ctrl+Y)"]')?.hasAttribute("disabled") === false
+    ), null, { timeout: 10000 })
+    const undoRestoreMs = now() - undoStartedAt
+    const undoStatusBeforeFullWait = await readPreviewLayoutStatus(page)
+    const undoFullWaitMs = await waitForPreviewLayoutFull(page, "undo", maxUndoFullWaitMs)
     const undoState = await readSmokeState(page, secondTarget.nodeId)
     assertNoBlocking(undoState, "undo")
+    assertPreviewSettleSupersedeBurst(undoState, "undo")
+    assert(undoState.shell.status === "full", `Undo preview layout status is ${undoState.shell.status}, expected full`)
     assert(undoState.targetFragmentPresent, "Undo did not restore the deleted paragraph fragment")
     assert(undoState.redoDisabled === false, "Redo button did not become enabled after undo")
 
+    const consoleErrorSignatures = summarizeConsoleErrorSignatures(consoleErrors)
     assert(pageErrors.length === 0, `Page errors:\n${pageErrors.join("\n")}`)
-    assert(consoleErrors.length === 0, `Console errors:\n${consoleErrors.join("\n")}`)
+    assert(consoleErrors.length === 0, [
+      "Console errors:",
+      consoleErrors.join("\n"),
+      `Console error signatures: ${JSON.stringify(consoleErrorSignatures)}`,
+    ].join("\n"))
 
     const summary = {
       ok: true,
@@ -469,6 +582,14 @@ async function runSmoke() {
       clickSwitchMs,
       exitMs,
       undoObservedMs: now() - undoStartedAt,
+      thresholds: {
+        maxClickSwitchMs,
+        maxExitMs,
+        maxResponsiveFinalizeMs,
+        maxPreviewSettleSupersedes,
+        maxUndoFullWaitMs,
+      },
+      consoleErrorSignatures,
       clickSwitchStartEvents: clickSwitchState.perfEvents.filter((event) => event.kind === "inline-edit-start"),
       clickSwitchFinalizeEvents: clickSwitchState.perfEvents.filter((event) => event.kind === "inline-edit-finalize"),
       exitStartEvents: exitState.perfEvents.filter((event) => event.kind === "inline-edit-start"),
@@ -476,6 +597,9 @@ async function runSmoke() {
       clickSwitchPerf: summarizeLifecyclePerf(clickSwitchState),
       exitPerf: summarizeLifecyclePerf(exitState),
       undoPerf: summarizeLifecyclePerf(undoState),
+      undoRestoreMs,
+      undoFullWaitMs,
+      undoStatusBeforeFullWait,
       undoStatus: undoState.shell.status,
     }
 
@@ -486,7 +610,118 @@ async function runSmoke() {
   }
 }
 
-runSmoke().catch((error) => {
+async function runChildStressSmoke(label) {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      STRESS_REPEAT: "1",
+      STRESS_WARMUP: "0",
+      STRESS_REPEAT_CHILD: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  })
+  const output = []
+  child.stdout.on("data", (chunk) => {
+    const text = String(chunk)
+    output.push(text)
+    if (process.env.SMOKE_VERBOSE === "1") process.stdout.write(text)
+  })
+  child.stderr.on("data", (chunk) => {
+    const text = String(chunk)
+    output.push(text)
+    if (process.env.SMOKE_VERBOSE === "1") process.stderr.write(text)
+  })
+  const exitCode = await new Promise((resolve) => {
+    child.once("close", (code) => resolve(code ?? 1))
+  })
+  if (exitCode !== 0) {
+    throw new Error([
+      `${label} failed with exit code ${exitCode}.`,
+      output.join("").trim(),
+    ].filter(Boolean).join("\n"))
+  }
+  return parseSmokeSummary(output.join(""), label)
+}
+
+function parseSmokeSummary(output, label) {
+  const trimmed = output.trim()
+  if (!trimmed) {
+    throw new Error(`${label} produced no JSON summary.`)
+  }
+  try {
+    return JSON.parse(trimmed)
+  } catch (error) {
+    throw new Error([
+      `${label} produced an unreadable JSON summary: ${error.message}`,
+      trimmed,
+    ].join("\n"))
+  }
+}
+
+function summarizeChildSample(summary) {
+  const phaseSummaries = {
+    clickSwitch: summary.clickSwitchPerf?.previewSettle ?? null,
+    exit: summary.exitPerf?.previewSettle ?? null,
+    undo: summary.undoPerf?.previewSettle ?? null,
+  }
+  return {
+    loadMs: summary.loadMs ?? null,
+    clickSwitchMs: summary.clickSwitchMs ?? null,
+    exitMs: summary.exitMs ?? null,
+    undoRestoreMs: summary.undoRestoreMs ?? null,
+    undoFullWaitMs: summary.undoFullWaitMs ?? null,
+    undoObservedMs: summary.undoObservedMs ?? null,
+    consoleErrorSignatures: summary.consoleErrorSignatures ?? { total: null, maximumUpdateDepth: null },
+    previewSettleSupersedes: Object.fromEntries(Object.entries(phaseSummaries).map(([phase, phaseSummary]) => [
+      phase,
+      phaseSummary?.superseded ?? null,
+    ])),
+    previewSettleTotals: Object.fromEntries(Object.entries(phaseSummaries).map(([phase, phaseSummary]) => [
+      phase,
+      phaseSummary?.total ?? null,
+    ])),
+    undoStatusBeforeFullWait: summary.undoStatusBeforeFullWait ?? null,
+    undoStatus: summary.undoStatus ?? null,
+  }
+}
+
+async function runRepeatedSmoke() {
+  const samples = []
+  const totalSamples = warmupCount + repeatCount
+  for (let index = 0; index < totalSamples; index += 1) {
+    const warmup = index < warmupCount
+    const sampleIndex = warmup ? index + 1 : index - warmupCount + 1
+    const label = warmup
+      ? `warmup ${sampleIndex}/${warmupCount}`
+      : `sample ${sampleIndex}/${repeatCount}`
+    const startedAt = now()
+    const childSummary = await runChildStressSmoke(label)
+    samples.push({
+      label,
+      warmup,
+      durationMs: now() - startedAt,
+      summary: summarizeChildSample(childSummary),
+    })
+  }
+
+  console.log(JSON.stringify({
+    ok: true,
+    browser: smokeBrowserLabel(smokeBrowser),
+    stressFile: path.relative(repoRoot, stressFilePath),
+    targetPageIndex,
+    repeat: repeatCount,
+    warmup: warmupCount,
+    samples,
+  }, null, 2))
+}
+
+const runPromise = !repeatChild && (repeatCount > 1 || warmupCount > 0)
+  ? runRepeatedSmoke()
+  : runSmoke()
+
+runPromise.catch((error) => {
   console.error(error)
   process.exit(1)
 })

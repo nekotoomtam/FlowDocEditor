@@ -36,6 +36,7 @@ export const EditorCanvasStructuralIslandWrapper = memo(function EditorCanvasStr
           fragment={flowdocDraftEditorIslandConfig.fragment}
           pageKey={flowdocDraftEditorIslandConfig.pageKey}
           pages={flowdocDraftEditorIslandConfig.pages}
+          isTableCellParagraph={flowdocDraftEditorIslandConfig.isTableCellParagraph}
           onStructuralRefocusPainted={handleOptimisticStructuralRefocusPainted}
           structuralRefocusStartedAt={optimisticStructuralRefocusPaint?.nodeId === flowdocDraftEditorIslandConfig.nodeId
             ? optimisticStructuralRefocusPaint.startedAt

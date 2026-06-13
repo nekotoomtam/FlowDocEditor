@@ -11,6 +11,7 @@ import {
   assertDocument,
   clearParagraphStyleId,
   createDefaultDocument,
+  deleteEmptyFlowTableCellParagraph,
   deleteNode,
   detachParagraphStyle,
   duplicateNode,
@@ -157,6 +158,7 @@ export type EditorAction =
   | { type: "CLEAR_SPLIT_NODE_ID" }
   | { type: "MERGE_PARAGRAPH"; nodeId: string; text?: string; history?: HistoryEntry; precomputed?: PrecomputedMergeParagraphResult; precomputedDocValidation?: PrecomputedDocValidation; paginated?: PaginatedDocument; isOptimistic?: boolean }
   | { type: "CLEAR_MERGE_RESULT" }
+  | { type: "DELETE_EMPTY_TABLE_CELL_PARAGRAPH"; nodeId: string; text?: string; history?: HistoryEntry; paginated?: PaginatedDocument }
   | { type: "EXIT_LIST_ITEM"; nodeId: string; text?: string; history?: HistoryEntry }
   | { type: "CLEAR_LIST_EXIT_NODE_ID" }
   | { type: "CHANGE_LIST_ITEM_LEVEL"; nodeId: string; direction: ListLevelChangeDirection; text?: string; caretIndex?: number | null; history?: HistoryEntry; refocus?: boolean }
@@ -894,6 +896,25 @@ export function reducer(state: EditorState, action: EditorAction): EditorState {
         active: true,
       })
       return finalState
+    }
+    case "DELETE_EMPTY_TABLE_CELL_PARAGRAPH": {
+      let sourceDoc = state.doc
+      if (action.text !== undefined) {
+        sourceDoc = replaceEditableParagraphTextInDocument(state.doc, action.nodeId, action.text)
+      }
+      const result = deleteEmptyFlowTableCellParagraph(sourceDoc, action.nodeId)
+      if (!result) return state
+      const nextState = pushDoc(state, result.doc, action.history)
+      return {
+        ...nextState,
+        paginated: action.paginated ?? nextState.paginated,
+        selectedNodeId: result.prevNodeId,
+        selectionAnchorNodeId: result.prevNodeId,
+        mergeResult: {
+          prevNodeId: result.prevNodeId,
+          caretIndex: result.caretIndex,
+        },
+      }
     }
     case "CLEAR_MERGE_RESULT":
       return { ...state, mergeResult: null }

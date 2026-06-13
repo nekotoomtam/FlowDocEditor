@@ -75,6 +75,7 @@ import {
   type WysiwygTextSelection,
   type WysiwygLocalDraftSnapshot,
 } from "./useWysiwygTextSession"
+import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import { hasPlatformShortcutModifier, normalizeShortcutKey } from "./keyboardShortcuts"
 import {
   WYSIWYG_ISLAND_REACT_LIVE_ATTRS_ENABLED,
@@ -96,6 +97,7 @@ import {
   classifyWysiwygDraftIslandSurfaceRenderTelemetry,
   type WysiwygDraftIslandSurfaceRenderTraceState,
 } from "./wysiwygDraftIslandSurfaceRenderTelemetry"
+import { renderListMarker } from "./WysiwygTextRenderPrimitives"
 import {
   classifyWysiwygTextReflow,
   shouldPatchPlainParagraphBoundaryHeightPreview,
@@ -130,6 +132,7 @@ interface FlowdocDraftEditorIslandRootProps {
   fragment: PageFragment | null
   pageKey: string | null
   pages?: PaginatedPage[] | null
+  isTableCellParagraph?: boolean
   scale: number
   textMeasurer: TextMeasurer
   draftText: string | null
@@ -144,6 +147,9 @@ interface FlowdocDraftEditorIslandRootProps {
   onEndEdit: (nodeId: string, reason?: "blur" | "keyboard") => void
   onSplitParagraph?: (nodeId: string, splitIndex: number, text?: string) => void
   onMergeParagraph?: (nodeId: string, text?: string) => void
+  onDeleteEmptyTableCellParagraph?: (nodeId: string, text?: string) => boolean
+  onCanChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection) => boolean
+  onChangeListItemLevel?: (nodeId: string, direction: ListLevelChangeDirection, text?: string, caretIndex?: number | null) => void
   onRequestUndo?: () => void
   onCompositionChange?: (nodeId: string, isComposing: boolean) => void
   structuralRefocusStartedAt?: number | null
@@ -378,6 +384,7 @@ function DraftIslandVisualLines({
       onRender={handleVisualLinesRender}
     >
       <g data-wysiwyg-flowdoc-draft-lines="true" pointerEvents="none">
+        {renderListMarker(surfaceFragment, renderProps, surfaceKey, 1, null)}
         {draftLines.map((line, index) => renderDraftLine({
           line,
           index,
@@ -1175,6 +1182,21 @@ function collapsedSelection(caretOffset: number | null): WysiwygTextSelection | 
   return { anchorOffset: caretOffset, focusOffset: caretOffset }
 }
 
+export type TableCellBoundaryBackspaceReason =
+  | "empty-table-cell-paragraph-delete"
+  | "empty-table-cell-paragraph-noop"
+  | "table-cell-start-boundary-noop"
+
+export function resolveTableCellBoundaryBackspaceReason(
+  textLength: number,
+  action: "delete" | "noop" = "noop",
+): TableCellBoundaryBackspaceReason {
+  if (textLength !== 0) return "table-cell-start-boundary-noop"
+  return action === "delete"
+    ? "empty-table-cell-paragraph-delete"
+    : "empty-table-cell-paragraph-noop"
+}
+
 function draftSelectionRange(current: DraftIslandState): { start: number; end: number; isCollapsed: boolean } {
   const caretOffset = clampWysiwygTextOffset(current.text, current.caretOffset) ?? current.text.length
   const anchorOffset = clampWysiwygTextOffset(current.text, current.selection?.anchorOffset) ?? caretOffset
@@ -1238,6 +1260,15 @@ function createDraftIslandState(input: {
     selection: input.selection ?? collapsedSelection(caretOffset),
     revision: input.revision ?? 0,
   }
+}
+
+function draftIslandStateMatches(current: DraftIslandState | null, next: DraftIslandState): boolean {
+  return (
+    current?.nodeId === next.nodeId &&
+    current.text === next.text &&
+    current.caretOffset === next.caretOffset &&
+    areWysiwygTextSelectionsEqual(current.selection, next.selection)
+  )
 }
 
 export function shouldReportDraftIslandHeightPreview(input: {
@@ -1327,6 +1358,7 @@ export function areDraftIslandRuntimePropsEqual(
     previous.fragment === next.fragment &&
     previous.pageKey === next.pageKey &&
     previous.pages === next.pages &&
+    previous.isTableCellParagraph === next.isTableCellParagraph &&
     previous.scale === next.scale &&
     previous.textMeasurer === next.textMeasurer &&
     previous.draftText === next.draftText &&
@@ -1341,6 +1373,9 @@ export function areDraftIslandRuntimePropsEqual(
     previous.onEndEdit === next.onEndEdit &&
     previous.onSplitParagraph === next.onSplitParagraph &&
     previous.onMergeParagraph === next.onMergeParagraph &&
+    previous.onDeleteEmptyTableCellParagraph === next.onDeleteEmptyTableCellParagraph &&
+    previous.onCanChangeListItemLevel === next.onCanChangeListItemLevel &&
+    previous.onChangeListItemLevel === next.onChangeListItemLevel &&
     previous.onRequestUndo === next.onRequestUndo &&
     previous.onCompositionChange === next.onCompositionChange &&
     previous.structuralRefocusStartedAt === next.structuralRefocusStartedAt &&
@@ -1356,6 +1391,7 @@ function FlowdocDraftEditorIslandRuntime({
   fragment,
   pageKey,
   pages,
+  isTableCellParagraph = false,
   scale,
   textMeasurer,
   draftText,
@@ -1370,6 +1406,9 @@ function FlowdocDraftEditorIslandRuntime({
   onEndEdit,
   onSplitParagraph,
   onMergeParagraph,
+  onDeleteEmptyTableCellParagraph,
+  onCanChangeListItemLevel,
+  onChangeListItemLevel,
   onRequestUndo,
   onCompositionChange,
   structuralRefocusStartedAt,
@@ -1380,12 +1419,22 @@ function FlowdocDraftEditorIslandRuntime({
   const resolvedDraftText = draftStoreSession ? draftStoreSession.text : draftText
   const resolvedCaretOffset = draftStoreSession ? draftStoreSession.caretIndex : caretOffset
   const resolvedSelection = draftStoreSession ? draftStoreSession.selection : selection
+  const isListItem = paragraph?.props?.list != null
+  const initialDraftState = active && nodeId && paragraph
+    ? createDraftIslandState({
+        nodeId,
+        paragraph,
+        draftText: resolvedDraftText,
+        caretOffset: resolvedCaretOffset,
+        selection: resolvedSelection,
+      })
+    : null
   const inputBridgeRef = useRef<HTMLTextAreaElement | null>(null)
   const lastBeforeInputChangeRef = useRef<{ insertedText: string; nextText: string } | null>(null)
   const lastBeforeInputClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputBridgeEchoSuppressedRef = useRef(false)
   const inputBridgeEchoSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const latestDraftRef = useRef<DraftIslandState | null>(null)
+  const latestDraftRef = useRef<DraftIslandState | null>(initialDraftState)
   const draftLayoutCacheRef = useRef(createWysiwygDraftParagraphLayoutCache())
   const lastDraftLayoutResultRef = useRef<{ cacheKey: string; layout: WysiwygDraftParagraphLayout | null } | null>(null)
   const lastDraftFragmentSplitResultRef = useRef<{ key: string; fragments: PageFragment[] } | null>(null)
@@ -1440,17 +1489,7 @@ function FlowdocDraftEditorIslandRuntime({
     }
   }, [nodeId])
 
-  const [draftState, setDraftState] = useState<DraftIslandState | null>(() => (
-    active && nodeId && paragraph
-      ? createDraftIslandState({
-          nodeId,
-          paragraph,
-          draftText: resolvedDraftText,
-          caretOffset: resolvedCaretOffset,
-          selection: resolvedSelection,
-        })
-      : null
-  ))
+  const [draftState, setDraftState] = useState<DraftIslandState | null>(() => initialDraftState)
   const [anchorElementsByPageKey, setAnchorElementsByPageKey] = useState<DraftIslandAnchorLookup>({})
   const anchorElementsByPageKeyRef = useRef<DraftIslandAnchorLookup>({})
   const draftSurfaceLiveLayerMode: DraftIslandSurfaceLiveLayerMode = (
@@ -1459,6 +1498,12 @@ function FlowdocDraftEditorIslandRuntime({
       : "inline"
   )
   const [committing, setCommitting] = useState(false)
+  const committingRef = useRef(false)
+  const setCommittingIfChanged = useCallback((nextCommitting: boolean) => {
+    if (committingRef.current === nextCommitting) return
+    committingRef.current = nextCommitting
+    setCommitting(nextCommitting)
+  }, [])
 
   const recordStructuralGuardEvent = useCallback((input: {
     action: "engaged" | "accepted" | "dropped" | `unlocked-${DraftIslandStructuralEditGuardUnlockReason}`
@@ -1609,6 +1654,7 @@ function FlowdocDraftEditorIslandRuntime({
 
   useEffect(() => {
     if (!active || !nodeId || !paragraph) {
+      const hadDraftState = latestDraftRef.current !== null
       clearStructuralEditGuard("inactive", "props-inactive", nodeId)
       latestDraftRef.current = null
       parentSyncedRevisionRef.current = -1
@@ -1620,8 +1666,10 @@ function FlowdocDraftEditorIslandRuntime({
       draftIslandSurfaceRenderTraceRef.current = {}
       endEditRequestedRef.current = false
       allowUnmountParentSyncRef.current = false
-      setCommitting(false)
-      setDraftState(null)
+      setCommittingIfChanged(false)
+      if (hadDraftState) {
+        setDraftState(null)
+      }
       return
     }
     const unlockReason = resolveDraftIslandStructuralGuardUnlockReason(structuralEditGuardRef.current, {
@@ -1632,21 +1680,20 @@ function FlowdocDraftEditorIslandRuntime({
     if (unlockReason && unlockReason !== "timeout") {
       clearStructuralEditGuard(unlockReason, "props-commit", nodeId)
     }
-    setCommitting(false)
+    setCommittingIfChanged(false)
+    const nextDraftState = createDraftIslandState({
+      nodeId,
+      paragraph,
+      draftText: resolvedDraftText,
+      caretOffset: resolvedCaretOffset,
+      selection: resolvedSelection,
+    })
+    if (draftIslandStateMatches(latestDraftRef.current, nextDraftState)) {
+      return
+    }
     setDraftState((current) => {
-      const next = createDraftIslandState({
-        nodeId,
-        paragraph,
-        draftText: resolvedDraftText,
-        caretOffset: resolvedCaretOffset,
-        selection: resolvedSelection,
-      })
-      if (
-        current?.nodeId === nodeId &&
-        current.text === next.text &&
-        current.caretOffset === next.caretOffset &&
-        areWysiwygTextSelectionsEqual(current.selection, next.selection)
-      ) {
+      const next = nextDraftState
+      if (draftIslandStateMatches(current, next)) {
         return current
       }
       if (current?.nodeId === nodeId) {
@@ -1672,6 +1719,7 @@ function FlowdocDraftEditorIslandRuntime({
     resolvedCaretOffset,
     resolvedDraftText,
     resolvedSelection,
+    setCommittingIfChanged,
   ])
 
   useEffect(() => () => {
@@ -2606,6 +2654,37 @@ function FlowdocDraftEditorIslandRuntime({
       action: "caret-resolve",
     })
     if (!range.isCollapsed || range.start !== 0) return false
+    if (isTableCellParagraph) {
+      const startedAt = startWysiwygPerfSpan()
+      const attemptedOperation = current.text.length === 0 ? "delete-empty" : "merge"
+      const deletedEmptyParagraph = current.text.length === 0
+        ? onDeleteEmptyTableCellParagraph?.(current.nodeId, current.text) === true
+        : false
+      if (deletedEmptyParagraph) {
+        engageStructuralEditGuard("delete-empty", current, "key:Backspace", "Backspace")
+        clearPendingParentSync()
+        pointerSelectionDragRef.current = null
+        suppressNextUnmountParentSyncRef.current = true
+        parentSyncedRevisionRef.current = current.revision
+      }
+      recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        kind: "flowdoc-island-structural-edit",
+        startedAt,
+        durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
+        nodeId: current.nodeId,
+        draftVersion: current.revision,
+        textLength: current.text.length,
+        source: "key:Backspace",
+        action: deletedEmptyParagraph ? "delete-empty-table-cell-paragraph" : "table-cell-boundary-backspace",
+        operation: attemptedOperation,
+        attemptedOperation,
+        status: deletedEmptyParagraph ? "dispatched-table-cell-delete" : "blocked-table-cell-boundary",
+        reason: resolveTableCellBoundaryBackspaceReason(current.text.length, deletedEmptyParagraph ? "delete" : "noop"),
+        active: deletedEmptyParagraph,
+        isTableCellParagraph: true,
+      })
+      return true
+    }
     const operation = current.text.length === 0 ? "delete-empty" : "merge"
     engageStructuralEditGuard(operation, current, "key:Backspace", "Backspace")
     clearPendingParentSync()
@@ -2625,7 +2704,45 @@ function FlowdocDraftEditorIslandRuntime({
       action: "merge-paragraph",
     })
     return true
-  }, [clearPendingParentSync, dropGuardedStructuralKey, engageStructuralEditGuard, onMergeParagraph])
+  }, [clearPendingParentSync, dropGuardedStructuralKey, engageStructuralEditGuard, isTableCellParagraph, onDeleteEmptyTableCellParagraph, onMergeParagraph])
+
+  const applyListLevelKey = useCallback((event: KeyboardEvent<Element>, current: DraftIslandState) => {
+    if (!isListItem || !onChangeListItemLevel) return false
+    if (event.key !== "Tab") return false
+    if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return false
+    const direction: ListLevelChangeDirection = event.shiftKey ? "outdent" : "indent"
+    const canChangeLevel = onCanChangeListItemLevel?.(current.nodeId, direction) ?? true
+    if (!canChangeLevel) {
+      recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+        kind: "flowdoc-island-structural-edit",
+        startedAt: startWysiwygPerfSpan(),
+        durationMs: 0,
+        nodeId: current.nodeId,
+        draftVersion: current.revision,
+        textLength: current.text.length,
+        source: event.shiftKey ? "key:Shift+Tab" : "key:Tab",
+        action: direction === "outdent" ? "outdent-list-item-noop" : "indent-list-item-noop",
+      })
+      return true
+    }
+    clearPendingParentSync()
+    pointerSelectionDragRef.current = null
+    suppressNextUnmountParentSyncRef.current = true
+    parentSyncedRevisionRef.current = current.revision
+    const startedAt = startWysiwygPerfSpan()
+    onChangeListItemLevel(current.nodeId, direction, current.text, current.caretOffset)
+    recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
+      kind: "flowdoc-island-structural-edit",
+      startedAt,
+      durationMs: Math.max(0, startWysiwygPerfSpan() - startedAt),
+      nodeId: current.nodeId,
+      draftVersion: current.revision,
+      textLength: current.text.length,
+      source: event.shiftKey ? "key:Shift+Tab" : "key:Tab",
+      action: direction === "outdent" ? "outdent-list-item" : "indent-list-item",
+    })
+    return true
+  }, [clearPendingParentSync, isListItem, onCanChangeListItemLevel, onChangeListItemLevel])
 
   const applyVerticalKeyInput = useCallback((event: KeyboardEvent<Element>, current: DraftIslandState) => {
     if (draftFragments.length === 0 || !isVerticalNavigationKey(event.key)) return false
@@ -2681,6 +2798,12 @@ function FlowdocDraftEditorIslandRuntime({
       return
     }
     if (handleClipboardShortcutKeyDown(event)) return
+
+    if (applyListLevelKey(event, current)) {
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
 
     if (onRichTextShortcut) {
       const keyInput = {
@@ -2794,6 +2917,7 @@ function FlowdocDraftEditorIslandRuntime({
     applyDraftChange,
     applyStructuralBackspace,
     applyStructuralEnter,
+    applyListLevelKey,
     applyVerticalKeyInput,
     flushParentDraft,
     handleClipboardShortcutKeyDown,
@@ -3094,7 +3218,7 @@ function FlowdocDraftEditorIslandRuntime({
   const runRealBlurHandoff = useCallback((source: string) => {
     const blurStartedAt = startWysiwygPerfSpan()
     const currentBeforeFlush = latestDraftRef.current
-    setCommitting(true)
+    setCommittingIfChanged(true)
     recordWysiwygPerfEvent(WYSIWYG_PERF_TRACE_ENABLED, {
       kind: "flowdoc-island-blur-handoff",
       startedAt: blurStartedAt,
@@ -3181,7 +3305,7 @@ function FlowdocDraftEditorIslandRuntime({
       active: true,
     })
     scheduleAfterPaint()
-  }, [flushParentDraft])
+  }, [flushParentDraft, setCommittingIfChanged])
 
   const handleBlur = useCallback((event: FocusEvent<Element>) => {
     const nextTarget = event.relatedTarget

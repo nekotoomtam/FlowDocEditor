@@ -13,6 +13,8 @@ function deriveOperationKindFromAction(action: EditorAction): EditorOperationKin
       return "paragraph.split"
     case "MERGE_PARAGRAPH":
       return "paragraph.merge"
+    case "DELETE_EMPTY_TABLE_CELL_PARAGRAPH":
+      return "table.structure.patch"
     case "DELETE_NODE":
       return "node.delete"
     case "REORDER_BODY_CHILD":
@@ -54,6 +56,8 @@ function extractOperationNodeIds(action: EditorAction): string[] {
       return [action.nodeId, ...(action.newNodeId ? [action.newNodeId] : [])]
     case "MERGE_PARAGRAPH":
       return [action.nodeId, ...(action.precomputed?.prevNodeId ? [action.precomputed.prevNodeId] : [])]
+    case "DELETE_EMPTY_TABLE_CELL_PARAGRAPH":
+      return [action.nodeId]
     case "DELETE_NODE":
       return [action.nodeId]
     case "UPDATE_TEXT":

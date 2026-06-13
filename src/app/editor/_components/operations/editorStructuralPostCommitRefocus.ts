@@ -20,7 +20,10 @@ import {
   startWysiwygPerfSpan,
   summarizePaginatedForWysiwygPerf,
 } from "../wysiwygPerformance"
-import { isWysiwygTextEngineFragmentEligible } from "../wysiwygTextEligibility"
+import {
+  isParagraphInsideTableCell,
+  isWysiwygTextEngineFragmentEligible,
+} from "../wysiwygTextEligibility"
 import type { EditorAction } from "../editorReducer"
 
 export interface PostCommitOptimisticSplitRefocusInput {
@@ -161,6 +164,7 @@ export function executePostCommitOptimisticSplitRefocus(
       fragment: optimistic.newFragment,
       pageKey,
       pages: optimistic.paginated.sections.flatMap((section) => section.pages),
+      isTableCellParagraph: isParagraphInsideTableCell(context.doc, input.nodeId, optimistic.newFragment.parentNodeId),
       mode: optimistic.mode,
       suppressedPageBreakNodeId,
     })

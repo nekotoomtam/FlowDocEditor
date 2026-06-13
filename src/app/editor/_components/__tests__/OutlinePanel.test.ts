@@ -203,6 +203,19 @@ describe("OutlinePanel", () => {
     expect(markup).not.toContain("First paragraph")
   })
 
+  it("marks the active edit row with a watermark without replacing the stable label", () => {
+    const markup = renderToStaticMarkup(createElement(OutlinePanel, {
+      doc: outlineDoc(),
+      selectedNodeId: "p1",
+      activeEditingNodeId: "p1",
+      onSelect: () => undefined,
+    }))
+
+    expect(markup).toContain("data-outline-editing=\"true\"")
+    expect(markup).toContain("First paragraph")
+    expect(markup).toContain("กำลังแก้ไข")
+  })
+
   it("shows flow-backed rows and stacks with standard row/column labels", () => {
     const markup = renderToStaticMarkup(createElement(OutlinePanel, {
       doc: flowOutlineDoc(),

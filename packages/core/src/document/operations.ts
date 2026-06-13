@@ -84,6 +84,8 @@ export type {
 // ─── Internal Types ────────────────────────────────────────────────────────────
 
 type Nodes = Record<string, LayoutNode>
+type ChildContainerNode = LayoutNode | FlowTableNode["nodes"][string]
+type ChildContainerNodes = Record<string, ChildContainerNode>
 
 export type ParagraphStyleDefinitionPatch = {
   name?: string | null
@@ -154,10 +156,11 @@ export const MAX_HEADER_FOOTER_RESERVED_RATIO = 1 - MIN_BODY_CONTENT_HEIGHT_RATI
 
 // ─── Tree Helpers ──────────────────────────────────────────────────────────────
 
-function findParentInfo(nodes: Nodes, childId: string): ParentInfo | null {
+function findParentInfo(nodes: ChildContainerNodes, childId: string): ParentInfo | null {
   for (const [id, node] of Object.entries(nodes)) {
     if (
-      (node.type === "body" || node.type === "stack" || node.type === "row" || node.type === "flow-row" || node.type === "flow-stack") &&
+      (node.type === "body" || node.type === "stack" || node.type === "row" || node.type === "flow-row" || node.type === "flow-stack" || node.type === "flow-table-cell") &&
+      "childIds" in node &&
       node.childIds.includes(childId)
     ) {
       return { parentId: id, index: node.childIds.indexOf(childId) }
@@ -166,16 +169,46 @@ function findParentInfo(nodes: Nodes, childId: string): ParentInfo | null {
   return null
 }
 
-function getChildIds(nodes: Nodes, parentId: string): string[] {
+function getChildIds(nodes: ChildContainerNodes, parentId: string): string[] {
   const node = nodes[parentId]
-  if (!node || !("childIds" in node)) return []
-  return (node as LayoutNode & { childIds: string[] }).childIds
+  if (!node || !("childIds" in node) || !Array.isArray(node.childIds)) return []
+  return node.childIds
 }
 
-function setChildIds(nodes: Nodes, parentId: string, childIds: string[]): Nodes {
+function setChildIds<TNodes extends ChildContainerNodes>(nodes: TNodes, parentId: string, childIds: string[]): TNodes {
   const node = nodes[parentId]
-  if (!node || !("childIds" in node)) return nodes
-  return { ...nodes, [parentId]: { ...node, childIds } as LayoutNode }
+  if (!node || !("childIds" in node) || !Array.isArray(node.childIds)) return nodes
+  return { ...nodes, [parentId]: { ...node, childIds } } as TNodes
+}
+
+function insertParagraphAfterInNodeMap<TNodes extends ChildContainerNodes>(
+  nodes: TNodes,
+  nodeId: string,
+  updatedNode: ParagraphNode,
+  newParagraph: ParagraphNode,
+): TNodes | null {
+  const parentInfo = findParentInfo(nodes, nodeId)
+  if (!parentInfo) return null
+
+  let newNodes = {
+    ...nodes,
+    [nodeId]: updatedNode,
+    [newParagraph.id]: newParagraph,
+  } as TNodes
+  const childIds = getChildIds(newNodes, parentInfo.parentId)
+  newNodes = setChildIds(newNodes, parentInfo.parentId, [
+    ...childIds.slice(0, parentInfo.index + 1),
+    newParagraph.id,
+    ...childIds.slice(parentInfo.index + 1),
+  ])
+  return newNodes
+}
+
+function sectionHasNodeId(section: DocumentNode["document"]["sections"][number], nodeId: string): boolean {
+  if (section.nodes[nodeId]) return true
+  return Object.values(section.nodes).some((node) =>
+    node.type === "flow-table" && Boolean((node as unknown as FlowTableNode).nodes[nodeId])
+  )
 }
 
 export function isPlainTextParagraph(node: ParagraphNode): node is ParagraphNode & { children: TextRun[] } {
@@ -2056,6 +2089,27 @@ export function updateNodeProps(
 
 export type BodyChildReorderPosition = "before" | "after"
 
+function hasValidListHierarchyOrder(doc: DocumentNode): boolean {
+  const previousLevelByInstance = new Map<string, number>()
+
+  for (const section of doc.document.sections) {
+    for (const paragraph of orderedSectionParagraphs(section)) {
+      const list = paragraph.props.list
+      if (!list) continue
+
+      const previousLevel = previousLevelByInstance.get(list.instanceId)
+      if (previousLevel == null) {
+        if (list.level > 0) return false
+      } else if (list.level > previousLevel + 1) {
+        return false
+      }
+      previousLevelByInstance.set(list.instanceId, list.level)
+    }
+  }
+
+  return true
+}
+
 export function reorderBodyChild(
   doc: DocumentNode,
   sectionId: string,
@@ -2098,7 +2152,10 @@ export function reorderBodyChild(
       : candidate
   ))
 
-  return { ...doc, document: { ...doc.document, sections: nextSections } }
+  const nextDoc = { ...doc, document: { ...doc.document, sections: nextSections } }
+  if (!hasValidListHierarchyOrder(nextDoc)) return doc
+
+  return nextDoc
 }
 
 const PARAGRAPH_BOX_EDGES: ParagraphBoxEdge[] = ["top", "right", "bottom", "left"]
@@ -2681,48 +2738,76 @@ export function splitParagraphAtIndex(
   for (let si = 0; si < doc.document.sections.length; si++) {
     const section = doc.document.sections[si]
     const node = section.nodes[nodeId]
-    if (node?.type !== "paragraph") continue
-    if (!isPlainTextParagraph(node)) continue
+    if (node?.type === "paragraph") {
+      if (!isPlainTextParagraph(node)) continue
 
-    const firstRun = node.children[0]
-    if (!firstRun || firstRun.type !== "text") continue
-    const fullText = getPlainText(node)
+      const firstRun = node.children[0]
+      if (!firstRun || firstRun.type !== "text") continue
+      const fullText = getPlainText(node)
 
-    const textBefore = fullText.slice(0, splitIndex)
-    const textAfter = fullText.slice(splitIndex)
-    const { beforeProps, afterProps } = resolveSplitParagraphSpacingProps(doc, node)
+      const textBefore = fullText.slice(0, splitIndex)
+      const textAfter = fullText.slice(splitIndex)
+      const { beforeProps, afterProps } = resolveSplitParagraphSpacingProps(doc, node)
 
-    const updatedNode: LayoutNode = {
-      ...node,
-      props: beforeProps,
-      children: [{ ...firstRun, text: textBefore }],
+      const updatedNode: ParagraphNode = {
+        ...node,
+        props: beforeProps,
+        children: [{ ...firstRun, text: textBefore }],
+      }
+      const generatedNewPara = createParagraphNode(textAfter, afterProps)
+      const newPara = options.newNodeId && !sectionHasNodeId(section, options.newNodeId)
+        ? { ...generatedNewPara, id: options.newNodeId }
+        : generatedNewPara
+
+      const newNodes = insertParagraphAfterInNodeMap(section.nodes, nodeId, updatedNode, newPara)
+      if (!newNodes) continue
+
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return {
+        doc: { ...doc, document: { ...doc.document, sections: newSections } },
+        newNodeId: newPara.id,
+      }
     }
-    const generatedNewPara = createParagraphNode(textAfter, afterProps)
-    const newPara = options.newNodeId && !section.nodes[options.newNodeId]
-      ? { ...generatedNewPara, id: options.newNodeId }
-      : generatedNewPara
 
-    const parentInfo = findParentInfo(section.nodes, nodeId)
-    if (!parentInfo) continue
+    for (const [tableId, candidate] of Object.entries(section.nodes)) {
+      if (candidate.type !== "flow-table") continue
+      const table = candidate as unknown as FlowTableNode
+      const inner = table.nodes[nodeId]
+      if (inner?.type !== "paragraph") continue
+      if (!isPlainTextParagraph(inner)) continue
 
-    let newNodes: Nodes = {
-      ...section.nodes,
-      [nodeId]: updatedNode,
-      [newPara.id]: newPara as unknown as LayoutNode,
-    }
-    const childIds = getChildIds(newNodes, parentInfo.parentId)
-    newNodes = setChildIds(newNodes, parentInfo.parentId, [
-      ...childIds.slice(0, parentInfo.index + 1),
-      newPara.id,
-      ...childIds.slice(parentInfo.index + 1),
-    ])
+      const firstRun = inner.children[0]
+      if (!firstRun || firstRun.type !== "text") continue
+      const fullText = getPlainText(inner)
 
-    const newSections = doc.document.sections.map((s, i) =>
-      i === si ? { ...s, nodes: newNodes } : s,
-    )
-    return {
-      doc: { ...doc, document: { ...doc.document, sections: newSections } },
-      newNodeId: newPara.id,
+      const textBefore = fullText.slice(0, splitIndex)
+      const textAfter = fullText.slice(splitIndex)
+      const { beforeProps, afterProps } = resolveSplitParagraphSpacingProps(doc, inner)
+
+      const updatedNode: ParagraphNode = {
+        ...inner,
+        props: beforeProps,
+        children: [{ ...firstRun, text: textBefore }],
+      }
+      const generatedNewPara = createParagraphNode(textAfter, afterProps)
+      const newPara = options.newNodeId && !sectionHasNodeId(section, options.newNodeId)
+        ? { ...generatedNewPara, id: options.newNodeId }
+        : generatedNewPara
+
+      const tableNodes = insertParagraphAfterInNodeMap(table.nodes, nodeId, updatedNode, newPara)
+      if (!tableNodes) continue
+
+      const newTable = { ...table, nodes: tableNodes }
+      const newSectionNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newSectionNodes } : s,
+      )
+      return {
+        doc: { ...doc, document: { ...doc.document, sections: newSections } },
+        newNodeId: newPara.id,
+      }
     }
   }
   return { doc, newNodeId: "" }
@@ -2779,6 +2864,47 @@ export function mergeParagraphWithPrevious(
   return null
 }
 
+export function deleteEmptyFlowTableCellParagraph(
+  doc: DocumentNode,
+  nodeId: string,
+): { doc: DocumentNode; prevNodeId: string; caretIndex: number } | null {
+  for (let si = 0; si < doc.document.sections.length; si++) {
+    const section = doc.document.sections[si]
+    for (const [tableId, candidate] of Object.entries(section.nodes)) {
+      if (candidate.type !== "flow-table") continue
+      const table = candidate as unknown as FlowTableNode
+      const node = table.nodes[nodeId]
+      if (node?.type !== "paragraph") continue
+      if (!isTextRunOnlyParagraph(node) || paragraphTextLength(node) !== 0) return null
+
+      const parentInfo = findParentInfo(table.nodes, nodeId)
+      if (!parentInfo || parentInfo.index <= 0) return null
+      const cell = table.nodes[parentInfo.parentId]
+      if (cell?.type !== "flow-table-cell") return null
+      if (cell.childIds.length <= 1) return null
+
+      const prevNodeId = cell.childIds[parentInfo.index - 1]
+      const prevNode = table.nodes[prevNodeId]
+      if (prevNode?.type !== "paragraph" || !isTextRunOnlyParagraph(prevNode)) return null
+
+      const caretIndex = paragraphTextLength(prevNode)
+      const nextTableNodes = setChildIds({ ...table.nodes }, cell.id, cell.childIds.filter((id) => id !== nodeId))
+      delete nextTableNodes[nodeId]
+      const newTable = { ...table, nodes: nextTableNodes }
+      const newSectionNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newSectionNodes } : s,
+      )
+      return {
+        doc: { ...doc, document: { ...doc.document, sections: newSections } },
+        prevNodeId,
+        caretIndex,
+      }
+    }
+  }
+  return null
+}
+
 export function splitTextRunParagraphAtIndex(
   doc: DocumentNode,
   nodeId: string,
@@ -2787,39 +2913,58 @@ export function splitTextRunParagraphAtIndex(
   for (let si = 0; si < doc.document.sections.length; si++) {
     const section = doc.document.sections[si]
     const node = section.nodes[nodeId]
-    if (node?.type !== "paragraph") continue
-    if (!isTextRunOnlyParagraph(node)) continue
+    if (node?.type === "paragraph") {
+      if (!isTextRunOnlyParagraph(node)) continue
 
-    const parentInfo = findParentInfo(section.nodes, nodeId)
-    if (!parentInfo) continue
+      const { before, after } = splitTextRunsAtOffset(node, splitIndex)
+      const updatedNode: ParagraphNode = { ...node, children: before }
+      const newPara = createParagraphNode("", node.props)
+      const newParagraph: ParagraphNode = {
+        ...newPara,
+        props: clonePlainData(node.props),
+        children: after,
+      }
 
-    const { before, after } = splitTextRunsAtOffset(node, splitIndex)
-    const updatedNode: LayoutNode = { ...node, children: before }
-    const newPara = createParagraphNode("", node.props)
-    const newParagraph: LayoutNode = {
-      ...newPara,
-      props: clonePlainData(node.props),
-      children: after,
+      const newNodes = insertParagraphAfterInNodeMap(section.nodes, nodeId, updatedNode, newParagraph)
+      if (!newNodes) continue
+
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newNodes } : s,
+      )
+      return {
+        doc: { ...doc, document: { ...doc.document, sections: newSections } },
+        newNodeId: newPara.id,
+      }
     }
 
-    let newNodes: Nodes = {
-      ...section.nodes,
-      [nodeId]: updatedNode,
-      [newPara.id]: newParagraph,
-    }
-    const childIds = getChildIds(newNodes, parentInfo.parentId)
-    newNodes = setChildIds(newNodes, parentInfo.parentId, [
-      ...childIds.slice(0, parentInfo.index + 1),
-      newPara.id,
-      ...childIds.slice(parentInfo.index + 1),
-    ])
+    for (const [tableId, candidate] of Object.entries(section.nodes)) {
+      if (candidate.type !== "flow-table") continue
+      const table = candidate as unknown as FlowTableNode
+      const inner = table.nodes[nodeId]
+      if (inner?.type !== "paragraph") continue
+      if (!isTextRunOnlyParagraph(inner)) continue
 
-    const newSections = doc.document.sections.map((s, i) =>
-      i === si ? { ...s, nodes: newNodes } : s,
-    )
-    return {
-      doc: { ...doc, document: { ...doc.document, sections: newSections } },
-      newNodeId: newPara.id,
+      const { before, after } = splitTextRunsAtOffset(inner, splitIndex)
+      const updatedNode: ParagraphNode = { ...inner, children: before }
+      const newPara = createParagraphNode("", inner.props)
+      const newParagraph: ParagraphNode = {
+        ...newPara,
+        props: clonePlainData(inner.props),
+        children: after,
+      }
+
+      const tableNodes = insertParagraphAfterInNodeMap(table.nodes, nodeId, updatedNode, newParagraph)
+      if (!tableNodes) continue
+
+      const newTable = { ...table, nodes: tableNodes }
+      const newSectionNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const newSections = doc.document.sections.map((s, i) =>
+        i === si ? { ...s, nodes: newSectionNodes } : s,
+      )
+      return {
+        doc: { ...doc, document: { ...doc.document, sections: newSections } },
+        newNodeId: newPara.id,
+      }
     }
   }
   return { doc, newNodeId: "" }

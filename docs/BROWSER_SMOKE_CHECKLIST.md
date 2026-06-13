@@ -72,8 +72,12 @@ documents into `localStorage`, explicitly enables
   continuation checks are legacy-textarea-specific and are skipped with an
   explicit log when the current text-engine path is active.
 - fieldRef paragraphs do not enter any inline text edit control
-- flow-table-cell paragraph Backspace at the true start does not call body-paragraph
-  merge or corrupt the table
+- flow-table-cell paragraph Backspace at the true start, including the active
+  draft-island path and the immediate post-Enter-split paragraph, does not call
+  body-paragraph merge or corrupt the table; empty post-Enter-split cell
+  paragraphs dispatch `DELETE_EMPTY_TABLE_CELL_PARAGRAPH`, remove only that
+  paragraph from the cell, restore/remove correctly through Undo/Redo, and
+  refocus the previous cell paragraph
 - autosave writes `FlowDocPackage v2` to localStorage
 - undo and redo restore the expected paragraph text
 - clicking inside a table cell selects the parent `flow-table-cell` and opens that
@@ -241,12 +245,119 @@ or preview layout status on large documents.
 - The smoke loads `public/mock/flowdoc-stress-mock.flowdoc.json`, jumps to page
   15, switches between two paragraph/list fragments, exits WYSIWYG, deletes the
   selected fragment, and runs Undo.
+- To look for intermittent preview/draft lifecycle loops, run
+  `npm run smoke:wysiwyg-stress-lifecycle-repeat`; this runs the same stress
+  lifecycle smoke three measured times. Override with
+  `npm run smoke:wysiwyg-stress-lifecycle-repeat5`,
+  `node scripts/wysiwyg-stress-lifecycle-smoke.mjs --repeat=5`, or
+  `STRESS_REPEAT=5` when a longer five-sample gate is needed.
 - Confirm the run reports no initial layout loading overlay, no preview layout
   blocking, no `settled-preview` finalize event, and no synchronous
   `inline-edit-exit-pagination` event.
+- The JSON summary includes `consoleErrorSignatures.maximumUpdateDepth` and
+  per-phase `previewSettle.superseded` counts. The default supersede burst
+  guard is 10 per phase; override with `STRESS_MAX_PREVIEW_SETTLE_SUPERSEDES`
+  only while investigating a known burst.
+- The undo phase waits for the restored paragraph and redo enablement, then
+  requires preview layout status `full` before taking the final summary. The
+  default full-status wait is 8000ms; override with
+  `STRESS_MAX_UNDO_FULL_WAIT_MS` only while investigating slow settling. Repeat
+  summaries include `undoRestoreMs`, `undoFullWaitMs`,
+  `undoStatusBeforeFullWait`, and final `undoStatus`.
 - If investigating typing lag, run `npm run smoke:wysiwyg-smoothness` separately
   because that probe measures keypress-to-paint and render jank rather than the
   lifecycle/undo path.
+
+### Outline Panel Stress Reorder
+
+Use when changing Outline rendering, virtualization, direct body-child reorder,
+or left-rail large-document behavior.
+
+- Windows PowerShell: `npm.cmd run smoke:outline-panel`.
+- Non-Windows: `npm run smoke:outline-panel`.
+- For the list-item active draft variant, run
+  `npm.cmd run smoke:outline-panel-list-draft` on Windows PowerShell or
+  `npm run smoke:outline-panel-list-draft` elsewhere.
+- For the active-list-item self-reorder variant, run
+  `npm.cmd run smoke:outline-panel-active-list-reorder` on Windows PowerShell
+  or `npm run smoke:outline-panel-active-list-reorder` elsewhere. This opens an
+  active draft on the level-2 list item `li_00035`, then drags that same list
+  item after the level-2 sibling `li_00057` so the authored list remains
+  schema-valid while the active node itself is reordered.
+- For the invalid list hierarchy guard, run
+  `npm.cmd run smoke:outline-panel-invalid-list-reorder` on Windows PowerShell
+  or `npm run smoke:outline-panel-invalid-list-reorder` elsewhere. This opens an
+  active draft on `li_00033`, attempts the invalid `li_00033` after `li_00035`
+  drop, verifies the target exposes `invalid-list-hierarchy` blocked feedback,
+  confirms the active draft still finalizes, verifies the body order stays
+  unchanged, and confirms no document assertion is emitted in the browser.
+- To catch intermittent self-reorder regressions, run
+  `npm.cmd run smoke:outline-panel-active-list-reorder-repeat` on Windows
+  PowerShell or `npm run smoke:outline-panel-active-list-reorder-repeat`
+  elsewhere; it runs the active-list-item self-reorder variant three times.
+- To catch intermittent invalid-list blocked-drop regressions, run
+  `npm.cmd run smoke:outline-panel-invalid-list-reorder-repeat` on Windows
+  PowerShell or `npm run smoke:outline-panel-invalid-list-reorder-repeat`
+  elsewhere; it runs the invalid-list no-op variant three times and expects
+  `invalid-list-hierarchy` blocked feedback.
+- To catch intermittent active list-draft finalize/reorder regressions, run
+  `npm.cmd run smoke:outline-panel-list-draft-repeat` on Windows PowerShell or
+  `npm run smoke:outline-panel-list-draft-repeat` elsewhere; it runs the
+  list-item variant three times with compact per-sample output. Override with
+  `node scripts/outline-panel-list-draft-repeat-smoke.mjs --repeat=5`,
+  `OUTLINE_PANEL_LIST_DRAFT_REPEAT=5`, or `SMOKE_REPEAT=5` when a longer gate
+  is needed.
+- The smoke loads `public/mock/flowdoc-stress-mock.flowdoc.json`, waits for the
+  Outline to virtualize, opens an active paragraph draft on `cover_title`, types
+  a Thai marker, drags `cover_project` after `cover_note`, and verifies
+  persisted body order plus committed draft text through local storage. The
+  list-item variant opens `li_00033` and verifies the committed text exactly
+  matches the active draft while the original list `instanceId`, `level`, and
+  `itemId` are preserved through reorder, Undo, and Redo.
+- Confirm the run reports `outline.domVirtualized=true`, total Outline rows
+  much larger than rendered rows, and no console/page/resource errors.
+- Confirm the active-edit summary reports a positive `inlineFinalize` delta, a
+  positive `reorder` delta, and that Undo/Redo preserve the typed active-draft
+  marker while only changing the body order. For the list-item variant, confirm
+  `activeEdit.listSignaturePreserved=true`.
+- Override `FLOWDOC_PROBE_FILE`, `OUTLINE_REORDER_SOURCE_NODE_ID`,
+  `OUTLINE_REORDER_TARGET_NODE_ID`, `OUTLINE_REORDER_POSITION`, or
+  `OUTLINE_ACTIVE_EDIT_NODE_ID` only when the target document/order changes
+  intentionally.
+
+### WYSIWYG List Level Active Draft
+
+Use when changing list level commands, active draft finalization, list toolbar
+behavior, or list marker rendering.
+
+- Windows PowerShell: `npm.cmd run smoke:wysiwyg-list-level-draft`.
+- Non-Windows: `npm run smoke:wysiwyg-list-level-draft`.
+- To catch intermittent active-draft list-level regressions, run
+  `npm run smoke:wysiwyg-list-level-draft-repeat`; this runs the same smoke
+  three measured times. Override with
+  `npm run smoke:wysiwyg-list-level-draft-repeat5`,
+  `node scripts/wysiwyg-list-level-active-draft-smoke.mjs --repeat=5`, or
+  `LIST_LEVEL_REPEAT=5` when a longer five-sample gate is needed.
+- The smoke seeds a small list document, starts an active rich draft on a list
+  item, types text before a toolbar indent, verifies the text commits before
+  the level change, resumes editing, types again, blurs, checks undo/redo, then
+  verifies active-draft `Shift+Tab` and `Tab` keyboard level changes, plus
+  active-draft `Enter` splitting into the next list item.
+- Confirm the stored paragraph text includes the typed markers exactly as
+  paragraph content while visual list markers remain renderer-owned metadata.
+- Confirm the keyboard phase reports `keyboardShiftTab.level=0`,
+  `keyboardTab.level=1`, `keyboardNoopTab.level=1`, and
+  `keyboardNoopShiftTab.level=0` without writing tab characters or generated
+  markers into paragraph text.
+- Confirm no-op keyboard phases keep the same list-level action count before
+  and after the keypress.
+- Confirm the Enter split phase reports matching source/new list levels,
+  preserves the list instance, creates a different new `itemId`, and records a
+  `SPLIT_PARAGRAPH` action plus a structural Enter split event.
+- Confirm the run reports no console/page/resource errors.
+- The repeat summary includes final levels, no-op action-count stability, and
+  `listLevelActionCount`, `splitParagraphActionCount`, and
+  `structuralEnterSplitCount` for each sample.
 
 ### WYSIWYG DevTools Trace
 
@@ -559,6 +670,28 @@ Automated command:
 
 - Windows PowerShell: `npm.cmd run smoke:wysiwyg-table-cell-boundary`
 - Non-Windows: `npm run smoke:wysiwyg-table-cell-boundary`
+- To run the full table-cell boundary matrix, use
+  `npm.cmd run smoke:wysiwyg-table-cell-boundary-matrix` on Windows PowerShell
+  or `npm run smoke:wysiwyg-table-cell-boundary-matrix` elsewhere. This runs the
+  base table-cell, colspan, rowspan, mixed-span, and over-case targets
+  sequentially and fails on the first target regression.
+- To look for intermittent table-cell boundary regressions, run
+  `npm.cmd run smoke:wysiwyg-table-cell-boundary-matrix-repeat` on Windows
+  PowerShell or `npm run smoke:wysiwyg-table-cell-boundary-matrix-repeat`
+  elsewhere; it runs the same matrix three times with compact child output so
+  the pass/fail summary stays readable. Add `-- --stream-child-output` when a
+  debugging run needs the full child smoke transcript. Use
+  `node scripts/wysiwyg-table-cell-boundary-matrix-smoke.mjs --repeat=2` for a
+  shorter local probe, and add `--targets=flow-table-mixed-span` when narrowing
+  investigation to one target. The matrix runner retries a child process once
+  only when the process exits like an infrastructure/browser crash before the
+  child smoke prints an `ok:true` or `ok:false` JSON summary; assertion failures
+  are not retried. The guard can be checked without launching the browser with
+  `npm.cmd run smoke:wysiwyg-table-cell-boundary-matrix-probe` on Windows
+  PowerShell or `npm run smoke:wysiwyg-table-cell-boundary-matrix-probe`
+  elsewhere. The probe covers both sides of the retry guard: child-reported
+  `ok:false` failures do not retry, while a child process crash before any
+  `ok` summary retries once and can pass on the next attempt.
 - For the colspan-only Flow Table target, use
   `npm.cmd run smoke:wysiwyg-flow-table-colspan-boundary` on Windows
   PowerShell or `npm run smoke:wysiwyg-flow-table-colspan-boundary` elsewhere.
@@ -584,8 +717,14 @@ multiline payload, and verifies:
 
 - the active cell paragraph splits across multiple pages through browser
   preview pagination
-- the active text-engine layer remains mounted with multiple pointer fragments
-- no inline textarea fallback mounts
+- the active draft-island text-engine layer remains mounted with multiple
+  pointer fragments
+- exactly one hidden input bridge owns text input, and no native or legacy
+  inline textarea fallback mounts
+- the base table-cell target accepts active-draft `Enter`, creates the next
+  paragraph inside the same `flow-table-cell`, records a `SPLIT_PARAGRAPH`
+  action plus structural Enter split event, and commits typed text into that
+  new cell paragraph
 - no layout error appears
 - the first table-cell browser-preview pagination starts within the responsive
   threshold
@@ -597,17 +736,23 @@ chrome shape. The base table-cell smoke does not claim full multi-cell live
 table preview. The Flow Table colspan variant uses the same script against
 `stage3-flow-table-colspan-target`, additionally checking that the target cell
 keeps colspan-width chrome and the shorter sibling paragraph is not duplicated
-on continuation slices. The colspan over-case variant uses the same target with
-a longer customer-data-like payload and requires at least three active target
-pages, checking 3-4 page live pagination, pointer fragments, continuation
-re-entry, and performance trace duration budgets. The Flow Table rowspan
+on continuation slices, while also covering active-draft `Enter`, immediate
+empty paragraph Backspace delete, and that operation's Undo/Redo restoration.
+The colspan over-case variant uses the same target with a longer
+customer-data-like payload and requires at least three active target pages,
+checking 3-4 page live pagination, pointer fragments, continuation re-entry,
+and performance trace duration budgets. The Flow Table rowspan
 variant uses the same script against `stage3-flow-table-rowspan-target`,
 checking that the active cell continues through multiple row parents and the
-authored sibling paragraphs are not duplicated. The mixed-span variant uses
+authored sibling paragraphs are not duplicated, while also covering
+active-draft `Enter`, immediate empty paragraph Backspace delete, and that
+operation's Undo/Redo restoration. The mixed-span variant uses
 `stage3-flow-table-mixed-span-target`, checking that a `rowspan>1` and
 `colspan>1` active cell keeps its wide cell chrome, continues through multiple
-row parents, does not duplicate sibling paragraphs, and can be re-entered from a
-continuation fragment with a single click while staying on the text-engine path.
+row parents, does not duplicate sibling paragraphs, can be re-entered from a
+continuation fragment with a single click while staying on the text-engine path,
+and also covers active-draft `Enter`, immediate empty paragraph Backspace
+delete, and that operation's Undo/Redo restoration.
 
 ### Editor State Race And Reconciliation
 

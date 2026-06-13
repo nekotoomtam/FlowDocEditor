@@ -80,6 +80,15 @@ Users should be able to:
 - Outline reorder is limited to direct children of a section `body`, within the
   same section body. It mutates only the logical `body.childIds` order through a
   core document operation.
+- Outline reorder must not create invalid list hierarchy. If a direct body-child
+  reorder would make a list instance start at a nested level or jump by more
+  than one level, the core operation must leave the document unchanged until a
+  future explicit design supports list subtree moves or automatic level repair.
+- Outline should expose invalid list reorder targets as blocked drop targets
+  with no-drop feedback and an accessibility status. Dropping on a blocked
+  target may still pass through the editor action lifecycle so active drafts are
+  finalized, but the core operation remains responsible for leaving the
+  document unchanged.
 - A six-dot grip on a direct body-child outline row is the drag affordance for
   this reorder. Nested outline nodes, stack children, flow-table rows and cells,
   canvas row handles, and cross-section reorder remain out of scope.
@@ -329,6 +338,10 @@ Paragraph box styling is defined in
   possible and must not reuse stale SVG paragraph snapshots as the edit visual.
 - Backspace at the true start of a flow-table-cell paragraph should not call the
   body-paragraph merge operation.
+- Backspace at the true start of an empty flow-table-cell paragraph deletes that
+  paragraph only through the dedicated table-cell operation when a previous
+  paragraph remains in the same cell; the only paragraph in a cell remains a
+  no-op.
 - When the flagged WYSIWYG text engine is enabled, paragraphs inside
   `flow-table-cell` should use the same active paragraph text-engine path as
   body paragraphs. Table-cell boundary Backspace remains table-specific.

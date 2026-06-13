@@ -70,6 +70,7 @@ import {
   resolveDraftIslandSurfaceLiveAttributes,
   resolveDraftIslandHeightPreviewDelayMs,
   resolveDraftIslandParentSyncDelayMs,
+  resolveTableCellBoundaryBackspaceReason,
   shouldQueueDraftIslandPageBoundaryReflow,
   shouldReportDraftIslandHeightPreview,
   syncDraftIslandSurfaceLiveAttributes,
@@ -862,8 +863,18 @@ describe("FlowdocDraftEditorIslandRoot", () => {
     })).toBe(false)
     expect(areDraftIslandRuntimePropsEqual(props, {
       ...props,
+      isTableCellParagraph: true,
+    })).toBe(false)
+    expect(areDraftIslandRuntimePropsEqual(props, {
+      ...props,
       onDraftChange: () => undefined,
     })).toBe(false)
+  })
+
+  it("labels table-cell true-start Backspace no-op reasons", () => {
+    expect(resolveTableCellBoundaryBackspaceReason(0)).toBe("empty-table-cell-paragraph-noop")
+    expect(resolveTableCellBoundaryBackspaceReason(0, "delete")).toBe("empty-table-cell-paragraph-delete")
+    expect(resolveTableCellBoundaryBackspaceReason(1)).toBe("table-cell-start-boundary-noop")
   })
 
   it("uses a longer parent sync debounce for held text input without delaying caret-only sync", () => {

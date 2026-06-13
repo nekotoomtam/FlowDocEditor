@@ -54,6 +54,32 @@ export function markEditorPreviewLayoutFull(generation: number): EditorPreviewLa
   }
 }
 
+export function areEditorPreviewLayoutStatesEqual(
+  current: EditorPreviewLayoutState,
+  next: EditorPreviewLayoutState,
+): boolean {
+  return (
+    current.status === next.status &&
+    current.blocksCanvas === next.blocksCanvas &&
+    current.generation === next.generation
+  )
+}
+
+export function shouldApplyEditorPreviewLayoutState(
+  current: EditorPreviewLayoutState,
+  next: EditorPreviewLayoutState,
+): boolean {
+  if (areEditorPreviewLayoutStatesEqual(current, next)) return false
+  if (
+    current.status === "settling" &&
+    next.status === "settling" &&
+    current.blocksCanvas === next.blocksCanvas
+  ) {
+    return false
+  }
+  return true
+}
+
 export function isEditorPreviewLayoutFull(status: EditorPreviewLayoutStatus): boolean {
   return status === "full"
 }

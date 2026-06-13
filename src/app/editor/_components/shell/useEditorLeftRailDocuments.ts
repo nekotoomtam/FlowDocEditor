@@ -54,8 +54,9 @@ export function useEditorLeftRailDocuments({
   const panelDeferralSnapshotActive = panelDeferralRuntime.shouldUsePanelSnapshot()
   const panelDeferralNonInteractive = panelDeferralRuntime.isPanelNonInteractive()
   const { optimisticStructuralRefocusPaint, optimisticStructuralIslandOverride } = editorStructuralIslandStore.getState()
+  const structuralIslandBlocksPanelRelease = optimisticStructuralIslandOverride?.suppressedPageBreakNodeId != null
   const deferLeftRailForStructuralPaint = optimisticStructuralRefocusPaint !== null ||
-    optimisticStructuralIslandOverride !== null ||
+    structuralIslandBlocksPanelRelease ||
     panelDeferralSnapshotActive
   const deferNonCriticalPanelsForStructuralPaint = deferLeftRailForStructuralPaint || panelDeferralNonInteractive
   const deferLeftRailDocForStructuralPaint = deferLeftRailForStructuralPaint || isInlineEditing

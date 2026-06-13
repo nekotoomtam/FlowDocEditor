@@ -14,6 +14,7 @@ import {
 } from "../wysiwygPerformance"
 import {
   findWysiwygTextEngineFragment,
+  isParagraphInsideTableCell,
 } from "../wysiwygTextEligibility"
 import type { StructuralEditRuntime } from "../runtime/structuralEditRuntime"
 import type { PanelDeferralRuntime } from "../runtime/panelDeferralRuntime"
@@ -53,6 +54,7 @@ export interface FlowdocDraftEditorIslandConfig {
   fragment: PageFragment
   pageKey: string
   pages: PaginatedDocument["sections"][number]["pages"]
+  isTableCellParagraph: boolean
 }
 
 export type DraftIslandConfigNullReason =
@@ -65,7 +67,6 @@ export type DraftIslandConfigNullReason =
   | "fragment-missing"
   | "continued-fragment"
   | "non-paragraph-fragment"
-  | "list-marker-fragment"
   | "page-key-missing"
 
 export type DraftIslandConfigResolveResult =
@@ -73,6 +74,19 @@ export type DraftIslandConfigResolveResult =
   | { kind: "null"; reason: DraftIslandConfigNullReason; nodeId?: string | null }
 
 import { useEditorStructuralIslandStore, editorStructuralIslandStore } from "./editorStructuralIslandStore"
+
+export function releaseBoundarySafePageBreakSuppression(
+  override: OptimisticStructuralIslandOverride | null,
+  nodeId: string,
+): OptimisticStructuralIslandOverride | null {
+  if (!override || override.nodeId !== nodeId || !override.suppressedPageBreakNodeId) {
+    return override
+  }
+  return {
+    ...override,
+    suppressedPageBreakNodeId: null,
+  }
+}
 
 export function useEditorStructuralIslandController({
   captureStructuralShellRenderValue,
@@ -160,9 +174,6 @@ export function useEditorStructuralIslandController({
             if (fragment.nodeType !== "paragraph") {
               return { kind: "null", reason: "non-paragraph-fragment", nodeId }
             }
-            if (fragment.listMarker) {
-              return { kind: "null", reason: "list-marker-fragment", nodeId }
-            }
             const pageKey = editorPageNavigation.pageKeyByPageIndex.get(fragment.pageIndex) ?? null
             if (!pageKey) {
               return { kind: "null", reason: "page-key-missing", nodeId }
@@ -170,7 +181,14 @@ export function useEditorStructuralIslandController({
             const pages = displayPaginated.sections.flatMap((section) => section.pages)
             return {
               kind: "ready",
-              config: { nodeId, paragraph, fragment, pageKey, pages }
+              config: {
+                nodeId,
+                paragraph,
+                fragment,
+                pageKey,
+                pages,
+                isTableCellParagraph: isParagraphInsideTableCell(previewDoc, nodeId, fragment.parentNodeId),
+              }
             }
           }
         )
@@ -308,9 +326,22 @@ export function useEditorStructuralIslandController({
   ])
 
   const handleOptimisticStructuralRefocusPainted = useCallback((nodeId: string) => {
-    const current = editorStructuralIslandStore.getState().optimisticStructuralRefocusPaint
-    if (current?.nodeId === nodeId) {
-      editorStructuralIslandStore.setState({ optimisticStructuralRefocusPaint: null })
+    const currentState = editorStructuralIslandStore.getState()
+    const nextRefocusPaint = currentState.optimisticStructuralRefocusPaint?.nodeId === nodeId
+      ? null
+      : currentState.optimisticStructuralRefocusPaint
+    const nextIslandOverride = releaseBoundarySafePageBreakSuppression(
+      currentState.optimisticStructuralIslandOverride,
+      nodeId,
+    )
+    if (
+      nextRefocusPaint !== currentState.optimisticStructuralRefocusPaint ||
+      nextIslandOverride !== currentState.optimisticStructuralIslandOverride
+    ) {
+      editorStructuralIslandStore.setState({
+        optimisticStructuralRefocusPaint: nextRefocusPaint,
+        optimisticStructuralIslandOverride: nextIslandOverride,
+      })
     }
     const release = deferredStructuralPanelReleaseRef.current
     if (release?.pending && release.nodeId === nodeId) {

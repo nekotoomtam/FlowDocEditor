@@ -1149,6 +1149,8 @@ function summarizePerfEvents(perfEvents) {
   const browserPreviewPaginationEvents = perfEvents.filter((event) => event.kind === "browser-preview-pagination")
   const editorActionDispatchEvents = perfEvents.filter((event) => event.kind === "editor-action-dispatch")
   const canvasCommitEvents = perfEvents.filter((event) => event.kind === "editor-canvas-react-commit")
+  const outlinePanelModelEvents = perfEvents.filter((event) => event.kind === "outline-panel-model")
+  const outlinePanelReactCommitEvents = perfEvents.filter((event) => event.kind === "outline-panel-react-commit")
   const structuralTransactionEventsByAction = flowdocStructuralTransactionEvents.reduce((acc, event) => {
     const key = `${event.operation ?? "unknown"}:${event.action ?? "unknown"}`
     acc[key] = (acc[key] ?? 0) + 1
@@ -1451,6 +1453,29 @@ function summarizePerfEvents(perfEvents) {
     browserPreviewPagination: summarizeDurations(browserPreviewPaginationEvents),
     rawBrowserPreviewPaginationEvents: browserPreviewPaginationEvents,
     editorCanvasCommit: summarizeDurations(canvasCommitEvents),
+    outlinePanel: {
+      model: {
+        ...summarizeDurations(outlinePanelModelEvents),
+        structureCacheHitCount: outlinePanelModelEvents.filter((event) => event.outlineStructureCacheHit === true).length,
+        labelSnapshotUsedCount: outlinePanelModelEvents.filter((event) => event.outlineLabelSnapshotUsed === true).length,
+        singleLabelUpdatedCount: outlinePanelModelEvents.filter((event) => event.outlineSingleLabelUpdated === true).length,
+        fullLabelRefreshCount: outlinePanelModelEvents.filter((event) => event.outlineFullLabelRefresh === true).length,
+        byAction: outlinePanelModelEvents.reduce((acc, event) => {
+          const action = event.action ?? "unknown"
+          acc[action] = (acc[action] ?? 0) + 1
+          return acc
+        }, {}),
+        latest: outlinePanelModelEvents[outlinePanelModelEvents.length - 1] ?? null,
+      },
+      reactCommit: {
+        ...summarizeDurations(outlinePanelReactCommitEvents),
+        longest: outlinePanelReactCommitEvents.reduce(
+          (longest, event) => (event.durationMs > (longest?.durationMs ?? 0) ? event : longest),
+          null,
+        ),
+        latest: outlinePanelReactCommitEvents[outlinePanelReactCommitEvents.length - 1] ?? null,
+      },
+    },
   }
 }
 

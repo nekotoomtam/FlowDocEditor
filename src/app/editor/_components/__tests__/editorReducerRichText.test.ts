@@ -15,7 +15,7 @@ import {
   TOR_HEADING1_PARAGRAPH_STYLE_ID,
 } from "@/document"
 import { getPageDimensions } from "@/pagination"
-import type { DocumentNode, LayoutNode, ParagraphNode } from "@/schema"
+import type { DocumentNode, FlowTableNode, LayoutNode, ParagraphNode } from "@/schema"
 import { pt } from "@/schema"
 import { createInitialEditorState, reducer } from "../editorReducer"
 
@@ -325,6 +325,108 @@ function docWithListedFlowStack(): DocumentNode {
           },
         },
         nodes,
+      }],
+    },
+  }
+}
+
+function docWithListedFlowTableCell(): DocumentNode {
+  const table: FlowTableNode = {
+    id: "flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(200) }],
+    rowIds: ["flow-row"],
+    nodes: {
+      "flow-row": { id: "flow-row", type: "flow-table-row", props: {}, cellIds: ["flow-cell"] },
+      "flow-cell": { id: "flow-cell", type: "flow-table-cell", props: {}, childIds: ["cell-p"] },
+      "cell-p": {
+        id: "cell-p",
+        type: "paragraph",
+        props: {
+          ...DEFAULT_PARAGRAPH_PROPS,
+          list: { instanceId: "tor-main", level: 0, itemId: "tor.cell" },
+        },
+        children: [
+          { id: "cell-t1", type: "text", text: "Cell ", style: { fontWeight: "bold" } },
+          { id: "cell-t2", type: "text", text: "body", style: { fontStyle: "italic" } },
+        ],
+      },
+    },
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      listStyles: getAllListStylePresets(),
+      listInstances: {
+        "tor-main": { id: "tor-main", styleId: "tor-clause" },
+      },
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: pt(72),
+            right: pt(72),
+            bottom: pt(72),
+            left: pt(72),
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["flow-table"] },
+          "flow-table": table as unknown as LayoutNode,
+        },
+      }],
+    },
+  }
+}
+
+function docWithFlowTableCellParagraphs(paragraphs: ParagraphNode[]): DocumentNode {
+  const table: FlowTableNode = {
+    id: "flow-table",
+    type: "flow-table",
+    props: {},
+    columns: [{ width: pt(200) }],
+    rowIds: ["flow-row"],
+    nodes: {
+      "flow-row": { id: "flow-row", type: "flow-table-row", props: {}, cellIds: ["flow-cell"] },
+      "flow-cell": {
+        id: "flow-cell",
+        type: "flow-table-cell",
+        props: {},
+        childIds: paragraphs.map((paragraph) => paragraph.id),
+      },
+      ...Object.fromEntries(paragraphs.map((paragraph) => [paragraph.id, paragraph])),
+    },
+  }
+
+  return {
+    version: 1,
+    document: {
+      id: "doc",
+      sections: [{
+        id: "section",
+        type: "section",
+        bodyRootId: "body",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: pt(72),
+            right: pt(72),
+            bottom: pt(72),
+            left: pt(72),
+          },
+        },
+        nodes: {
+          body: { id: "body", type: "body", props: {}, childIds: ["flow-table"] },
+          "flow-table": table as unknown as LayoutNode,
+        },
       }],
     },
   }
@@ -685,6 +787,36 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(inserted.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("child")
     expect(first.props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: "tor.stack.left" })
     expect(inserted.props.list).toEqual({ instanceId: "tor-main", level: 1, itemId: newNodeId })
+    expect(next.past).toHaveLength(1)
+  })
+
+  it("uses the latest edit text before splitting a listed flow-table cell paragraph", () => {
+    const state = createInitialEditorState(docWithListedFlowTableCell())
+    const next = reducer(state, {
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "cell-p",
+      splitIndex: "Cell draft ".length,
+      text: "Cell draft child",
+    })
+    const newNodeId = next.lastSplitNodeId
+    expect(newNodeId).toBeTruthy()
+    if (!newNodeId) return
+
+    const section = next.doc.document.sections[0]
+    const table = section.nodes["flow-table"] as unknown as FlowTableNode
+    const cell = table.nodes["flow-cell"]
+    const first = table.nodes["cell-p"] as ParagraphNode
+    const inserted = table.nodes[newNodeId] as ParagraphNode
+
+    expect(cell.type).toBe("flow-table-cell")
+    if (cell.type !== "flow-table-cell") return
+    expect(section.nodes[newNodeId]).toBeUndefined()
+    expect(section.nodes.body?.type === "body" ? section.nodes.body.childIds : []).toEqual(["flow-table"])
+    expect(cell.childIds).toEqual(["cell-p", newNodeId])
+    expect(first.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("Cell draft ")
+    expect(inserted.children.map((child) => child.type === "text" ? child.text : "").join("")).toBe("child")
+    expect(first.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: "tor.cell" })
+    expect(inserted.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: newNodeId })
     expect(next.past).toHaveLength(1)
   })
 
@@ -1171,6 +1303,62 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(next.past).toHaveLength(1)
   })
 
+  it("deletes an empty flow-table cell paragraph and refocuses the previous cell paragraph", () => {
+    const previous: ParagraphNode = {
+      id: "cell-p1",
+      type: "paragraph",
+      props: DEFAULT_PARAGRAPH_PROPS,
+      children: [{ id: "cell-t1", type: "text", text: "Cell before" }],
+    }
+    const empty: ParagraphNode = {
+      id: "cell-p2",
+      type: "paragraph",
+      props: DEFAULT_PARAGRAPH_PROPS,
+      children: [{ id: "cell-t2", type: "text", text: "draft" }],
+    }
+    const selected = reducer(createInitialEditorState(docWithFlowTableCellParagraphs([previous, empty])), {
+      type: "SELECT_NODE",
+      nodeId: "cell-p2",
+    })
+    const next = reducer(selected, { type: "DELETE_EMPTY_TABLE_CELL_PARAGRAPH", nodeId: "cell-p2", text: "" })
+    const table = next.doc.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const cell = table.nodes["flow-cell"]
+
+    expect(cell?.type).toBe("flow-table-cell")
+    if (cell?.type !== "flow-table-cell") return
+    expect(table.nodes["cell-p2"]).toBeUndefined()
+    expect(cell.childIds).toEqual(["cell-p1"])
+    expect(next.selectedNodeId).toBe("cell-p1")
+    expect(next.mergeResult).toEqual({ prevNodeId: "cell-p1", caretIndex: "Cell before".length })
+    expect(next.past).toHaveLength(1)
+
+    const undone = reducer(next, { type: "UNDO" })
+    const undoneTable = undone.doc.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const undoneCell = undoneTable.nodes["flow-cell"]
+    expect(undoneCell?.type === "flow-table-cell" ? undoneCell.childIds : []).toEqual(["cell-p1", "cell-p2"])
+    expect(undoneTable.nodes["cell-p2"]?.type).toBe("paragraph")
+    expect(undone.future).toHaveLength(1)
+
+    const redone = reducer(undone, { type: "REDO" })
+    const redoneTable = redone.doc.document.sections[0].nodes["flow-table"] as unknown as FlowTableNode
+    const redoneCell = redoneTable.nodes["flow-cell"]
+    expect(redoneCell?.type === "flow-table-cell" ? redoneCell.childIds : []).toEqual(["cell-p1"])
+    expect(redoneTable.nodes["cell-p2"]).toBeUndefined()
+  })
+
+  it("does not delete the only empty flow-table cell paragraph", () => {
+    const empty: ParagraphNode = {
+      id: "cell-p1",
+      type: "paragraph",
+      props: DEFAULT_PARAGRAPH_PROPS,
+      children: [{ id: "cell-t1", type: "text", text: "" }],
+    }
+    const state = createInitialEditorState(docWithFlowTableCellParagraphs([empty]))
+    const next = reducer(state, { type: "DELETE_EMPTY_TABLE_CELL_PARAGRAPH", nodeId: "cell-p1" })
+
+    expect(next).toBe(state)
+  })
+
   it("toggles a preset-backed list from the editor reducer", () => {
     const state = createInitialEditorState(docWithParagraph())
     const listed = reducer(state, {
@@ -1236,6 +1424,53 @@ describe("editorReducer list-aware structural paragraph actions", () => {
 
     expect(indented).toBe(listed)
     expect(paragraph.props.list).toEqual({ instanceId: "bullets", level: 0, itemId: "p1" })
+  })
+
+  it("reorders direct body children while preserving history and source selection", () => {
+    const state = createInitialEditorState(docWithParagraphBeforePageBreak())
+    const next = reducer(state, {
+      type: "REORDER_BODY_CHILD",
+      sectionId: "section",
+      sourceNodeId: "cover_break",
+      targetNodeId: "after_break",
+      position: "after",
+    })
+    const body = next.doc.document.sections[0].nodes.body
+
+    expect(body.type === "body" ? body.childIds : []).toEqual(["cover_note", "after_break", "cover_break"])
+    expect(next.selectedNodeId).toBe("cover_break")
+    expect(next.selectionAnchorNodeId).toBe("cover_break")
+    expect(next.past).toHaveLength(1)
+  })
+
+  it("does not push history when a list reorder is blocked by hierarchy guard", () => {
+    const doc = docWithListedParagraphs()
+    const section = doc.document.sections[0]
+    const body = section.nodes.body
+    const p2 = section.nodes.p2 as ParagraphNode
+    if (body?.type !== "body") throw new Error("expected body")
+    if (!p2.props.list) throw new Error("expected p2 list item")
+    body.childIds = ["p0", "p1", "p2"]
+    delete section.nodes["p0-child"]
+    p2.props = {
+      ...p2.props,
+      list: { ...p2.props.list, level: 2 },
+    }
+    const state = createInitialEditorState(doc)
+    const next = reducer(state, {
+      type: "REORDER_BODY_CHILD",
+      sectionId: "section",
+      sourceNodeId: "p1",
+      targetNodeId: "p2",
+      position: "after",
+    })
+
+    expect(next).toBe(state)
+    expect(body.childIds).toEqual(["p0", "p1", "p2"])
+    expect(next.past).toHaveLength(0)
+    expect(next.future).toHaveLength(0)
+    expect(next.selectedNodeId).toBeNull()
+    expect(next.selectionAnchorNodeId).toBeNull()
   })
 
   it("merges a listed text-run paragraph into the previous paragraph while preserving previous identity", () => {

@@ -3,7 +3,7 @@ import type { DocumentNode } from "@/schema"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DragSource } from "@/placement/types"
 import { AddPanel } from "../AddPanel"
-import { OutlinePanel, type OutlineBodyChildReorder } from "../OutlinePanel"
+import { OutlinePanel, type OutlineBodyChildReorder, type OutlineEditRelease } from "../OutlinePanel"
 import { StyleManagerPanel, type StyleManagerResourceSelection } from "../StyleManagerPanel"
 
 export type EditorLeftRailMode = "outline" | "add" | "styles"
@@ -13,6 +13,8 @@ interface EditorLeftRailProps {
   outlineDoc: DocumentNode
   styleDoc: DocumentNode
   selectedNodeId: string | null
+  activeOutlineEditingNodeId?: string | null
+  outlineEditRelease?: OutlineEditRelease | null
   selectedStyleResource: StyleManagerResourceSelection
   activeOutlineListGroupId?: string | null
   registry: FieldRegistryV1
@@ -20,6 +22,7 @@ interface EditorLeftRailProps {
   isDragging: boolean
   addPaletteScope?: "document" | "headerFooter"
   deferOutlineContent?: boolean
+  perfTraceActive?: boolean
   onModeChange: (mode: EditorLeftRailMode) => void
   onSelectNode: (nodeId: string) => void
   onSelectOutlineListGroup?: (instanceId: string) => void
@@ -100,6 +103,8 @@ function EditorLeftRailImpl({
   outlineDoc,
   styleDoc,
   selectedNodeId,
+  activeOutlineEditingNodeId = null,
+  outlineEditRelease = null,
   selectedStyleResource,
   activeOutlineListGroupId = null,
   registry,
@@ -107,6 +112,7 @@ function EditorLeftRailImpl({
   isDragging,
   addPaletteScope = "document",
   deferOutlineContent = false,
+  perfTraceActive = false,
   onModeChange,
   onSelectNode,
   onSelectOutlineListGroup,
@@ -160,8 +166,11 @@ function EditorLeftRailImpl({
           <OutlinePanel
             doc={outlineDoc}
             selectedNodeId={editable ? selectedNodeId : null}
+            activeEditingNodeId={editable ? activeOutlineEditingNodeId : null}
+            editRelease={editable ? outlineEditRelease : null}
             selectedListGroupId={activeOutlineListGroupId ?? (selectedStyleResource?.kind === "list-group" ? selectedStyleResource.id : null)}
             deferContent={deferOutlineContent}
+            perfTraceActive={perfTraceActive}
             onAddShortcut={editable ? openAddPanel : undefined}
             onSelect={editable ? onSelectNode : noopSelectNode}
             onSelectListGroup={editable ? onSelectOutlineListGroup : undefined}
