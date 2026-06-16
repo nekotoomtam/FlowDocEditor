@@ -13,6 +13,11 @@ Accepted facts:
   drop feedback, active-draft finalize preservation through blocked and valid
   reorder paths, reducer no-op history coverage, and valid/invalid repeat
   browser smokes.
+- Post-`0.6.34`, Outline list reorder design has moved to segment-aware
+  subtree moves: dragging a list item moves its contiguous deeper same-instance
+  children; self-subtree drops stay blocked and automatic level repair remains
+  out of scope. The Outline drag ghost now reports the source subtree child
+  count for these moves as editor-only feedback.
 - Editor render/action separation now has ownership/invalidation contracts,
   structural handler extraction, page render churn guards, and WYSIWYG draft
   island trace coverage.

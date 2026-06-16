@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   resolveOutlineBodyChildReorderDrop,
   resolveOutlineBodyChildReorderRequest,
+  resolveOutlineReorderSubtreeChildCount,
   type OutlineReorderItem,
 } from "../OutlinePanel"
 import type { DocumentNode } from "@/schema"
@@ -99,7 +100,7 @@ describe("outline panel reorder request", () => {
     )).toBeNull()
   })
 
-  it("marks list hierarchy jumps as blocked before dispatch", () => {
+  it("marks drops into the source list subtree as blocked before dispatch", () => {
     const drop = resolveOutlineBodyChildReorderDrop(
       listDoc(["p0", "p1", "p2"]),
       item({ nodeId: "p1" }),
@@ -113,7 +114,49 @@ describe("outline panel reorder request", () => {
       targetNodeId: "p2",
       position: "after",
     })
+    expect(drop.blockedReason).toBe("source-subtree")
+  })
+
+  it("marks list hierarchy jumps as blocked before dispatch", () => {
+    const drop = resolveOutlineBodyChildReorderDrop(
+      listDoc(["p0", "p1", "q0", "q1", "q2"]),
+      item({ nodeId: "q1" }),
+      item({ nodeId: "p0" }),
+      "before",
+    )
+
+    expect(drop.request).toEqual({
+      sectionId: "section",
+      sourceNodeId: "q1",
+      targetNodeId: "p0",
+      position: "before",
+    })
     expect(drop.blockedReason).toBe("invalid-list-hierarchy")
+  })
+
+  it("allows list subtree preserving drops", () => {
+    const drop = resolveOutlineBodyChildReorderDrop(
+      listDoc(["p0", "p1", "p2", "q0", "q1"]),
+      item({ nodeId: "p1" }),
+      item({ nodeId: "q1" }),
+      "after",
+    )
+
+    expect(drop.request).toEqual({
+      sectionId: "section",
+      sourceNodeId: "p1",
+      targetNodeId: "q1",
+      position: "after",
+    })
+    expect(drop.blockedReason).toBeNull()
+  })
+
+  it("counts source list subtree children for the drag ghost affordance", () => {
+    const doc = listDoc(["p0", "p1", "p2", "q0"])
+
+    expect(resolveOutlineReorderSubtreeChildCount(doc, item({ nodeId: "p1" }))).toBe(1)
+    expect(resolveOutlineReorderSubtreeChildCount(doc, item({ nodeId: "p2" }))).toBe(0)
+    expect(resolveOutlineReorderSubtreeChildCount(doc, item({ nodeId: "missing" }))).toBe(0)
   })
 
   it("allows list hierarchy preserving drops", () => {

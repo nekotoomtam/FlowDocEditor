@@ -85,7 +85,7 @@ export function executeParagraphSplitOperationPlan(
     pageKey,
   } = plan
 
-  if (!newNodeId || !optimisticLayout || !optimisticFragment || !newParagraph || !newText || !pageKey || !plan.operation) {
+  if (!newNodeId || !optimisticLayout || !optimisticFragment || !newParagraph || newText == null || !pageKey || !plan.operation) {
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "structural-operation-handler-execute", handlerStartedAt, {
       operation: "split",
       status: "abort",

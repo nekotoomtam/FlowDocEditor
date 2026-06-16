@@ -9,6 +9,7 @@ import {
   describeWysiwygTextSessionAccessibility,
   INACTIVE_WYSIWYG_TEXT_SESSION,
   useWysiwygTextSession,
+  type WysiwygTextSessionStart,
   type WysiwygTextSelection,
 } from "../useWysiwygTextSession"
 import {
@@ -31,6 +32,17 @@ import {
   getParagraphTextFromDoc,
 } from "./editorDocumentLookup"
 import { wysiwygDraftStore } from "./wysiwygDraftStore"
+
+export function resolveWysiwygDraftStoreStartFromTextUpdate(input: WysiwygTextSessionStart) {
+  const caretIndex = input.caretOffset ?? null
+  return {
+    nodeId: input.nodeId,
+    text: input.text,
+    caretIndex,
+    selection: caretIndex == null ? null : { anchorOffset: caretIndex, focusOffset: caretIndex },
+    source: "start-plain-text-session-from-text",
+  }
+}
 
 export function useEditorWysiwygTextSessionController({
   docRef,
@@ -157,6 +169,14 @@ export function useEditorWysiwygTextSessionController({
     startRichWysiwygDraftSession,
   ])
 
+  const startPlainWysiwygTextSessionFromTextWithStore = useCallback((startInput: WysiwygTextSessionStart) => {
+    const started = startPlainWysiwygTextSessionFromText(startInput)
+    if (started) {
+      wysiwygDraftStore.setState(resolveWysiwygDraftStoreStartFromTextUpdate(startInput))
+    }
+    return started
+  }, [startPlainWysiwygTextSessionFromText])
+
   const changeWysiwygTextDraft = useCallback((change: Parameters<typeof changePlainWysiwygTextDraft>[0]) => {
     wysiwygDraftStore.setState({
       text: change.text,
@@ -219,7 +239,7 @@ export function useEditorWysiwygTextSessionController({
     wysiwygTextSessionStateRef,
     richWysiwygDraftSessionStateRef,
     wysiwygTextAccessibilityStatus,
-    startPlainWysiwygTextSessionFromText,
+    startPlainWysiwygTextSessionFromText: startPlainWysiwygTextSessionFromTextWithStore,
     applyRichWysiwygDraftStyleCommand,
     endRichWysiwygDraftSession,
     beginWysiwygDraftRuntimeSession,

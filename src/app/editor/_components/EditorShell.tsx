@@ -140,7 +140,11 @@ import { useEditorPreviewDocumentController } from "./shell/useEditorPreviewDocu
 import { useEditorPaginationLifecycleController } from "./shell/useEditorPaginationLifecycleController"
 import { useEditorNavigationSelectionState } from "./shell/useEditorNavigationSelectionState"
 import { useEditorDocumentSnapshotActions } from "./shell/useEditorDocumentSnapshotActions"
-import { useEditorHistoryActions } from "./shell/useEditorHistoryActions"
+import {
+  resetStructuralEditTransactionForHistoryAction,
+  type EditorHistoryActionKind,
+  useEditorHistoryActions,
+} from "./shell/useEditorHistoryActions"
 import { useEditorWheelZoomController } from "./shell/useEditorWheelZoomController"
 import { useEditorExportController } from "./shell/useEditorExportController"
 import { useInlineEditPageRelocation } from "./shell/useInlineEditPageRelocation"
@@ -1001,6 +1005,14 @@ export default function EditorShell() {
     setSelectedStyleResource,
   })
 
+  const resetStructuralEditForHistoryAction = useCallback((action: EditorHistoryActionKind) => {
+    resetStructuralEditTransactionForHistoryAction({
+      action,
+      structuralEditRuntime,
+      abortStructuralEditTransactionAndPanelDeferral,
+    })
+  }, [abortStructuralEditTransactionAndPanelDeferral, structuralEditRuntime])
+
   const {
     handleUndo,
     handleRedo,
@@ -1010,6 +1022,7 @@ export default function EditorShell() {
     futureLength: state.future.length,
     finalizeInlineEditBeforeResponsiveAction,
     dispatchEditorAction,
+    onBeforeHistoryDispatch: resetStructuralEditForHistoryAction,
   })
   const { handleWheelCapture } = useEditorWheelZoomController({
     editorRootRef,

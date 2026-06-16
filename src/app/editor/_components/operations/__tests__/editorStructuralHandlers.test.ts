@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { PageFragment, PaginatedDocument } from "@/pagination"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import {
+  executeParagraphSplitOperationPlan,
   executeParagraphMergeOperationPlan,
   type StructuralExecutionContext,
 } from "../editorStructuralHandlers"
-import type { ParagraphMergeOperationPlan } from "../editorStructuralOperationPlans"
+import type { ParagraphMergeOperationPlan, ParagraphSplitOperationPlan } from "../editorStructuralOperationPlans"
+import type { PendingOptimisticSplitRefocus } from "../../shell/editorShellTypes"
 
 function fragment(nodeId: string, pageIndex = 1): PageFragment {
   return {
@@ -41,13 +43,60 @@ function paginated(id: string): PaginatedDocument {
   }
 }
 
-function paragraph(id: string): ParagraphNode {
+function paragraph(id: string, text = "Merged text"): ParagraphNode {
   return {
     id,
     type: "paragraph",
     props: {},
-    children: [{ id: `${id}:text`, type: "text", text: "Merged text" }],
+    children: [{ id: `${id}:text`, type: "text", text }],
   } as ParagraphNode
+}
+
+function splitPlan(overrides: Partial<ParagraphSplitOperationPlan> = {}): ParagraphSplitOperationPlan {
+  const doc = { document: { sections: [] } } as unknown as DocumentNode
+  const nextPaginated = paginated("next")
+  return {
+    status: "success",
+    sourceNodeId: "source",
+    newNodeId: "new",
+    sourceFragment: fragment("source"),
+    newParagraph: paragraph("new", ""),
+    newText: "",
+    optimisticLayout: { doc, paginated: nextPaginated },
+    optimisticFragment: fragment("new"),
+    isTableCellParagraph: false,
+    mode: "same-page",
+    overflowedPage: false,
+    suppressedPageBreakNodeId: null,
+    pageKey: "page:1",
+    operation: {
+      kind: "paragraph.split",
+      urgency: "visible",
+      scope: {
+        nodeIds: ["source", "new"],
+        layoutScope: "from-index",
+        uiImpact: "structure",
+        needsHistory: true,
+        needsPreviewSettle: true,
+        canOptimistic: true,
+      },
+      action: {
+        type: "SPLIT_PARAGRAPH",
+        nodeId: "source",
+        splitIndex: 11,
+        text: "Source text",
+        newNodeId: "new",
+        precomputed: {
+          doc,
+          newNodeId: "new",
+        },
+        precomputedDocValidation: "shell-optimistic-structural",
+        paginated: nextPaginated,
+      },
+    },
+    perf: { startedAt: 10 },
+    ...overrides,
+  }
 }
 
 function mergePlan(overrides: Partial<Extract<ParagraphMergeOperationPlan, { status: "success" }>> = {}): Extract<ParagraphMergeOperationPlan, { status: "success" }> {
@@ -112,6 +161,18 @@ function executionContext(overrides: Partial<StructuralExecutionContext> = {}): 
     startInlineEditAfterOptimisticStructuralChange: vi.fn(() => true),
     startPlainWysiwygTextSessionFromText: vi.fn(() => true),
     structuralEditController: {
+      beginSplit: vi.fn(() => ({
+        transaction: { id: "tx-1", generation: 1 },
+        identity: { id: "tx-1", generation: 1 },
+        panelDeferral: {
+          transactionId: "tx-1",
+          generation: 1,
+          operation: "split",
+          nodeId: "new",
+          reason: "split-urgent-structural-paint",
+          startedAt: 10,
+        },
+      })),
       beginMerge: vi.fn(() => ({
         transaction: { id: "tx-1", generation: 1 },
         identity: { id: "tx-1", generation: 1 },
@@ -125,6 +186,7 @@ function executionContext(overrides: Partial<StructuralExecutionContext> = {}): 
         },
       })),
       markUrgentPainting: vi.fn(),
+      markSplitCommitted: vi.fn(),
       markMergeCommitted: vi.fn(),
     } as any,
     setPendingOptimisticSplitRefocus: vi.fn(),
@@ -147,6 +209,57 @@ afterEach(() => {
 })
 
 describe("editor structural handlers", () => {
+  it("executes an Enter split that creates an empty paragraph through the optimistic structural path", () => {
+    vi.useFakeTimers()
+    const plan = splitPlan()
+    const pending: PendingOptimisticSplitRefocus = {
+      sourceNodeId: "source",
+      newNodeId: "new",
+      sourceFragment: fragment("source"),
+      startedAt: 10,
+      prestarted: false,
+    }
+    const context = executionContext()
+
+    expect(executeParagraphSplitOperationPlan(plan, pending, context)).toBe(true)
+
+    expect(context.startInlineEditAfterOptimisticStructuralChange).toHaveBeenCalledWith(
+      "new",
+      0,
+      plan.optimisticLayout?.paginated,
+      1,
+      plan.optimisticLayout?.doc,
+      "",
+    )
+    expect(context.startPlainWysiwygTextSessionFromText).toHaveBeenCalledWith({
+      nodeId: "new",
+      text: "",
+      caretOffset: 0,
+      pageIndex: 1,
+    })
+    expect(context.beginWysiwygDraftRuntimeSession).toHaveBeenCalledWith(expect.objectContaining({
+      nodeId: "new",
+      initialTextLength: 0,
+      caretIndex: 0,
+    }))
+    expect(context.setOptimisticStructuralIslandOverride).toHaveBeenCalledWith(expect.objectContaining({
+      nodeId: "new",
+      paragraph: plan.newParagraph,
+    }))
+
+    vi.runAllTimers()
+
+    expect(context.dispatchEditorAction).toHaveBeenCalledWith(expect.objectContaining({
+      type: "SPLIT_PARAGRAPH",
+      nodeId: "source",
+      isOptimistic: true,
+    }))
+    expect(context.structuralEditController.markSplitCommitted).toHaveBeenCalledWith(
+      { id: "tx-1", generation: 1 },
+      "new",
+    )
+  })
+
   it("executes a merge plan through the injected structural context", () => {
     vi.useFakeTimers()
     const plan = mergePlan()

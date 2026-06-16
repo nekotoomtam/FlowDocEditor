@@ -34,7 +34,7 @@ export interface OutlineBodyChildReorder {
   position: OutlineReorderPosition
 }
 
-export type OutlineReorderBlockedReason = "invalid-list-hierarchy"
+export type OutlineReorderBlockedReason = "invalid-list-hierarchy" | "source-subtree"
 
 export interface OutlineBodyChildReorderDrop {
   request: OutlineBodyChildReorder | null
@@ -58,7 +58,7 @@ interface OutlineDragState {
   position: OutlineReorderPosition | null
   blockedReason: OutlineReorderBlockedReason | null
   pointer: { x: number; y: number } | null
-  ghost: { label: string; icon: string; depth: number }
+  ghost: { label: string; icon: string; depth: number; subtreeChildCount: number }
 }
 
 interface OutlineListGroupContext {
@@ -98,6 +98,7 @@ function dragEventTargetElement(event: React.DragEvent): Element | null {
 
 function outlineReorderBlockedReasonLabel(reason: OutlineReorderBlockedReason | null): string {
   if (reason === "invalid-list-hierarchy") return "วางตรงนี้ไม่ได้ เพราะลำดับรายการจะไม่ถูกต้อง"
+  if (reason === "source-subtree") return "วางเข้าในหัวข้อย่อยของตัวเองไม่ได้"
   return ""
 }
 
@@ -234,6 +235,7 @@ type NodeRowProps = {
   onDragStateChange: (state: OutlineDragState | null) => void
   onReorder?: (request: OutlineBodyChildReorder) => void
   resolveReorderDrop?: (target: OutlineReorderItem, position: OutlineReorderPosition | null) => OutlineBodyChildReorderDrop
+  getReorderSubtreeChildCount?: (source: OutlineReorderItem) => number
   children?: React.ReactNode
 }
 
@@ -274,26 +276,56 @@ export function resolveOutlineBodyChildReorderRequest(
   }
 }
 
+function outlineListSubtreeBodyChildSegment(
+  section: DocumentSection,
+  childIds: string[],
+  sourceIndex: number,
+): string[] {
+  const sourceNodeId = childIds[sourceIndex]
+  const sourceNode = section.nodes[sourceNodeId]
+  if (sourceNode?.type !== "paragraph") return [sourceNodeId]
+
+  const sourceList = sourceNode.props.list
+  if (!sourceList) return [sourceNodeId]
+
+  const segment = [sourceNodeId]
+  for (let index = sourceIndex + 1; index < childIds.length; index += 1) {
+    const node = section.nodes[childIds[index]]
+    if (node?.type !== "paragraph") break
+
+    const list = node.props.list
+    if (!list || list.instanceId !== sourceList.instanceId || list.level <= sourceList.level) break
+    segment.push(node.id)
+  }
+
+  return segment
+}
+
 function moveOutlineBodyChildIds(
+  section: DocumentSection,
   childIds: string[],
   sourceNodeId: string,
   targetNodeId: string,
   position: OutlineReorderPosition,
-): string[] | null {
-  if (sourceNodeId === targetNodeId) return null
+): { childIds: string[] | null; blockedReason: OutlineReorderBlockedReason | null } {
+  if (sourceNodeId === targetNodeId) return { childIds: null, blockedReason: null }
 
   const sourceIndex = childIds.indexOf(sourceNodeId)
   const targetIndex = childIds.indexOf(targetNodeId)
-  if (sourceIndex < 0 || targetIndex < 0) return null
+  if (sourceIndex < 0 || targetIndex < 0) return { childIds: null, blockedReason: null }
 
-  const withoutSource = childIds.filter((id) => id !== sourceNodeId)
+  const segment = outlineListSubtreeBodyChildSegment(section, childIds, sourceIndex)
+  if (segment.includes(targetNodeId)) return { childIds: null, blockedReason: "source-subtree" }
+
+  const segmentIds = new Set(segment)
+  const withoutSource = childIds.filter((id) => !segmentIds.has(id))
   const targetIndexAfterRemoval = withoutSource.indexOf(targetNodeId)
-  if (targetIndexAfterRemoval < 0) return null
+  if (targetIndexAfterRemoval < 0) return { childIds: null, blockedReason: null }
 
   const insertIndex = position === "before" ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
   const nextChildIds = [...withoutSource]
-  nextChildIds.splice(insertIndex, 0, sourceNodeId)
-  return nextChildIds
+  nextChildIds.splice(insertIndex, 0, ...segment)
+  return { childIds: nextChildIds, blockedReason: null }
 }
 
 function hasValidOutlineListHierarchyOrder(sections: DocumentSection[]): boolean {
@@ -317,6 +349,19 @@ function hasValidOutlineListHierarchyOrder(sections: DocumentSection[]): boolean
   return true
 }
 
+export function resolveOutlineReorderSubtreeChildCount(doc: DocumentNode, source: OutlineReorderItem): number {
+  const section = doc.document.sections.find((candidate) => candidate.id === source.sectionId)
+  if (!section) return 0
+
+  const body = section.nodes[source.bodyId]
+  if (body?.type !== "body") return 0
+
+  const sourceIndex = body.childIds.indexOf(source.nodeId)
+  if (sourceIndex < 0) return 0
+
+  return Math.max(0, outlineListSubtreeBodyChildSegment(section, body.childIds, sourceIndex).length - 1)
+}
+
 export function resolveOutlineBodyChildReorderDrop(
   doc: DocumentNode,
   source: OutlineReorderItem,
@@ -326,13 +371,16 @@ export function resolveOutlineBodyChildReorderDrop(
   const request = resolveOutlineBodyChildReorderRequest(source, target, position)
   if (!request || !position) return { request: null, blockedReason: null }
 
+  let blockedReason: OutlineReorderBlockedReason | null = null
   const nextSections = doc.document.sections.map((section) => {
     if (section.id !== source.sectionId) return section
 
     const body = section.nodes[source.bodyId]
     if (body?.type !== "body") return section
 
-    const nextChildIds = moveOutlineBodyChildIds(body.childIds, source.nodeId, target.nodeId, position)
+    const move = moveOutlineBodyChildIds(section, body.childIds, source.nodeId, target.nodeId, position)
+    if (move.blockedReason) blockedReason = move.blockedReason
+    const nextChildIds = move.childIds
     if (!nextChildIds) return section
 
     return {
@@ -346,7 +394,7 @@ export function resolveOutlineBodyChildReorderDrop(
 
   return {
     request,
-    blockedReason: hasValidOutlineListHierarchyOrder(nextSections) ? null : "invalid-list-hierarchy",
+    blockedReason: blockedReason ?? (hasValidOutlineListHierarchyOrder(nextSections) ? null : "invalid-list-hierarchy"),
   }
 }
 
@@ -367,7 +415,8 @@ function areNodeRowPropsEqual(previous: NodeRowProps, next: NodeRowProps): boole
     previous.onClick === next.onClick &&
     previous.onDragStateChange === next.onDragStateChange &&
     previous.onReorder === next.onReorder &&
-    previous.resolveReorderDrop === next.resolveReorderDrop
+    previous.resolveReorderDrop === next.resolveReorderDrop &&
+    previous.getReorderSubtreeChildCount === next.getReorderSubtreeChildCount
   )
 }
 
@@ -387,6 +436,7 @@ const NodeRow = memo(function NodeRow({
   onDragStateChange,
   onReorder,
   resolveReorderDrop,
+  getReorderSubtreeChildCount,
   children,
 }: NodeRowProps) {
   const [expanded, setExpanded] = useState(true)
@@ -545,7 +595,12 @@ const NodeRow = memo(function NodeRow({
                 position: null,
                 blockedReason: null,
                 pointer: dragPointerFromEvent(event),
-                ghost: { label, icon, depth },
+                ghost: {
+                  label,
+                  icon,
+                  depth,
+                  subtreeChildCount: getReorderSubtreeChildCount?.(reorderItem) ?? 0,
+                },
               })
             }}
             onDrag={(event) => {
@@ -727,6 +782,7 @@ function OutlineItems({
   onDragStateChange,
   onReorder,
   resolveReorderDrop,
+  getReorderSubtreeChildCount,
   listGroupContext,
   labelByNodeId,
 }: {
@@ -739,6 +795,7 @@ function OutlineItems({
   onDragStateChange: (state: OutlineDragState | null) => void
   onReorder?: (request: OutlineBodyChildReorder) => void
   resolveReorderDrop?: (target: OutlineReorderItem, position: OutlineReorderPosition | null) => OutlineBodyChildReorderDrop
+  getReorderSubtreeChildCount?: (source: OutlineReorderItem) => number
   listGroupContext: OutlineListGroupContext
   labelByNodeId: Map<string, string>
 }) {
@@ -762,6 +819,7 @@ function OutlineItems({
             onDragStateChange={onDragStateChange}
             onReorder={onReorder}
             resolveReorderDrop={resolveReorderDrop}
+            getReorderSubtreeChildCount={getReorderSubtreeChildCount}
             listGroupContext={listGroupContext}
             labelByNodeId={labelByNodeId}
           />
@@ -778,6 +836,7 @@ function OutlineItems({
           onDragStateChange={onDragStateChange}
           onReorder={onReorder}
           resolveReorderDrop={resolveReorderDrop}
+          getReorderSubtreeChildCount={getReorderSubtreeChildCount}
           listGroupContext={listGroupContext}
           labelByNodeId={labelByNodeId}
         />
@@ -794,6 +853,7 @@ type OutlineNodeProps = {
   onDragStateChange: (state: OutlineDragState | null) => void
   onReorder?: (request: OutlineBodyChildReorder) => void
   resolveReorderDrop?: (target: OutlineReorderItem, position: OutlineReorderPosition | null) => OutlineBodyChildReorderDrop
+  getReorderSubtreeChildCount?: (source: OutlineReorderItem) => number
   listGroupContext: OutlineListGroupContext
   labelByNodeId: Map<string, string>
 }
@@ -826,7 +886,8 @@ function areOutlineNodePropsEqual(previous: OutlineNodeProps, next: OutlineNodeP
     previous.onSelect === next.onSelect &&
     previous.onDragStateChange === next.onDragStateChange &&
     previous.onReorder === next.onReorder &&
-    previous.resolveReorderDrop === next.resolveReorderDrop
+    previous.resolveReorderDrop === next.resolveReorderDrop &&
+    previous.getReorderSubtreeChildCount === next.getReorderSubtreeChildCount
   )
 }
 
@@ -840,6 +901,7 @@ const OutlineNode = memo(function OutlineNode({
   onDragStateChange,
   onReorder,
   resolveReorderDrop,
+  getReorderSubtreeChildCount,
   listGroupContext,
   labelByNodeId,
 }: OutlineNodeProps) {
@@ -856,6 +918,7 @@ const OutlineNode = memo(function OutlineNode({
       onDragStateChange={onDragStateChange}
       onReorder={onReorder}
       resolveReorderDrop={resolveReorderDrop}
+      getReorderSubtreeChildCount={getReorderSubtreeChildCount}
       listGroupContext={listGroupContext}
       labelByNodeId={labelByNodeId}
     />
@@ -868,7 +931,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop} />
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount} />
     )
   }
 
@@ -878,7 +942,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop} />
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount} />
     )
   }
 
@@ -888,7 +953,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop} />
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount} />
     )
   }
 
@@ -898,7 +964,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop} />
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount} />
     )
   }
 
@@ -908,7 +975,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop} />
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount} />
     )
   }
 
@@ -918,7 +986,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop}>
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount}>
         {children}
       </NodeRow>
     )
@@ -930,7 +999,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop}>
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount}>
         {children}
       </NodeRow>
     )
@@ -942,7 +1012,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop}>
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount}>
         {children}
       </NodeRow>
     )
@@ -954,7 +1025,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop}>
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount}>
         {children}
       </NodeRow>
     )
@@ -966,7 +1038,8 @@ const OutlineNode = memo(function OutlineNode({
         selectedNodeId={selectedNodeId} activeEditingNodeId={activeEditingNodeId} onClick={onSelect}
         reorderItem={reorderItem} dragState={dragState}
         onDragStateChange={onDragStateChange} onReorder={onReorder}
-        resolveReorderDrop={resolveReorderDrop}>
+        resolveReorderDrop={resolveReorderDrop}
+        getReorderSubtreeChildCount={getReorderSubtreeChildCount}>
         {children}
       </NodeRow>
     )
@@ -1003,6 +1076,7 @@ function OutlineFlatRowView({
   onDragStateChange,
   onReorder,
   resolveReorderDrop,
+  getReorderSubtreeChildCount,
   listGroupContext,
   labelByNodeId,
   onToggleExpanded,
@@ -1015,6 +1089,7 @@ function OutlineFlatRowView({
   onDragStateChange: (state: OutlineDragState | null) => void
   onReorder?: (request: OutlineBodyChildReorder) => void
   resolveReorderDrop?: (target: OutlineReorderItem, position: OutlineReorderPosition | null) => OutlineBodyChildReorderDrop
+  getReorderSubtreeChildCount?: (source: OutlineReorderItem) => number
   listGroupContext: OutlineListGroupContext
   labelByNodeId: Map<string, string>
   onToggleExpanded: (rowKey: string) => void
@@ -1063,6 +1138,7 @@ function OutlineFlatRowView({
       onDragStateChange={onDragStateChange}
       onReorder={onReorder}
       resolveReorderDrop={resolveReorderDrop}
+      getReorderSubtreeChildCount={getReorderSubtreeChildCount}
     />
   )
 }
@@ -1135,6 +1211,13 @@ const outlineDragGhostIcon: React.CSSProperties = {
   fontWeight: 800,
 }
 
+const outlineDragGhostContent: React.CSSProperties = {
+  minWidth: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: 1,
+}
+
 const outlineDragGhostLabel: React.CSSProperties = {
   minWidth: 0,
   overflow: "hidden",
@@ -1143,20 +1226,39 @@ const outlineDragGhostLabel: React.CSSProperties = {
   fontWeight: 700,
 }
 
+const outlineDragGhostSubtree: React.CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: "#0369a1",
+  fontSize: 10,
+  fontWeight: 800,
+  lineHeight: 1.2,
+}
+
 function OutlineDragGhost({ dragState }: { dragState: OutlineDragState | null }) {
   if (!dragState?.pointer) return null
+  const subtreeChildCount = dragState.ghost.subtreeChildCount
+  const subtreeLabel = subtreeChildCount > 0 ? `พร้อมหัวข้อย่อย ${subtreeChildCount} รายการ` : null
+  const title = subtreeLabel ? `${dragState.ghost.label} (${subtreeLabel})` : dragState.ghost.label
   const x = Math.min(Math.max(12, dragState.pointer.x + 14), Math.max(12, window.innerWidth - 236))
-  const y = Math.min(Math.max(12, dragState.pointer.y + 10), Math.max(12, window.innerHeight - 44))
+  const y = Math.min(Math.max(12, dragState.pointer.y + 10), Math.max(12, window.innerHeight - 58))
   return (
     <div
       data-testid="outline-drag-ghost"
+      data-outline-drag-subtree-count={subtreeChildCount > 0 ? String(subtreeChildCount) : undefined}
+      title={title}
       style={{
         ...outlineDragGhost,
         transform: `translate3d(${x}px, ${y}px, 0)`,
       }}
     >
       <span style={outlineDragGhostIcon}>{dragState.ghost.icon}</span>
-      <span title={dragState.ghost.label} style={outlineDragGhostLabel}>{dragState.ghost.label}</span>
+      <span style={outlineDragGhostContent}>
+        <span style={outlineDragGhostLabel}>{dragState.ghost.label}</span>
+        {subtreeLabel ? <span style={outlineDragGhostSubtree}>{subtreeLabel}</span> : null}
+      </span>
     </div>
   )
 }
@@ -1383,6 +1485,9 @@ function OutlinePanelImpl({
     if (!dragState) return { request: null, blockedReason: null }
     return resolveOutlineBodyChildReorderDrop(doc, dragState.source, target, position)
   }, [doc, dragState])
+  const getReorderSubtreeChildCount = useCallback((source: OutlineReorderItem): number => (
+    resolveOutlineReorderSubtreeChildCount(doc, source)
+  ), [doc])
   const reorderStatusText = outlineReorderBlockedReasonLabel(dragState?.blockedReason ?? null)
 
   if (deferContent) {
@@ -1499,6 +1604,7 @@ function OutlinePanelImpl({
       onDragStateChange={setDragState}
       onReorder={onReorderBodyChild}
       resolveReorderDrop={resolveReorderDrop}
+      getReorderSubtreeChildCount={getReorderSubtreeChildCount}
       listGroupContext={listGroupContext}
       labelByNodeId={labelByNodeId}
       onToggleExpanded={handleToggleFlatRowExpanded}
@@ -1577,6 +1683,7 @@ function OutlinePanelImpl({
                 onDragStateChange={setDragState}
                 onReorder={onReorderBodyChild}
                 resolveReorderDrop={resolveReorderDrop}
+                getReorderSubtreeChildCount={getReorderSubtreeChildCount}
                 listGroupContext={listGroupContext}
                 labelByNodeId={labelByNodeId}
               />

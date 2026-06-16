@@ -146,7 +146,6 @@ export function useEditorOptimisticStructuralRefocusController({
       !activeFragment ||
       activeFragment.nodeType !== "paragraph" ||
       activeFragment.continuesFrom ||
-      activeFragment.isContinued ||
       activeFragment.listMarker
     ) return null
     const pageKey = editorPageNavigation.pageKeyByPageIndex.get(activeFragment.pageIndex) ?? null
@@ -332,6 +331,7 @@ export function useEditorOptimisticStructuralRefocusController({
   const handleMergeParagraph = useCallback((nodeId: string, text?: string) => {
     const history = consumeInlineEditHistory(nodeId)
     const canTryOptimisticMerge = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId
+    const hadActiveWysiwygTextSession = WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId
     const pendingSplit = pendingOptimisticSplitRefocusRef.current
     const optimisticLayoutDoc = optimisticLayoutRef.current?.doc ?? null
     const optimisticMergeSourceDoc = resolveOptimisticMergeSourceDocument({
@@ -341,15 +341,15 @@ export function useEditorOptimisticStructuralRefocusController({
       optimisticLayoutDoc,
       pendingSplitRefocus: pendingSplit,
     })
-    if (WYSIWYG_TEXT_ENGINE_ENABLED && wysiwygTextSessionStateRef.current.nodeId === nodeId) {
-      clearWysiwygDraftPagination()
-      endWysiwygTextSession()
-    }
     if (canTryOptimisticMerge && startOptimisticMergeRefocusBeforeDispatch(nodeId, text, history, optimisticMergeSourceDoc)) {
       if (pendingSplit?.newNodeId === nodeId) {
         pendingOptimisticSplitRefocusRef.current = null
       }
       return
+    }
+    if (hadActiveWysiwygTextSession) {
+      clearWysiwygDraftPagination()
+      endWysiwygTextSession()
     }
     pendingOptimisticMergeRefocusRef.current = null
     dispatchEditorAction({ type: "MERGE_PARAGRAPH", nodeId, text, history })

@@ -105,7 +105,6 @@ export function createParagraphSplitOperationPlan(ctx: ParagraphSplitOperationPl
     !activeFragment ||
     activeFragment.nodeType !== "paragraph" ||
     activeFragment.continuesFrom ||
-    activeFragment.isContinued ||
     activeFragment.listMarker
   ) {
     return { status: "ineligible", reason: "fragment-ineligible", sourceNodeId: ctx.nodeId }

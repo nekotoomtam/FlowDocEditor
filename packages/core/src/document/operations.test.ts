@@ -540,7 +540,7 @@ describe("body child reorder operations", () => {
     expect(reorderBodyChild(doc, "section", "row", "missing-target", "after")).toBe(doc)
   })
 
-  it("refuses list reorders that would create a level jump", () => {
+  it("refuses list reorders into their own subtree segment", () => {
     const p0 = makeListParagraph("p0", 0)
     const p1 = makeListParagraph("p1", 1)
     const p2 = makeListParagraph("p2", 2)
@@ -550,6 +550,36 @@ describe("body child reorder operations", () => {
 
     expect(moved).toBe(doc)
     assertDocument(doc)
+  })
+
+  it("refuses list reorders that would make the instance start nested", () => {
+    const p0 = makeListParagraph("p0", 0)
+    const p1 = makeListParagraph("p1", 1)
+    const q0 = makeListParagraph("q0", 0)
+    const q1 = makeListParagraph("q1", 1)
+    const q2 = makeListParagraph("q2", 2)
+    const doc = makeListDoc({ p0, p1, q0, q1, q2 }, ["p0", "p1", "q0", "q1", "q2"])
+
+    const moved = reorderBodyChild(doc, "section", "q1", "p0", "before")
+
+    expect(moved).toBe(doc)
+    assertDocument(doc)
+  })
+
+  it("moves a listed body child with its subtree segment", () => {
+    const p0 = makeListParagraph("p0", 0)
+    const p1 = makeListParagraph("p1", 1)
+    const p2 = makeListParagraph("p2", 2)
+    const q0 = makeListParagraph("q0", 0)
+    const q1 = makeListParagraph("q1", 1)
+    const doc = makeListDoc({ p0, p1, p2, q0, q1 }, ["p0", "p1", "p2", "q0", "q1"])
+
+    const moved = reorderBodyChild(doc, "section", "p1", "q1", "after")
+
+    expect(moved.document.sections[0].nodes.body).toMatchObject({
+      childIds: ["p0", "q0", "q1", "p1", "p2"],
+    })
+    assertDocument(moved)
   })
 
   it("allows list reorders that preserve the authored hierarchy", () => {

@@ -4600,6 +4600,10 @@ async function runStructuralRefocusSafetyProbe(page) {
     steps.push({ index: 0, ...step })
     latestNodeId = step.newNodeId
     screenshots.afterOptimisticIsland = await captureProbeScreenshot(page, "after-optimistic-island")
+    if (PROBE_MODE === "enter-type-before-settle") {
+      preservedPerfEvents = preservedPerfEvents.concat(await page.evaluate(() => window.__flowDocWysiwygPerfEvents ?? []))
+      await page.evaluate(() => { window.__flowDocWysiwygPerfEvents = [] })
+    }
 
     if (PROBE_MODE === "enter-mid-split") {
       let previousDelay = 0
@@ -4741,15 +4745,24 @@ async function runStructuralRefocusSafetyProbe(page) {
   }
 
   screenshots.afterAction = await captureProbeScreenshot(page, "structural-after-action")
-  let structuralPanelLiveDocRestoredObserved = await waitForWysiwygPerfEventAction(
-    page,
-    "flowdoc-structural-panel-release",
-    "live-doc-restored",
-    Math.min(READY_TIMEOUT_MS, 5000),
-  )
+  let structuralPanelLiveDocRestoredObserved = preservedPerfEvents.some((event) => (
+    event.kind === "flowdoc-structural-panel-release" &&
+    event.action === "live-doc-restored"
+  ))
+  if (!structuralPanelLiveDocRestoredObserved) {
+    structuralPanelLiveDocRestoredObserved = await waitForWysiwygPerfEventAction(
+      page,
+      "flowdoc-structural-panel-release",
+      "live-doc-restored",
+      Math.min(READY_TIMEOUT_MS, 5000),
+    )
+  }
   if (!structuralPanelLiveDocRestoredObserved) {
     await page.waitForTimeout(650)
-    structuralPanelLiveDocRestoredObserved = await hasWysiwygPerfEventAction(
+    structuralPanelLiveDocRestoredObserved = preservedPerfEvents.some((event) => (
+      event.kind === "flowdoc-structural-panel-release" &&
+      event.action === "live-doc-restored"
+    )) || await hasWysiwygPerfEventAction(
       page,
       "flowdoc-structural-panel-release",
       "live-doc-restored",

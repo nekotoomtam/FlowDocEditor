@@ -1,4 +1,5 @@
 import type {
+  DocumentSection,
   DocumentNode,
   FieldRefInline,
   FlowTableCellNode,
@@ -2110,6 +2111,27 @@ function hasValidListHierarchyOrder(doc: DocumentNode): boolean {
   return true
 }
 
+function listSubtreeBodyChildSegment(section: DocumentSection, childIds: string[], sourceIndex: number): string[] {
+  const sourceNodeId = childIds[sourceIndex]
+  const source = section.nodes[sourceNodeId]
+  if (source?.type !== "paragraph") return [sourceNodeId]
+
+  const sourceList = source.props.list
+  if (!sourceList) return [sourceNodeId]
+
+  const segment = [sourceNodeId]
+  for (let index = sourceIndex + 1; index < childIds.length; index += 1) {
+    const node = section.nodes[childIds[index]]
+    if (node?.type !== "paragraph") break
+
+    const list = node.props.list
+    if (!list || list.instanceId !== sourceList.instanceId || list.level <= sourceList.level) break
+    segment.push(node.id)
+  }
+
+  return segment
+}
+
 export function reorderBodyChild(
   doc: DocumentNode,
   sectionId: string,
@@ -2130,13 +2152,17 @@ export function reorderBodyChild(
   const targetIndex = body.childIds.indexOf(targetNodeId)
   if (sourceIndex < 0 || targetIndex < 0) return doc
 
-  const withoutSource = body.childIds.filter((id) => id !== sourceNodeId)
+  const segment = listSubtreeBodyChildSegment(section, body.childIds, sourceIndex)
+  if (segment.includes(targetNodeId)) return doc
+
+  const segmentIds = new Set(segment)
+  const withoutSource = body.childIds.filter((id) => !segmentIds.has(id))
   const targetIndexAfterRemoval = withoutSource.indexOf(targetNodeId)
   if (targetIndexAfterRemoval < 0) return doc
 
   const insertIndex = position === "before" ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
   const nextChildIds = [...withoutSource]
-  nextChildIds.splice(insertIndex, 0, sourceNodeId)
+  nextChildIds.splice(insertIndex, 0, ...segment)
 
   if (nextChildIds.every((id, index) => id === body.childIds[index])) return doc
 

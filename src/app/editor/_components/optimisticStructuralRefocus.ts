@@ -122,6 +122,29 @@ function findFragmentLane(paginated: PaginatedDocument, sourceFragment: PageFrag
   return null
 }
 
+function findTerminalFragmentForNodeInLane(
+  paginated: PaginatedDocument,
+  sourceFragment: PageFragment,
+  lane: FragmentLane,
+): PageFragment | null {
+  const candidates: PageFragment[] = []
+  for (const section of paginated.sections) {
+    for (const page of section.pages) {
+      for (const fragment of page[lane]) {
+        if (fragment.nodeId === sourceFragment.nodeId && fragment.nodeType === sourceFragment.nodeType) {
+          candidates.push(fragment)
+        }
+      }
+    }
+  }
+  candidates.sort((a, b) => (
+    a.pageIndex - b.pageIndex ||
+    ((a.fragmentIndex ?? a.lineStart ?? 0) - (b.fragmentIndex ?? b.lineStart ?? 0)) ||
+    a.y - b.y
+  ))
+  return candidates.at(-1) ?? null
+}
+
 export function createOptimisticSplitRefocusPaginated(input: {
   doc: DocumentNode
   paginated: PaginatedDocument
@@ -134,9 +157,9 @@ export function createOptimisticSplitRefocusPaginated(input: {
   if (
     sourceFragment.nodeType !== "paragraph" ||
     sourceFragment.continuesFrom ||
-    sourceFragment.isContinued ||
     sourceFragment.listMarker
   ) return null
+  const firstContinuedSource = sourceFragment.isContinued === true
 
   const sourceParagraph = findParagraph(input.doc, input.sourceNodeId)
   const newParagraph = findParagraph(input.doc, input.newNodeId)
@@ -145,6 +168,51 @@ export function createOptimisticSplitRefocusPaginated(input: {
 
   const sourceText = getTextRunParagraphText(sourceParagraph) ?? ""
   const newText = getTextRunParagraphText(newParagraph) ?? ""
+  const lane = findFragmentLane(input.paginated, sourceFragment)
+  if (!lane) return null
+
+  if (firstContinuedSource) {
+    if (newText.length > 0) return null
+    const terminalFragment = findTerminalFragmentForNodeInLane(input.paginated, sourceFragment, lane)
+    if (
+      !terminalFragment ||
+      sameFragment(terminalFragment, sourceFragment) ||
+      terminalFragment.continuesFrom !== true ||
+      terminalFragment.isContinued === true
+    ) return null
+    const newMeasureTemplateFragment = withOptimisticRenderSpacing(terminalFragment, { spacingBefore: 0 })
+    const newBaseFragment: PageFragment = {
+      ...newMeasureTemplateFragment,
+      nodeId: input.newNodeId,
+      y: terminalFragment.y + terminalFragment.height,
+      height: Math.max(1, terminalFragment.height),
+      lines: [],
+      fragmentIndex: (terminalFragment.fragmentIndex ?? 0) + 1,
+      lineStart: 0,
+      lineEnd: 0,
+      continuesFrom: false,
+      isContinued: false,
+    }
+    const newLayout = buildWysiwygDraftParagraphLayout(newBaseFragment, newParagraph, newText, input.textMeasurer)
+    if (!newLayout) return null
+    const newFragment: PageFragment = {
+      ...newBaseFragment,
+      height: Math.max(1, newLayout.height),
+      lines: linesWithNodeId(newLayout.lines, input.newNodeId),
+      lineStart: 0,
+      lineEnd: newLayout.lines.length,
+    }
+    const pageContentBottom = findPageContentBottom(input.paginated, terminalFragment.pageIndex)
+    const optimisticBottom = newFragment.y + newFragment.height
+    return {
+      paginated: input.paginated,
+      sourceFragment,
+      newFragment,
+      overflowedPage: pageContentBottom != null && optimisticBottom > pageContentBottom + HEIGHT_EPSILON,
+      mode: "boundary-safe",
+    }
+  }
+
   const sourceMeasureFragment = withOptimisticRenderSpacing(sourceFragment, { spacingAfter: 0 })
   const newMeasureTemplateFragment = withOptimisticRenderSpacing(sourceFragment, { spacingBefore: 0 })
   const sourceLayout = buildWysiwygDraftParagraphLayout(sourceMeasureFragment, sourceParagraph, sourceText, input.textMeasurer)
@@ -182,9 +250,6 @@ export function createOptimisticSplitRefocusPaginated(input: {
     lineStart: 0,
     lineEnd: newLayout.lines.length,
   }
-
-  const lane = findFragmentLane(input.paginated, sourceFragment)
-  if (!lane) return null
 
   const sourceBottom = sourceFragment.y + sourceFragment.height
   const optimisticBottom = newFragment.y + newFragment.height

@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "0.6.34",
+  "version": "0.6.35",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -37,6 +37,8 @@
     "smoke:outline-panel": "node scripts/outline-panel-smoke.mjs",
     "smoke:outline-panel-list-draft": "node scripts/outline-panel-list-draft-smoke.mjs",
     "smoke:outline-panel-list-draft-repeat": "node scripts/outline-panel-list-draft-repeat-smoke.mjs",
+    "smoke:outline-panel-list-subtree-reorder": "node scripts/outline-panel-list-subtree-reorder-smoke.mjs",
+    "smoke:outline-panel-list-subtree-reorder-repeat": "node scripts/outline-panel-list-subtree-reorder-repeat-smoke.mjs",
     "smoke:outline-panel-active-list-reorder": "node scripts/outline-panel-active-list-reorder-smoke.mjs",
     "smoke:outline-panel-active-list-reorder-repeat": "node scripts/outline-panel-active-list-reorder-repeat-smoke.mjs",
     "smoke:outline-panel-invalid-list-reorder": "node scripts/outline-panel-invalid-list-reorder-smoke.mjs",

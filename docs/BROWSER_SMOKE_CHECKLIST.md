@@ -278,6 +278,13 @@ or left-rail large-document behavior.
 - For the list-item active draft variant, run
   `npm.cmd run smoke:outline-panel-list-draft` on Windows PowerShell or
   `npm run smoke:outline-panel-list-draft` elsewhere.
+- For the list subtree move variant, run
+  `npm.cmd run smoke:outline-panel-list-subtree-reorder` on Windows PowerShell
+  or `npm run smoke:outline-panel-list-subtree-reorder` elsewhere. This opens
+  an active draft on the level-1 list item `li_00033`, drags it after
+  `li_00057`, and expects the level-2 child `li_00035` to move with the source
+  item as one body-order segment while the drag ghost reports one subtree child
+  and Undo/Redo preserves the finalized draft.
 - For the active-list-item self-reorder variant, run
   `npm.cmd run smoke:outline-panel-active-list-reorder` on Windows PowerShell
   or `npm run smoke:outline-panel-active-list-reorder` elsewhere. This opens an
@@ -288,9 +295,16 @@ or left-rail large-document behavior.
   `npm.cmd run smoke:outline-panel-invalid-list-reorder` on Windows PowerShell
   or `npm run smoke:outline-panel-invalid-list-reorder` elsewhere. This opens an
   active draft on `li_00033`, attempts the invalid `li_00033` after `li_00035`
-  drop, verifies the target exposes `invalid-list-hierarchy` blocked feedback,
+  drop into its own subtree, verifies the target exposes `source-subtree`
+  blocked feedback, confirms the drag ghost still reports one subtree child,
   confirms the active draft still finalizes, verifies the body order stays
   unchanged, and confirms no document assertion is emitted in the browser.
+- To catch intermittent list-subtree move regressions, run
+  `npm.cmd run smoke:outline-panel-list-subtree-reorder-repeat` on Windows
+  PowerShell or `npm run smoke:outline-panel-list-subtree-reorder-repeat`
+  elsewhere; it runs the list subtree move variant three times and expects the
+  subtree source draft to preserve text/list signature through Undo/Redo and
+  report one subtree child in the drag ghost.
 - To catch intermittent self-reorder regressions, run
   `npm.cmd run smoke:outline-panel-active-list-reorder-repeat` on Windows
   PowerShell or `npm run smoke:outline-panel-active-list-reorder-repeat`
@@ -299,7 +313,7 @@ or left-rail large-document behavior.
   `npm.cmd run smoke:outline-panel-invalid-list-reorder-repeat` on Windows
   PowerShell or `npm run smoke:outline-panel-invalid-list-reorder-repeat`
   elsewhere; it runs the invalid-list no-op variant three times and expects
-  `invalid-list-hierarchy` blocked feedback.
+  `source-subtree` blocked feedback plus one subtree child in the drag ghost.
 - To catch intermittent active list-draft finalize/reorder regressions, run
   `npm.cmd run smoke:outline-panel-list-draft-repeat` on Windows PowerShell or
   `npm run smoke:outline-panel-list-draft-repeat` elsewhere; it runs the

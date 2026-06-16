@@ -1283,6 +1283,220 @@ describe("FlowdocDraftEditorIslandRoot", () => {
     expect(fragments[1].y).toBe(pageBreakFragment.y)
   })
 
+  it("anchors end-of-paragraph Enter from the first continued fragment after the terminal fragment", () => {
+    const doc = makeDoc("Before continued paragraph")
+    const section = doc.document.sections[0]
+    const p1 = section.nodes.p1 as ParagraphNode
+    const p2: ParagraphNode = {
+      ...p1,
+      id: "p2",
+      children: [{ id: "p2-text", type: "text", text: "" }],
+    }
+    const splitDoc: DocumentNode = {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            ...section.nodes,
+            body: { ...section.nodes.body, childIds: ["p1", "p2", "p3"] },
+            p2,
+            p3: {
+              ...p1,
+              id: "p3",
+              children: [{ id: "p3-text", type: "text", text: "Downstream" }],
+            },
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+    const firstFragment = makeFragment({
+      nodeId: "p1",
+      pageIndex: 0,
+      y: 48,
+      height: 24,
+      fragmentIndex: 0,
+      lineStart: 0,
+      lineEnd: 1,
+      continuesFrom: false,
+      isContinued: true,
+    })
+    const terminalFragment = makeFragment({
+      nodeId: "p1",
+      pageIndex: 1,
+      y: 64,
+      height: 24,
+      fragmentIndex: 1,
+      lineStart: 1,
+      lineEnd: 2,
+      continuesFrom: true,
+      isContinued: false,
+    })
+    const downstreamFragment = makeFragment({
+      nodeId: "p3",
+      pageIndex: 1,
+      y: 96,
+      height: 24,
+      lineStart: 0,
+      lineEnd: 1,
+    })
+    const paginated: PaginatedDocument = {
+      sections: [{
+        sectionId: "section",
+        pages: [
+          {
+            index: 0,
+            width: 300,
+            height: 300,
+            contentBox: { x: 36, y: 48, width: 220, height: 220 },
+            fragments: [firstFragment],
+            headerFragments: [],
+            footerFragments: [],
+          },
+          {
+            index: 1,
+            width: 300,
+            height: 300,
+            contentBox: { x: 36, y: 48, width: 220, height: 220 },
+            fragments: [terminalFragment, downstreamFragment],
+            headerFragments: [],
+            footerFragments: [],
+          },
+        ],
+      }],
+    } as unknown as PaginatedDocument
+
+    const result = createOptimisticSplitRefocusPaginated({
+      doc: splitDoc,
+      paginated,
+      sourceNodeId: "p1",
+      newNodeId: "p2",
+      sourceFragment: firstFragment,
+      textMeasurer: fixedMeasurer,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.mode).toBe("boundary-safe")
+    expect(result!.newFragment.nodeId).toBe("p2")
+    expect(result!.newFragment.pageIndex).toBe(1)
+    expect(result!.newFragment.y).toBeGreaterThanOrEqual(terminalFragment.y + terminalFragment.height)
+    expect(result!.paginated.sections[0].pages[0].fragments).toEqual([firstFragment])
+    expect(result!.paginated.sections[0].pages[1].fragments).toEqual([terminalFragment, downstreamFragment])
+  })
+
+  it("does not optimistic split a continued paragraph when the new paragraph keeps tail text", () => {
+    const doc = makeDoc("Before continued paragraph")
+    const section = doc.document.sections[0]
+    const p1 = section.nodes.p1 as ParagraphNode
+    const p2: ParagraphNode = {
+      ...p1,
+      id: "p2",
+      children: [{ id: "p2-text", type: "text", text: "tail" }],
+    }
+    const splitDoc: DocumentNode = {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            ...section.nodes,
+            body: { ...section.nodes.body, childIds: ["p1", "p2"] },
+            p2,
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+    const firstFragment = makeFragment({
+      nodeId: "p1",
+      pageIndex: 0,
+      fragmentIndex: 0,
+      continuesFrom: false,
+      isContinued: true,
+    })
+    const terminalFragment = makeFragment({
+      nodeId: "p1",
+      pageIndex: 1,
+      fragmentIndex: 1,
+      continuesFrom: true,
+      isContinued: false,
+    })
+    const paginated: PaginatedDocument = {
+      sections: [{
+        sectionId: "section",
+        pages: [
+          { index: 0, width: 300, height: 300, contentBox: { x: 36, y: 48, width: 220, height: 220 }, fragments: [firstFragment], headerFragments: [], footerFragments: [] },
+          { index: 1, width: 300, height: 300, contentBox: { x: 36, y: 48, width: 220, height: 220 }, fragments: [terminalFragment], headerFragments: [], footerFragments: [] },
+        ],
+      }],
+    } as unknown as PaginatedDocument
+
+    expect(createOptimisticSplitRefocusPaginated({
+      doc: splitDoc,
+      paginated,
+      sourceNodeId: "p1",
+      newNodeId: "p2",
+      sourceFragment: firstFragment,
+      textMeasurer: fixedMeasurer,
+    })).toBeNull()
+  })
+
+  it("does not optimistic split from a continued-from paragraph fragment", () => {
+    const doc = makeDoc("Before continued paragraph")
+    const section = doc.document.sections[0]
+    const p1 = section.nodes.p1 as ParagraphNode
+    const p2: ParagraphNode = {
+      ...p1,
+      id: "p2",
+      children: [{ id: "p2-text", type: "text", text: "" }],
+    }
+    const splitDoc: DocumentNode = {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            ...section.nodes,
+            body: { ...section.nodes.body, childIds: ["p1", "p2"] },
+            p2,
+          },
+        }],
+      },
+    } as unknown as DocumentNode
+    const terminalFragment = makeFragment({
+      nodeId: "p1",
+      pageIndex: 1,
+      fragmentIndex: 1,
+      continuesFrom: true,
+      isContinued: false,
+    })
+    const paginated: PaginatedDocument = {
+      sections: [{
+        sectionId: "section",
+        pages: [{
+          index: 1,
+          width: 300,
+          height: 300,
+          contentBox: { x: 36, y: 48, width: 220, height: 220 },
+          fragments: [terminalFragment],
+          headerFragments: [],
+          footerFragments: [],
+        }],
+      }],
+    } as unknown as PaginatedDocument
+
+    expect(createOptimisticSplitRefocusPaginated({
+      doc: splitDoc,
+      paginated,
+      sourceNodeId: "p1",
+      newNodeId: "p2",
+      sourceFragment: terminalFragment,
+      textMeasurer: fixedMeasurer,
+    })).toBeNull()
+  })
+
   it("builds an optimistic same-page merge fragment for structural Backspace refocus", () => {
     const doc = makeDoc("BeforeAfter")
     const section = doc.document.sections[0]

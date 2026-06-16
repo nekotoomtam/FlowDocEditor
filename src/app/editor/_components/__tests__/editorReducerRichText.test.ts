@@ -1443,7 +1443,35 @@ describe("editorReducer list-aware structural paragraph actions", () => {
     expect(next.past).toHaveLength(1)
   })
 
-  it("does not push history when a list reorder is blocked by hierarchy guard", () => {
+  it("reorders a listed body child with its subtree as one history entry", () => {
+    const doc = docWithListedParagraphs()
+    const section = doc.document.sections[0]
+    const body = section.nodes.body
+    const p2 = section.nodes.p2 as ParagraphNode
+    if (body?.type !== "body") throw new Error("expected body")
+    if (!p2.props.list) throw new Error("expected p2 list item")
+    body.childIds = ["p0", "p1", "p2", "p0-child"]
+    p2.props = {
+      ...p2.props,
+      list: { ...p2.props.list, level: 2 },
+    }
+    const state = createInitialEditorState(doc)
+    const next = reducer(state, {
+      type: "REORDER_BODY_CHILD",
+      sectionId: "section",
+      sourceNodeId: "p1",
+      targetNodeId: "p0-child",
+      position: "after",
+    })
+    const movedBody = next.doc.document.sections[0].nodes.body
+
+    expect(movedBody.type === "body" ? movedBody.childIds : []).toEqual(["p0", "p0-child", "p1", "p2"])
+    expect(next.selectedNodeId).toBe("p1")
+    expect(next.selectionAnchorNodeId).toBe("p1")
+    expect(next.past).toHaveLength(1)
+  })
+
+  it("does not push history when a list reorder drops into its own subtree", () => {
     const doc = docWithListedParagraphs()
     const section = doc.document.sections[0]
     const body = section.nodes.body

@@ -15,6 +15,9 @@ const SOURCE_NODE_ID = process.env.OUTLINE_REORDER_SOURCE_NODE_ID?.trim() || "co
 const TARGET_NODE_ID = process.env.OUTLINE_REORDER_TARGET_NODE_ID?.trim() || "cover_note"
 const REORDER_POSITION = process.env.OUTLINE_REORDER_POSITION?.trim() || "after"
 const EXPECT_REORDER_NOOP = process.env.OUTLINE_REORDER_EXPECT_NOOP === "1"
+const EXPECTED_DROP_BLOCKED_REASON = process.env.OUTLINE_REORDER_EXPECT_BLOCKED_REASON?.trim() || "invalid-list-hierarchy"
+const EXPECTED_SUBTREE_CHILD_COUNT_RAW = process.env.OUTLINE_REORDER_EXPECT_SUBTREE_CHILD_COUNT ?? "0"
+const EXPECTED_SUBTREE_CHILD_COUNT = Number(EXPECTED_SUBTREE_CHILD_COUNT_RAW)
 const VALID_REORDER_POSITIONS = new Set(["before", "after"])
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
@@ -31,6 +34,10 @@ function assert(condition, message) {
 }
 
 assert(VALID_REORDER_POSITIONS.has(REORDER_POSITION), `OUTLINE_REORDER_POSITION must be before or after, got ${REORDER_POSITION}`)
+assert(
+  Number.isInteger(EXPECTED_SUBTREE_CHILD_COUNT) && EXPECTED_SUBTREE_CHILD_COUNT >= 0,
+  `OUTLINE_REORDER_EXPECT_SUBTREE_CHILD_COUNT must be an integer >= 0, got ${EXPECTED_SUBTREE_CHILD_COUNT_RAW}`,
+)
 
 function cssAttrValue(value) {
   return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
@@ -187,6 +194,10 @@ async function readStoredBodyOrder(page) {
       sectionId: section.id,
       bodyId: section.bodyRootId,
       childIds: body.childIds,
+      listByNodeId: Object.fromEntries(body.childIds.map((nodeId) => {
+        const node = section.nodes[nodeId]
+        return [nodeId, node?.type === "paragraph" ? (node.props.list ?? null) : null]
+      })),
     }
   }, STORAGE_KEY)
 }
@@ -480,6 +491,18 @@ async function dragOutlineRow(page, sourceNodeId, targetNodeId, position) {
     rowSelector(sourceNodeId),
     { timeout: 5000 },
   )
+  const ghost = page.getByTestId("outline-drag-ghost")
+  await ghost.waitFor({ state: "attached", timeout: 5000 })
+  const ghostSubtreeCountAttr = await ghost.getAttribute("data-outline-drag-subtree-count")
+  const ghostSubtreeChildCount = ghostSubtreeCountAttr == null ? 0 : Number(ghostSubtreeCountAttr)
+  assert(
+    Number.isInteger(ghostSubtreeChildCount) && ghostSubtreeChildCount >= 0,
+    `outline drag ghost exposed invalid subtree count ${ghostSubtreeCountAttr}`,
+  )
+  assert(
+    ghostSubtreeChildCount === EXPECTED_SUBTREE_CHILD_COUNT,
+    `expected outline drag ghost subtree count ${EXPECTED_SUBTREE_CHILD_COUNT}, got ${ghostSubtreeChildCount}`,
+  )
 
   await dispatchDragEvent(page, { type: "dragover", rowNodeId: targetNodeId, position })
   await page.waitForFunction(
@@ -494,7 +517,7 @@ async function dragOutlineRow(page, sourceNodeId, targetNodeId, position) {
   const dropBlockedReason = await page.locator(rowSelector(targetNodeId)).getAttribute("data-outline-drop-blocked")
   if (EXPECT_REORDER_NOOP) {
     assert(
-      dropBlockedReason === "invalid-list-hierarchy",
+      dropBlockedReason === EXPECTED_DROP_BLOCKED_REASON,
       `expected invalid list drop to expose blocked reason, got ${dropBlockedReason}`,
     )
   } else {
@@ -505,16 +528,35 @@ async function dragOutlineRow(page, sourceNodeId, targetNodeId, position) {
   await page.evaluate(() => {
     window.__flowDocOutlineSmokeDragTransfer = null
   })
-  return { dropBlockedReason }
+  return { dropBlockedReason, ghostSubtreeChildCount }
 }
 
-function expectedOrderAfterMove(childIds, sourceNodeId, targetNodeId, position) {
-  const withoutSource = childIds.filter((id) => id !== sourceNodeId)
+function expectedOrderAfterMove(childIds, listByNodeId, sourceNodeId, targetNodeId, position) {
+  const sourceIndex = childIds.indexOf(sourceNodeId)
+  assert(sourceIndex >= 0, `source ${sourceNodeId} not found in body order`)
+  const sourceList = listByNodeId[sourceNodeId]
+  const segment = [sourceNodeId]
+  if (sourceList) {
+    for (let index = sourceIndex + 1; index < childIds.length; index += 1) {
+      const candidateId = childIds[index]
+      const candidateList = listByNodeId[candidateId]
+      if (
+        !candidateList ||
+        candidateList.instanceId !== sourceList.instanceId ||
+        candidateList.level <= sourceList.level
+      ) break
+      segment.push(candidateId)
+    }
+  }
+  if (segment.includes(targetNodeId)) return childIds.slice()
+
+  const segmentIds = new Set(segment)
+  const withoutSource = childIds.filter((id) => !segmentIds.has(id))
   const targetIndex = withoutSource.indexOf(targetNodeId)
   assert(targetIndex >= 0, `target ${targetNodeId} not found after source removal`)
   const insertIndex = position === "before" ? targetIndex : targetIndex + 1
   const next = withoutSource.slice()
-  next.splice(insertIndex, 0, sourceNodeId)
+  next.splice(insertIndex, 0, ...segment)
   return next
 }
 
@@ -570,7 +612,13 @@ async function runSmoke(page) {
   const activeEdit = await startActiveDraftBeforeOutlineReorder(page)
   const actionCountsBeforeReorder = await readOutlineActionCounts(page)
   const dragResult = await dragOutlineRow(page, SOURCE_NODE_ID, TARGET_NODE_ID, REORDER_POSITION)
-  const attemptedChildIds = expectedOrderAfterMove(before.childIds, SOURCE_NODE_ID, TARGET_NODE_ID, REORDER_POSITION)
+  const attemptedChildIds = expectedOrderAfterMove(
+    before.childIds,
+    before.listByNodeId,
+    SOURCE_NODE_ID,
+    TARGET_NODE_ID,
+    REORDER_POSITION,
+  )
   const expectedStoredChildIds = EXPECT_REORDER_NOOP ? before.childIds : attemptedChildIds
   await waitForStoredOrder(page, expectedStoredChildIds)
   const committedActiveEditSnapshot = await waitForStoredParagraphSnapshot(
@@ -645,6 +693,8 @@ async function runSmoke(page) {
       expectedIndex: expectedStoredChildIds.indexOf(SOURCE_NODE_ID),
       attemptedIndex: attemptedChildIds.indexOf(SOURCE_NODE_ID),
       dropBlockedReason: dragResult.dropBlockedReason,
+      ghostSubtreeChildCount: dragResult.ghostSubtreeChildCount,
+      expectedSubtreeChildCount: EXPECTED_SUBTREE_CHILD_COUNT,
       firstFiveBefore: before.childIds.slice(0, 5),
       firstFiveAfter: after.childIds.slice(0, 5),
       packageVersion: after.packageVersion,

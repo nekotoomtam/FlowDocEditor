@@ -12,12 +12,19 @@ const repeatLabel = process.env.OUTLINE_PANEL_REPEAT_LABEL ?? "Outline panel lis
 const expectNoop = process.env.OUTLINE_PANEL_REPEAT_EXPECT_NOOP === "1"
 const expectedDropBlockedReason = process.env.OUTLINE_PANEL_REPEAT_EXPECTED_DROP_BLOCKED_REASON
   ?? (expectNoop ? "invalid-list-hierarchy" : null)
+const expectedSubtreeChildCountRaw = process.env.OUTLINE_PANEL_REPEAT_EXPECTED_SUBTREE_CHILD_COUNT ?? "0"
+const expectedSubtreeChildCount = Number(expectedSubtreeChildCountRaw)
 const OUTPUT_TAIL_LIMIT = 6000
 const DEFAULT_REPEAT = 3
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
+
+assert(
+  Number.isInteger(expectedSubtreeChildCount) && expectedSubtreeChildCount >= 0,
+  `OUTLINE_PANEL_REPEAT_EXPECTED_SUBTREE_CHILD_COUNT must be an integer >= 0; received ${JSON.stringify(expectedSubtreeChildCountRaw)}`,
+)
 
 function readCliOption(name) {
   const exact = `--${name}`
@@ -81,6 +88,8 @@ function summarizeChildSample(summary) {
       expectedIndex: reorder.expectedIndex ?? null,
       attemptedIndex: reorder.attemptedIndex ?? null,
       dropBlockedReason: reorder.dropBlockedReason ?? null,
+      ghostSubtreeChildCount: reorder.ghostSubtreeChildCount ?? null,
+      expectedSubtreeChildCount: reorder.expectedSubtreeChildCount ?? null,
     },
     virtualization: {
       beforeRows: virtualization.before?.domRowCount ?? null,
@@ -104,13 +113,18 @@ function assertSampleSummary(sample, label) {
       sample.reorder.dropBlockedReason === expectedDropBlockedReason,
       `${label} expected blocked reason ${expectedDropBlockedReason}, got ${sample.reorder.dropBlockedReason}`,
     )
+    assert(sample.actionCountDelta?.reorder > 0, `${label} no-op sample did not record Outline reorder action lifecycle`)
   } else {
     assert(sample.undoPreserved === true, `${label} did not preserve active draft text through Undo`)
     assert(sample.redoPreserved === true, `${label} did not preserve active draft text through Redo`)
     assert(sample.reorder.dropBlockedReason == null, `${label} valid reorder unexpectedly reported a blocked drop`)
+    assert(sample.actionCountDelta?.reorder > 0, `${label} did not record Outline reorder action`)
   }
+  assert(
+    sample.reorder.ghostSubtreeChildCount === expectedSubtreeChildCount,
+    `${label} expected ghost subtree count ${expectedSubtreeChildCount}, got ${sample.reorder.ghostSubtreeChildCount}`,
+  )
   assert(sample.actionCountDelta?.inlineFinalize > 0, `${label} did not record inline finalize before reorder`)
-  assert(sample.actionCountDelta?.reorder > 0, `${label} did not record Outline reorder action`)
   assert(sample.reorder.afterIndex === sample.reorder.expectedIndex, `${label} reorder target index mismatch`)
   assert(sample.virtualization.beforeRows > sample.virtualization.beforeRenderedRows, `${label} did not start with bounded Outline virtualization`)
   assert(sample.virtualization.afterRows > sample.virtualization.afterRenderedRows, `${label} did not keep bounded Outline virtualization`)
@@ -172,7 +186,7 @@ async function main() {
       summary: sample,
     })
     console.log(
-      `PASS ${label}: durationMs=${durationMs} activeNodeId=${sample.activeNodeId} listSignaturePreserved=${sample.listSignaturePreserved} undo=${sample.undoPreserved} redo=${sample.redoPreserved} blocked=${sample.reorder.dropBlockedReason}`,
+      `PASS ${label}: durationMs=${durationMs} activeNodeId=${sample.activeNodeId} listSignaturePreserved=${sample.listSignaturePreserved} undo=${sample.undoPreserved} redo=${sample.redoPreserved} blocked=${sample.reorder.dropBlockedReason} subtree=${sample.reorder.ghostSubtreeChildCount}`,
     )
   }
 
@@ -182,6 +196,7 @@ async function main() {
     expectedActiveNodeId,
     expectNoop,
     expectedDropBlockedReason,
+    expectedSubtreeChildCount,
     repeat,
     samples,
   }, null, 2))

@@ -81,9 +81,14 @@ Users should be able to:
   same section body. It mutates only the logical `body.childIds` order through a
   core document operation.
 - Outline reorder must not create invalid list hierarchy. If a direct body-child
-  reorder would make a list instance start at a nested level or jump by more
-  than one level, the core operation must leave the document unchanged until a
-  future explicit design supports list subtree moves or automatic level repair.
+  list item is reordered, the core operation should move that item as a
+  contiguous list subtree segment: the source item plus following body children
+  in the same list instance whose list level is deeper than the source level.
+  Moving a source into its own subtree is invalid and must leave the document
+  unchanged. If the resulting body order would make a list instance start at a
+  nested level or jump by more than one level, the core operation must also
+  leave the document unchanged. Automatic list-level repair remains out of
+  scope until an explicit design accepts authored level changes.
 - Outline should expose invalid list reorder targets as blocked drop targets
   with no-drop feedback and an accessibility status. Dropping on a blocked
   target may still pass through the editor action lifecycle so active drafts are
@@ -94,8 +99,10 @@ Users should be able to:
   canvas row handles, and cross-section reorder remain out of scope.
 - During outline reorder, the editor should show a custom drag ghost containing
   the dragged row icon and label, dim the source row as an in-place placeholder,
-  and highlight the active target row/drop edge. The ghost is editor-only
-  interaction state and must not become document data.
+  and highlight the active target row/drop edge. If a list source will move
+  deeper same-instance child items with it, the ghost should expose that child
+  count as an editor-only affordance. The ghost is editor-only interaction state
+  and must not become document data.
 - Outline rows may use subtle depth lanes: each nested row can show faint
   vertical guide marks on the left, while its tint begins at that depth lane
   rather than filling the whole row from the panel edge. The tint and guides

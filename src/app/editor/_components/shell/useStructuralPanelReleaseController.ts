@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "../wysiwygInlineEditConfig"
 import {
   recordWysiwygPerfEvent,
@@ -251,11 +251,10 @@ export function useStructuralPanelReleaseController({
         durationMs: Math.max(0, applyStartedAt - scheduledAt),
         active: true,
       })
-      startTransition(() => {
-        setDeferredStructuralPanelRelease((active) => (
-          active?.generation === generation ? null : active
-        ))
-      })
+      deferredStructuralPanelReleaseRef.current = null
+      setDeferredStructuralPanelRelease((active) => (
+        active?.generation === generation ? null : active
+      ))
       recordStructuralPanelReleaseEvent("release-state-update-scheduled", {
         generation,
         operation: latest.operation,
