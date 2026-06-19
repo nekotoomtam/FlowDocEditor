@@ -1,0 +1,141 @@
+{
+  "generatedAt": "2026-06-19T00:00:00.000Z",
+  "variants": [
+    {
+      "id": "stress-node-mutations-v2",
+      "filename": "stress-node-mutations-v2.flowdoc.json",
+      "title": "Stress Node Mutations v2",
+      "workflow": "node",
+      "documentVersion": 2,
+      "packageVersion": 2,
+      "nodeCount": 149,
+      "targets": {
+        "typing": {
+          "primary": "v2_typing_primary",
+          "boundary": "v2_typing_boundary"
+        },
+        "node": {
+          "delete": "v2_delete_target",
+          "duplicate": "v2_duplicate_target",
+          "reorderSource": "v2_reorder_source",
+          "reorderTarget": "v2_reorder_target"
+        },
+        "flowRow": {
+          "resizeTarget": "v2_flow_row_main",
+          "addColumnTarget": "v2_flow_row_main",
+          "leftStack": "v2_flow_stack_left",
+          "rightStack": "v2_flow_stack_right"
+        },
+        "table": {
+          "primaryTable": "v2_table_main",
+          "primaryCell": "v2_table_cell_001_001",
+          "primaryRow": "v2_table_row_001",
+          "bodyCell": "v2_table_cell_002_002",
+          "spanCell": "v2_table_cell_003_002"
+        }
+      }
+    },
+    {
+      "id": "stress-typing-v2",
+      "filename": "stress-typing-v2.flowdoc.json",
+      "title": "Stress Typing v2",
+      "workflow": "typing",
+      "documentVersion": 2,
+      "packageVersion": 2,
+      "nodeCount": 209,
+      "targets": {
+        "typing": {
+          "primary": "v2_typing_typing_primary",
+          "boundary": "v2_typing_typing_boundary"
+        },
+        "node": {
+          "delete": "v2_typing_delete_target",
+          "duplicate": "v2_typing_duplicate_target",
+          "reorderSource": "v2_typing_reorder_source",
+          "reorderTarget": "v2_typing_reorder_target"
+        },
+        "flowRow": {
+          "resizeTarget": "v2_typing_flow_row_main",
+          "addColumnTarget": "v2_typing_flow_row_main",
+          "leftStack": "v2_typing_flow_stack_left",
+          "rightStack": "v2_typing_flow_stack_right"
+        },
+        "table": {
+          "primaryTable": "v2_typing_table_main",
+          "primaryCell": "v2_typing_table_cell_002_002",
+          "primaryRow": "v2_typing_table_row_002",
+          "bodyCell": "v2_typing_table_cell_004_003",
+          "spanCell": "v2_typing_table_cell_003_002"
+        }
+      }
+    },
+    {
+      "id": "stress-flow-row-v2",
+      "filename": "stress-flow-row-v2.flowdoc.json",
+      "title": "Stress Flow Row v2",
+      "workflow": "flow-row",
+      "documentVersion": 2,
+      "packageVersion": 2,
+      "nodeCount": 173,
+      "targets": {
+        "typing": {
+          "primary": "v2_flow_row_typing_primary",
+          "boundary": "v2_flow_row_typing_boundary"
+        },
+        "node": {
+          "delete": "v2_flow_row_delete_target",
+          "duplicate": "v2_flow_row_duplicate_target",
+          "reorderSource": "v2_flow_row_reorder_source",
+          "reorderTarget": "v2_flow_row_reorder_target"
+        },
+        "flowRow": {
+          "resizeTarget": "v2_flow_row_flow_row_main",
+          "addColumnTarget": "v2_flow_row_flow_row_main",
+          "leftStack": "v2_flow_row_flow_stack_left",
+          "rightStack": "v2_flow_row_flow_stack_right"
+        },
+        "table": {
+          "primaryTable": "v2_flow_row_table_main",
+          "primaryCell": "v2_flow_row_table_cell_002_002",
+          "primaryRow": "v2_flow_row_table_row_002",
+          "bodyCell": "v2_flow_row_table_cell_004_003",
+          "spanCell": "v2_flow_row_table_cell_003_002"
+        }
+      }
+    },
+    {
+      "id": "stress-table-v2",
+      "filename": "stress-table-v2.flowdoc.json",
+      "title": "Stress Table v2",
+      "workflow": "table",
+      "documentVersion": 2,
+      "packageVersion": 2,
+      "nodeCount": 222,
+      "targets": {
+        "typing": {
+          "primary": "v2_table_fixture_typing_primary",
+          "boundary": "v2_table_fixture_typing_boundary"
+        },
+        "node": {
+          "delete": "v2_table_fixture_delete_target",
+          "duplicate": "v2_table_fixture_duplicate_target",
+          "reorderSource": "v2_table_fixture_reorder_source",
+          "reorderTarget": "v2_table_fixture_reorder_target"
+        },
+        "flowRow": {
+          "resizeTarget": "v2_table_fixture_flow_row_main",
+          "addColumnTarget": "v2_table_fixture_flow_row_main",
+          "leftStack": "v2_table_fixture_flow_stack_left",
+          "rightStack": "v2_table_fixture_flow_stack_right"
+        },
+        "table": {
+          "primaryTable": "v2_table_fixture_table_main",
+          "primaryCell": "v2_table_fixture_table_cell_002_002",
+          "primaryRow": "v2_table_fixture_table_row_002",
+          "bodyCell": "v2_table_fixture_table_cell_004_003",
+          "spanCell": "v2_table_fixture_table_cell_003_002"
+        }
+      }
+    }
+  ]
+}

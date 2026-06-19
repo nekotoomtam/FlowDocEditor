@@ -154,6 +154,7 @@ function executionContext(overrides: Partial<StructuralExecutionContext> = {}): 
     beginWysiwygDraftRuntimeSession: vi.fn(),
     clearWysiwygDraftPagination: vi.fn(),
     dispatchEditorAction: vi.fn(),
+    dispatchEditorOperation: vi.fn(),
     endRichWysiwygDraftSession: vi.fn(),
     endWysiwygTextSession: vi.fn(),
     setOptimisticStructuralIslandOverride: vi.fn(),
@@ -249,10 +250,17 @@ describe("editor structural handlers", () => {
 
     vi.runAllTimers()
 
-    expect(context.dispatchEditorAction).toHaveBeenCalledWith(expect.objectContaining({
-      type: "SPLIT_PARAGRAPH",
-      nodeId: "source",
-      isOptimistic: true,
+    expect(context.dispatchEditorAction).toHaveBeenCalledWith({
+      type: "SET_PAGINATED",
+      paginated: plan.optimisticLayout?.paginated,
+    })
+    expect(context.dispatchEditorOperation).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "paragraph.split",
+      action: expect.objectContaining({
+        type: "SPLIT_PARAGRAPH",
+        nodeId: "source",
+        isOptimistic: true,
+      }),
     }))
     expect(context.structuralEditController.markSplitCommitted).toHaveBeenCalledWith(
       { id: "tx-1", generation: 1 },
@@ -293,10 +301,13 @@ describe("editor structural handlers", () => {
 
     vi.runAllTimers()
 
-    expect(context.dispatchEditorAction).toHaveBeenCalledWith(expect.objectContaining({
-      type: "MERGE_PARAGRAPH",
-      nodeId: "current",
-      isOptimistic: true,
+    expect(context.dispatchEditorOperation).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "paragraph.merge",
+      action: expect.objectContaining({
+        type: "MERGE_PARAGRAPH",
+        nodeId: "current",
+        isOptimistic: true,
+      }),
     }))
     expect(context.structuralEditController.markMergeCommitted).toHaveBeenCalledWith(
       { id: "tx-1", generation: 1 },
@@ -335,6 +346,7 @@ describe("editor structural handlers", () => {
     expect(context.clearWysiwygDraftPagination).toHaveBeenCalled()
     expect(context.endWysiwygTextSession).toHaveBeenCalled()
     expect(context.dispatchEditorAction).not.toHaveBeenCalled()
+    expect(context.dispatchEditorOperation).not.toHaveBeenCalled()
     expect(context.structuralEditController.markMergeCommitted).not.toHaveBeenCalled()
   })
 })

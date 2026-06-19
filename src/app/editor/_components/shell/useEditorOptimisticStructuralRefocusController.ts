@@ -41,6 +41,7 @@ import {
   findWysiwygTextEngineFragment,
 } from "../wysiwygTextEligibility"
 import type { EditorAction } from "../editorReducer"
+import type { EditorOperationEnvelope } from "../operations/editorOperationTypes"
 import type { EditorPageNavigationIndex } from "./editorCanvasNavigation"
 import type {
   PendingOptimisticMergeRefocus,
@@ -71,6 +72,7 @@ export function useEditorOptimisticStructuralRefocusController({
   consumeInlineEditHistory,
   dispatch,
   dispatchEditorAction,
+  dispatchEditorOperation,
   displayPaginated,
   docRef,
   editorPageNavigation,
@@ -100,6 +102,7 @@ export function useEditorOptimisticStructuralRefocusController({
   consumeInlineEditHistory: (nodeId: string) => SplitParagraphHistory
   dispatch: (action: EditorAction) => void
   dispatchEditorAction: (action: EditorAction) => void
+  dispatchEditorOperation: (operation: EditorOperationEnvelope) => void
   displayPaginated: PaginatedDocument
   docRef: MutableCurrentRef<DocumentNode>
   editorPageNavigation: EditorPageNavigationIndex
@@ -188,6 +191,7 @@ export function useEditorOptimisticStructuralRefocusController({
     beginWysiwygDraftRuntimeSession,
     clearWysiwygDraftPagination,
     dispatchEditorAction,
+    dispatchEditorOperation,
     endRichWysiwygDraftSession,
     endWysiwygTextSession,
     setOptimisticStructuralIslandOverride: (override) => {

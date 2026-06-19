@@ -68,7 +68,7 @@ function pageIndexesForNodeIds(
   nodeIds: readonly string[],
 ): number[] | null {
   if (!paginated) return null
-  if (nodeIds.length === 0) return []
+  if (nodeIds.length === 0) return null
   const targets = new Set(nodeIds)
   const indexes: number[] = []
   for (const section of paginated.sections) {

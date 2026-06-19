@@ -38,7 +38,6 @@ import {
   type BrowserPreviewShellMutationPlan,
 } from "../structuralEdit/previewSettleShellAdapter"
 import { tryApplyVisualOnlyPaginatedUpdate } from "../editorVisualOnlyPagination"
-import { createEditorOperationFromAction } from "../operations/editorOperationFromAction"
 import { resolveEditorRenderInvalidation } from "../operations/editorRenderInvalidation"
 import type { EditorPreviewLayoutState } from "../editorPreviewLayoutStatus"
 import {
@@ -539,7 +538,7 @@ export function useEditorPaginationLifecycleController({
     pendingEditorActionClassificationRef.current = null
     const renderInvalidationPlan = pendingActionClassification
       ? resolveEditorRenderInvalidation({
-        operation: createEditorOperationFromAction(pendingActionClassification.action),
+        operation: pendingActionClassification.operation,
         paginated: paginatedRef.current,
       })
       : null

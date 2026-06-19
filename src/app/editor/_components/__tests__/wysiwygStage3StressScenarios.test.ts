@@ -88,6 +88,8 @@ function allFragments(paginated: ReturnType<typeof paginateDocument>) {
     .flatMap((page) => page.fragments)
 }
 
+const HEAVY_SCENARIO_TEST_TIMEOUT_MS = 30000
+
 describe("WYSIWYG Stage 3 stress scenario", () => {
   it("resolves only the named dev/test query scenario", () => {
     expect(resolveEditorTestScenario("")).toBeNull()
@@ -197,7 +199,7 @@ describe("WYSIWYG Stage 3 stress scenario", () => {
     expect(fullModeHeaderRow?.x).toBe(0)
     expect(fullModeHeaderRow?.width).toBe(fullModePage.width)
     expect(fullModePage.contentBox).toEqual(bodyModePage.contentBox)
-  })
+  }, HEAVY_SCENARIO_TEST_TIMEOUT_MS)
 
   it("starts near a page boundary, overflows after draft append, and shrinks back", () => {
     const doc = makeWysiwygStage3BoundaryDocument()

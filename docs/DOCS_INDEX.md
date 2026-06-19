@@ -14,8 +14,12 @@ For a new session:
 4. `docs/agent/REVIEW_GATE.md` when reviewing or accepting work
 5. `docs/agent/AGENT_OPERATING_MODEL.md` when ownership, scope, or handoff is
    unclear
-6. The smallest task-specific contract below
-7. `docs/WORK_LOG_RECENT.md` only when recent implementation context is needed
+6. `docs/agent/JOB_OPERATING_MODEL.md` when the user delegates a broad goal,
+   image, or problem for Codex to break down and iterate on
+7. `docs/agent/JOB_INTAKE_TEMPLATE.md` when a delegated job needs a durable
+   plan, ledger, or owner checkpoint
+8. The smallest task-specific contract below
+9. `docs/WORK_LOG_RECENT.md` only when recent implementation context is needed
 
 ## Source Of Truth Map
 
@@ -24,16 +28,25 @@ For a new session:
 | Agent operating rules | `AGENTS.md` |
 | Agent roles | `docs/agent/CODEX_ROLES.md` |
 | Detailed agent workflow | `docs/agent/AGENT_OPERATING_MODEL.md` |
+| Goal-oriented job workflow | `docs/agent/JOB_OPERATING_MODEL.md` |
+| Job intake and ledger template | `docs/agent/JOB_INTAKE_TEMPLATE.md` |
 | Handoff template | `docs/agent/TASK_HANDOFF.md` |
 | Review gate | `docs/agent/REVIEW_GATE.md` |
 | Product direction | `docs/PRODUCT_DIRECTION.md` |
 | Version/readiness semantics | `docs/VERSIONING.md` |
 | Engineering boundaries | `docs/ENGINEERING_PRINCIPLES.md` |
 | System overview | `docs/ARCHITECTURE_OVERVIEW.md` |
+| Document model v2 direction | `docs/DOCUMENT_MODEL_V2_PLAN.md` |
+| Document model v2 contract | `docs/DOCUMENT_MODEL_V2_CONTRACT.md` |
 | Test strategy | `docs/TEST_STRATEGY.md` |
 | Browser smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Editor UX | `docs/EDITOR_UX_CONTRACT.md` |
+| Editor operation architecture | `docs/EDITOR_OPERATION_ARCHITECTURE.md` |
+| Editor operation source-of-truth plan | `docs/EDITOR_OPERATION_SOURCE_OF_TRUTH_PLAN.md` |
+| Editor reducer responsibility audit | `docs/EDITOR_REDUCER_RESPONSIBILITY_AUDIT.md` |
+| Editor mutation path equality | `docs/EDITOR_MUTATION_PATH_EQUALITY_PLAN.md` |
 | Editor render/action ownership | `docs/EDITOR_RENDER_ACTION_OWNERSHIP.md` |
+| Editor long-document stability gates | `docs/EDITOR_STABILITY_GATES.md` |
 | Paragraph box styling | `docs/PARAGRAPH_BOX_STYLE_CONTRACT.md` |
 | Paragraph/text style presets | `docs/PARAGRAPH_STYLE_CONTRACT.md` |
 | Style manager | `docs/STYLE_MANAGER_CONTRACT.md` |
@@ -62,14 +75,28 @@ Agent or review work:
 - `AGENTS.md`
 - `docs/agent/CODEX_ROLES.md`
 - `docs/agent/AGENT_OPERATING_MODEL.md`
+- `docs/agent/JOB_OPERATING_MODEL.md` when the user delegates a broad goal,
+  image, or problem for Codex to break down and iterate on
+- `docs/agent/JOB_INTAKE_TEMPLATE.md` when the delegated job needs a durable
+  plan, ledger, or owner checkpoint
 - `docs/agent/TASK_HANDOFF.md`
 - `docs/agent/REVIEW_GATE.md`
 
 WYSIWYG or inline editing:
 
 - `docs/EDITOR_UX_CONTRACT.md`
+- `docs/EDITOR_OPERATION_ARCHITECTURE.md` when mutation, history, or operation
+  ownership is in scope
+- `docs/EDITOR_OPERATION_SOURCE_OF_TRUTH_PLAN.md` when Operation Architecture
+  is being moved from bridge metadata to runtime source of truth
+- `docs/EDITOR_REDUCER_RESPONSIBILITY_AUDIT.md` when reducer extraction or
+  operation migration is in scope
+- `docs/EDITOR_MUTATION_PATH_EQUALITY_PLAN.md` when remaining direct
+  `pushDoc(...)` mutation branches are in scope
 - `docs/EDITOR_RENDER_ACTION_OWNERSHIP.md` when render invalidation,
   operation ownership, or page render scope is in scope
+- `docs/EDITOR_STABILITY_GATES.md` when long-document responsiveness,
+  stress-fixture coverage, or operation acceptance is in scope
 - `docs/WYSIWYG_EDITOR_ROADMAP.md`
 - `docs/WYSIWYG_TEXT_ENGINE_PLAN.md`
 - `docs/WYSIWYG_PARAGRAPH_INTERACTION_CHECKLIST.md` when paragraph typing,
@@ -83,8 +110,18 @@ WYSIWYG or inline editing:
 
 Layout, pagination, or cross-page behavior:
 
+- `docs/EDITOR_OPERATION_ARCHITECTURE.md` when editor mutation routing or
+  operation migration is in scope
+- `docs/EDITOR_OPERATION_SOURCE_OF_TRUTH_PLAN.md` when operation-first dispatch
+  or operation-plan ownership is in scope
+- `docs/EDITOR_REDUCER_RESPONSIBILITY_AUDIT.md` when reducer extraction,
+  history policy, validation policy, or commit-adapter work is in scope
+- `docs/EDITOR_MUTATION_PATH_EQUALITY_PLAN.md` when remaining direct reducer
+  mutation branches are in scope
 - `docs/EDITOR_RENDER_ACTION_OWNERSHIP.md` when editor action invalidation or
   render ownership is in scope
+- `docs/EDITOR_STABILITY_GATES.md` when browser preview, stress fixture, or
+  long-document responsiveness is in scope
 - `docs/LAYOUT_ENGINE_SPEC.md`
 - `docs/CROSS_PAGE_BEHAVIOR.md`
 - `docs/LAZY_PAGINATION_PLAN.md` when checkpointing or partial preview is in
@@ -94,6 +131,10 @@ Layout, pagination, or cross-page behavior:
 
 Table work:
 
+- `docs/DOCUMENT_MODEL_V2_CONTRACT.md` when implementing v2 table storage,
+  table flattening, graph parentage, or v2 table fixtures
+- `docs/DOCUMENT_MODEL_V2_PLAN.md` when table storage, node graph parentage, or
+  v2 fixture shape is in scope
 - `docs/TABLE_EDITING_CONTRACT.md`
 - `docs/FLOW_TABLE_SPEC.md`
 - `docs/CROSS_PAGE_BEHAVIOR.md`
@@ -103,6 +144,8 @@ Table work:
 
 Export, renderer, package, field, or data work:
 
+- `docs/DOCUMENT_MODEL_V2_CONTRACT.md` when changing document schema versioning
+  inside the package envelope
 - `docs/EXPORT_RENDERER_CONTRACT.md`
 - `docs/FLOWDOC_PACKAGE_CONTRACT.md`
 - `docs/FIELD_REGISTRY_CONTRACT.md`
@@ -112,8 +155,14 @@ Export, renderer, package, field, or data work:
 
 Test or fixture work:
 
+- `docs/DOCUMENT_MODEL_V2_CONTRACT.md` when adding v2 fixtures or semantic
+  fixture target aliases
+- `docs/DOCUMENT_MODEL_V2_PLAN.md` when replacing old JSON mocks or designing
+  fixtures for the v2 node graph
 - `docs/TEST_STRATEGY.md`
 - `docs/BROWSER_SMOKE_CHECKLIST.md`
+- `docs/EDITOR_STABILITY_GATES.md` when editor long-document behavior is in
+  scope
 - `docs/FIXTURE_CATALOG.md`
 - the focused test file near the behavior
 

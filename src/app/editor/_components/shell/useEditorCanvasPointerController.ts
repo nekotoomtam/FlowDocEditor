@@ -10,7 +10,8 @@ import type { DocumentNode } from "@/schema"
 import type { DragSource, PlacementPreview } from "@/placement/types"
 import { detectPlacementTarget } from "@/placement/geometry"
 import { resolvePlacementLaw } from "@/placement/law"
-import { resizeColumnsDocument, type EditorAction } from "../editorReducer"
+import type { EditorAction } from "../editorReducer"
+import { resizeColumnsDocument } from "../operations/editorFlowRowOperationPlans"
 import { resolveFlowStackResizePairShares } from "../flowStackResize"
 import type {
   DragState,

@@ -1,13 +1,19 @@
 # Flow Row / Flow Stack Spec
 
-Status: Draft plus active implementation notes for the `0.5.0` milestone.
-`flow-row` and `flow-stack` have an initial static implementation; live
-cross-page WYSIWYG editing remains out of scope.
+Status: Current-model spec plus active implementation notes for the `0.5.0`
+milestone. `flow-row` and `flow-stack` have an initial static implementation;
+live cross-page WYSIWYG editing remains out of scope.
+
+Document Model v2 note: `docs/DOCUMENT_MODEL_V2_PLAN.md` and
+`docs/DOCUMENT_MODEL_V2_CONTRACT.md` supersede this spec's original long-term
+compatibility assumption for legacy `row` / `stack`. In v2, new authoring and
+new fixtures should use `flow-row` / `flow-stack` only. Legacy `row` / `stack`
+may remain import-only while migration work is in progress.
 
 Implementation order and phase gates are tracked in
 `docs/FLOW_ROW_STACK_ROADMAP.md`.
 
-## Decision
+## Current-Model Decision
 
 FlowDocEditor will keep the existing `row` / `stack` behavior as the stable
 atomic layout primitive and introduce a parallel primitive pair:
@@ -21,6 +27,9 @@ single-page atomic groups.
 
 This avoids silently changing the meaning of existing documents while creating a
 path toward multi-page row/column layout.
+
+For the v2 target, this compatibility period is intentionally not treated as
+the final architecture. See `docs/DOCUMENT_MODEL_V2_CONTRACT.md`.
 
 ## Version Target
 

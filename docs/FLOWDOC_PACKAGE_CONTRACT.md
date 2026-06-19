@@ -25,6 +25,16 @@ FlowDocPackage v2
   -> document: DocumentNode v1
 ```
 
+Document Model v2 note: `docs/DOCUMENT_MODEL_V2_CONTRACT.md` changes the
+authored document schema target to `DocumentNode.version = 2`, but it does not
+by itself require a `FlowDocPackage` envelope bump. `packageVersion` and
+`document.version` remain separate migration axes.
+
+Valid `FlowDocPackage v2` files may carry either `DocumentNode.version = 1` or
+`DocumentNode.version = 2` during the transition. Runtime editor state still
+receives the current `DocumentNode` shape; valid DocumentNode v2 input is
+adapted through `adaptDocumentV2ToCurrentDocument(...)` at import time.
+
 Core layout, pagination, API export, and renderers still consume `DocumentNode`
 or `PaginatedDocument`. The package is an app/file boundary, not a layout engine
 input.
@@ -196,6 +206,7 @@ Current direction:
 unknown JSON
   -> parse JSON
   -> migrate package/raw document to current FlowDocPackage
+  -> adapt valid DocumentNode v2 to current runtime DocumentNode when needed
   -> normalize document
   -> assert document
   -> editor receives DocumentNode
@@ -216,10 +227,18 @@ Current implementation:
   v2 migration
 - keeps existing package v2 input idempotent while preserving optional
   `data`, `history`, and `migrations` members
+- `parsePersistedDocument(...)`
+- accepts valid raw DocumentNode v2 JSON and valid FlowDocPackage v2 files whose
+  `document.version` is `2`
+- adapts DocumentNode v2 input to the current runtime DocumentNode shape without
+  bumping `packageVersion`
 
-Runtime localStorage autosave and default JSON export now use package v2 and
-preserve the active field registry plus the current document-bound data
-snapshot.
+Runtime localStorage autosave and default JSON export now use package v2 with
+DocumentNode v2 authored storage. The editor still adapts DocumentNode v2 back
+to the current runtime shape on import, but newly saved/exported packages do
+not persist legacy `row` / `stack` authoring or nested `flow-table.nodes`.
+Autosave/export preserve the active field registry plus the current
+document-bound data snapshot.
 
 The field registry contract already exists for validation and package planning.
 Persisting a registry in JSON is part of the current package v2 baseline.
@@ -248,6 +267,11 @@ Persistence/package changes should cover:
 - legacy raw document -> package v2 in-memory migration
 - package v1 -> package v2 in-memory migration
 - package v2 migration idempotence
+- raw DocumentNode v2 -> current runtime adapter parse
+- package v2 with DocumentNode v2 -> current runtime adapter parse
+- localStorage and JSON export write DocumentNode v2 authored storage
+- authored flow-table export flattens rows, cells, and cell content into the
+  section graph rather than persisting `flow-table.nodes`
 - localStorage save/load
 - safe JSON export filename generation
 - inline `fieldRef` preservation through package export/import

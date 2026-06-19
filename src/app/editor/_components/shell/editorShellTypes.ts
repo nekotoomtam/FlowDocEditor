@@ -3,6 +3,7 @@ import type { DragSource } from "@/placement/types"
 import type { ParagraphNode } from "@/schema"
 import type { EditorAction } from "../editorReducer"
 import type { EditorActionClassification } from "../editorActionClassifier"
+import type { EditorOperationEnvelope } from "../operations/editorOperationTypes"
 import type { OptimisticSplitRefocusMode } from "../optimisticStructuralRefocus"
 import type { EditorWorkflowMode } from "./EditorToolbar"
 import type { EditorLeftRailMode } from "./EditorLeftRail"
@@ -39,6 +40,7 @@ export interface DeferredInlineEditEnd {
 
 export interface PendingEditorActionClassification {
   action: EditorAction
+  operation: EditorOperationEnvelope
   classification: EditorActionClassification
 }
 

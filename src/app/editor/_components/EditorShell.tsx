@@ -60,8 +60,11 @@ import {
   type WysiwygTextReflowDecision,
 } from "./wysiwygReflow"
 import { useAnimationFrameState } from "./useAnimationFrameState"
-import { createInitialEditorState, reducer, type EditorAction } from "./editorReducer"
-import { classifyEditorAction, shouldSuppressLayoutLoadingOverlayForEditorAction } from "./editorActionClassifier"
+import { createInitialEditorState, reduceEditorOperation, type EditorAction } from "./editorReducer"
+import { classifyEditorAction, shouldSuppressLayoutLoadingOverlayForEditorAction, type EditorActionClassification } from "./editorActionClassifier"
+import { createEditorOperationFromAction } from "./operations/editorOperationFromAction"
+import { attachEditorOperationDocumentGraphRuntime } from "./operations/editorOperationRuntime"
+import type { EditorOperationEnvelope } from "./operations/editorOperationTypes"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import { EditorCanvasColumn } from "./shell/EditorCanvasColumn"
 import type {
@@ -213,7 +216,7 @@ export default function EditorShell() {
     moveRightRailResize,
     finishRightRailResize,
   } = useRightRailController()
-  const [state, dispatch] = useReducer(reducer, initialTestScenario?.document ?? null, createInitialEditorState)
+  const [state, commitEditorOperation] = useReducer(reduceEditorOperation, initialTestScenario?.document ?? null, createInitialEditorState)
   const {
     selectedStyleResource,
     setSelectedStyleResource,
@@ -303,24 +306,40 @@ export default function EditorShell() {
   const pendingDragRef = useRef<PendingDrag | null>(null)
   const pendingEditorActionClassificationRef = useRef<PendingEditorActionClassification | null>(null)
   const suppressNextLayoutLoadingOverlayRef = useRef(false)
+  const editorDocRef = useRef(state.doc)
 
-  const dispatchEditorAction = useCallback((action: EditorAction) => {
+  useLayoutEffect(() => {
+    editorDocRef.current = state.doc
+  }, [state.doc])
+
+  const dispatchEditorOperation = useCallback((
+    operation: EditorOperationEnvelope,
+    classificationOverride?: EditorActionClassification,
+  ) => {
     const startedAt = startWysiwygPerfSpan()
-    const classification = classifyEditorAction(action)
-    pendingEditorActionClassificationRef.current = { action, classification }
+    const operationWithRuntime = attachEditorOperationDocumentGraphRuntime(operation, editorDocRef.current)
+    const action = operationWithRuntime.action
+    const classification = classificationOverride ?? classifyEditorAction(action)
+    pendingEditorActionClassificationRef.current = { action, operation: operationWithRuntime, classification }
     if (shouldSuppressLayoutLoadingOverlayForEditorAction(action, classification)) {
       suppressNextLayoutLoadingOverlayRef.current = true
     }
-    dispatch(action)
+    commitEditorOperation(operationWithRuntime)
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "editor-action-dispatch", startedAt, {
-      source: "dispatchEditorAction",
+      source: "dispatchEditorOperation",
       commandType: action.type,
+      operation: operationWithRuntime.kind,
       uiImpact: classification.uiImpact,
       layoutScope: classification.layoutScope,
       priority: classification.priority,
       layoutAffecting: classification.layoutScope !== "none",
     })
   }, [])
+
+  const dispatchEditorAction = useCallback((action: EditorAction) => {
+    const classification = classifyEditorAction(action)
+    dispatchEditorOperation(createEditorOperationFromAction(action, classification), classification)
+  }, [dispatchEditorOperation])
   const pendingDragMoveRef = useRef<PendingDragMove | null>(null)
   const dragMoveFrameRef = useRef<number | null>(null)
   const {
@@ -432,7 +451,7 @@ export default function EditorShell() {
       })
     },
     commitInlineTextEdit: (payload) => dispatchEditorAction({ type: "COMMIT_INLINE_TEXT_EDIT", ...payload }),
-    setPaginated: (paginated) => dispatch({ type: "SET_PAGINATED", paginated }),
+    setPaginated: (paginated) => dispatchEditorAction({ type: "SET_PAGINATED", paginated }),
   })
   const inlineEditPageIndexRef = useRef<number | null>(inlineEditPageIndex)
   useEffect(() => { inlineEditPageIndexRef.current = inlineEditPageIndex }, [inlineEditPageIndex])
@@ -558,7 +577,7 @@ export default function EditorShell() {
     wysiwygLatestDraftPaginationSnapshotRef,
     wysiwygPlainTextBoundaryDraftPaginationNodeIdRef,
   } = useWysiwygDraftPaginationController({
-    dispatch,
+    dispatch: dispatchEditorAction,
     docRef,
     inlineEditDraftVersionRef,
     inlineEditPageIndexRef,
@@ -645,7 +664,7 @@ export default function EditorShell() {
   } = useEditorInlineEditLifecycleController({
     clearWysiwygDraftPagination,
     consumeInlineEditHistory,
-    dispatch,
+    dispatch: dispatchEditorAction,
     displayPaginated,
     docRef,
     editorPageCount,
@@ -887,9 +906,10 @@ export default function EditorShell() {
       reflowReason: reflow?.reason,
     })
     startTransition(() => {
-      dispatch({ type: "SET_INLINE_EDIT_HEIGHT", nodeId, height, pageIndex, reflow })
+      dispatchEditorAction({ type: "SET_INLINE_EDIT_HEIGHT", nodeId, height, pageIndex, reflow })
     })
   }, [
+    dispatchEditorAction,
     handleInlineEditHeightChange,
     wysiwygTextSessionStateRef,
   ])
@@ -991,7 +1011,7 @@ export default function EditorShell() {
   } = useEditorDocumentIoActions({
     clearWysiwygDraftPagination,
     dataSnapshot,
-    dispatch,
+    dispatch: dispatchEditorAction,
     docRef,
     endWysiwygTextSession,
     finalizeInlineEditBeforeAction,
@@ -1041,8 +1061,9 @@ export default function EditorShell() {
     beginWysiwygDraftRuntimeSession,
     clearWysiwygDraftPagination,
     consumeInlineEditHistory,
-    dispatch,
+    dispatch: dispatchEditorAction,
     dispatchEditorAction,
+    dispatchEditorOperation,
     displayPaginated,
     docRef,
     editorPageNavigation,
@@ -1171,7 +1192,7 @@ export default function EditorShell() {
     browserPreviewLayout,
     currentCanvasPageIndex,
     dataReadiness,
-    dispatch,
+    dispatch: dispatchEditorAction,
     driftReport,
     editorTextMeasurer,
     editorTextMeasurerStatus,
@@ -1320,7 +1341,7 @@ export default function EditorShell() {
     startPaletteDrag,
   } = useEditorCanvasInteractionActions({
     cancelDeferredInlineEditStart,
-    dispatch,
+    dispatch: dispatchEditorAction,
     dispatchEditorAction,
     doc: state.doc,
     editorTextMeasurer,
@@ -1363,7 +1384,7 @@ export default function EditorShell() {
     activeDrag: state.drag,
     canStartInlineEditImmediatelyForClick,
     cancelDeferredInlineEditStart,
-    dispatch,
+    dispatch: dispatchEditorAction,
     dispatchEditorAction,
     doc: state.doc,
     dragMoveFrameRef,
@@ -1403,7 +1424,7 @@ export default function EditorShell() {
   }, [])
   const { handleKeyDown } = useEditorKeyboardShortcuts({
     clearSelectedStyleResource,
-    dispatch,
+    dispatch: dispatchEditorAction,
     dispatchEditorAction,
     handleInlineEditEnd,
     handleRedo,

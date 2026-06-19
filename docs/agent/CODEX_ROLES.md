@@ -2,7 +2,9 @@
 
 This is the concise role reference for Codex sessions. For detailed ownership,
 multi-agent division of work, routing rules, and handoff requirements, see
-[`AGENT_OPERATING_MODEL.md`](./AGENT_OPERATING_MODEL.md).
+[`AGENT_OPERATING_MODEL.md`](./AGENT_OPERATING_MODEL.md). For broad delegated
+goals, image/problem intake, iteration loops, and stop conditions, see
+[`JOB_OPERATING_MODEL.md`](./JOB_OPERATING_MODEL.md).
 
 ---
 
@@ -63,6 +65,10 @@ Output:
 ## Role: Minimal Patch Implementer
 
 Use only after the design is accepted.
+
+In delegated jobs, this is an item-level execution role. It keeps each job item
+small and reversible, but it does not make `Minimal next patch` the stopping
+condition for the whole job.
 
 Responsibilities:
 - implement only the approved plan

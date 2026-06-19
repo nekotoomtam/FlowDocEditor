@@ -1,4 +1,5 @@
-import type { DocumentNode, FlowTableNode } from "../schema"
+import type { DocumentNode, DocumentNodeV2, FlowTableNode } from "../schema"
+import { buildDocumentGraphIndexV2, orderedDocumentParagraphsV2 } from "../document/documentV2"
 
 export type FieldValueType = "text" | "number" | "date" | "boolean" | "enum" | "image" | "collection"
 export type InlineFieldValueType = Exclude<FieldValueType, "image" | "collection">
@@ -101,8 +102,26 @@ export function collectDocumentFieldRefs(doc: DocumentNode): FieldRefUsage[] {
   return usages
 }
 
-export function validateFieldRegistryReferences(
-  doc: DocumentNode,
+export function collectDocumentFieldRefsV2(doc: DocumentNodeV2): FieldRefUsage[] {
+  const usages: FieldRefUsage[] = []
+  const index = buildDocumentGraphIndexV2(doc)
+
+  orderedDocumentParagraphsV2(doc).forEach((paragraph) => {
+    const sectionId = index.sectionById.get(paragraph.id)
+    if (sectionId == null) return
+    collectParagraphFieldRefs(
+      usages,
+      sectionId,
+      paragraph,
+      index.tableByDescendantId.get(paragraph.id),
+    )
+  })
+
+  return usages
+}
+
+function validateFieldRegistryUsages(
+  usages: FieldRefUsage[],
   registry: FieldRegistryV1,
 ): FieldRegistryValidationResult {
   const issues: FieldRegistryIssue[] = []
@@ -123,7 +142,6 @@ export function validateFieldRegistryReferences(
     definitions.set(field.key, field)
   })
 
-  const usages = collectDocumentFieldRefs(doc)
   usages.forEach((usage) => {
     const definition = definitions.get(usage.key)
     if (!definition) {
@@ -155,6 +173,20 @@ export function validateFieldRegistryReferences(
   })
 
   return { usages, issues }
+}
+
+export function validateFieldRegistryReferences(
+  doc: DocumentNode,
+  registry: FieldRegistryV1,
+): FieldRegistryValidationResult {
+  return validateFieldRegistryUsages(collectDocumentFieldRefs(doc), registry)
+}
+
+export function validateFieldRegistryReferencesV2(
+  doc: DocumentNodeV2,
+  registry: FieldRegistryV1,
+): FieldRegistryValidationResult {
+  return validateFieldRegistryUsages(collectDocumentFieldRefsV2(doc), registry)
 }
 
 export function hasFieldRegistryErrors(result: FieldRegistryValidationResult): boolean {

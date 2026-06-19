@@ -1470,7 +1470,7 @@ function roundWidthPt(value: number): number {
   return Math.round(Math.max(0, value) * 100) / 100
 }
 
-function fitFlowTableColumnsToWidth(table: FlowTableNode, targetWidthPt: number): FlowTableNode {
+export function fitFlowTableColumnsToWidth(table: FlowTableNode, targetWidthPt: number): FlowTableNode {
   const safeTargetWidth = roundWidthPt(targetWidthPt)
   if (table.columns.length === 0 || safeTargetWidth <= 0) return table
 
@@ -2890,6 +2890,34 @@ export function mergeParagraphWithPrevious(
   return null
 }
 
+export function deleteEmptyFlowTableCellParagraphInTable(
+  table: FlowTableNode,
+  nodeId: string,
+): { table: FlowTableNode; prevNodeId: string; caretIndex: number } | null {
+  const node = table.nodes[nodeId]
+  if (node?.type !== "paragraph") return null
+  if (!isTextRunOnlyParagraph(node) || paragraphTextLength(node) !== 0) return null
+
+  const parentInfo = findParentInfo(table.nodes, nodeId)
+  if (!parentInfo || parentInfo.index <= 0) return null
+  const cell = table.nodes[parentInfo.parentId]
+  if (cell?.type !== "flow-table-cell") return null
+  if (cell.childIds.length <= 1) return null
+
+  const prevNodeId = cell.childIds[parentInfo.index - 1]
+  const prevNode = table.nodes[prevNodeId]
+  if (prevNode?.type !== "paragraph" || !isTextRunOnlyParagraph(prevNode)) return null
+
+  const caretIndex = paragraphTextLength(prevNode)
+  const nextTableNodes = setChildIds({ ...table.nodes }, cell.id, cell.childIds.filter((id) => id !== nodeId))
+  delete nextTableNodes[nodeId]
+  return {
+    table: { ...table, nodes: nextTableNodes },
+    prevNodeId,
+    caretIndex,
+  }
+}
+
 export function deleteEmptyFlowTableCellParagraph(
   doc: DocumentNode,
   nodeId: string,
@@ -2899,32 +2927,16 @@ export function deleteEmptyFlowTableCellParagraph(
     for (const [tableId, candidate] of Object.entries(section.nodes)) {
       if (candidate.type !== "flow-table") continue
       const table = candidate as unknown as FlowTableNode
-      const node = table.nodes[nodeId]
-      if (node?.type !== "paragraph") continue
-      if (!isTextRunOnlyParagraph(node) || paragraphTextLength(node) !== 0) return null
-
-      const parentInfo = findParentInfo(table.nodes, nodeId)
-      if (!parentInfo || parentInfo.index <= 0) return null
-      const cell = table.nodes[parentInfo.parentId]
-      if (cell?.type !== "flow-table-cell") return null
-      if (cell.childIds.length <= 1) return null
-
-      const prevNodeId = cell.childIds[parentInfo.index - 1]
-      const prevNode = table.nodes[prevNodeId]
-      if (prevNode?.type !== "paragraph" || !isTextRunOnlyParagraph(prevNode)) return null
-
-      const caretIndex = paragraphTextLength(prevNode)
-      const nextTableNodes = setChildIds({ ...table.nodes }, cell.id, cell.childIds.filter((id) => id !== nodeId))
-      delete nextTableNodes[nodeId]
-      const newTable = { ...table, nodes: nextTableNodes }
-      const newSectionNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
+      const result = deleteEmptyFlowTableCellParagraphInTable(table, nodeId)
+      if (result == null) continue
+      const newSectionNodes = { ...section.nodes, [tableId]: result.table as unknown as LayoutNode }
       const newSections = doc.document.sections.map((s, i) =>
         i === si ? { ...s, nodes: newSectionNodes } : s,
       )
       return {
         doc: { ...doc, document: { ...doc.document, sections: newSections } },
-        prevNodeId,
-        caretIndex,
+        prevNodeId: result.prevNodeId,
+        caretIndex: result.caretIndex,
       }
     }
   }
@@ -3068,218 +3080,255 @@ export function mergeListItemWithPrevious(
   return mergeTextRunParagraphWithPrevious(doc, nodeId)
 }
 
-export function addFlowTableRow(doc: DocumentNode, tableId: string, afterIndex?: number): DocumentNode {
-  return updateFlowTableInSection(doc, tableId, (table) => {
-    const resolved = tryResolveFlowTableGrid(table)
-    if (!resolved.ok) return table
-    const insertAt = afterIndex !== undefined
-      ? Math.min(Math.max(0, afterIndex + 1), table.rowIds.length)
-      : table.rowIds.length
-    const internalNodes = { ...table.nodes }
-    const coveredColumns = new Set<number>()
+export function addFlowTableRowToTable(table: FlowTableNode, afterIndex?: number): FlowTableNode {
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return table
+  const insertAt = afterIndex !== undefined
+    ? Math.min(Math.max(0, afterIndex + 1), table.rowIds.length)
+    : table.rowIds.length
+  const internalNodes = { ...table.nodes }
+  const coveredColumns = new Set<number>()
 
-    resolved.grid.placements.forEach((placement) => {
-      if (!(placement.rowIndex < insertAt && insertAt <= placement.rowEndIndex)) return
-      const cell = internalNodes[placement.cellId] as FlowTableCellNode | undefined
-      if (cell?.type !== "flow-table-cell") return
-      const nextRowspan = placement.rowspan + 1
-      const mergeMap = shiftFlowTableCellMergeMapForAxisInsert(
-        cell,
-        "row",
-        insertAt - placement.rowIndex,
-        nextRowspan,
-        placement.colspan,
-      )
-      internalNodes[placement.cellId] = {
-        ...cell,
-        props: updateFlowTableCellPropsMergeMap({ ...cell.props, rowspan: nextRowspan }, mergeMap),
-      }
-      for (let columnIndex = placement.columnIndex; columnIndex <= placement.columnEndIndex; columnIndex++) {
-        coveredColumns.add(columnIndex)
-      }
-    })
-
-    const cellIds: string[] = []
-
-    for (let c = 0; c < table.columns.length; c++) {
-      if (coveredColumns.has(c)) continue
-      cellIds.push(createEmptyFlowTableCell(internalNodes))
+  resolved.grid.placements.forEach((placement) => {
+    if (!(placement.rowIndex < insertAt && insertAt <= placement.rowEndIndex)) return
+    const cell = internalNodes[placement.cellId] as FlowTableCellNode | undefined
+    if (cell?.type !== "flow-table-cell") return
+    const nextRowspan = placement.rowspan + 1
+    const mergeMap = shiftFlowTableCellMergeMapForAxisInsert(
+      cell,
+      "row",
+      insertAt - placement.rowIndex,
+      nextRowspan,
+      placement.colspan,
+    )
+    internalNodes[placement.cellId] = {
+      ...cell,
+      props: updateFlowTableCellPropsMergeMap({ ...cell.props, rowspan: nextRowspan }, mergeMap),
     }
-
-    const row = createFlowTableRowNode(cellIds)
-    internalNodes[row.id] = row
-    const rowIds = [...table.rowIds]
-    rowIds.splice(insertAt, 0, row.id)
-    return { ...table, rowIds, nodes: internalNodes }
+    for (let columnIndex = placement.columnIndex; columnIndex <= placement.columnEndIndex; columnIndex++) {
+      coveredColumns.add(columnIndex)
+    }
   })
+
+  const cellIds: string[] = []
+
+  for (let c = 0; c < table.columns.length; c++) {
+    if (coveredColumns.has(c)) continue
+    cellIds.push(createEmptyFlowTableCell(internalNodes))
+  }
+
+  const row = createFlowTableRowNode(cellIds)
+  internalNodes[row.id] = row
+  const rowIds = [...table.rowIds]
+  rowIds.splice(insertAt, 0, row.id)
+  return { ...table, rowIds, nodes: internalNodes }
+}
+
+export function addFlowTableRow(doc: DocumentNode, tableId: string, afterIndex?: number): DocumentNode {
+  return updateFlowTableInSection(doc, tableId, (table) => addFlowTableRowToTable(table, afterIndex))
+}
+
+export function removeFlowTableRowFromTable(table: FlowTableNode, rowIndex: number): FlowTableNode {
+  const plan = getFlowTableRowRemovalPlan(table, rowIndex)
+  if (plan == null) return table
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return table
+
+  const internalNodes = { ...table.nodes }
+
+  plan.shrinkRowspanCellIds.forEach((cellId) => {
+    const cell = internalNodes[cellId] as FlowTableCellNode | undefined
+    if (cell?.type !== "flow-table-cell") return
+    const placement = resolved.grid.placementsByCellId.get(cellId)
+    if (placement == null) return
+    const rowspan = Math.max(1, placement.rowspan - 1)
+    const mergeMap = shiftFlowTableCellMergeMapForAxisRemoval(
+      cell,
+      "row",
+      rowIndex - placement.rowIndex,
+      rowspan,
+      placement.colspan,
+    )
+    internalNodes[cellId] = {
+      ...cell,
+      props: updateFlowTableCellPropsMergeMap({ ...cell.props, rowspan }, mergeMap),
+    }
+  })
+
+  const row = internalNodes[plan.rowId] as FlowTableRowNode | undefined
+  if (row?.type === "flow-table-row") {
+    plan.deleteCellIds.forEach((cellId) => {
+      const cell = internalNodes[cellId] as FlowTableCellNode | undefined
+      if (cell?.type !== "flow-table-cell") return
+      cell.childIds.forEach((id) => { delete internalNodes[id] })
+      delete internalNodes[cellId]
+    })
+    delete internalNodes[plan.rowId]
+  }
+
+  const rowIds = table.rowIds.filter((_, i) => i !== rowIndex)
+  const headerRowCount = table.props.headerRowCount
+  const props = headerRowCount != null && headerRowCount > rowIds.length
+    ? { ...table.props, headerRowCount: rowIds.length }
+    : table.props
+  return { ...table, props, rowIds, nodes: internalNodes }
 }
 
 export function removeFlowTableRow(doc: DocumentNode, tableId: string, rowIndex: number): DocumentNode {
-  return updateFlowTableInSection(doc, tableId, (table) => {
-    const plan = getFlowTableRowRemovalPlan(table, rowIndex)
-    if (plan == null) return table
-    const resolved = tryResolveFlowTableGrid(table)
-    if (!resolved.ok) return table
+  return updateFlowTableInSection(doc, tableId, (table) => removeFlowTableRowFromTable(table, rowIndex))
+}
 
-    const internalNodes = { ...table.nodes }
+export function addFlowTableColumnToTable(table: FlowTableNode, afterColIndex?: number): FlowTableNode {
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return table
+  const insertAt = afterColIndex != null
+    ? Math.min(Math.max(0, afterColIndex + 1), table.columns.length)
+    : table.columns.length
+  const splitIndex = afterColIndex != null
+    ? Math.min(Math.max(0, afterColIndex), table.columns.length - 1)
+    : table.columns.length - 1
+  const splitWidth = Math.max(24, unitWidthToPt(table.columns[splitIndex]?.width) || 150)
+  const insertedWidth = Math.max(24, splitWidth / 2)
+  const remainingWidth = Math.max(24, splitWidth - insertedWidth)
 
-    plan.shrinkRowspanCellIds.forEach((cellId) => {
-      const cell = internalNodes[cellId] as FlowTableCellNode | undefined
-      if (cell?.type !== "flow-table-cell") return
-      const placement = resolved.grid.placementsByCellId.get(cellId)
-      if (placement == null) return
-      const rowspan = Math.max(1, placement.rowspan - 1)
-      const mergeMap = shiftFlowTableCellMergeMapForAxisRemoval(
-        cell,
-        "row",
-        rowIndex - placement.rowIndex,
-        rowspan,
-        placement.colspan,
-      )
-      internalNodes[cellId] = {
-        ...cell,
-        props: updateFlowTableCellPropsMergeMap({ ...cell.props, rowspan }, mergeMap),
-      }
-    })
+  const columns = table.columns.map((column, index) =>
+    index === splitIndex ? { ...column, width: pt(remainingWidth) } : column,
+  )
+  columns.splice(insertAt, 0, { width: pt(insertedWidth) })
 
-    const row = internalNodes[plan.rowId] as FlowTableRowNode | undefined
-    if (row?.type === "flow-table-row") {
-      plan.deleteCellIds.forEach((cellId) => {
-        const cell = internalNodes[cellId] as FlowTableCellNode | undefined
-        if (cell?.type !== "flow-table-cell") return
-        cell.childIds.forEach((id) => { delete internalNodes[id] })
-        delete internalNodes[cellId]
-      })
-      delete internalNodes[plan.rowId]
+  const internalNodes = { ...table.nodes }
+  const coveredRows = new Set<number>()
+
+  resolved.grid.placements.forEach((placement) => {
+    if (!(placement.columnIndex < insertAt && insertAt <= placement.columnEndIndex)) return
+    const cell = internalNodes[placement.cellId] as FlowTableCellNode | undefined
+    if (cell?.type !== "flow-table-cell") return
+    const nextColspan = placement.colspan + 1
+    const mergeMap = shiftFlowTableCellMergeMapForAxisInsert(
+      cell,
+      "column",
+      insertAt - placement.columnIndex,
+      placement.rowspan,
+      nextColspan,
+    )
+    internalNodes[placement.cellId] = {
+      ...cell,
+      props: updateFlowTableCellPropsMergeMap({ ...cell.props, colspan: nextColspan }, mergeMap),
     }
-
-    const rowIds = table.rowIds.filter((_, i) => i !== rowIndex)
-    const headerRowCount = table.props.headerRowCount
-    const props = headerRowCount != null && headerRowCount > rowIds.length
-      ? { ...table.props, headerRowCount: rowIds.length }
-      : table.props
-    return { ...table, props, rowIds, nodes: internalNodes }
+    for (let rowIndex = placement.rowIndex; rowIndex <= placement.rowEndIndex; rowIndex++) {
+      coveredRows.add(rowIndex)
+    }
   })
+
+  table.rowIds.forEach((rowId, rowIndex) => {
+    if (coveredRows.has(rowIndex)) return
+    const row = internalNodes[rowId] as FlowTableRowNode | undefined
+    if (row?.type !== "flow-table-row") return
+    const cellId = createEmptyFlowTableCell(internalNodes)
+    const cellInsertIndex = row.cellIds.findIndex((existingCellId) => {
+      const placement = resolved.grid.placementsByCellId.get(existingCellId)
+      return placement != null && placement.columnIndex >= insertAt
+    })
+    const insertCellAt = cellInsertIndex === -1 ? row.cellIds.length : cellInsertIndex
+    internalNodes[rowId] = {
+      ...row,
+      cellIds: [...row.cellIds.slice(0, insertCellAt), cellId, ...row.cellIds.slice(insertCellAt)],
+    }
+  })
+
+  return { ...table, columns, nodes: internalNodes }
 }
 
 export function addFlowTableColumn(doc: DocumentNode, tableId: string, afterColIndex?: number): DocumentNode {
-  return updateFlowTableInSection(doc, tableId, (table) => {
-    const resolved = tryResolveFlowTableGrid(table)
-    if (!resolved.ok) return table
-    const insertAt = afterColIndex != null
-      ? Math.min(Math.max(0, afterColIndex + 1), table.columns.length)
-      : table.columns.length
-    const splitIndex = afterColIndex != null
-      ? Math.min(Math.max(0, afterColIndex), table.columns.length - 1)
-      : table.columns.length - 1
-    const splitWidth = Math.max(24, unitWidthToPt(table.columns[splitIndex]?.width) || 150)
-    const insertedWidth = Math.max(24, splitWidth / 2)
-    const remainingWidth = Math.max(24, splitWidth - insertedWidth)
+  return updateFlowTableInSection(doc, tableId, (table) => addFlowTableColumnToTable(table, afterColIndex))
+}
 
-    const columns = table.columns.map((column, index) =>
-      index === splitIndex ? { ...column, width: pt(remainingWidth) } : column,
+export function removeFlowTableColumnFromTable(table: FlowTableNode, colIndex: number): FlowTableNode {
+  const plan = getFlowTableColumnRemovalPlan(table, colIndex)
+  if (plan == null) return table
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return table
+
+  const internalNodes = { ...table.nodes }
+  const removedWidth = unitWidthToPt(table.columns[colIndex]?.width)
+  const deleteCellIds = new Set(plan.deleteCellIds)
+
+  plan.shrinkColspanCellIds.forEach((cellId) => {
+    const cell = internalNodes[cellId] as FlowTableCellNode | undefined
+    if (cell?.type !== "flow-table-cell") return
+    const placement = resolved.grid.placementsByCellId.get(cellId)
+    if (placement == null) return
+    const colspan = Math.max(1, placement.colspan - 1)
+    const mergeMap = shiftFlowTableCellMergeMapForAxisRemoval(
+      cell,
+      "column",
+      colIndex - placement.columnIndex,
+      placement.rowspan,
+      colspan,
     )
-    columns.splice(insertAt, 0, { width: pt(insertedWidth) })
-
-    const internalNodes = { ...table.nodes }
-    const coveredRows = new Set<number>()
-
-    resolved.grid.placements.forEach((placement) => {
-      if (!(placement.columnIndex < insertAt && insertAt <= placement.columnEndIndex)) return
-      const cell = internalNodes[placement.cellId] as FlowTableCellNode | undefined
-      if (cell?.type !== "flow-table-cell") return
-      const nextColspan = placement.colspan + 1
-      const mergeMap = shiftFlowTableCellMergeMapForAxisInsert(
-        cell,
-        "column",
-        insertAt - placement.columnIndex,
-        placement.rowspan,
-        nextColspan,
-      )
-      internalNodes[placement.cellId] = {
-        ...cell,
-        props: updateFlowTableCellPropsMergeMap({ ...cell.props, colspan: nextColspan }, mergeMap),
-      }
-      for (let rowIndex = placement.rowIndex; rowIndex <= placement.rowEndIndex; rowIndex++) {
-        coveredRows.add(rowIndex)
-      }
-    })
-
-    table.rowIds.forEach((rowId, rowIndex) => {
-      if (coveredRows.has(rowIndex)) return
-      const row = internalNodes[rowId] as FlowTableRowNode | undefined
-      if (row?.type !== "flow-table-row") return
-      const cellId = createEmptyFlowTableCell(internalNodes)
-      const cellInsertIndex = row.cellIds.findIndex((existingCellId) => {
-        const placement = resolved.grid.placementsByCellId.get(existingCellId)
-        return placement != null && placement.columnIndex >= insertAt
-      })
-      const insertCellAt = cellInsertIndex === -1 ? row.cellIds.length : cellInsertIndex
-      internalNodes[rowId] = {
-        ...row,
-        cellIds: [...row.cellIds.slice(0, insertCellAt), cellId, ...row.cellIds.slice(insertCellAt)],
-      }
-    })
-
-    return { ...table, columns, nodes: internalNodes }
+    internalNodes[cellId] = {
+      ...cell,
+      props: updateFlowTableCellPropsMergeMap({ ...cell.props, colspan }, mergeMap),
+    }
   })
+
+  table.rowIds.forEach((rowId) => {
+    const row = internalNodes[rowId] as FlowTableRowNode | undefined
+    if (row?.type !== "flow-table-row") return
+    row.cellIds.forEach((cellId) => {
+      if (!deleteCellIds.has(cellId)) return
+      const cell = internalNodes[cellId] as FlowTableCellNode | undefined
+      if (cell?.type !== "flow-table-cell") return
+      cell.childIds.forEach((id) => { delete internalNodes[id] })
+      delete internalNodes[cellId]
+    })
+    internalNodes[rowId] = {
+      ...row,
+      cellIds: row.cellIds.filter((cellId) => !deleteCellIds.has(cellId)),
+    }
+  })
+
+  const columns = table.columns.filter((_, index) => index !== colIndex)
+  if (columns.length > 0 && removedWidth > 0) {
+    const absorbIndex = Math.min(Math.max(0, colIndex - 1), columns.length - 1)
+    const absorbWidth = unitWidthToPt(columns[absorbIndex]?.width)
+    columns[absorbIndex] = { ...columns[absorbIndex], width: pt(absorbWidth + removedWidth) }
+  }
+
+  return { ...table, columns, nodes: internalNodes }
 }
 
 export function removeFlowTableColumn(doc: DocumentNode, tableId: string, colIndex: number): DocumentNode {
-  return updateFlowTableInSection(doc, tableId, (table) => {
-    const plan = getFlowTableColumnRemovalPlan(table, colIndex)
-    if (plan == null) return table
-    const resolved = tryResolveFlowTableGrid(table)
-    if (!resolved.ok) return table
+  return updateFlowTableInSection(doc, tableId, (table) => removeFlowTableColumnFromTable(table, colIndex))
+}
 
-    const internalNodes = { ...table.nodes }
-    const removedWidth = unitWidthToPt(table.columns[colIndex]?.width)
-    const deleteCellIds = new Set(plan.deleteCellIds)
+export function resizeFlowTableColumnPairInTable(
+  table: FlowTableNode,
+  leftColIndex: number,
+  leftWidthPt: number,
+  rightWidthPt: number,
+): FlowTableNode {
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return table
+  const rightColIndex = leftColIndex + 1
+  if (leftColIndex < 0 || rightColIndex >= table.columns.length) return table
 
-    plan.shrinkColspanCellIds.forEach((cellId) => {
-      const cell = internalNodes[cellId] as FlowTableCellNode | undefined
-      if (cell?.type !== "flow-table-cell") return
-      const placement = resolved.grid.placementsByCellId.get(cellId)
-      if (placement == null) return
-      const colspan = Math.max(1, placement.colspan - 1)
-      const mergeMap = shiftFlowTableCellMergeMapForAxisRemoval(
-        cell,
-        "column",
-        colIndex - placement.columnIndex,
-        placement.rowspan,
-        colspan,
-      )
-      internalNodes[cellId] = {
-        ...cell,
-        props: updateFlowTableCellPropsMergeMap({ ...cell.props, colspan }, mergeMap),
-      }
-    })
+  const currentLeftWidth = unitWidthToPt(table.columns[leftColIndex]?.width)
+  const currentRightWidth = unitWidthToPt(table.columns[rightColIndex]?.width)
+  const nextPair = resolveResizedColumnPair(leftWidthPt, rightWidthPt, currentLeftWidth, currentRightWidth)
+  if (!nextPair) return table
+  if (
+    Math.abs(nextPair.leftWidthPt - currentLeftWidth) < 0.01 &&
+    Math.abs(nextPair.rightWidthPt - currentRightWidth) < 0.01
+  ) return table
 
-    table.rowIds.forEach((rowId) => {
-      const row = internalNodes[rowId] as FlowTableRowNode | undefined
-      if (row?.type !== "flow-table-row") return
-      row.cellIds.forEach((cellId) => {
-        if (!deleteCellIds.has(cellId)) return
-        const cell = internalNodes[cellId] as FlowTableCellNode | undefined
-        if (cell?.type !== "flow-table-cell") return
-        cell.childIds.forEach((id) => { delete internalNodes[id] })
-        delete internalNodes[cellId]
-      })
-      internalNodes[rowId] = {
-        ...row,
-        cellIds: row.cellIds.filter((cellId) => !deleteCellIds.has(cellId)),
-      }
-    })
-
-    const columns = table.columns.filter((_, index) => index !== colIndex)
-    if (columns.length > 0 && removedWidth > 0) {
-      const absorbIndex = Math.min(Math.max(0, colIndex - 1), columns.length - 1)
-      const absorbWidth = unitWidthToPt(columns[absorbIndex]?.width)
-      columns[absorbIndex] = { ...columns[absorbIndex], width: pt(absorbWidth + removedWidth) }
-    }
-
-    return { ...table, columns, nodes: internalNodes }
+  const columns = table.columns.map((column, index) => {
+    if (index === leftColIndex) return { ...column, width: pt(nextPair.leftWidthPt) }
+    if (index === rightColIndex) return { ...column, width: pt(nextPair.rightWidthPt) }
+    return column
   })
+
+  return { ...table, columns }
 }
 
 export function resizeFlowTableColumnPair(
@@ -3289,29 +3338,11 @@ export function resizeFlowTableColumnPair(
   leftWidthPt: number,
   rightWidthPt: number,
 ): DocumentNode {
-  return updateFlowTableInSection(doc, tableId, (table) => {
-    const resolved = tryResolveFlowTableGrid(table)
-    if (!resolved.ok) return table
-    const rightColIndex = leftColIndex + 1
-    if (leftColIndex < 0 || rightColIndex >= table.columns.length) return table
-
-    const currentLeftWidth = unitWidthToPt(table.columns[leftColIndex]?.width)
-    const currentRightWidth = unitWidthToPt(table.columns[rightColIndex]?.width)
-    const nextPair = resolveResizedColumnPair(leftWidthPt, rightWidthPt, currentLeftWidth, currentRightWidth)
-    if (!nextPair) return table
-    if (
-      Math.abs(nextPair.leftWidthPt - currentLeftWidth) < 0.01 &&
-      Math.abs(nextPair.rightWidthPt - currentRightWidth) < 0.01
-    ) return table
-
-    const columns = table.columns.map((column, index) => {
-      if (index === leftColIndex) return { ...column, width: pt(nextPair.leftWidthPt) }
-      if (index === rightColIndex) return { ...column, width: pt(nextPair.rightWidthPt) }
-      return column
-    })
-
-    return { ...table, columns }
-  })
+  return updateFlowTableInSection(
+    doc,
+    tableId,
+    (table) => resizeFlowTableColumnPairInTable(table, leftColIndex, leftWidthPt, rightWidthPt),
+  )
 }
 
 export function fitFlowTableToSectionWidth(doc: DocumentNode, tableId: string): DocumentNode {
@@ -3330,6 +3361,105 @@ export function fitFlowTableToSectionWidth(doc: DocumentNode, tableId: string): 
   return doc
 }
 
+export function updateFlowTableCellSpanInTable(
+  table: FlowTableNode,
+  cellId: string,
+  changes: FlowTableCellSpanChanges,
+): FlowTableNode {
+  const cell = table.nodes[cellId]
+  if (cell?.type !== "flow-table-cell") return table
+
+  const plan = getFlowTableCellSpanUpdatePlan(table, cellId, changes)
+  if (plan == null) return table
+
+  const internalNodes: FlowTableNode["nodes"] = { ...table.nodes }
+  const consumed = new Set(plan.consumeCellIds)
+  const originColumns = new Map<string, number>()
+  const consumedChildIdsByCellId = new Map<string, string[]>()
+  const appendChildIds = plan.consumeCellIds.flatMap((consumeCellId) => {
+    const consumeCell = table.nodes[consumeCellId]
+    if (consumeCell?.type !== "flow-table-cell") return []
+    const childIds = consumeCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
+    consumedChildIdsByCellId.set(consumeCellId, childIds)
+    return childIds
+  })
+
+  plan.consumeCellIds.forEach((consumeCellId) => {
+    const consumeCell = internalNodes[consumeCellId]
+    if (consumeCell?.type !== "flow-table-cell") return
+    consumeCell.childIds.forEach((childId) => {
+      if (!appendChildIds.includes(childId)) delete internalNodes[childId]
+    })
+    delete internalNodes[consumeCellId]
+  })
+
+  const currentCell = internalNodes[cellId] as FlowTableCellNode | undefined
+  if (currentCell?.type !== "flow-table-cell") return table
+  const shrinkContentPlan = splitFlowTableCellChildrenForSpanShrink(currentCell, plan)
+  const currentChildIds = shrinkContentPlan?.originChildIds ?? (appendChildIds.length > 0
+    ? currentCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
+    : currentCell.childIds)
+  const nextProps = flowTableCellPropsWithSpan(currentCell.props, plan.colspan, plan.rowspan)
+  const shouldWriteMergeMap =
+    plan.createSlots.length === 0 &&
+    plan.consumeCellIds.length > 0 &&
+    (
+      appendChildIds.length > 0 ||
+      currentCell.props.mergeMap != null ||
+      plan.consumeCellIds.some((consumeCellId) => {
+        const consumeCell = table.nodes[consumeCellId]
+        return consumeCell?.type === "flow-table-cell" && consumeCell.props.mergeMap != null
+      })
+    )
+  const mergeMap = shouldWriteMergeMap
+    ? buildFlowTableCellMergeMapForSpanUpdate(table, plan, currentChildIds, consumedChildIdsByCellId)
+    : undefined
+  if (mergeMap) nextProps.mergeMap = mergeMap
+  else delete nextProps.mergeMap
+  internalNodes[cellId] = {
+    ...currentCell,
+    props: nextProps,
+    childIds: [...currentChildIds, ...appendChildIds],
+  }
+
+  const resolved = tryResolveFlowTableGrid(table)
+  if (!resolved.ok) return table
+  resolved.grid.placements.forEach((placement) => {
+    if (!consumed.has(placement.cellId)) originColumns.set(placement.cellId, placement.columnIndex)
+  })
+  originColumns.set(cellId, plan.columnIndex)
+
+  const createdByRow = new Map<number, string[]>()
+  plan.createSlots
+    .sort((a, b) => a.rowIndex - b.rowIndex || a.columnIndex - b.columnIndex)
+    .forEach((slot) => {
+      const restoredChildIds = shrinkContentPlan?.childIdsBySlot.get(slotKey(
+        slot.rowIndex - plan.rowIndex,
+        slot.columnIndex - plan.columnIndex,
+      ))
+      const newCellId = restoredChildIds != null && restoredChildIds.length > 0
+        ? createFlowTableCellWithChildren(internalNodes, restoredChildIds)
+        : createEmptyFlowTableCell(internalNodes)
+      originColumns.set(newCellId, slot.columnIndex)
+      const rowCells = createdByRow.get(slot.rowIndex) ?? []
+      rowCells.push(newCellId)
+      createdByRow.set(slot.rowIndex, rowCells)
+    })
+
+  table.rowIds.forEach((rowId, rowIndex) => {
+    const row = internalNodes[rowId] as FlowTableRowNode | undefined
+    if (row?.type !== "flow-table-row") return
+    const cellIds = [
+      ...row.cellIds.filter((rowCellId) => !consumed.has(rowCellId)),
+      ...(createdByRow.get(rowIndex) ?? []),
+    ].sort((left, right) => (originColumns.get(left) ?? 0) - (originColumns.get(right) ?? 0))
+    internalNodes[rowId] = { ...row, cellIds }
+  })
+
+  const newTable: FlowTableNode = { ...table, nodes: internalNodes }
+  return tryResolveFlowTableGrid(newTable).ok ? newTable : table
+}
+
 export function updateFlowTableCellSpan(
   doc: DocumentNode,
   cellId: string,
@@ -3340,98 +3470,9 @@ export function updateFlowTableCellSpan(
     for (const [tableId, node] of Object.entries(section.nodes)) {
       if (node.type !== "flow-table") continue
       const table = node as unknown as FlowTableNode
-      const cell = table.nodes[cellId]
-      if (cell?.type !== "flow-table-cell") continue
-
-      const plan = getFlowTableCellSpanUpdatePlan(table, cellId, changes)
-      if (plan == null) return doc
-
-      const internalNodes: FlowTableNode["nodes"] = { ...table.nodes }
-      const consumed = new Set(plan.consumeCellIds)
-      const originColumns = new Map<string, number>()
-      const consumedChildIdsByCellId = new Map<string, string[]>()
-      const appendChildIds = plan.consumeCellIds.flatMap((consumeCellId) => {
-        const consumeCell = table.nodes[consumeCellId]
-        if (consumeCell?.type !== "flow-table-cell") return []
-        const childIds = consumeCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
-        consumedChildIdsByCellId.set(consumeCellId, childIds)
-        return childIds
-      })
-
-      plan.consumeCellIds.forEach((consumeCellId) => {
-        const consumeCell = internalNodes[consumeCellId]
-        if (consumeCell?.type !== "flow-table-cell") return
-        consumeCell.childIds.forEach((childId) => {
-          if (!appendChildIds.includes(childId)) delete internalNodes[childId]
-        })
-        delete internalNodes[consumeCellId]
-      })
-
-      const currentCell = internalNodes[cellId] as FlowTableCellNode | undefined
-      if (currentCell?.type !== "flow-table-cell") return doc
-      const shrinkContentPlan = splitFlowTableCellChildrenForSpanShrink(currentCell, plan)
-      const currentChildIds = shrinkContentPlan?.originChildIds ?? (appendChildIds.length > 0
-        ? currentCell.childIds.filter((childId) => !isEmptyFlowTableCellChild(table, childId))
-        : currentCell.childIds)
-      const nextProps = flowTableCellPropsWithSpan(currentCell.props, plan.colspan, plan.rowspan)
-      const shouldWriteMergeMap =
-        plan.createSlots.length === 0 &&
-        plan.consumeCellIds.length > 0 &&
-        (
-          appendChildIds.length > 0 ||
-          currentCell.props.mergeMap != null ||
-          plan.consumeCellIds.some((consumeCellId) => {
-            const consumeCell = table.nodes[consumeCellId]
-            return consumeCell?.type === "flow-table-cell" && consumeCell.props.mergeMap != null
-          })
-        )
-      const mergeMap = shouldWriteMergeMap
-        ? buildFlowTableCellMergeMapForSpanUpdate(table, plan, currentChildIds, consumedChildIdsByCellId)
-        : undefined
-      if (mergeMap) nextProps.mergeMap = mergeMap
-      else delete nextProps.mergeMap
-      internalNodes[cellId] = {
-        ...currentCell,
-        props: nextProps,
-        childIds: [...currentChildIds, ...appendChildIds],
-      }
-
-      const resolved = tryResolveFlowTableGrid(table)
-      if (!resolved.ok) return doc
-      resolved.grid.placements.forEach((placement) => {
-        if (!consumed.has(placement.cellId)) originColumns.set(placement.cellId, placement.columnIndex)
-      })
-      originColumns.set(cellId, plan.columnIndex)
-
-      const createdByRow = new Map<number, string[]>()
-      plan.createSlots
-        .sort((a, b) => a.rowIndex - b.rowIndex || a.columnIndex - b.columnIndex)
-        .forEach((slot) => {
-          const restoredChildIds = shrinkContentPlan?.childIdsBySlot.get(slotKey(
-            slot.rowIndex - plan.rowIndex,
-            slot.columnIndex - plan.columnIndex,
-          ))
-          const newCellId = restoredChildIds != null && restoredChildIds.length > 0
-            ? createFlowTableCellWithChildren(internalNodes, restoredChildIds)
-            : createEmptyFlowTableCell(internalNodes)
-          originColumns.set(newCellId, slot.columnIndex)
-          const rowCells = createdByRow.get(slot.rowIndex) ?? []
-          rowCells.push(newCellId)
-          createdByRow.set(slot.rowIndex, rowCells)
-        })
-
-      table.rowIds.forEach((rowId, rowIndex) => {
-        const row = internalNodes[rowId] as FlowTableRowNode | undefined
-        if (row?.type !== "flow-table-row") return
-        const cellIds = [
-          ...row.cellIds.filter((rowCellId) => !consumed.has(rowCellId)),
-          ...(createdByRow.get(rowIndex) ?? []),
-        ].sort((left, right) => (originColumns.get(left) ?? 0) - (originColumns.get(right) ?? 0))
-        internalNodes[rowId] = { ...row, cellIds }
-      })
-
-      const newTable: FlowTableNode = { ...table, nodes: internalNodes }
-      if (!tryResolveFlowTableGrid(newTable).ok) return doc
+      if (table.nodes[cellId]?.type !== "flow-table-cell") continue
+      const newTable = updateFlowTableCellSpanInTable(table, cellId, changes)
+      if (newTable === table) return doc
       const newNodes = { ...section.nodes, [tableId]: newTable as unknown as LayoutNode }
       const newSections = doc.document.sections.map((s, i) =>
         i === si ? { ...s, nodes: newNodes } : s,

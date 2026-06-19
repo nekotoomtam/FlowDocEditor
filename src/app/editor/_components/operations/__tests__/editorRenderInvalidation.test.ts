@@ -126,6 +126,82 @@ describe("editorRenderInvalidation", () => {
     expect(plan.invalidatesPagination).toBe(true)
   })
 
+  it("marks duplicate-node operations as structural from-index invalidations", () => {
+    const plan = planFor({ type: "DUPLICATE_NODE", nodeId: "target" })
+
+    expect(plan.lane).toBe("from-index-structure")
+    expect(plan.pageScope).toBe("from-first-affected-page")
+    expect(plan.affectedNodeIds).toEqual(["target"])
+    expect(plan.affectedPageIndexes).toEqual([1, 2])
+    expect(plan.invalidatesPagination).toBe(true)
+    expect(plan.reason).toBe("node.duplicate:from-index-structure")
+  })
+
+  it("marks flow-row structure operations as structural from-index invalidations", () => {
+    const plan = planFor({ type: "FLOW_ROW_ADD_COL", rowId: "target", stackId: "stack-1", position: "after" })
+
+    expect(plan.lane).toBe("from-index-structure")
+    expect(plan.pageScope).toBe("from-first-affected-page")
+    expect(plan.affectedNodeIds).toEqual(["target", "stack-1"])
+    expect(plan.affectedPageIndexes).toEqual([1, 2])
+    expect(plan.invalidatesPagination).toBe(true)
+    expect(plan.reason).toBe("flow-row.structure.patch:from-index-structure")
+  })
+
+  it("marks drag placement as a structural invalidation with conservative page scope", () => {
+    const plan = planFor({ type: "DRAG_COMMIT", sectionId: "s1", op: {} as any })
+
+    expect(plan.lane).toBe("from-index-structure")
+    expect(plan.pageScope).toBe("from-first-affected-page")
+    expect(plan.affectedNodeIds).toEqual([])
+    expect(plan.affectedPageIndexes).toEqual([0, 1, 2])
+    expect(plan.invalidatesPagination).toBe(true)
+    expect(plan.reason).toBe("drag.placement:from-index-structure")
+  })
+
+  it("marks flow-row layout operations as node-layout invalidations", () => {
+    const plan = planFor({
+      type: "RESIZE_COLUMNS",
+      leftStackId: "target",
+      leftShare: 2,
+      rightStackId: "later",
+      rightShare: 1,
+    })
+
+    expect(plan.lane).toBe("node-layout")
+    expect(plan.pageScope).toBe("affected-node-pages")
+    expect(plan.affectedNodeIds).toEqual(["target", "later"])
+    expect(plan.affectedPageIndexes).toEqual([1, 2])
+    expect(plan.invalidatesPagination).toBe(true)
+    expect(plan.reason).toBe("flow-row.layout.patch:node-layout")
+  })
+
+  it("marks layout actions without target node ids as unknown page scope", () => {
+    const plan = planFor({
+      type: "UPDATE_FIELD_REF",
+      fieldRefId: "field-1",
+      changes: { fallback: "Fallback" },
+    })
+
+    expect(plan.lane).toBe("node-layout")
+    expect(plan.pageScope).toBe("unknown")
+    expect(plan.affectedNodeIds).toEqual([])
+    expect(plan.affectedPageIndexes).toBeNull()
+    expect(plan.invalidatesPagination).toBe(true)
+    expect(plan.reason).toBe("field.patch:node-layout")
+  })
+
+  it("marks list structural operations as from-index invalidations", () => {
+    const plan = planFor({ type: "CHANGE_LIST_ITEM_LEVEL", nodeId: "target", direction: "indent" })
+
+    expect(plan.lane).toBe("from-index-structure")
+    expect(plan.pageScope).toBe("from-first-affected-page")
+    expect(plan.affectedNodeIds).toEqual(["target"])
+    expect(plan.affectedPageIndexes).toEqual([1, 2])
+    expect(plan.invalidatesPagination).toBe(true)
+    expect(plan.reason).toBe("list.structure.patch:from-index-structure")
+  })
+
   it("marks document layout actions as whole-document invalidations", () => {
     const plan = planFor({
       type: "UPDATE_MARGIN",
@@ -138,6 +214,7 @@ describe("editorRenderInvalidation", () => {
     expect(plan.affectedNodeIds).toEqual([])
     expect(plan.affectedPageIndexes).toEqual([0, 1, 2])
     expect(plan.invalidatesPagination).toBe(true)
+    expect(plan.reason).toBe("document.settings.patch:document-layout")
   })
 
   it("keeps no-layout reducer updates as no-render invalidations", () => {

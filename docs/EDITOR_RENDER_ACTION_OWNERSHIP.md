@@ -115,4 +115,7 @@ Before moving runtime behavior to a new render/action lane, the patch must show:
 - the invalidation lane and affected page rule;
 - the owner for document mutation, render output, history, and preview settle;
 - focused tests proving the lane mapping;
+- the relevant long-document stability gate from
+  `docs/EDITOR_STABILITY_GATES.md`, or an explicit UNKNOWN when no stress
+  coverage exists yet;
 - a statement that export and persisted document schema ownership did not move.

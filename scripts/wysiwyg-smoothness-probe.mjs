@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { resolveFlowDocFixtureTarget } from "./flowdoc-fixture-targets.mjs"
 import { getSmokeBrowserConfig, launchSmokeBrowser } from "./smoke-browser.mjs"
 
 // Phase C smoothness probe. Types a controlled burst into the Stage 3
@@ -86,8 +87,10 @@ const headless = process.env.HEADED !== "1"
 const smokeBrowser = getSmokeBrowserConfig({ headless })
 const probeFlowDocFile = process.env.FLOWDOC_PROBE_FILE?.trim() || null
 const configuredTargetNodeId = process.env.PROBE_TARGET_NODE_ID?.trim() || null
+const configuredTargetAlias = process.env.PROBE_TARGET_ALIAS?.trim() || process.env.FLOWDOC_TARGET_ALIAS?.trim() || null
 const configuredStaleTailText = process.env.PROBE_ENTER_STALE_TAIL_TEXT?.trim() || null
 const shouldUseMixedPaginationDocument = PROBE_MODE === "mixed-pagination" && !probeFlowDocFile
+let configuredAliasTargetNodeId = null
 
 const paragraphFragmentSelector = `[data-testid="editor-fragment"][data-node-type="paragraph"]`
 const resizeHandleSelector = `[data-testid="column-resize-handle"]`
@@ -172,6 +175,14 @@ function readProbeFlowDocFile() {
     path: resolvedPath,
     raw: fs.readFileSync(resolvedPath, "utf8"),
   }
+}
+
+function resolveConfiguredTargetAlias(probeDocument) {
+  if (!configuredTargetAlias) return null
+  assert(probeDocument, `PROBE_TARGET_ALIAS requires FLOWDOC_PROBE_FILE; received ${configuredTargetAlias}`)
+  const targetNodeId = resolveFlowDocFixtureTarget(probeDocument.raw, configuredTargetAlias)
+  assert(targetNodeId, `Could not resolve PROBE_TARGET_ALIAS=${configuredTargetAlias} from fixture mockData.targets`)
+  return targetNodeId
 }
 
 function pt(value) {
@@ -312,6 +323,7 @@ function resolveStructuralNextNodeId(targetNodeId) {
 
 async function resolveTargetNodeId(page) {
   if (configuredTargetNodeId) return configuredTargetNodeId
+  if (configuredAliasTargetNodeId) return configuredAliasTargetNodeId
   if (isLongMockStructuralProbe()) return LONG_MOCK_STRUCTURAL_TARGET_NODE_ID
   if (shouldUseMixedPaginationDocument) return MIXED_PAGINATION_TARGET_NODE_ID
   if (!probeFlowDocFile) return DEFAULT_TARGET_NODE_ID
@@ -6240,6 +6252,7 @@ async function runProbe() {
   const server = shouldStartServer ? startNextDevServer() : null
   if (server) await waitForServer(baseEditorUrl, server)
   const probeDocument = readProbeFlowDocFile()
+  configuredAliasTargetNodeId = resolveConfiguredTargetAlias(probeDocument)
   const inlineProbeDocument = shouldUseMixedPaginationDocument
     ? JSON.stringify(makeMixedPaginationProbeDocument())
     : null
@@ -6347,6 +6360,7 @@ async function runProbe() {
         samplePhase: PROBE_SAMPLE_PHASE,
         nativeWrapVariant: NATIVE_WRAP_VARIANT,
         ...probeResult.action,
+        targetAlias: configuredTargetAlias,
         targetNodeId: probeResult.targetNodeId,
         flowDocFile: probeDocument?.path ?? (inlineProbeDocument ? "inline:mixed-pagination" : null),
         readyTimeoutMs: READY_TIMEOUT_MS,

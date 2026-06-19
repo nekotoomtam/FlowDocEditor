@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { createDefaultDocument, DEFAULT_PARAGRAPH_PROPS } from "@/document"
-import type { DocumentNode, LayoutNode, ParagraphNode } from "@/schema"
+import { createDefaultDocument, createDefaultFlowTable, DEFAULT_PARAGRAPH_PROPS, migrateDocumentToV2 } from "@/document"
+import type { DocumentNode, DocumentNodeV2, LayoutNode, ParagraphNode } from "@/schema"
 import type { FieldRegistryV1 } from "@/fieldRegistry"
 import type { DataSnapshotV1 } from "@/dataSnapshot"
 import {
@@ -8,6 +8,7 @@ import {
   CURRENT_PACKAGE_VERSION,
   CURRENT_STORAGE_PACKAGE_VERSION,
   LEGACY_PACKAGE_VERSION,
+  NEXT_DOCUMENT_VERSION,
   STORAGE_KEY,
   createLegacyDocumentPackage,
   documentImportSuccessMessage,
@@ -16,6 +17,7 @@ import {
   loadDocumentFromStorageCachedByRawValue,
   makeFlowDocFileName,
   migratePersistedDocumentPackage,
+  migratePersistedDocumentPackageToDocumentV2,
   migratePersistedDocumentPackageToV2,
   parsePersistedDocument,
   saveDocumentToStorage,
@@ -107,9 +109,41 @@ function makeFlowRowDocument(): DocumentNode {
   }
 }
 
-function expectFlowRowTree(doc: DocumentNode) {
+function makeFlowTableDocument(): { doc: DocumentNode; tableId: string } {
+  const doc = createDefaultDocument("Flow Table Storage")
   const section = doc.document.sections[0]
   const body = section.nodes[section.bodyRootId]
+
+  if (!body || body.type !== "body") {
+    throw new Error("Expected default document body")
+  }
+
+  const table = createDefaultFlowTable(3, 2)
+  return {
+    tableId: table.id,
+    doc: {
+      ...doc,
+      document: {
+        ...doc.document,
+        sections: [{
+          ...section,
+          nodes: {
+            [body.id]: { ...body, childIds: [table.id] },
+            [table.id]: table as unknown as LayoutNode,
+          },
+        }],
+      },
+    },
+  }
+}
+
+function getBodyRootId(section: DocumentNode["document"]["sections"][number] | DocumentNodeV2["document"]["sections"][number]): string {
+  return "bodyRootId" in section ? section.bodyRootId : section.roots.body
+}
+
+function expectFlowRowTree(doc: DocumentNode | DocumentNodeV2) {
+  const section = doc.document.sections[0]
+  const body = section.nodes[getBodyRootId(section)]
   const row = section.nodes["flow-row-1"]
   const leftStack = section.nodes["flow-stack-left"]
   const rightStack = section.nodes["flow-stack-right"]
@@ -233,6 +267,7 @@ describe("document persistence", () => {
     expect(items.has(STORAGE_KEY)).toBe(true)
     const storedPackage = JSON.parse(items.get(STORAGE_KEY)!)
     expect(storedPackage["packageVersion"]).toBe(CURRENT_STORAGE_PACKAGE_VERSION)
+    expect(storedPackage["document"]["version"]).toBe(NEXT_DOCUMENT_VERSION)
     expect(storedPackage["fields"]).toEqual({ version: 1, fields: [] })
 
     const result = loadDocumentFromStorage(storage)
@@ -279,6 +314,7 @@ describe("document persistence", () => {
 
     const storedPackage = JSON.parse(items.get(STORAGE_KEY)!)
     expect(storedPackage.packageVersion).toBe(CURRENT_STORAGE_PACKAGE_VERSION)
+    expect(storedPackage.document.version).toBe(NEXT_DOCUMENT_VERSION)
     expectFlowRowTree(storedPackage.document)
 
     const result = loadDocumentFromStorage(storage)
@@ -306,6 +342,7 @@ describe("document persistence", () => {
     expect(saveDocumentToStorage(storage, doc, { fields, now: "2026-05-12T00:00:00.000Z" })).toEqual({ ok: true })
     const storedPackage = JSON.parse(items.get(STORAGE_KEY)!)
     expect(storedPackage["packageVersion"]).toBe(2)
+    expect(storedPackage["document"]["version"]).toBe(NEXT_DOCUMENT_VERSION)
     expect(storedPackage["fields"]).toEqual(fields)
 
     const result = loadDocumentFromStorage(storage)
@@ -335,6 +372,7 @@ describe("document persistence", () => {
     expect(saveDocumentToStorage(storage, doc, { fields, data, now: "2026-05-12T00:00:00.000Z" })).toEqual({ ok: true })
     const storedPackage = JSON.parse(items.get(STORAGE_KEY)!)
     expect(storedPackage["packageVersion"]).toBe(2)
+    expect(storedPackage["document"]["version"]).toBe(NEXT_DOCUMENT_VERSION)
     expect(storedPackage["data"]).toEqual(data)
 
     const result = loadDocumentFromStorage(storage)
@@ -351,6 +389,7 @@ describe("document persistence", () => {
     expect(exported.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
     expect(exported.packageVersion).toBe(2)
     expect(exported.kind).toBe("document")
+    expect(exported.document.version).toBe(NEXT_DOCUMENT_VERSION)
     expect(exported.document.document.meta.title).toBe("Download")
     expect(exported.fields).toEqual({ version: 1, fields: [] })
   })
@@ -370,9 +409,33 @@ describe("document persistence", () => {
 
     expect(exported.packageVersion).toBe(2)
     expect(exported.kind).toBe("document")
+    expect(exported.document.version).toBe(NEXT_DOCUMENT_VERSION)
     expect(exported.document.document.meta.title).toBe("Download V2")
     expect(exported.fields).toEqual(fields)
     expect(exported.data).toEqual(data)
+  })
+
+  it("serializes authored flow-table output as flattened DocumentNode v2 table storage", () => {
+    const { doc, tableId } = makeFlowTableDocument()
+    const exported = JSON.parse(serializeDocumentPackage(doc))
+    const section = exported.document.document.sections[0]
+    const table = section.nodes[tableId]
+
+    expect(exported.document.version).toBe(NEXT_DOCUMENT_VERSION)
+    expect(table.type).toBe("flow-table")
+    expect("nodes" in table).toBe(false)
+    expect(section.nodes[table.rowIds[0]].type).toBe("flow-table-row")
+    const firstRow = section.nodes[table.rowIds[0]]
+    expect(section.nodes[firstRow.cellIds[0]].type).toBe("flow-table-cell")
+    const firstCell = section.nodes[firstRow.cellIds[0]]
+    expect(section.nodes[firstCell.childIds[0]].type).toBe("paragraph")
+
+    const result = parsePersistedDocument(JSON.stringify(exported))
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const runtimeTable = result.doc.document.sections[0].nodes[tableId]
+    expect(runtimeTable?.type).toBe("flow-table")
+    expect(runtimeTable && "nodes" in runtimeTable).toBe(true)
   })
 
   it("parses package v2 with a field registry as the current package format", () => {
@@ -578,6 +641,151 @@ describe("document persistence", () => {
     expect(result.package.history).toEqual(pack.history)
     expect(result.package.migrations).toEqual(pack.migrations)
     expect(result.fieldRegistryIssues).toEqual([])
+  })
+
+  it("migrates persisted packages to DocumentNode v2 without bumping the package envelope", () => {
+    const doc = makeFlowRowDocument()
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+    const fields: FieldRegistryV1 = {
+      version: 1,
+      fields: [{ key: "customer.name", fieldType: "text", label: "Customer name" }],
+    }
+    const data = dataSnapshot({ "customer.name": "Acme Co" })
+
+    const result = migratePersistedDocumentPackageToDocumentV2(
+      serializeDocumentPackageWithFields(doc, fields, data),
+      "2026-06-19T00:00:00.000Z",
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.package.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
+    expect(result.package.document.version).toBe(NEXT_DOCUMENT_VERSION)
+    expect(result.package.document.document.sections[0].roots.body).toBeTruthy()
+    expect("bodyRootId" in result.package.document.document.sections[0]).toBe(false)
+    expect(result.package.fields).toEqual(fields)
+    expect(result.package.data).toEqual(data)
+    expect(result.fieldRegistryIssues).toEqual([])
+  })
+
+  it("accepts package v2 that already contains DocumentNode v2", () => {
+    const doc = makeFlowRowDocument()
+    firstParagraph(doc).children = [
+      { id: "field-customer", type: "fieldRef", key: "customer.name", label: "Customer" },
+    ]
+    const fields: FieldRegistryV1 = {
+      version: 1,
+      fields: [{ key: "customer.name", fieldType: "text", label: "Customer name" }],
+    }
+    const first = migratePersistedDocumentPackageToDocumentV2(
+      serializeDocumentPackageWithFields(doc, fields),
+      "2026-06-19T00:00:00.000Z",
+    )
+
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    const second = migratePersistedDocumentPackageToDocumentV2(JSON.stringify({
+      ...first.package,
+      history: { version: 1, entries: [] },
+      migrations: [{ from: 1, to: 2 }],
+    }))
+
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.source).toBe("package")
+    expect(second.package.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
+    expect(second.package.document).toEqual(first.package.document)
+    expect(second.package.fields).toEqual(fields)
+    expect(second.package.history).toEqual({ version: 1, entries: [] })
+    expect(second.package.migrations).toEqual([{ from: 1, to: 2 }])
+    expect(second.fieldRegistryIssues).toEqual([])
+  })
+
+  it("wraps raw DocumentNode v2 JSON in the current package envelope", () => {
+    const first = migratePersistedDocumentPackageToDocumentV2(
+      JSON.stringify(createDefaultDocument("Raw V2")),
+      "2026-06-19T00:00:00.000Z",
+    )
+
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    const second = migratePersistedDocumentPackageToDocumentV2(
+      JSON.stringify(first.package.document),
+      "2026-06-20T00:00:00.000Z",
+    )
+
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.source).toBe("legacy-document")
+    expect(second.package.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
+    expect(second.package.document.version).toBe(NEXT_DOCUMENT_VERSION)
+    expect(second.package.id).toBe(first.package.document.document.id)
+    expect(second.package.fields).toEqual({ version: 1, fields: [] })
+  })
+
+  it("parses raw DocumentNode v2 JSON through the current runtime adapter", () => {
+    const doc = makeFlowRowDocument()
+    const v2 = migrateDocumentToV2(doc)
+
+    const result = parsePersistedDocument(JSON.stringify(v2))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.source).toBe("legacy-document")
+    expect(result.doc.version).toBe(CURRENT_DOCUMENT_VERSION)
+    expect(result.package?.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
+    expectFlowRowTree(result.doc)
+  })
+
+  it("parses package v2 with DocumentNode v2 through the current runtime adapter", () => {
+    const doc = makeFlowRowDocument()
+    const fields: FieldRegistryV1 = {
+      version: 1,
+      fields: [{ key: "customer.name", fieldType: "text", label: "Customer name" }],
+    }
+    const migrated = migratePersistedDocumentPackageToDocumentV2(serializeDocumentPackageWithFields(doc, fields))
+
+    expect(migrated.ok).toBe(true)
+    if (!migrated.ok) return
+
+    const result = parsePersistedDocument(JSON.stringify(migrated.package))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.source).toBe("package")
+    expect(result.doc.version).toBe(CURRENT_DOCUMENT_VERSION)
+    expect(result.package?.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
+    expect(result.package?.packageVersion === 2 ? result.package.fields : null).toEqual(fields)
+    expect(result.fieldRegistryIssues).toEqual([])
+    expectFlowRowTree(result.doc)
+  })
+
+  it("migrates legacy row and stack nodes during persisted DocumentNode v2 migration", () => {
+    const doc = createDefaultDocument("Legacy Row Stack")
+    const section = doc.document.sections[0]
+    section.nodes = {
+      body: { id: "body", type: "body", props: {}, childIds: ["row"] },
+      row: { id: "row", type: "row", props: {}, childIds: ["stack"] },
+      stack: { id: "stack", type: "stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1: makeParagraphNode("p1", "Legacy content"),
+    }
+    section.bodyRootId = "body"
+
+    const result = migratePersistedDocumentPackageToDocumentV2(JSON.stringify(doc), "2026-06-19T00:00:00.000Z")
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const nodes = result.package.document.document.sections[0].nodes
+    expect(nodes.row?.type).toBe("flow-row")
+    expect(nodes.stack?.type).toBe("flow-stack")
+    expect(Object.values(nodes).some((node) => {
+      const type = (node as { type: string }).type
+      return type === "row" || type === "stack"
+    })).toBe(false)
   })
 
   it("builds safe FlowDoc package file names from document titles", () => {

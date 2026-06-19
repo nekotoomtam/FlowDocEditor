@@ -42,6 +42,13 @@ and scrolls the lazy canvas to page 15 before clicking the target paragraph:
 $env:FLOWDOC_PROBE_FILE="public/mock/flowdoc-stress-mock.flowdoc.json"; $env:PROBE_TARGET_NODE_ID="p_00114"; $env:PROBE_TARGET_PAGE_INDEX="14"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
 ```
 
+Document Model v2 fixtures can use semantic target aliases from
+`mockData.targets` instead of hardcoded node ids:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/stress-node-mutations-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="typing.primary"; $env:PROBE_BURST_LENGTH="1"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
 Run the focused stress baseline modes:
 
 ```powershell

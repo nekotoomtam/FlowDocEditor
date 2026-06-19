@@ -1,9 +1,15 @@
 # Flow Table Spec
 
-Status: Accepted active table primitive. Flow Table is the canonical authored
-table model in the current codebase. The node family keeps the `flow-table`,
-`flow-table-row`, and `flow-table-cell` names for this slice; renaming it to
-`table` is intentionally not part of the legacy-table removal patch.
+Status: Accepted active table primitive for the current model. Flow Table is
+the canonical authored table model in the current codebase. The node family
+keeps the `flow-table`, `flow-table-row`, and `flow-table-cell` names for this
+slice; renaming it to `table` is intentionally not part of the legacy-table
+removal patch.
+
+Document Model v2 note: `docs/DOCUMENT_MODEL_V2_PLAN.md` and
+`docs/DOCUMENT_MODEL_V2_CONTRACT.md` keep Flow Table's grid/span/pagination
+semantics, but change the target storage shape so table rows, cells, and cell
+content live in the section node graph instead of inside `flow-table.nodes`.
 
 Implementation status:
 
@@ -206,7 +212,9 @@ The current code/docs show Flow Table as the active table path:
 - `packages/core/src/schema/table.ts` defines the authored `flow-table`,
   `flow-table-row`, and `flow-table-cell` model, including header rows, row
   `allowBreak`, cell `rowspan`/`colspan`, `box`, `verticalAlign`, and
-  `mergeMap`.
+  `mergeMap`. In the current model, it also stores table descendants in
+  `flow-table.nodes`; the v2 target moves those descendants into
+  `section.nodes`.
 - `packages/core/src/layout/flow.ts` measures Flow Table fragments with
   `flowFlowTable(...)`.
 - `packages/core/src/pagination/paginator/flowTable.ts` owns Flow Table

@@ -23,8 +23,11 @@ scope guard, regression/risk reviewer, and minimal patch planner.
 
 The short role definitions live in
 [`CODEX_ROLES.md`](./CODEX_ROLES.md). The pass/fail standard lives in
-[`REVIEW_GATE.md`](./REVIEW_GATE.md). The task setup template lives in
-[`TASK_HANDOFF.md`](./TASK_HANDOFF.md).
+[`REVIEW_GATE.md`](./REVIEW_GATE.md). The job-level loop for broad delegated
+goals lives in [`JOB_OPERATING_MODEL.md`](./JOB_OPERATING_MODEL.md). The task
+setup template lives in [`TASK_HANDOFF.md`](./TASK_HANDOFF.md). The job intake
+and ledger template lives in
+[`JOB_INTAKE_TEMPLATE.md`](./JOB_INTAKE_TEMPLATE.md).
 
 Project architecture and ownership boundaries are defined by:
 
@@ -353,6 +356,7 @@ Handoff requirements for worker agents:
 | Task type | First role | Support roles | Required reading | Verification default |
 |---|---|---|---|---|
 | Docs-only operating guidance | Docs Steward | Blocker Reviewer | `AGENTS.md`, `DOCS_INDEX.md`, agent docs | `git diff --check` |
+| Broad delegated job, image, or problem | Lead Agent | Design Reviewer, Regression Hunter, Minimal Patch Implementer, Test Planner, Blocker Reviewer as needed | `AGENTS.md`, `DOCS_INDEX.md`, `JOB_OPERATING_MODEL.md`, `JOB_INTAKE_TEMPLATE.md` when a durable plan is needed, task-specific contracts | job-specific focused checks; broaden only when risk requires |
 | Small UI copy/panel wiring | Minimal Patch Implementer | Test Planner | relevant editor component and `EDITOR_UX_CONTRACT.md` if interaction changes | type-check; focused app tests if logic changed |
 | Inline edit or WYSIWYG behavior | Design Reviewer | Regression Hunter, Test Planner, Blocker Reviewer | `EDITOR_UX_CONTRACT.md`, `WYSIWYG_EDITOR_ROADMAP.md`, `BROWSER_SMOKE_CHECKLIST.md`, `TEST_STRATEGY.md` | type-check, focused app tests, editor smoke/browser check |
 | Undo/redo or editor state race | Design Reviewer | Regression Hunter, Blocker Reviewer | `EDITOR_UX_CONTRACT.md`, `ARCHITECTURE_OVERVIEW.md`, `TEST_STRATEGY.md` | focused app tests, type-check, editor smoke |
@@ -496,6 +500,18 @@ Lead Agent classifies as Docs Steward work. Docs Steward reads `AGENTS.md`,
 `DOCS_INDEX.md`, and existing agent docs. The patch updates only the owning
 agent docs and discoverability links. Verification is `git diff --check`.
 Runtime tests are intentionally not run because behavior did not change.
+
+### Broad Delegated Job
+
+Lead Agent classifies the request as a job when the user gives Codex a broad
+goal, image, or problem and delegates workflow breakdown. The Lead Agent reads
+`JOB_OPERATING_MODEL.md`, establishes the job contract, gathers evidence,
+breaks the work into reversible role-owned steps, and iterates through
+implementation, verification, review, and replanning until the goal is met or a
+stop condition requires owner input. In this mode, `Minimal next patch` is an
+internal loop step, not the final stopping point while the delegated plan still
+has executable required work. Use `JOB_INTAKE_TEMPLATE.md` when the job needs a
+durable plan, ledger, or owner checkpoint.
 
 ## Maintenance
 

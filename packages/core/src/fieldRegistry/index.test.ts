@@ -10,10 +10,13 @@ import type {
 import { pt } from "../schema"
 import {
   collectDocumentFieldRefs,
+  collectDocumentFieldRefsV2,
   hasFieldRegistryErrors,
   validateFieldRegistryReferences,
+  validateFieldRegistryReferencesV2,
   type FieldRegistryV1,
 } from "./index"
+import { migrateDocumentToV2 } from "../document/documentV2"
 
 function makeParagraph(id: string, children: ParagraphNode["children"]): ParagraphNode {
   return {
@@ -137,12 +140,43 @@ describe("field registry references", () => {
     ])
   })
 
+  it("collects fieldRef usages from flattened v2 flow-table-cell paragraphs", () => {
+    const paragraph = makeParagraph("flow-table-p", [
+      { id: "flow-table-field", type: "fieldRef", key: "invoice.total", label: "Total" },
+    ])
+    const doc = migrateDocumentToV2(makeFlowTableDoc(paragraph))
+
+    expect(collectDocumentFieldRefsV2(doc)).toEqual([
+      {
+        key: "invoice.total",
+        fieldRefId: "flow-table-field",
+        paragraphId: "flow-table-p",
+        sectionId: "section",
+        tableId: "flow-table",
+        label: "Total",
+        fallback: undefined,
+      },
+    ])
+  })
+
   it("accepts registered inline scalar field references", () => {
     const paragraph = makeParagraph("p1", [
       { id: "f1", type: "fieldRef", key: "customer.name" },
       { id: "f2", type: "fieldRef", key: "invoice.total" },
     ])
     const result = validateFieldRegistryReferences(makeDoc({ p1: paragraph }, ["p1"]), registry)
+
+    expect(result.usages.map((usage) => usage.key)).toEqual(["customer.name", "invoice.total"])
+    expect(result.issues).toEqual([])
+    expect(hasFieldRegistryErrors(result)).toBe(false)
+  })
+
+  it("validates registered inline scalar field references in DocumentNode v2", () => {
+    const paragraph = makeParagraph("p1", [
+      { id: "f1", type: "fieldRef", key: "customer.name" },
+      { id: "f2", type: "fieldRef", key: "invoice.total" },
+    ])
+    const result = validateFieldRegistryReferencesV2(migrateDocumentToV2(makeDoc({ p1: paragraph }, ["p1"])), registry)
 
     expect(result.usages.map((usage) => usage.key)).toEqual(["customer.name", "invoice.total"])
     expect(result.issues).toEqual([])

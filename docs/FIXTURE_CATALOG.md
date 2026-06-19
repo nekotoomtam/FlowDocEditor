@@ -36,6 +36,10 @@ Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 | `government-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts` | saved FlowDoc package v2, cover, TOC, Thai formal body, keep-with-next heading, bordered table, restarted footer page numbers, default and production-stack pagination assertions, PDF page count |
 | `university-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts` | saved FlowDoc package v2, cover, TOC, body page restart, long Thai continuation, footer page numbers, default and production-stack pagination assertions, PDF page count |
 | `flow-row-export-golden` | `packages/core/src/renderer/__tests__/productExportGolden.test.ts` | multi-column flow-row export with gaps, styled flow-stack boxes, PDF page-count parity, DOCX fixed-layout table projection, DOCX marker de-duplication |
+| `stress-typing-v2` | `public/mock/stress-typing-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 typing stress fixture, package v2 import through current runtime adapter, section roots, flattened graph storage, and semantic target aliases for primary/boundary typing probes |
+| `stress-node-mutations-v2` | `public/mock/stress-node-mutations-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 node mutation stress fixture, package v2 import through current runtime adapter, section roots, flow-row/flow-stack, flattened flow-table storage, and semantic target aliases for delete, duplicate, reorder, typing, flow-row, and table probes |
+| `stress-flow-row-v2` | `public/mock/stress-flow-row-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 flow-row stress fixture with semantic aliases for flow-row resize/add-column targets and flow-stack descendants without legacy `row` / `stack` authoring |
+| `stress-table-v2` | `public/mock/stress-table-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 table stress fixture with flattened table row/cell/content storage and semantic aliases for table root, row, primary cell, body cell, and span cell targets |
 
 Product fixture names should stay visible in test descriptions, such as
 `product fixture - customs-basic-table`.
@@ -125,6 +129,7 @@ editor preview fill/border rendering from paginated metadata.
 - `src/app/api/__tests__/userReportImportExport.test.ts`
 - `src/app/editor/_components/__tests__/comparePagination.test.ts`
 - `src/app/editor/_components/__tests__/documentPersistence.test.ts`
+- `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts`
 - `src/app/editor/_components/__tests__/inlineEditBlur.test.ts`
 - `src/app/editor/_components/__tests__/inlineEditCaret.test.ts`
 - `src/app/editor/_components/__tests__/layoutReconciliation.test.ts`
@@ -153,6 +158,16 @@ document migration into the current `FlowDocPackage v2`, legacy package v1
 migration to package v2, package v2 migration idempotence, v2 registry warning
 propagation, v2 registry warning import status, and v2 registry hard-error
 rejection.
+`documentV2StressFixture.test.ts` covers the public DocumentNode v2 stress
+fixture set, including manifest variants for typing, node mutation, flow-row,
+and table workflows, v2 graph assertion, forbidden legacy `row` / `stack` and
+`flow-table.nodes` checks, semantic target alias resolution, and import through
+the current editor runtime adapter.
+`scripts/flowdoc-fixture-targets.mjs` is the shared browser-smoke helper for
+reading `mockData.targets` aliases from v2 fixtures, so smoke scripts can target
+fixture-owned semantic names such as `typing.primary`,
+`flowRow.resizeTarget`, and `table.primaryCell` instead of hardcoded generated
+ids.
 Inline-edit session coverage locks visual freshness and transaction helper
 rules. WYSIWYG inline-edit config coverage keeps the experimental visual path
 disabled by default in every environment unless the flag is explicitly enabled.
@@ -165,7 +180,9 @@ typing, undo/redo, flicker, and table panel workflows.
 ## Browser Smoke Scripts
 
 - `scripts/editor-smoke.mjs`
+- `scripts/wysiwyg-smoothness-probe.mjs`
 - `scripts/wysiwyg-stage4c-smoke.mjs`
+- `scripts/wysiwyg-stress-lifecycle-smoke.mjs`
 
 `scripts/editor-smoke.mjs` protects the default `/editor` load path with a real browser, deterministic
 localStorage document fixtures, paragraph inline edit commit, undo/redo, Thai
@@ -184,6 +201,10 @@ unless
 `scripts/wysiwyg-stage4c-smoke.mjs` protects the opt-in Stage 4C text-engine
 clipboard, composition, cross-fragment selection, perf trace, and heavy
 row-stack smoke paths.
+`scripts/wysiwyg-smoothness-probe.mjs` and
+`scripts/wysiwyg-stress-lifecycle-smoke.mjs` can target v2 fixtures by semantic
+alias through `mockData.targets`, such as `typing.primary` and
+`typing.boundary`.
 The browser smoke scripts use bundled Chromium by default and can be pointed at
 an installed Playwright browser channel with `SMOKE_BROWSER_CHANNEL` or a
 system Chromium-family executable with `SMOKE_EXECUTABLE_PATH`.

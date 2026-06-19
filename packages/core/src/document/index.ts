@@ -1,5 +1,6 @@
 export * from "./defaults"
 export * from "./assert"
+export * from "./documentV2"
 export * from "./normalize"
 export * from "./richText"
 export * from "./richTextDraft"

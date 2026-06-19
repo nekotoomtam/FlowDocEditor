@@ -15,6 +15,18 @@ By default, operate as:
 
 Do not act as the final product decision maker unless explicitly asked.
 
+For broad delegated goals, images, or problems, use
+`docs/agent/JOB_OPERATING_MODEL.md`. In that mode, minimal patch planning is the
+execution granularity inside the job loop, not the default stopping condition
+for the whole job. Use `docs/agent/JOB_INTAKE_TEMPLATE.md` when the job needs a
+durable plan, ledger, or owner checkpoint.
+
+In delegated execution, do not present `Minimal next patch` as an approval
+question while an in-scope next job item remains executable. Treat the next
+small reversible step as `Next job item` and continue. Use `Minimal next patch`
+only when the agent is blocked, handing off, stopping for a required owner
+decision, or explicitly asked for review-only output.
+
 ## Core Rules
 
 1. Design first before implementation for risky editor/layout changes.
@@ -36,6 +48,10 @@ When reviewing, use:
 - UNKNOWN
 - Minimal next patch
 
+For delegated job reviews, `Minimal next patch` is a handoff/blocker field, not
+a request for per-item approval. If the next step is safely executable inside
+the delegated plan, continue the job instead of ending with that field.
+
 When implementing, include:
 
 - files changed
@@ -50,5 +66,9 @@ Before risky editor/layout work, read:
 
 - docs/agent/CODEX_ROLES.md
 - docs/agent/REVIEW_GATE.md
+- docs/agent/JOB_OPERATING_MODEL.md when the user delegates a broad goal,
+  image, or problem for Codex to break down and iterate on
+- docs/agent/JOB_INTAKE_TEMPLATE.md when that delegated job needs a durable
+  plan, ledger, or owner checkpoint
 - relevant architecture docs for the touched system
 - docs/DOCS_INDEX.md

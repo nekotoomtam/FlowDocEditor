@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { resolveFlowDocFixtureTarget } from "./flowdoc-fixture-targets.mjs"
 import { getSmokeBrowserConfig, launchSmokeBrowser, smokeBrowserLabel } from "./smoke-browser.mjs"
 
 const STORAGE_KEY = "flowdoc_document"
@@ -24,6 +25,8 @@ const shouldStartServer = process.env.SMOKE_BASE_URL == null
 const headless = process.env.HEADED !== "1"
 const smokeBrowser = getSmokeBrowserConfig({ headless })
 const stressFilePath = path.resolve(repoRoot, process.env.FLOWDOC_STRESS_FILE ?? process.env.FLOWDOC_PROBE_FILE ?? DEFAULT_STRESS_FILE)
+const firstTargetAlias = process.env.STRESS_FIRST_TARGET_ALIAS?.trim() || process.env.FLOWDOC_FIRST_TARGET_ALIAS?.trim() || null
+const secondTargetAlias = process.env.STRESS_SECOND_TARGET_ALIAS?.trim() || process.env.FLOWDOC_SECOND_TARGET_ALIAS?.trim() || null
 const targetPageIndex = Number(process.env.STRESS_PAGE_INDEX ?? process.env.PROBE_TARGET_PAGE_INDEX ?? DEFAULT_PAGE_INDEX)
 const maxClickSwitchMs = Number(process.env.MAX_CLICK_SWITCH_MS ?? DEFAULT_MAX_CLICK_SWITCH_MS)
 const maxExitMs = Number(process.env.MAX_EXIT_MS ?? DEFAULT_MAX_EXIT_MS)
@@ -156,6 +159,14 @@ function paragraphSelectorForPage(pageIndex) {
   return `${pageFrameSelector(pageIndex)} [data-testid="editor-fragment"][data-node-type="paragraph"]`
 }
 
+function cssAttributeValue(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
+function fragmentSelectorForNode(nodeId) {
+  return `[data-testid="editor-fragment"][data-node-id="${cssAttributeValue(nodeId)}"]`
+}
+
 function bridgeSelectorForNode(nodeId) {
   return `[data-wysiwyg-input-bridge="true"][data-inline-edit-node-id="${nodeId}"]`
 }
@@ -248,7 +259,63 @@ async function visibleParagraphTargets(page) {
 }
 
 async function clickParagraph(page, target) {
+  if (target.clickSelector) {
+    await page.locator(target.clickSelector).first().click()
+    return
+  }
   await page.mouse.click(target.x, target.y)
+}
+
+function resolveStressTargetAlias(rawDocument, alias, envName) {
+  if (!alias) return null
+  const targetNodeId = resolveFlowDocFixtureTarget(rawDocument, alias)
+  assert(targetNodeId, `Could not resolve ${envName}=${alias} from fixture mockData.targets`)
+  return targetNodeId
+}
+
+async function paragraphTargetForNode(page, nodeId) {
+  await page.waitForFunction((id) => (
+    document.querySelector(`[data-testid="editor-fragment"][data-node-type="paragraph"][data-node-id="${CSS.escape(id)}"]`) !== null
+  ), nodeId, { timeout: 30000 })
+  await page.evaluate((id) => {
+    document.querySelector(`[data-testid="editor-fragment"][data-node-type="paragraph"][data-node-id="${CSS.escape(id)}"]`)
+      ?.scrollIntoView({ block: "center" })
+  }, nodeId)
+  await waitForDoubleAnimationFrame(page)
+  const target = await page.evaluate((id) => {
+    const elements = Array.from(document.querySelectorAll(
+      `[data-testid="editor-fragment"][data-node-type="paragraph"][data-node-id="${CSS.escape(id)}"]`,
+    ))
+    const element = elements.find((candidate) => {
+      const rect = candidate.getBoundingClientRect()
+      return rect.width > 4 && rect.height > 4 && candidate.getAttribute("data-line-start") === "0"
+    }) ?? elements.find((candidate) => {
+      const rect = candidate.getBoundingClientRect()
+      return rect.width > 4 && rect.height > 4
+    })
+    if (!element) return null
+    const rect = element.getBoundingClientRect()
+    const x = rect.left + rect.width / 2
+    const y = rect.top + Math.min(Math.max(rect.height / 2, 4), rect.height - 2)
+    const hit = document.elementFromPoint(x, y)
+    return {
+      index: 0,
+      nodeId: id,
+      lineStart: element.getAttribute("data-line-start"),
+      inlineEditable: element.getAttribute("data-inline-editable") === "true",
+      x,
+      y,
+      width: rect.width,
+      height: rect.height,
+      top: rect.top,
+      hitTestId: hit?.getAttribute("data-testid") ?? null,
+    }
+  }, nodeId)
+  assert(target?.inlineEditable, `Target alias resolved to non-editable or missing paragraph node ${nodeId}`)
+  return {
+    ...target,
+    clickSelector: fragmentSelectorForNode(nodeId),
+  }
 }
 
 async function waitForInlineEdit(page, nodeId, timeoutMs = 5000) {
@@ -457,6 +524,13 @@ function assertPreviewSettleSupersedeBurst(state, label) {
 
 async function runSmoke() {
   const rawStressDoc = await readFile(stressFilePath, "utf8")
+  const firstAliasTargetNodeId = resolveStressTargetAlias(rawStressDoc, firstTargetAlias, "STRESS_FIRST_TARGET_ALIAS")
+  const secondAliasTargetNodeId = resolveStressTargetAlias(rawStressDoc, secondTargetAlias, "STRESS_SECOND_TARGET_ALIAS")
+  assert(
+    (firstAliasTargetNodeId == null && secondAliasTargetNodeId == null) ||
+    (firstAliasTargetNodeId != null && secondAliasTargetNodeId != null),
+    "Provide both STRESS_FIRST_TARGET_ALIAS and STRESS_SECOND_TARGET_ALIAS, or neither.",
+  )
   let server = null
   let browser = null
   const pageErrors = []
@@ -491,7 +565,9 @@ async function runSmoke() {
     const loadStartedAt = now()
     await page.goto(editorUrl(), { waitUntil: "domcontentloaded", timeout: 180000 })
     await waitForReadyEditor(page)
-    await scrollTargetPageIntoView(page)
+    if (firstAliasTargetNodeId == null || secondAliasTargetNodeId == null) {
+      await scrollTargetPageIntoView(page)
+    }
 
     const storageState = await page.evaluate(() => ({
       storedLength: localStorage.getItem("flowdoc_document")?.length ?? 0,
@@ -499,10 +575,19 @@ async function runSmoke() {
     }))
     assert(storageState.storageError == null, `Could not store stress document: ${storageState.storageError}`)
 
-    const targets = await visibleParagraphTargets(page)
-    assert(targets.length >= 2, `Need at least 2 visible paragraph targets on page ${targetPageIndex + 1}`)
+    const usesAliasTargets = firstAliasTargetNodeId != null && secondAliasTargetNodeId != null
+    const visibleTargets = usesAliasTargets ? [] : await visibleParagraphTargets(page)
+    assert(
+      usesAliasTargets || visibleTargets.length >= 2,
+      `Need at least 2 paragraph targets on page ${targetPageIndex + 1} or from configured aliases`,
+    )
 
-    const [firstTarget, secondTarget] = targets
+    const firstTarget = usesAliasTargets
+      ? await paragraphTargetForNode(page, firstAliasTargetNodeId)
+      : visibleTargets[0]
+    let secondTarget = usesAliasTargets
+      ? null
+      : visibleTargets[1]
 
     await clearPerfEvents(page)
     await clickParagraph(page, firstTarget)
@@ -512,6 +597,9 @@ async function runSmoke() {
     await clearPerfEvents(page)
     await startLayoutMonitor(page)
     const clickSwitchStartedAt = now()
+    if (usesAliasTargets) {
+      secondTarget = await paragraphTargetForNode(page, secondAliasTargetNodeId)
+    }
     await clickParagraph(page, secondTarget)
     await waitForInlineEdit(page, secondTarget.nodeId)
     const clickSwitchMs = now() - clickSwitchStartedAt
@@ -579,6 +667,9 @@ async function runSmoke() {
         first: firstTarget.nodeId,
         second: secondTarget.nodeId,
       },
+      targetAliases: firstTargetAlias || secondTargetAlias
+        ? { first: firstTargetAlias, second: secondTargetAlias }
+        : null,
       clickSwitchMs,
       exitMs,
       undoObservedMs: now() - undoStartedAt,

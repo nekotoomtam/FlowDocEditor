@@ -8,6 +8,7 @@ import {
 } from "../wysiwygPerformance"
 import { createStructuralDraftSessionPlan } from "../structuralEdit/structuralEditPlans"
 import type { EditorAction } from "../editorReducer"
+import type { EditorOperationEnvelope } from "./editorOperationTypes"
 import type { StructuralEditController } from "../structuralEdit/structuralEditBridgeTypes"
 import type { OptimisticLayoutSnapshot } from "../layoutReconciliation"
 import type { PaginatedDocument } from "@/pagination"
@@ -30,6 +31,7 @@ export interface StructuralExecutionContext {
   beginStructuralPanelReleaseDeferral: (plan: ReturnType<StructuralEditController["beginSplit"]>["panelDeferral"]) => unknown
   beginWysiwygDraftRuntimeSession: (plan: ReturnType<typeof createStructuralDraftSessionPlan>) => unknown
   dispatchEditorAction: (action: EditorAction) => void
+  dispatchEditorOperation: (operation: EditorOperationEnvelope) => void
   endRichWysiwygDraftSession: () => void
   setOptimisticStructuralIslandOverride: (value: OptimisticStructuralIslandOverride | null) => void
   setOptimisticStructuralRefocusPaint: (value: OptimisticStructuralRefocusPaint | null) => void
@@ -64,6 +66,16 @@ export interface StructuralExecutionContext {
   getOptimisticLayoutRef: () => OptimisticLayoutSnapshot | null
   getOptimisticStructuralSettleRef: () => (PendingOptimisticSplitRefocus & StructuralPreviewSettleSnapshot) | null
   getOptimisticStructuralPreviewSettleGraceUntilRef: () => number
+}
+
+function withOptimisticStructuralAction(operation: EditorOperationEnvelope): EditorOperationEnvelope {
+  switch (operation.action.type) {
+    case "SPLIT_PARAGRAPH":
+    case "MERGE_PARAGRAPH":
+      return { ...operation, action: { ...operation.action, isOptimistic: true } }
+    default:
+      return operation
+  }
 }
 
 export function executeParagraphSplitOperationPlan(
@@ -215,10 +227,10 @@ export function executeParagraphSplitOperationPlan(
 
   // --- 5. Dispatch Mutation ---
   context.dispatchEditorAction({ type: "SET_PAGINATED", paginated: optimistic.paginated })
-  const operationAction = { ...plan.operation.action, isOptimistic: true }
+  const optimisticOperation = withOptimisticStructuralAction(plan.operation)
   setTimeout(() => {
     const dispatchStartedAt = startWysiwygPerfSpan()
-    context.dispatchEditorAction(operationAction)
+    context.dispatchEditorOperation(optimisticOperation)
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", dispatchStartedAt, {
       nodeId: pending.newNodeId,
       previousNodeId: pending.sourceNodeId,
@@ -409,10 +421,10 @@ export function executeParagraphMergeOperationPlan(
     return false
   }
 
-  const operationAction = { ...plan.operation.action, isOptimistic: true }
+  const optimisticOperation = withOptimisticStructuralAction(plan.operation)
   setTimeout(() => {
     const dispatchStartedAt = startWysiwygPerfSpan()
-    context.dispatchEditorAction(operationAction)
+    context.dispatchEditorOperation(optimisticOperation)
     finishWysiwygPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "flowdoc-structural-attribution", dispatchStartedAt, {
       nodeId: plan.previousNodeId,
       previousNodeId: plan.sourceNodeId,
