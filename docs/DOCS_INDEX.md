@@ -42,8 +42,10 @@ For a new session:
 | Node relationship graph vNext | `docs/NODE_RELATIONSHIP_GRAPH_VNEXT_PLAN.md` |
 | Node model vNext package/schema boundary | `docs/NODE_MODEL_VNEXT_PACKAGE_SCHEMA_BOUNDARY_PLAN.md` |
 | Node model vNext prototype adapter evidence | `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` |
-| vNext extractable workspace | `vnext-workspace/README.md`, `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` |
+| vNext extractable workspace | `vnext-workspace/README.md`, `vnext-workspace/docs/WORKSPACE_BOUNDARY.md`, `vnext-workspace/docs/PHASE_LEDGER.md`, `vnext-workspace/docs/PHASE_10_CLOSE_AUDIT.md` |
 | Editor runtime Document Model v2 | `docs/EDITOR_RUNTIME_DOCUMENT_MODEL_V2_PLAN.md` |
+| Editor vNext runtime bridge | `docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md` |
+| Editor vNext import boundary | `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md` |
 | Test strategy | `docs/TEST_STRATEGY.md` |
 | Browser smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Editor UX | `docs/EDITOR_UX_CONTRACT.md` |
@@ -144,10 +146,17 @@ Layout, pagination, or cross-page behavior:
 - `vnext-workspace/README.md` and
   `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` when working in the temporary
   vNext home that will later move to a new repository
+- `vnext-workspace/docs/PHASE_LEDGER.md` and
+  `vnext-workspace/docs/PHASE_10_CLOSE_AUDIT.md` when moving from vNext core
+  pagination/export work into editor runtime bridge work
 - `docs/EDITOR_ARCHITECTURE_EVOLUTION_PLAN.md` when choosing the next broad
   editor architecture lane
 - `docs/EDITOR_RUNTIME_DOCUMENT_MODEL_V2_PLAN.md` when moving editor runtime
   planning toward DocumentNode v2 graph identity
+- `docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md` when connecting the current editor
+  runtime to the extractable vNext core after Phase 10
+- `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md` before adding parent editor
+  imports of the vNext workspace
 - `docs/EDITOR_OPERATION_ARCHITECTURE.md` when editor mutation routing or
   operation migration is in scope
 - `docs/EDITOR_OPERATION_COMMAND_ARCHITECTURE_PLAN.md` when operation command,

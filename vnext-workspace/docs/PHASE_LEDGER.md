@@ -16,8 +16,8 @@ Parent goal:
 | 7 | Legacy cutoff and canonical-only boundary | done | `README.md`; `docs/WORKSPACE_BOUNDARY.md` |
 | 8 | Canonical package parser/serializer | done | `src/persistence/package.ts`; `tests/packageFixture.test.ts` |
 | 9 | vNext operations | done | `src/operations/documentOperations.ts`; `tests/operations.test.ts` |
-| 10 | Pagination/export integration | in_progress | `docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `src/pagination/rendererConsumption.ts`; `src/pagination/exportReadiness.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts`; `tests/rendererConsumption.test.ts`; `tests/exportReadiness.test.ts` |
-| 11 | Editor runtime bridge | pending | editor tests and smokes |
+| 10 | Pagination/export integration | done | `docs/PHASE_10_CLOSE_AUDIT.md`; `docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `src/pagination/rendererConsumption.ts`; `src/pagination/exportReadiness.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts`; `tests/rendererConsumption.test.ts`; `tests/exportReadiness.test.ts` |
+| 11 | Editor runtime bridge | in_progress | `../docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`; `../docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`; `src/editorBridge/runtime.ts`; `tests/editorBridgeRuntime.test.ts` |
 | 12 | Move to new repository | pending | repository extraction checklist |
 
 ## Current Rule
@@ -29,10 +29,11 @@ inputs for exported core. The canonical persisted input is
 one-off converter must live outside exported core and outside required vNext
 checks.
 
-## Phase 10 Boundary
+## Phase 10 Close
 
-Current pagination/export work is vNext-only and now has both a planning
-boundary and measured skeleton output:
+Phase 10 is closed for the vNext core pagination/export boundary. The close
+audit is `docs/PHASE_10_CLOSE_AUDIT.md`. Current pagination/export work is
+vNext-only and now has both a planning boundary and measured skeleton output:
 
 - `buildVNextPaginationPlan(...)` produces page boxes, zone source order,
   source item split-policy hints, and measurement status.
@@ -67,10 +68,32 @@ boundary and measured skeleton output:
 - `resolveVNextPaginationInvalidation(...)` maps operation results to stale or
   unchanged pagination/export readiness.
 
-This phase does not import the parent layout engine, provide a renderer-backed
-measurement profile implementation, split non-text table cell content across
-pages, balance columns across multiple pages, finalize TOC page references, or
-render PDF/DOCX beyond the measured-fragment consumption contract yet.
+This phase intentionally does not import the parent layout engine, provide a
+renderer-backed measurement profile implementation, split non-text table cell
+content across pages, balance columns across multiple pages, finalize TOC page
+references, or render PDF/DOCX beyond the measured-fragment consumption
+contract.
+
+## Phase 11 Next Boundary
+
+Phase 11 starts with `../docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`. It must
+connect the current editor runtime to the vNext core through an explicit bridge
+without making legacy/current runtime structures the vNext source of truth. The
+first implementation target should be a read-only vNext bridge runtime inside
+`vnext-workspace`, not a parent editor runtime flip.
+
+Current Phase 11 progress:
+
+- `createVNextEditorBridgeRuntime(...)` and
+  `safeCreateVNextEditorBridgeRuntime(...)` build a read-only bridge runtime
+  from canonical vNext package input only.
+- The bridge runtime includes relationship graph, measured pagination,
+  renderer-consumption audit, export readiness, and supported operation kinds.
+- Raw/current runtime document input is rejected by the bridge parser.
+- Import boundary is locked: do not move repo yet, do not add this folder to
+  root workspaces yet, and allow parent editor imports only through the future
+  Phase 11.3 bridge host.
+- Parent editor bridge hosting remains next.
 
 ## Phase 9 Baseline
 

@@ -78,6 +78,19 @@ From the current parent repository without installing this folder separately:
 - Table direction plan: `docs/TABLE_PAGINATION_VNEXT_PLAN.md` selects
   row-level pagination plus splittable cell text before the deferred full table
   engine path
+- Phase 10 close audit: `docs/PHASE_10_CLOSE_AUDIT.md` marks the vNext core
+  pagination/export boundary complete for bridge work while deferring concrete
+  PDF/DOCX renderers and product smokes
+- Phase 11 bridge plan: `../docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md` starts
+  the editor bridge lane with a read-only vNext bridge runtime target before
+  parent editor runtime integration
+- Phase 11 import boundary: `../docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`
+  keeps this folder in-repo for now and allows parent editor imports only
+  through the future bridge host
+- Read-only editor bridge runtime: `src/editorBridge/runtime.ts` composes
+  canonical package parsing, relationship graph, measured pagination,
+  renderer-consumption audit, export readiness, and supported operation kinds
+  without accepting current runtime document input
 
 Not implemented yet:
 

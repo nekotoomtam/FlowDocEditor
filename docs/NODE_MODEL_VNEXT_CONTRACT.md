@@ -32,8 +32,8 @@ Current position:
 
 - Request: step back and design the next node model from the product goal.
 - Plan: Node Model vNext Plan.
-- Phase: Phase 10, pagination/export integration.
-- Job item: replace opaque table pagination with row-level table fragments.
+- Phase: Phase 11, editor runtime bridge.
+- Job item: temporary vNext import boundary.
 - Status: in_progress.
 - Why this item is current: Phase 1 locked the node set, Phase 2 locked the
   relationship graph, Phase 3 locked the persisted boundary, Phase 5/5.5 moved
@@ -67,9 +67,20 @@ Current position:
 - Table pagination direction is locked in
   `vnext-workspace/docs/TABLE_PAGINATION_VNEXT_PLAN.md`: implement row-level
   pagination plus splittable cell text before attempting a full table engine.
-- Next transition: continue Phase 10 with a renderer-backed measurement profile
-  implementation, non-text table cell splitting, multi-page columns balancing,
-  final TOC page resolution, and concrete PDF/DOCX renderer integration.
+- Phase 10 is closed for the vNext core pagination/export boundary in
+  `vnext-workspace/docs/PHASE_10_CLOSE_AUDIT.md`. Renderer-backed measurement,
+  non-text table cell splitting, multi-page column balancing, final TOC page
+  resolution, and concrete PDF/DOCX renderers are deferred rather than required
+  before editor bridge work.
+- Phase 11 starts with `docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`, which keeps
+  vNext canonical input separate from current runtime compatibility before
+  touching reducer/runtime paths.
+- Phase 11.2 adds `createVNextEditorBridgeRuntime(...)` in
+  `vnext-workspace/src/editorBridge/runtime.ts`, producing a read-only bridge
+  runtime from canonical vNext package input only.
+- Phase 11.1 is locked by `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`: do
+  not move repo yet, do not add `vnext-workspace` to root workspaces yet, and
+  allow parent imports only through the future Phase 11.3 bridge host.
 
 ## Evidence From The Prototype
 
@@ -716,7 +727,8 @@ Current job lane:
 | 7 | Legacy cutoff | Docs/tests | vNext core rejects old/prototype shapes instead of exporting a legacy adapter | done | `vnext-workspace/README.md`; `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` |
 | 8 | Canonical package parser | Persistence/tests | Package v2 with document v3 parse/serialize behavior is explicit | done | `vnext-workspace/src/persistence/package.ts`; `vnext-workspace/tests/packageFixture.test.ts` |
 | 9 | Operation integration | Editor operation plans/tests | Operations consume relationship graph instead of UI-specific inference | done | `vnext-workspace/src/operations/documentOperations.ts`; `vnext-workspace/tests/operations.test.ts` |
-| 10 | Pagination/export integration | Renderer/pagination tests | vNext document structure has explicit pagination/export invalidation, measurement contracts, measured page fragments, column child fragments, row-level table fragments, and rendering boundaries | in_progress | `vnext-workspace/docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `vnext-workspace/src/pagination/paginationPlan.ts`; `vnext-workspace/src/pagination/textMeasurement.ts`; `vnext-workspace/src/pagination/measuredPagination.ts`; `vnext-workspace/src/pagination/rendererConsumption.ts`; `vnext-workspace/src/pagination/exportReadiness.ts`; `vnext-workspace/tests/paginationPlan.test.ts`; `vnext-workspace/tests/textMeasurement.test.ts`; `vnext-workspace/tests/measuredPagination.test.ts`; `vnext-workspace/tests/rendererConsumption.test.ts`; `vnext-workspace/tests/exportReadiness.test.ts` |
+| 10 | Pagination/export integration | Renderer/pagination tests | vNext document structure has explicit pagination/export invalidation, measurement contracts, measured page fragments, column child fragments, row-level table fragments, and rendering boundaries | done | `vnext-workspace/docs/PHASE_10_CLOSE_AUDIT.md`; `vnext-workspace/docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `vnext-workspace/src/pagination/paginationPlan.ts`; `vnext-workspace/src/pagination/textMeasurement.ts`; `vnext-workspace/src/pagination/measuredPagination.ts`; `vnext-workspace/src/pagination/rendererConsumption.ts`; `vnext-workspace/src/pagination/exportReadiness.ts`; `vnext-workspace/tests/paginationPlan.test.ts`; `vnext-workspace/tests/textMeasurement.test.ts`; `vnext-workspace/tests/measuredPagination.test.ts`; `vnext-workspace/tests/rendererConsumption.test.ts`; `vnext-workspace/tests/exportReadiness.test.ts` |
+| 11 | Editor runtime bridge | Editor bridge design/tests/smokes | Current editor runtime consumes vNext core through an explicit bridge without making legacy/runtime structures the source of truth | in_progress | `docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`; `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`; `vnext-workspace/src/editorBridge/runtime.ts`; `vnext-workspace/tests/editorBridgeRuntime.test.ts` |
 
 ## Stop Conditions
 
