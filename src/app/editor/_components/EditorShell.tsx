@@ -4,7 +4,6 @@ import { startTransition, useReducer, useCallback, useRef, useState, useEffect, 
 import { assertDocument, createUniqueListPresetInstanceId, indentListItem, normalizeDocument, outdentListItem, resolveParagraphListContext } from "@/document"
 import type { FlowDocListStylePresetId } from "@/document"
 import type { DocumentNode } from "@/schema"
-import type { PaginatedDocument } from "@/pagination"
 import { EditorCanvas } from "./EditorCanvas"
 import type { DriftReport } from "./comparePagination"
 import type { OptimisticLayoutSnapshot } from "./layoutReconciliation"
@@ -63,7 +62,7 @@ import { useAnimationFrameState } from "./useAnimationFrameState"
 import { createInitialEditorState, reduceEditorOperation, type EditorAction } from "./editorReducer"
 import { classifyEditorAction, shouldSuppressLayoutLoadingOverlayForEditorAction, type EditorActionClassification } from "./editorActionClassifier"
 import { createEditorOperationFromAction } from "./operations/editorOperationFromAction"
-import { attachEditorOperationDocumentGraphRuntime } from "./operations/editorOperationRuntime"
+import { attachEditorOperationDocumentGraphRuntime, createEditorDocumentGraphRuntimeCache } from "./operations/editorOperationRuntime"
 import type { EditorOperationEnvelope } from "./operations/editorOperationTypes"
 import type { ListLevelChangeDirection } from "./wysiwygTextInteraction"
 import { EditorCanvasColumn } from "./shell/EditorCanvasColumn"
@@ -118,7 +117,11 @@ import {
   type PendingEditorActionClassification,
   type WorkflowMode,
 } from "./shell/editorShellTypes"
-import type { EditorRenderInvalidationPlan } from "./operations/editorRenderInvalidation"
+import {
+  resolveActiveCanvasRenderInvalidationPlan,
+  shouldClearConsumedCanvasRenderInvalidationState,
+  type CanvasRenderInvalidationState,
+} from "./shell/editorPreviewLifecycleGuards"
 import { useEditorZoomController } from "./shell/useEditorZoomController"
 import { useRightRailController } from "./shell/useRightRailController"
 import { useEditorAutosave } from "./shell/useEditorAutosave"
@@ -176,11 +179,6 @@ import {
 
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
-type RenderInvalidationPlanForCanvas = {
-  plan: EditorRenderInvalidationPlan | null
-  paginated: PaginatedDocument
-}
-
 const editorShellNoop = () => {}
 
 export default function EditorShell() {
@@ -228,7 +226,7 @@ export default function EditorShell() {
   } = useEditorTextMeasurerController()
   const [browserPreviewLayout, setBrowserPreviewLayout] = useState(createEditorPreviewPlaceholderLayoutState)
   const [partialPreviewPaginated, setPartialPreviewPaginated] = useState<EditorPartialPreviewPaginated | null>(null)
-  const [renderInvalidationPlanForCanvas, setRenderInvalidationPlanForCanvas] = useState<RenderInvalidationPlanForCanvas | null>(null)
+  const [renderInvalidationPlanForCanvas, setRenderInvalidationPlanForCanvas] = useState<CanvasRenderInvalidationState | null>(null)
   const [mode, setMode] = useState<"template" | "fill">("template")
   const {
     dataSnapshot,
@@ -307,17 +305,28 @@ export default function EditorShell() {
   const pendingEditorActionClassificationRef = useRef<PendingEditorActionClassification | null>(null)
   const suppressNextLayoutLoadingOverlayRef = useRef(false)
   const editorDocRef = useRef(state.doc)
+  const editorDocumentGraphRuntimeCacheRef = useRef(createEditorDocumentGraphRuntimeCache())
 
   useLayoutEffect(() => {
     editorDocRef.current = state.doc
+    editorDocumentGraphRuntimeCacheRef.current.clear()
   }, [state.doc])
+
+  const getEditorDocumentGraphRuntime = useCallback(
+    () => editorDocumentGraphRuntimeCacheRef.current.get(editorDocRef.current),
+    [],
+  )
 
   const dispatchEditorOperation = useCallback((
     operation: EditorOperationEnvelope,
     classificationOverride?: EditorActionClassification,
   ) => {
     const startedAt = startWysiwygPerfSpan()
-    const operationWithRuntime = attachEditorOperationDocumentGraphRuntime(operation, editorDocRef.current)
+    const operationWithRuntime = attachEditorOperationDocumentGraphRuntime(
+      operation,
+      editorDocRef.current,
+      getEditorDocumentGraphRuntime,
+    )
     const action = operationWithRuntime.action
     const classification = classificationOverride ?? classifyEditorAction(action)
     pendingEditorActionClassificationRef.current = { action, operation: operationWithRuntime, classification }
@@ -334,7 +343,7 @@ export default function EditorShell() {
       priority: classification.priority,
       layoutAffecting: classification.layoutScope !== "none",
     })
-  }, [])
+  }, [getEditorDocumentGraphRuntime])
 
   const dispatchEditorAction = useCallback((action: EditorAction) => {
     const classification = classifyEditorAction(action)
@@ -403,12 +412,12 @@ export default function EditorShell() {
     partialPreviewPaginated,
     previewLayout: browserPreviewLayout,
   }), [browserPreviewLayout, partialPreviewPaginated, state.paginated])
-  const activeRenderInvalidationPlanForCanvas = renderInvalidationPlanForCanvas?.paginated === displayPaginated
-    ? renderInvalidationPlanForCanvas.plan
-    : null
+  const activeRenderInvalidationPlanForCanvas = resolveActiveCanvasRenderInvalidationPlan(
+    renderInvalidationPlanForCanvas,
+    displayPaginated,
+  )
   useEffect(() => {
-    if (!renderInvalidationPlanForCanvas) return
-    if (renderInvalidationPlanForCanvas.paginated !== displayPaginated) return
+    if (!shouldClearConsumedCanvasRenderInvalidationState(renderInvalidationPlanForCanvas, displayPaginated)) return
     setRenderInvalidationPlanForCanvas(null)
   }, [displayPaginated, renderInvalidationPlanForCanvas])
 

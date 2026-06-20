@@ -6,6 +6,7 @@ import JSZip from "jszip"
 import { PDFDocument as PdfLibDocument } from "pdf-lib"
 import { POST as exportPost } from "../export/route"
 import { POST as paginatePost } from "../paginate/route"
+import { resetRuntimePaginationMeasurerForTests } from "../paginate/paginateRuntime"
 import { FLOWDOC_EXPORT_PROFILE_HEADER, parseFlowDocExportProfileHeader } from "../../_lib/exportProfile"
 import {
   resetRuntimeFontCacheForTests,
@@ -212,6 +213,7 @@ async function withTemporaryCwd<T>(fn: () => Promise<T>): Promise<T> {
   const originalCwd = process.cwd()
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "flowdoc-no-runtime-font-"))
   resetRuntimeFontCacheForTests()
+  resetRuntimePaginationMeasurerForTests()
 
   try {
     process.chdir(tempDir)
@@ -219,6 +221,7 @@ async function withTemporaryCwd<T>(fn: () => Promise<T>): Promise<T> {
   } finally {
     process.chdir(originalCwd)
     resetRuntimeFontCacheForTests()
+    resetRuntimePaginationMeasurerForTests()
     rmSync(tempDir, { recursive: true, force: true })
   }
 }
@@ -240,6 +243,17 @@ describe("API route contract smoke", () => {
     const response = await paginatePost(rawRequest("http://localhost/api/paginate", "{") as never)
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toMatchObject({ error: "Invalid JSON body" })
+  })
+
+  it("/api/paginate exposes font fallback state when the runtime font is missing", async () => {
+    await withTemporaryCwd(async () => {
+      const response = await paginatePost(jsonRequest("http://localhost/api/paginate", makeDoc()) as never)
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get(RUNTIME_FONT_RESPONSE_HEADER)).toBe(RUNTIME_FONT_FALLBACK_VALUE)
+      const paginated = await response.json() as PaginatedDocument
+      expect(() => assertPaginatedDocument(paginated)).not.toThrow()
+    })
   })
 
   it("/api/export rejects unsupported formats", async () => {

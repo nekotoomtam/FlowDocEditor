@@ -64,4 +64,34 @@ describe("editor style operation plans", () => {
 
     expect(createStylePatchOperationResult(state, operation)).toEqual(createStylePatchActionResult(state, action))
   })
+
+  it("uses style command instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state.doc)
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "APPLY_PARAGRAPH_STYLE_PRESET",
+        nodeId,
+        styleId: TOR_HEADING1_PARAGRAPH_STYLE_ID,
+      }),
+      action: {
+        type: "APPLY_PARAGRAPH_STYLE_PRESET" as const,
+        nodeId,
+        styleId: "tor.body" as any,
+      },
+      payload: {
+        kind: "style.patch" as const,
+        styleType: "apply-paragraph-style-preset" as const,
+        nodeId,
+        styleId: "tor.body" as any,
+      },
+    }
+
+    const result = createStylePatchOperationResult(state, operation)
+    const paragraph = result.status === "success" ? getParagraph(result.nextDoc, nodeId) : undefined
+
+    expect(result.status).toBe("success")
+    expect(paragraph?.props.paragraphStyleId).toBe(TOR_HEADING1_PARAGRAPH_STYLE_ID)
+    expect(paragraph?.props.headingLevel).toBe(1)
+  })
 })

@@ -1,24 +1,27 @@
 import type { PaginatedDocument } from "@/pagination"
-import type { EditorPreviewLayoutState } from "./editorPreviewLayoutStatus"
+import {
+  resolveEditorDisplayPaginatedResolution,
+  type EditorDisplayPaginatedInput,
+  type EditorDisplayPaginatedResolution,
+} from "./editorPaginationOwnership"
 
-export interface EditorPartialPreviewPaginated {
-  generation: number
-  requestId: number
-  paginated: PaginatedDocument
+export type {
+  EditorDisplayPaginatedInput,
+  EditorDisplayPaginatedResolution,
+  EditorDisplayPaginatedSource,
+  EditorPaginationSnapshotAdoptionPurpose,
+  EditorPaginationSnapshotFreshness,
+  EditorPaginationSnapshotIdentity,
+  EditorPaginationSnapshotSource,
+  EditorPartialPreviewPaginated,
+} from "./editorPaginationOwnership"
+
+export function resolveEditorDisplayPagination(
+  input: EditorDisplayPaginatedInput,
+): EditorDisplayPaginatedResolution {
+  return resolveEditorDisplayPaginatedResolution(input)
 }
 
-export function resolveEditorDisplayPaginated(input: {
-  authoritativePaginated: PaginatedDocument
-  partialPreviewPaginated: EditorPartialPreviewPaginated | null
-  previewLayout: EditorPreviewLayoutState
-}): PaginatedDocument {
-  if (
-    input.previewLayout.status === "partial" &&
-    input.previewLayout.generation !== null &&
-    input.partialPreviewPaginated?.generation === input.previewLayout.generation
-  ) {
-    return input.partialPreviewPaginated.paginated
-  }
-
-  return input.authoritativePaginated
+export function resolveEditorDisplayPaginated(input: EditorDisplayPaginatedInput): PaginatedDocument {
+  return resolveEditorDisplayPagination(input).paginated
 }

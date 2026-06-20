@@ -109,6 +109,13 @@ function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
 
+function isOptimisticMergeRefocusEvent(event, previousNodeId, removedNodeId) {
+  if (event?.kind !== "structural-refocus-used-full-pagination-before-island") return false
+  if (event.action !== "prestarted") return false
+  if (event.nodeId !== previousNodeId || event.previousNodeId !== removedNodeId) return false
+  return event.source === "optimistic-merge-prestarted" || event.source === "optimistic-prestarted"
+}
+
 function safeFileSegment(value) {
   return String(value)
     .trim()
@@ -2868,6 +2875,35 @@ async function prepareProbeViewport(page) {
   await waitForDoubleAnimationFrame(page)
 }
 
+async function revealFragmentForNode(page, targetNodeId) {
+  const selector = fragmentSelectorForNode(targetNodeId)
+  if (await page.locator(selector).first().count() > 0) return true
+
+  const pageFrameSelectorBase = '[data-testid="editor-page-frame"]'
+  await page.locator(pageFrameSelectorBase).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
+  const pageIndexes = await page.locator(pageFrameSelectorBase).evaluateAll((frames) => (
+    frames
+      .map((frame) => Number(frame.getAttribute("data-page-index")))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b)
+  ))
+  const orderedPageIndexes = [
+    ...(HAS_TARGET_PAGE_INDEX ? [TARGET_PAGE_INDEX] : []),
+    ...pageIndexes.filter((pageIndex) => !HAS_TARGET_PAGE_INDEX || pageIndex !== TARGET_PAGE_INDEX),
+  ]
+
+  for (const pageIndex of orderedPageIndexes) {
+    await page.evaluate((pageIndex) => {
+      document.querySelector(`[data-testid="editor-page-frame"][data-page-index="${pageIndex}"]`)
+        ?.scrollIntoView({ block: "center" })
+    }, pageIndex)
+    await waitForDoubleAnimationFrame(page)
+    if (await page.locator(selector).first().count() > 0) return true
+  }
+
+  return false
+}
+
 async function waitForServer(url, server, timeoutMs = 60000) {
   const startedAt = Date.now()
   let lastError = null
@@ -3266,6 +3302,7 @@ async function runTypingProbe(page) {
   const fragmentSelector = fragmentSelectorForNode(targetNodeId)
   const bridgeSelector = bridgeSelectorForNode(targetNodeId)
   const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
+  await revealFragmentForNode(page, targetNodeId)
   await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
 
   // Click into target paragraph to enter the text-engine bridge.
@@ -3656,6 +3693,7 @@ async function runSelectionProbe(page) {
   const bridgeSelector = bridgeSelectorForNode(targetNodeId)
   const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
   const fragment = page.locator(fragmentSelector).first()
+  await revealFragmentForNode(page, targetNodeId)
   await fragment.waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
 
   await fragment.click()
@@ -3886,6 +3924,7 @@ async function runScrollAnchoringProbe(page) {
   const fragmentSelector = fragmentSelectorForNode(targetNodeId)
   const bridgeSelector = bridgeSelectorForNode(targetNodeId)
   const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
+  await revealFragmentForNode(page, targetNodeId)
   await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
   await page.locator(fragmentSelector).first().click()
   await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
@@ -4003,6 +4042,7 @@ async function runBlurHandoffProbe(page) {
   const fragmentSelector = fragmentSelectorForNode(targetNodeId)
   const bridgeSelector = bridgeSelectorForNode(targetNodeId)
   const layerSelector = textEngineLayerSelectorForNode(targetNodeId)
+  await revealFragmentForNode(page, targetNodeId)
   await page.locator(fragmentSelector).first().waitFor({ state: "attached", timeout: READY_TIMEOUT_MS })
   await page.locator(fragmentSelector).first().click()
   await page.locator(bridgeSelector).waitFor({ state: "attached", timeout: 10000 })
@@ -4405,8 +4445,7 @@ async function runStructuralRefocusSafetyProbe(page) {
       event.action === "merge-paragraph"
     ))
     const mergeRefocusEvents = backspacePerfEvents.filter((event) => (
-      event.kind === "structural-refocus-used-full-pagination-before-island" &&
-      event.source === "optimistic-merge-prestarted"
+      isOptimisticMergeRefocusEvent(event, step.previousNodeId, step.newNodeId)
     ))
     const mergeDispatchEvents = backspacePerfEvents.filter((event) => (
       event.kind === "editor-action-dispatch" &&
@@ -4704,8 +4743,7 @@ async function runStructuralRefocusSafetyProbe(page) {
         event.action === "merge-paragraph"
       ))
       const mergeRefocusEvents = backspacePerfEvents.filter((event) => (
-        event.kind === "structural-refocus-used-full-pagination-before-island" &&
-        event.source === "optimistic-merge-prestarted"
+        isOptimisticMergeRefocusEvent(event, step.previousNodeId, step.newNodeId)
       ))
       const mergeDispatchEvents = backspacePerfEvents.filter((event) => (
         event.kind === "editor-action-dispatch" &&
@@ -6015,6 +6053,90 @@ function summarizeNumericValues(values) {
   }
 }
 
+function readReportNumber(report, path) {
+  const value = path.reduce((current, segment) => current?.[segment], report)
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function summarizeReportNumbers(samples, path) {
+  return summarizeNumericValues(samples.map((sample) => readReportNumber(sample.report, path)))
+}
+
+function countReportFlag(samples, path) {
+  return samples.filter((sample) => path.reduce((current, segment) => current?.[segment], sample.report) === true).length
+}
+
+function countReportFalseFlag(samples, path) {
+  return samples.filter((sample) => path.reduce((current, segment) => current?.[segment], sample.report) === false).length
+}
+
+function pickKeyInputSampleMetrics(report) {
+  const browserPreviewPaginationCount = readReportNumber(report, ["perfEvents", "browserPreviewPagination", "count"]) ??
+    readReportNumber(report, ["perfEvents", "countByKind", "browser-preview-pagination"])
+  return {
+    paintLatencyMs: report.paintLatencyMs ?? null,
+    keystrokeTotalMs: report.keystrokeTotalMs ?? null,
+    browserPreviewPaginationCount,
+    consoleErrors: report.console?.errors ?? null,
+    pageErrors: report.console?.pageErrors ?? null,
+    nodeNotFoundErrorCount: report.console?.nodeNotFoundErrorCount ?? null,
+    pageBoundaryCrossed: report.pageBoundary?.crossed ?? null,
+    typingLayer: report.typingLayer
+      ? {
+          captured: report.typingLayer.captured ?? null,
+          activeVisualModeStable: report.typingLayer.activeVisualModeStable ?? null,
+          nativeVisualModeStable: report.typingLayer.nativeVisualModeStable ?? null,
+          flowdocPageBoundaryPreviewDetected: report.typingLayer.flowdocPageBoundaryPreviewDetected ?? null,
+          flowdocHardBoundaryReflowDetected: report.typingLayer.flowdocHardBoundaryReflowDetected ?? null,
+          flowdocPageBreakOverlapDetected: report.typingLayer.flowdocPageBreakOverlapDetected ?? null,
+          flowdocCustomCaretMissingDetected: report.typingLayer.flowdocCustomCaretMissingDetected ?? null,
+          flowdocInputBridgePointerTargetDetected: report.typingLayer.flowdocInputBridgePointerTargetDetected ?? null,
+        }
+      : null,
+    activeReflowHandoff: report.activeReflowHandoff
+      ? {
+          boundaryHeightHandoffDetected: report.activeReflowHandoff.boundaryHeightHandoffDetected ?? null,
+          pageBoundaryPreviewDetected: report.activeReflowHandoff.pageBoundaryPreviewDetected ?? null,
+          hardBoundaryReflowDetected: report.activeReflowHandoff.hardBoundaryReflowDetected ?? null,
+          pageBreakOverlapDetected: report.activeReflowHandoff.pageBreakOverlapDetected ?? null,
+          editorCanvasCommitMaxMs: report.activeReflowHandoff.editorCanvasCommitMaxMs ?? null,
+        }
+      : null,
+  }
+}
+
+function buildRepeatedKeyInputMetrics(measuredSamples) {
+  return {
+    paintLatencyMs: {
+      p50: summarizeReportNumbers(measuredSamples, ["paintLatencyMs", "p50"]),
+      p95: summarizeReportNumbers(measuredSamples, ["paintLatencyMs", "p95"]),
+      p99: summarizeReportNumbers(measuredSamples, ["paintLatencyMs", "p99"]),
+      max: summarizeReportNumbers(measuredSamples, ["paintLatencyMs", "max"]),
+    },
+    keystrokeTotalMs: {
+      p50: summarizeReportNumbers(measuredSamples, ["keystrokeTotalMs", "p50"]),
+      p95: summarizeReportNumbers(measuredSamples, ["keystrokeTotalMs", "p95"]),
+      p99: summarizeReportNumbers(measuredSamples, ["keystrokeTotalMs", "p99"]),
+      max: summarizeReportNumbers(measuredSamples, ["keystrokeTotalMs", "max"]),
+    },
+    browserPreviewPaginationCount: summarizeNumericValues(measuredSamples.map((sample) => (
+      pickKeyInputSampleMetrics(sample.report).browserPreviewPaginationCount
+    ))),
+    consoleErrors: summarizeReportNumbers(measuredSamples, ["console", "errors"]),
+    pageErrors: summarizeReportNumbers(measuredSamples, ["console", "pageErrors"]),
+    nodeNotFoundErrorCount: summarizeReportNumbers(measuredSamples, ["console", "nodeNotFoundErrorCount"]),
+    failedTypingLayerSampleCounts: {
+      activeVisualModeUnstable: countReportFalseFlag(measuredSamples, ["typingLayer", "activeVisualModeStable"]),
+      nativeVisualModeUnstable: countReportFalseFlag(measuredSamples, ["typingLayer", "nativeVisualModeStable"]),
+      pageBoundaryPreviewDetected: countReportFlag(measuredSamples, ["typingLayer", "flowdocPageBoundaryPreviewDetected"]),
+      hardBoundaryReflowDetected: countReportFlag(measuredSamples, ["typingLayer", "flowdocHardBoundaryReflowDetected"]),
+      pageBreakOverlapDetected: countReportFlag(measuredSamples, ["typingLayer", "flowdocPageBreakOverlapDetected"]),
+      customCaretMissingDetected: countReportFlag(measuredSamples, ["typingLayer", "flowdocCustomCaretMissingDetected"]),
+      inputBridgePointerTargetDetected: countReportFlag(measuredSamples, ["typingLayer", "flowdocInputBridgePointerTargetDetected"]),
+    },
+  }
+}
+
 function pickStructuralSampleTimings(report) {
   const timings = report.performanceAttribution?.timings ?? {}
   return {
@@ -6131,10 +6253,12 @@ function buildRepeatedProbeReport(sampleReports) {
     key,
     summarizeNumericValues(measuredSamples.map((sample) => sample.timings[key])),
   ]))
+  const keyInputMetrics = buildRepeatedKeyInputMetrics(measuredSamples)
   const samples = sampleReports.map((sample) => ({
     sampleIndex: sample.sampleIndex,
     warmup: sample.warmup,
     ok: sample.report.ok,
+    keyInput: pickKeyInputSampleMetrics(sample.report),
     timings: sample.timings,
     timingTrace: sample.report.performanceAttribution?.attribution?.timingTrace ?? sample.report.structuralTimingTrace ?? null,
     metricConsistency: sample.report.performanceAttribution?.attribution?.metricConsistency ?? sample.report.structuralTimingTrace?.consistency ?? null,
@@ -6175,6 +6299,7 @@ function buildRepeatedProbeReport(sampleReports) {
     },
     metricDefinitions: firstReport.performanceAttribution?.attribution?.metricDefinitions ?? null,
     metrics,
+    keyInputMetrics,
     samples,
   }
 }

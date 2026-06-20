@@ -1,6 +1,6 @@
-import { migrateDocumentToV2 } from "@/document"
+import { buildDocumentGraphIndexV2, migrateDocumentToV2 } from "@/document"
 import type { DocumentNode } from "@/schema"
-import type { EditorOperationEnvelope, EditorOperationKind } from "./editorOperationTypes"
+import type { EditorOperationDocumentGraphRuntime, EditorOperationEnvelope, EditorOperationKind } from "./editorOperationTypes"
 
 const DOCUMENT_GRAPH_RUNTIME_OPERATION_KINDS: ReadonlySet<EditorOperationKind> = new Set([
   "drag.placement",
@@ -19,9 +19,40 @@ export function shouldAttachDocumentGraphRuntime(operation: EditorOperationEnvel
   return DOCUMENT_GRAPH_RUNTIME_OPERATION_KINDS.has(operation.kind)
 }
 
+export function createEditorDocumentGraphRuntime(doc: DocumentNode): EditorOperationDocumentGraphRuntime {
+  const document = migrateDocumentToV2(doc)
+  return {
+    sourceModel: "document-v2",
+    sourceDocument: doc,
+    document,
+    index: buildDocumentGraphIndexV2(document),
+  }
+}
+
+export function createEditorDocumentGraphRuntimeCache(): {
+  clear: () => void
+  get: (doc: DocumentNode) => EditorOperationDocumentGraphRuntime
+} {
+  let runtime: EditorOperationDocumentGraphRuntime | null = null
+
+  return {
+    clear: () => {
+      runtime = null
+    },
+    get: (doc) => {
+      if (runtime?.sourceDocument === doc) {
+        return runtime
+      }
+      runtime = createEditorDocumentGraphRuntime(doc)
+      return runtime
+    },
+  }
+}
+
 export function attachEditorOperationDocumentGraphRuntime(
   operation: EditorOperationEnvelope,
   doc: DocumentNode,
+  resolveDocumentGraphRuntime?: () => EditorOperationDocumentGraphRuntime | null | undefined,
 ): EditorOperationEnvelope {
   if (operation.runtime?.documentGraph?.sourceModel === "document-v2") {
     return operation
@@ -31,14 +62,14 @@ export function attachEditorOperationDocumentGraphRuntime(
   }
 
   try {
+    const resolvedDocumentGraph = resolveDocumentGraphRuntime?.()
     return {
       ...operation,
       runtime: {
         ...operation.runtime,
-        documentGraph: {
-          sourceModel: "document-v2",
-          document: migrateDocumentToV2(doc),
-        },
+        documentGraph: resolvedDocumentGraph?.sourceDocument === doc
+          ? resolvedDocumentGraph
+          : createEditorDocumentGraphRuntime(doc),
       },
     }
   } catch {

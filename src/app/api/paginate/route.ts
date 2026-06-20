@@ -1,25 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { paginateDocument } from "@/pagination"
 import { thaiWordBreaker } from "@/layout/word-breaker"
-import { createFontkitMeasurer } from "@/layout/font-measurer"
 import { assertDocument, DocumentAssertionError } from "@/document"
 import { assertPaginatedDocument } from "@/pagination"
-import { DEFAULT_FONT_KEY } from "@/font-registry"
-import type { TextMeasurer } from "@/layout"
-import { loadRuntimeFontMapSync, loadRuntimeFontSync, runtimeFontFallbackHeaders } from "../runtimeFont"
-
-// ─── Font + Measurer Cache ────────────────────────────────────────────────────
-
-let measurer: TextMeasurer | null = null
-let fontFallback = false
-
-function getMeasurer(): TextMeasurer {
-  if (measurer) return measurer
-  const buf = loadRuntimeFontSync(DEFAULT_FONT_KEY)
-  fontFallback = buf === null
-  measurer = createFontkitMeasurer(buf, loadRuntimeFontMapSync())
-  return measurer
-}
+import { runtimeFontFallbackHeaders } from "../runtimeFont"
+import { getRuntimePaginationMeasurer } from "./paginateRuntime"
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -41,8 +26,11 @@ export async function POST(req: NextRequest) {
   }
 
   let paginated
+  let fontFallback = false
   try {
-    paginated = paginateDocument(doc, getMeasurer(), thaiWordBreaker)
+    const runtime = getRuntimePaginationMeasurer()
+    fontFallback = runtime.fontFallback
+    paginated = paginateDocument(doc, runtime.measurer, thaiWordBreaker)
   } catch (err) {
     console.error("[FlowDoc] /api/paginate: pagination failed:", err)
     return NextResponse.json({ error: "Pagination failed", detail: String(err) }, { status: 500 })

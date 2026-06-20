@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import type { LayoutWarningSummary } from "@/pagination"
 import {
   areLayoutWarningSummariesEqual,
+  createServerPaginationSnapshotIdentity,
+  resolveServerPaginationSnapshotFreshness,
   shouldApplyServerLayoutWarnings,
 } from "../editorServerLayoutReadinessGuards"
 
@@ -14,6 +16,56 @@ function warning(
 }
 
 describe("editor server layout readiness guards", () => {
+  it("marks server pagination current only for the active layout version", () => {
+    const identity = createServerPaginationSnapshotIdentity({
+      layoutVersion: 7,
+      documentId: "doc-1",
+    })
+
+    expect(resolveServerPaginationSnapshotFreshness({
+      identity,
+      currentLayoutVersion: 7,
+      cancelled: false,
+      aborted: false,
+    })).toEqual({
+      identity,
+      freshness: "current",
+      reason: "server-pagination-current",
+    })
+  })
+
+  it("marks cancelled, aborted, and superseded server pagination as stale", () => {
+    const identity = createServerPaginationSnapshotIdentity({ layoutVersion: 7 })
+
+    expect(resolveServerPaginationSnapshotFreshness({
+      identity,
+      currentLayoutVersion: 7,
+      cancelled: true,
+      aborted: false,
+    })).toMatchObject({
+      freshness: "stale",
+      reason: "server-pagination-cancelled",
+    })
+    expect(resolveServerPaginationSnapshotFreshness({
+      identity,
+      currentLayoutVersion: 7,
+      cancelled: false,
+      aborted: true,
+    })).toMatchObject({
+      freshness: "stale",
+      reason: "server-pagination-aborted",
+    })
+    expect(resolveServerPaginationSnapshotFreshness({
+      identity,
+      currentLayoutVersion: 8,
+      cancelled: false,
+      aborted: false,
+    })).toMatchObject({
+      freshness: "stale",
+      reason: "server-pagination-layout-version-mismatch",
+    })
+  })
+
   it("treats repeated empty warning arrays as equal", () => {
     expect(areLayoutWarningSummariesEqual([], [])).toBe(true)
     expect(shouldApplyServerLayoutWarnings([], [])).toBe(false)

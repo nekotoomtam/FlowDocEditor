@@ -3005,6 +3005,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                 <label style={label}>Rows</label>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button
+                    data-testid="flow-table-add-row"
                     style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
                     disabled={!canAddGrid}
                     title={canAddGrid ? "Add row" : "Invalid Flow Table grid"}
@@ -3013,6 +3014,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                     + Row
                   </button>
                   <button
+                    data-testid="flow-table-remove-last-row"
                     style={{ ...btn, opacity: canRemoveLastRow ? 1 : 0.4 }}
                     disabled={!canRemoveLastRow}
                     title={canRemoveLastRow ? "Remove last row" : "Span-aware row deletion is blocked for this Flow Table target"}
@@ -3026,6 +3028,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                 <label style={label}>Columns</label>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button
+                    data-testid="flow-table-add-column"
                     style={{ ...btn, opacity: canAddGrid ? 1 : 0.4 }}
                     disabled={!canAddGrid}
                     title={canAddGrid ? "Add column" : "Invalid Flow Table grid"}
@@ -3034,6 +3037,7 @@ export function PropertyPanel({ doc, registry, selectedNodeId, selectionAnchorNo
                     + Col
                   </button>
                   <button
+                    data-testid="flow-table-remove-last-column"
                     style={{ ...btn, opacity: canRemoveLastCol ? 1 : 0.4 }}
                     disabled={!canRemoveLastCol}
                     title={canRemoveLastCol ? "Remove last column" : "Span-aware column deletion is blocked for this Flow Table target"}

@@ -49,6 +49,21 @@ Document Model v2 fixtures can use semantic target aliases from
 $env:FLOWDOC_PROBE_FILE="public/mock/stress-node-mutations-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="typing.primary"; $env:PROBE_BURST_LENGTH="1"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
 ```
 
+Long Document Model v2 stress runs:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="typing.primary"; $env:PROBE_MODE="typing"; $env:PROBE_BURST_LENGTH="400"; $env:PROBE_INTERVAL_MS="30"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+$env:FLOWDOC_PROBE_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="typing.primary"; $env:PROBE_MODE="typing"; $env:PROBE_BURST_LENGTH="400"; $env:PROBE_INTERVAL_MS="30"; $env:PROBE_READY_TIMEOUT_MS="240000"; $env:PROBE_REPEAT="3"; npm.cmd run smoke:wysiwyg-smoothness
+$env:FLOWDOC_PROBE_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="node.split"; $env:PROBE_MODE="enter-backspace-after-dispatch"; $env:PROBE_ENTER_SPLIT_TEXT="Browser probes"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
+The long-v2 split/merge run verifies structural Enter split, Backspace merge,
+refocus to the previous node, no full pagination before the active island, and
+zero console/page errors. The merge refocus check accepts the current
+`optimistic-prestarted` telemetry when the event node shape matches merge
+semantics, while remaining compatible with the older
+`optimistic-merge-prestarted` source.
+
 Run the focused stress baseline modes:
 
 ```powershell
@@ -129,6 +144,11 @@ selected mode (`typing` by default, plus `space-repeat`, `delete`, `enter`,
 | `perfEvents.longestEvent` | slowest event recorded | review the `kind` if `durationMs` > 100 |
 | `pageBoundary.crossed` | true when fragment count increased | confirms the burst crossed a page break |
 | `console.errors` / `console.pageErrors` | runtime errors during the burst | must be 0 |
+
+Repeated probe reports include a `keyInputMetrics` summary for key-input modes.
+Use it to read sample-to-sample p50/p95/p99/max values without opening every
+sample object. The summary also counts browser preview pagination, console/page
+errors, node-not-found errors, and typing-layer failures across samples.
 
 `ok: true` requires zero console errors and zero page errors. Threshold
 breaches do not fail the probe; they surface as numbers for human review.

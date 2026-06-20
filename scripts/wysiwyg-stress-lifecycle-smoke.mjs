@@ -273,7 +273,33 @@ function resolveStressTargetAlias(rawDocument, alias, envName) {
   return targetNodeId
 }
 
+async function revealFragmentForNode(page, nodeId) {
+  const selector = fragmentSelectorForNode(nodeId)
+  if (await page.locator(selector).first().count() > 0) return true
+
+  const pageFrameSelectorBase = '[data-testid="editor-page-frame"]'
+  await page.locator(pageFrameSelectorBase).first().waitFor({ state: "attached", timeout: 30000 })
+  const pageIndexes = await page.locator(pageFrameSelectorBase).evaluateAll((frames) => (
+    frames
+      .map((frame) => Number(frame.getAttribute("data-page-index")))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b)
+  ))
+
+  for (const pageIndex of pageIndexes) {
+    await page.evaluate((pageIndex) => {
+      document.querySelector(`[data-testid="editor-page-frame"][data-page-index="${pageIndex}"]`)
+        ?.scrollIntoView({ block: "center" })
+    }, pageIndex)
+    await waitForDoubleAnimationFrame(page)
+    if (await page.locator(selector).first().count() > 0) return true
+  }
+
+  return false
+}
+
 async function paragraphTargetForNode(page, nodeId) {
+  await revealFragmentForNode(page, nodeId)
   await page.waitForFunction((id) => (
     document.querySelector(`[data-testid="editor-fragment"][data-node-type="paragraph"][data-node-id="${CSS.escape(id)}"]`) !== null
   ), nodeId, { timeout: 30000 })
@@ -582,24 +608,30 @@ async function runSmoke() {
       `Need at least 2 paragraph targets on page ${targetPageIndex + 1} or from configured aliases`,
     )
 
+    const firstTargetRevealStartedAt = now()
     const firstTarget = usesAliasTargets
       ? await paragraphTargetForNode(page, firstAliasTargetNodeId)
       : visibleTargets[0]
+    const firstTargetRevealMs = usesAliasTargets ? now() - firstTargetRevealStartedAt : 0
     let secondTarget = usesAliasTargets
       ? null
       : visibleTargets[1]
+    let secondTargetRevealMs = 0
 
     await clearPerfEvents(page)
     await clickParagraph(page, firstTarget)
     await waitForInlineEdit(page, firstTarget.nodeId)
     await waitForDoubleAnimationFrame(page)
 
+    if (usesAliasTargets) {
+      const secondTargetRevealStartedAt = now()
+      secondTarget = await paragraphTargetForNode(page, secondAliasTargetNodeId)
+      secondTargetRevealMs = now() - secondTargetRevealStartedAt
+    }
+
     await clearPerfEvents(page)
     await startLayoutMonitor(page)
     const clickSwitchStartedAt = now()
-    if (usesAliasTargets) {
-      secondTarget = await paragraphTargetForNode(page, secondAliasTargetNodeId)
-    }
     await clickParagraph(page, secondTarget)
     await waitForInlineEdit(page, secondTarget.nodeId)
     const clickSwitchMs = now() - clickSwitchStartedAt
@@ -670,6 +702,10 @@ async function runSmoke() {
       targetAliases: firstTargetAlias || secondTargetAlias
         ? { first: firstTargetAlias, second: secondTargetAlias }
         : null,
+      targetRevealMs: {
+        first: firstTargetRevealMs,
+        second: secondTargetRevealMs,
+      },
       clickSwitchMs,
       exitMs,
       undoObservedMs: now() - undoStartedAt,
@@ -759,6 +795,7 @@ function summarizeChildSample(summary) {
   }
   return {
     loadMs: summary.loadMs ?? null,
+    targetRevealMs: summary.targetRevealMs ?? null,
     clickSwitchMs: summary.clickSwitchMs ?? null,
     exitMs: summary.exitMs ?? null,
     undoRestoreMs: summary.undoRestoreMs ?? null,

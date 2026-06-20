@@ -56,6 +56,39 @@ describe("editor document settings operation plans", () => {
     )
   })
 
+  it("uses document settings command instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "UPDATE_MARGIN",
+        sectionIndex: 0,
+        margin: { top: 24, right: 36, bottom: 48, left: 60 },
+      }),
+      action: {
+        type: "UPDATE_MARGIN" as const,
+        sectionIndex: 0,
+        margin: { top: 99, right: 99, bottom: 99, left: 99 },
+      },
+      payload: {
+        kind: "document.settings.patch" as const,
+        setting: "margin" as const,
+        sectionIndex: 0,
+        margin: { top: 99, right: 99, bottom: 99, left: 99 },
+      },
+    }
+
+    const result = createDocumentSettingsOperationResult(state, operation)
+    const margin = result.status === "success"
+      ? result.nextDoc.document.sections[0].page.margin
+      : state.doc.document.sections[0].page.margin
+
+    expect(result.status).toBe("success")
+    expect(margin.top).toEqual(pt(24))
+    expect(margin.right).toEqual(pt(36))
+    expect(margin.bottom).toEqual(pt(48))
+    expect(margin.left).toEqual(pt(60))
+  })
+
   it("declares mode diagnostics for header/footer horizontal mode updates", () => {
     const state = createInitialEditorState(createDefaultDocument())
     const operation = createEditorOperationFromAction({

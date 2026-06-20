@@ -2,7 +2,7 @@ import type { EditorAction, EditorState } from "../editorReducer"
 import { createOperationDocumentGraphDiagnostics } from "./editorDocumentGraphDiagnostics"
 import { createEditorGraphPlanningDecision } from "./editorGraphPlanningDecision"
 import type { EditorOperationCommitResult } from "./editorOperationCommit"
-import type { EditorOperationEnvelope } from "./editorOperationTypes"
+import type { EditorOperationCommand, EditorOperationEnvelope, EditorOperationStructuralRuntimeContext } from "./editorOperationTypes"
 import {
   createBackspaceListItemAtStartPlan,
   createChangeListItemLevelPlan,
@@ -19,41 +19,123 @@ type ListStructureAction =
   | ChangeListItemLevelAction
   | BackspaceListItemAtStartAction
   | ToggleListPresetAction
+type ListStructureCommand = Extract<EditorOperationCommand, { kind: "list.structure.patch" }>
+type ListStructureInput = ListStructureCommand & {
+  history?: ListStructureAction["history"]
+  caretIndex?: ChangeListItemLevelAction["caretIndex"] | BackspaceListItemAtStartAction["caretIndex"]
+  refocus?: ChangeListItemLevelAction["refocus"]
+  paragraph?: ToggleListPresetAction["paragraph"]
+}
 type ListGraphPlanningResult = ReturnType<typeof createEditorGraphPlanningDecision>
 
-function createListPlan(state: EditorState, action: ListStructureAction) {
+function listReducerPath(input: ListStructureInput): string {
+  switch (input.mutation) {
+    case "exit-item":
+      return "EXIT_LIST_ITEM"
+    case "change-level":
+      return "CHANGE_LIST_ITEM_LEVEL"
+    case "backspace-at-start":
+      return "BACKSPACE_LIST_ITEM_AT_START"
+    case "toggle-preset":
+      return "TOGGLE_LIST_PRESET"
+  }
+}
+
+function createListStructureInputFromAction(action: ListStructureAction): ListStructureInput {
   switch (action.type) {
     case "EXIT_LIST_ITEM":
-      return createExitListItemPlan({
-        doc: state.doc,
+      return {
+        kind: "list.structure.patch",
+        mutation: "exit-item",
         nodeId: action.nodeId,
-        text: action.text,
-      })
+        ...(action.text !== undefined ? { text: action.text } : {}),
+        ...(action.history ? { history: action.history } : {}),
+      }
     case "CHANGE_LIST_ITEM_LEVEL":
-      return createChangeListItemLevelPlan({
-        doc: state.doc,
+      return {
+        kind: "list.structure.patch",
+        mutation: "change-level",
         nodeId: action.nodeId,
         direction: action.direction,
-        text: action.text,
-        caretIndex: action.caretIndex,
-        refocus: action.refocus,
-      })
+        ...(action.text !== undefined ? { text: action.text } : {}),
+        ...(action.history ? { history: action.history } : {}),
+        ...(action.caretIndex !== undefined ? { caretIndex: action.caretIndex } : {}),
+        ...(action.refocus !== undefined ? { refocus: action.refocus } : {}),
+      }
     case "BACKSPACE_LIST_ITEM_AT_START":
-      return createBackspaceListItemAtStartPlan({
-        doc: state.doc,
+      return {
+        kind: "list.structure.patch",
+        mutation: "backspace-at-start",
         nodeId: action.nodeId,
-        text: action.text,
-        caretIndex: action.caretIndex,
-      })
+        ...(action.text !== undefined ? { text: action.text } : {}),
+        ...(action.history ? { history: action.history } : {}),
+        ...(action.caretIndex !== undefined ? { caretIndex: action.caretIndex } : {}),
+      }
     case "TOGGLE_LIST_PRESET":
-      return createToggleListPresetPlan({
-        doc: state.doc,
+      return {
+        kind: "list.structure.patch",
+        mutation: "toggle-preset",
         nodeId: action.nodeId,
         styleId: action.styleId,
         instanceId: action.instanceId,
-        level: action.level,
-        text: action.text,
-        paragraph: action.paragraph,
+        ...(action.level !== undefined ? { level: action.level } : {}),
+        ...(action.text !== undefined ? { text: action.text } : {}),
+        ...(action.history ? { history: action.history } : {}),
+        ...(action.paragraph ? { paragraph: action.paragraph } : {}),
+      }
+  }
+}
+
+function createListStructureInputFromOperation(operation: EditorOperationEnvelope): ListStructureInput | null {
+  const command = operation.command?.kind === "list.structure.patch"
+    ? operation.command
+    : operation.payload?.kind === "list.structure.patch"
+      ? operation.payload
+      : null
+  if (command == null) return null
+  const runtime: EditorOperationStructuralRuntimeContext | undefined = operation.runtime?.structural
+  return {
+    ...command,
+    ...(runtime?.history ? { history: runtime.history } : {}),
+    ...(runtime?.caretIndex !== undefined ? { caretIndex: runtime.caretIndex } : {}),
+    ...(runtime?.refocus !== undefined ? { refocus: runtime.refocus } : {}),
+    ...(runtime?.paragraph ? { paragraph: runtime.paragraph as ToggleListPresetAction["paragraph"] } : {}),
+  }
+}
+
+function createListPlan(state: EditorState, input: ListStructureInput) {
+  switch (input.mutation) {
+    case "exit-item":
+      return createExitListItemPlan({
+        doc: state.doc,
+        nodeId: input.nodeId,
+        text: input.text,
+      })
+    case "change-level":
+      return createChangeListItemLevelPlan({
+        doc: state.doc,
+        nodeId: input.nodeId,
+        direction: input.direction,
+        text: input.text,
+        caretIndex: input.caretIndex,
+        refocus: input.refocus,
+      })
+    case "backspace-at-start":
+      return createBackspaceListItemAtStartPlan({
+        doc: state.doc,
+        nodeId: input.nodeId,
+        text: input.text,
+        caretIndex: input.caretIndex,
+      })
+    case "toggle-preset":
+      return createToggleListPresetPlan({
+        doc: state.doc,
+        nodeId: input.nodeId,
+        styleId: input.styleId,
+        instanceId: input.instanceId,
+        level: input.level,
+        text: input.text,
+        paragraph: input.paragraph,
       })
   }
 }
@@ -127,24 +209,24 @@ function allowedListGraphDecision(
 
 function createListStructureCommitResult(
   state: EditorState,
-  action: ListStructureAction,
+  input: ListStructureInput,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const targetNodeIds = operation?.scope.nodeIds ?? [action.nodeId]
+  const targetNodeIds = operation?.scope.nodeIds ?? [input.nodeId]
   const { graphDiagnostics, graphDecision } = createListGraphPlanningContext(
     state,
     operation,
     targetNodeIds,
     "list-structure",
   )
-  const preflightResult = createListGraphPreflightResult(action.type, targetNodeIds, graphDiagnostics, graphDecision)
+  const preflightResult = createListGraphPreflightResult(listReducerPath(input), targetNodeIds, graphDiagnostics, graphDecision)
   if (preflightResult != null) return preflightResult
   const allowedGraphDecision = allowedListGraphDecision(graphDecision)
-  const plan = createListPlan(state, action)
+  const plan = createListPlan(state, input)
   const diagnostics = {
     operationKind: "list.structure.patch" as const,
     reducerPath: plan.reducerPath,
-    nodeId: action.nodeId,
+    nodeId: input.nodeId,
     targetNodeIds,
     ...graphDiagnostics,
     ...allowedGraphDecision.diagnostics,
@@ -164,7 +246,7 @@ function createListStructureCommitResult(
     status: "success",
     nextDoc: plan.nextDoc,
     validationPolicy: allowedGraphDecision.validationPolicy,
-    historyPolicy: { kind: "push", entry: action.history },
+    historyPolicy: { kind: "push", entry: input.history },
     selectionPatch: plan.selectionPatch,
     diagnostics: {
       ...diagnostics,
@@ -177,14 +259,15 @@ export function createListStructureActionResult(
   state: EditorState,
   action: ListStructureAction,
 ): EditorOperationCommitResult {
-  return createListStructureCommitResult(state, action)
+  return createListStructureCommitResult(state, createListStructureInputFromAction(action))
 }
 
 export function createListStructureOperationResult(
   state: EditorState,
   operation: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  if (operation.kind !== "list.structure.patch") {
+  const input = createListStructureInputFromOperation(operation)
+  if (operation.kind !== "list.structure.patch" || input == null) {
     return {
       status: "failure",
       failure: { reason: "invalid-list-structure-operation" },
@@ -197,22 +280,5 @@ export function createListStructureOperationResult(
     }
   }
 
-  switch (operation.action.type) {
-    case "EXIT_LIST_ITEM":
-    case "CHANGE_LIST_ITEM_LEVEL":
-    case "BACKSPACE_LIST_ITEM_AT_START":
-    case "TOGGLE_LIST_PRESET":
-      return createListStructureCommitResult(state, operation.action, operation)
-    default:
-      return {
-        status: "failure",
-        failure: { reason: "invalid-list-structure-action" },
-        validationPolicy: "read-only",
-        historyPolicy: { kind: "none", reason: "invalid operation" },
-        diagnostics: {
-          operationKind: operation.kind,
-          reducerPath: "LIST_STRUCTURE",
-        },
-      }
-  }
+  return createListStructureCommitResult(state, input, operation)
 }

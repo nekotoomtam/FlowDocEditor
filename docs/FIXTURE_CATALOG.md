@@ -7,6 +7,10 @@ discoverable.
 Use this document together with `docs/PRODUCT_SCENARIOS.md` and
 `docs/TEST_STRATEGY.md`.
 
+Product-shaped v2 anchor:
+`docs/PRODUCT_REPORT_V2_SCENARIO_CONTRACT.md` defines `product-report-v2`.
+It is listed below now that the package and fixture validity tests exist.
+
 ## Current Suite Snapshot
 
 Last verified full-suite size:
@@ -36,10 +40,12 @@ Historical counts in `docs/WORK_LOG.md` may be older. Treat this catalog and
 | `government-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts` | saved FlowDoc package v2, cover, TOC, Thai formal body, keep-with-next heading, bordered table, restarted footer page numbers, default and production-stack pagination assertions, PDF page count |
 | `university-report` | `packages/core/src/fixtures/userReportFixtures.ts`, `packages/core/src/pagination/__tests__/userReportFixtures.test.ts`, `packages/core/src/renderer/__tests__/userReportExport.test.ts` | saved FlowDoc package v2, cover, TOC, body page restart, long Thai continuation, footer page numbers, default and production-stack pagination assertions, PDF page count |
 | `flow-row-export-golden` | `packages/core/src/renderer/__tests__/productExportGolden.test.ts` | multi-column flow-row export with gaps, styled flow-stack boxes, PDF page-count parity, DOCX fixed-layout table projection, DOCX marker de-duplication |
+| `product-report-v2` | `public/mock/product-report-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts`, browser smoke commands recorded in `docs/PRODUCT_REPORT_V2_SCENARIO_CONTRACT.md` | canonical product-shaped DocumentNode v2 report anchor, package v2 import through current runtime adapter, cover/TOC/body sections, header/footer/page number roots, field/data snapshot, flow-row summary, flattened flow-table storage, Thai/mixed body text, and semantic aliases for typing, node mutation, flow-row, table, field, history, and export workflow probes; browser typing and structure mutation pass, diagnostic node mutation correctness passes, strict node mutation latency remains RISK |
 | `stress-typing-v2` | `public/mock/stress-typing-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 typing stress fixture, package v2 import through current runtime adapter, section roots, flattened graph storage, and semantic target aliases for primary/boundary typing probes |
 | `stress-node-mutations-v2` | `public/mock/stress-node-mutations-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 node mutation stress fixture, package v2 import through current runtime adapter, section roots, flow-row/flow-stack, flattened flow-table storage, and semantic target aliases for delete, duplicate, reorder, typing, flow-row, and table probes |
 | `stress-flow-row-v2` | `public/mock/stress-flow-row-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 flow-row stress fixture with semantic aliases for flow-row resize/add-column targets and flow-stack descendants without legacy `row` / `stack` authoring |
 | `stress-table-v2` | `public/mock/stress-table-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 table stress fixture with flattened table row/cell/content storage and semantic aliases for table root, row, primary cell, body cell, and span cell targets |
+| `stress-long-v2` | `public/mock/stress-long-v2.flowdoc.json`, `src/app/editor/_components/__tests__/documentV2StressFixture.test.ts` | DocumentNode v2 long-document stress fixture with legacy-scale node/body breadth, flattened graph storage, and semantic aliases for typing, page-boundary, deep-document, split/merge, node mutation, flow-row, and table probes |
 
 Product fixture names should stay visible in test descriptions, such as
 `product fixture - customs-basic-table`.
@@ -166,8 +172,8 @@ the current editor runtime adapter.
 `scripts/flowdoc-fixture-targets.mjs` is the shared browser-smoke helper for
 reading `mockData.targets` aliases from v2 fixtures, so smoke scripts can target
 fixture-owned semantic names such as `typing.primary`,
-`flowRow.resizeTarget`, and `table.primaryCell` instead of hardcoded generated
-ids.
+`flowRow.resizeTarget`, `table.primaryCell`, `typing.deepDocument`, and
+`node.split` instead of hardcoded generated ids.
 Inline-edit session coverage locks visual freshness and transaction helper
 rules. WYSIWYG inline-edit config coverage keeps the experimental visual path
 disabled by default in every environment unless the flag is explicitly enabled.
@@ -183,6 +189,8 @@ typing, undo/redo, flicker, and table panel workflows.
 - `scripts/wysiwyg-smoothness-probe.mjs`
 - `scripts/wysiwyg-stage4c-smoke.mjs`
 - `scripts/wysiwyg-stress-lifecycle-smoke.mjs`
+- `scripts/wysiwyg-node-mutation-smoke.mjs`
+- `scripts/wysiwyg-structure-mutation-smoke.mjs`
 
 `scripts/editor-smoke.mjs` protects the default `/editor` load path with a real browser, deterministic
 localStorage document fixtures, paragraph inline edit commit, undo/redo, Thai
@@ -201,10 +209,16 @@ unless
 `scripts/wysiwyg-stage4c-smoke.mjs` protects the opt-in Stage 4C text-engine
 clipboard, composition, cross-fragment selection, perf trace, and heavy
 row-stack smoke paths.
-`scripts/wysiwyg-smoothness-probe.mjs` and
-`scripts/wysiwyg-stress-lifecycle-smoke.mjs` can target v2 fixtures by semantic
-alias through `mockData.targets`, such as `typing.primary` and
-`typing.boundary`.
+`scripts/wysiwyg-smoothness-probe.mjs`,
+`scripts/wysiwyg-stress-lifecycle-smoke.mjs`, and
+`scripts/wysiwyg-node-mutation-smoke.mjs` can target v2 fixtures by semantic
+alias through `mockData.targets`, such as `typing.primary`, `typing.boundary`,
+`node.duplicate`, and `node.reorderTarget`.
+`scripts/wysiwyg-structure-mutation-smoke.mjs` targets v2 table and flow-row
+structure aliases such as `table.primaryTable`, `flowRow.resizeTarget`,
+`flowRow.leftStack`, and `flowRow.rightStack`; it covers table add row, table
+add column, table column resize, flow-stack add column, flow-row resize,
+preview settle, and undo restore on the long v2 fixture.
 The browser smoke scripts use bundled Chromium by default and can be pointed at
 an installed Playwright browser channel with `SMOKE_BROWSER_CHANNEL` or a
 system Chromium-family executable with `SMOKE_EXECUTABLE_PATH`.

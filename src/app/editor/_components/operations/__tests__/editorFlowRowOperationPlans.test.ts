@@ -1,4 +1,4 @@
-import { createDefaultDocument, migrateDocumentToV2 } from "@/document"
+import { createDefaultDocument } from "@/document"
 import type { DocumentNode, LayoutNode } from "@/schema"
 import { describe, expect, it } from "vitest"
 import { createInitialEditorState } from "../../editorReducer"
@@ -10,6 +10,7 @@ import {
   createFlowRowLayoutActionResult,
   createFlowRowLayoutOperationResult,
 } from "../editorFlowRowOperationPlans"
+import { createEditorDocumentGraphRuntime } from "../editorOperationRuntime"
 
 function createStateWithFlowRow(): EditorState {
   const doc = createDefaultDocument()
@@ -47,10 +48,7 @@ function withDocumentV2GraphRuntime<T extends ReturnType<typeof createEditorOper
   return {
     ...operation,
     runtime: {
-      documentGraph: {
-        sourceModel: "document-v2" as const,
-        document: migrateDocumentToV2(state.doc),
-      },
+      documentGraph: createEditorDocumentGraphRuntime(state.doc),
     },
   }
 }
@@ -112,6 +110,29 @@ describe("editor flow-row operation plans", () => {
     const operation = createEditorOperationFromAction(action)
 
     expect(createFlowRowAddColumnOperationResult(state, operation)).toEqual(createFlowRowAddColumnActionResult(state, action))
+  })
+
+  it("uses flow-row add-column command instead of compatibility snapshots", () => {
+    const state = createStateWithFlowRow()
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "FLOW_ROW_ADD_COL",
+        rowId: "row-1",
+        stackId: "stack-1",
+        position: "after",
+      }),
+      action: { type: "FLOW_ROW_ADD_COL" as const, rowId: "missing-row" },
+      payload: { kind: "flow-row.structure.patch" as const, rowId: "missing-row" },
+    }
+
+    const result = createFlowRowAddColumnOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    const row = result.nextDoc.document.sections[0].nodes["row-1"]
+    expect(row?.type).toBe("flow-row")
+    if (row?.type !== "flow-row") return
+    expect(row.childIds).toHaveLength(3)
   })
 
   it("uses DocumentNode v2 graph runtime to allow flow-row structure planning", () => {
@@ -197,6 +218,46 @@ describe("editor flow-row operation plans", () => {
         expect.objectContaining({ nodeId: "stack-2", parentType: "flow-row", siblingCount: 2 }),
       ],
     }))
+  })
+
+  it("uses flow-row layout command instead of compatibility snapshots", () => {
+    const state = createStateWithFlowRow()
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "RESIZE_COLUMNS",
+        leftStackId: "stack-1",
+        leftShare: 30,
+        rightStackId: "stack-2",
+        rightShare: 70,
+      }),
+      action: {
+        type: "RESIZE_COLUMNS" as const,
+        leftStackId: "stack-1",
+        leftShare: 10,
+        rightStackId: "stack-2",
+        rightShare: 90,
+      },
+      payload: {
+        kind: "flow-row.layout.patch" as const,
+        layoutType: "resize-columns" as const,
+        leftStackId: "stack-1",
+        leftShare: 10,
+        rightStackId: "stack-2",
+        rightShare: 90,
+      },
+    }
+
+    const result = createFlowRowLayoutOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    const leftStack = result.nextDoc.document.sections[0].nodes["stack-1"]
+    const rightStack = result.nextDoc.document.sections[0].nodes["stack-2"]
+    expect(leftStack?.type).toBe("flow-stack")
+    expect(rightStack?.type).toBe("flow-stack")
+    if (leftStack?.type !== "flow-stack" || rightStack?.type !== "flow-stack") return
+    expect(leftStack.props.widthShare).toBe(30)
+    expect(rightStack.props.widthShare).toBe(70)
   })
 
   it("keeps resize row min-height action and operation planning aligned", () => {

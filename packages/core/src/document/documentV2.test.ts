@@ -146,6 +146,22 @@ describe("Document Model v2 migration", () => {
     expect(() => assertDocumentV2(migrated)).not.toThrow()
   })
 
+  it("rejects v2 flow-stack children that omit widthShare inside a flow-row", () => {
+    const migrated = migrateDocumentToV2(bodyDoc({
+      row: { id: "row", type: "row", props: {}, childIds: ["left"] },
+      left: { id: "left", type: "stack", props: { widthShare: 100 }, childIds: ["p1"] },
+      p1: paragraph("p1", "Left"),
+    }, ["row"]))
+    const section = migrated.document.sections[0]
+    const left = section.nodes.left
+    if (left?.type !== "flow-stack") throw new Error("expected migrated flow-stack")
+    const props = { ...left.props }
+    delete props.widthShare
+    section.nodes.left = { ...left, props }
+
+    expect(() => assertDocumentV2(migrated)).toThrow("flow-stack inside flow-row must have widthShare")
+  })
+
   it("flattens flow-table internals into the section node map", () => {
     const p1 = paragraph("p1", "A")
     const p2 = paragraph("p2", "B")

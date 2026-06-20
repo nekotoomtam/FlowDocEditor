@@ -93,6 +93,16 @@ function splitPlan(overrides: Partial<ParagraphSplitOperationPlan> = {}): Paragr
         precomputedDocValidation: "shell-optimistic-structural",
         paginated: nextPaginated,
       },
+      runtime: {
+        structural: {
+          precomputed: {
+            doc,
+            newNodeId: "new",
+          },
+          precomputedDocValidation: "shell-optimistic-structural",
+          paginated: nextPaginated,
+        },
+      },
     },
     perf: { startedAt: 10 },
     ...overrides,
@@ -138,6 +148,17 @@ function mergePlan(overrides: Partial<Extract<ParagraphMergeOperationPlan, { sta
         precomputedDocValidation: "shell-optimistic-structural",
         paginated: nextPaginated,
       },
+      runtime: {
+        structural: {
+          precomputed: {
+            doc,
+            prevNodeId: "previous",
+            caretIndex: 6,
+          },
+          precomputedDocValidation: "shell-optimistic-structural",
+          paginated: nextPaginated,
+        },
+      },
     },
     perf: { startedAt: 10 },
     ...overrides,
@@ -157,6 +178,7 @@ function executionContext(overrides: Partial<StructuralExecutionContext> = {}): 
     dispatchEditorOperation: vi.fn(),
     endRichWysiwygDraftSession: vi.fn(),
     endWysiwygTextSession: vi.fn(),
+    runSynchronousEditorUpdate: (callback) => callback(),
     setOptimisticStructuralIslandOverride: vi.fn(),
     setOptimisticStructuralRefocusPaint: vi.fn(),
     startInlineEditAfterOptimisticStructuralChange: vi.fn(() => true),

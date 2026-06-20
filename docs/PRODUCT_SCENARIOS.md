@@ -21,6 +21,11 @@ Project-wide test levels and QA expectations live in `docs/TEST_STRATEGY.md`.
 
 Current fixture-to-test ownership lives in `docs/FIXTURE_CATALOG.md`.
 
+The active v2 product-shaped anchor is
+`docs/PRODUCT_REPORT_V2_SCENARIO_CONTRACT.md`. Use that contract when a change
+needs one shared report workflow across Document Model v2, editor operations,
+history, field/data readiness, long-document stability, and export readiness.
+
 ## Scenario Quality Bar
 
 Each product scenario should answer:
@@ -312,6 +317,16 @@ the executable test suite.
 Use `docs/FIXTURE_CATALOG.md` for the wider test-file map and known coverage
 gaps.
 
+- [x] `product-report-v2`: canonical product-shaped Document Model v2
+  report anchor with semantic targets for typing, node mutation, flow-row,
+  table, field/data readiness, history, and export workflows.
+  - Contract: `docs/PRODUCT_REPORT_V2_SCENARIO_CONTRACT.md`.
+  - Covered by `public/mock/product-report-v2.flowdoc.json`,
+    `flowdoc-v2-mock-manifest.json`, and `documentV2StressFixture.test.ts`
+    for package shape, v2 graph validity, field aliases, node aliases, and
+    current runtime adapter import. Browser workflow gates are partial: typing,
+    structure mutation, and diagnostic node mutation correctness passed, while
+    strict node mutation latency is a recorded RISK.
 - [x] `customs-basic-table`: 2-page table, repeated header, page footer.
   - Covered by `product fixture — customs-basic-table` in
     `packages/core/src/pagination/__tests__/flowTablePagination.test.ts`.

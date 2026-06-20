@@ -75,7 +75,11 @@ import {
   shouldClearPartialPreviewPaginated,
   type CanvasRenderInvalidationState,
 } from "./editorPreviewLifecycleGuards"
-import { shouldApplyServerLayoutWarnings } from "./editorServerLayoutReadinessGuards"
+import {
+  createServerPaginationSnapshotIdentity,
+  resolveServerPaginationSnapshotFreshness,
+  shouldApplyServerLayoutWarnings,
+} from "./editorServerLayoutReadinessGuards"
 import {
   BROWSER_PREVIEW_VISIBLE_WINDOW_MARGIN_PAGES,
   FLOWDOC_FONT_FALLBACK_VALUE,
@@ -1058,9 +1062,17 @@ export function useEditorPaginationLifecycleController({
           finishFlowDocPerfSpan(WYSIWYG_PERF_TRACE_ENABLED, "pre-pagination:server-pagination-apply-idle-delay", applyIdleStartedAt, {
             layoutVersion,
           })
-          if (cancelled) return
-          if (activeController.signal.aborted) return
-          if (layoutVersion !== layoutVersionRef.current) return
+          const serverPaginationIdentity = createServerPaginationSnapshotIdentity({
+            layoutVersion,
+            documentId: previewDoc.document.id,
+          })
+          const serverPaginationFreshness = resolveServerPaginationSnapshotFreshness({
+            identity: serverPaginationIdentity,
+            currentLayoutVersion: layoutVersionRef.current,
+            cancelled,
+            aborted: activeController.signal.aborted,
+          })
+          if (serverPaginationFreshness.freshness !== "current") return
           setLayoutErrorIfChanged(false)
           setServerLayoutWarningsIfChanged(collectPaginatedLayoutWarnings(paginated))
           const optimisticLayout = resolveSamePreviewOptimisticLayout(
@@ -1099,7 +1111,17 @@ export function useEditorPaginationLifecycleController({
             error.message === "Failed to fetch" &&
             document.visibilityState === "hidden"
           ) return
-          if (layoutVersion !== layoutVersionRef.current) return
+          const serverPaginationIdentity = createServerPaginationSnapshotIdentity({
+            layoutVersion,
+            documentId: previewDoc.document.id,
+          })
+          const serverPaginationFreshness = resolveServerPaginationSnapshotFreshness({
+            identity: serverPaginationIdentity,
+            currentLayoutVersion: layoutVersionRef.current,
+            cancelled,
+            aborted: activeController.signal.aborted,
+          })
+          if (serverPaginationFreshness.freshness !== "current") return
           console.error("server pagination failed:", error)
           setServerCheckedPreviewDocIfChanged(null)
           setServerLayoutWarningsIfChanged([])

@@ -1,4 +1,4 @@
-import { createDefaultDocument, migrateDocumentToV2 } from "@/document"
+import { createDefaultDocument } from "@/document"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import { describe, expect, it } from "vitest"
 import { createInitialEditorState } from "../../editorReducer"
@@ -9,6 +9,7 @@ import {
   createParagraphMergeOperationResult,
   createParagraphSplitOperationResult,
 } from "../editorParagraphOperationPlans"
+import { createEditorDocumentGraphRuntime } from "../editorOperationRuntime"
 
 function getFirstBodyChildId(doc: DocumentNode): string {
   const section = doc.document.sections[0]
@@ -60,10 +61,7 @@ function withDocumentV2GraphRuntime<T extends ReturnType<typeof createEditorOper
   return {
     ...operation,
     runtime: {
-      documentGraph: {
-        sourceModel: "document-v2" as const,
-        document: migrateDocumentToV2(state.doc),
-      },
+      documentGraph: createEditorDocumentGraphRuntime(state.doc),
     },
   }
 }
@@ -120,6 +118,53 @@ describe("editor paragraph operation plans", () => {
       graphDecisionSource: "document-v2",
       graphDecision: "allow",
       graphDecisionAllowedSurfaces: ["inline"],
+      targetNodeIds: [nodeId],
+    }))
+  })
+
+  it("uses paragraph split command instead of the compatibility action snapshot", () => {
+    const { state, nodeId } = createTextState()
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "SPLIT_PARAGRAPH",
+        nodeId,
+        splitIndex: "Hello ".length,
+      }),
+      action: {
+        type: "SPLIT_PARAGRAPH" as const,
+        nodeId: "missing-node",
+        splitIndex: 0,
+      },
+    }
+
+    const result = createParagraphSplitOperationResult(state, operation)
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "success",
+      validationPolicy: "full",
+    }))
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      targetNodeIds: [nodeId],
+    }))
+  })
+
+  it("uses paragraph merge command instead of the compatibility action snapshot", () => {
+    const { state, nodeId } = createTextState()
+    const operation = {
+      ...createEditorOperationFromAction({ type: "MERGE_PARAGRAPH", nodeId }),
+      action: {
+        type: "MERGE_PARAGRAPH" as const,
+        nodeId: "missing-node",
+      },
+    }
+
+    const result = createParagraphMergeOperationResult(state, operation)
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "noop",
+      noopReason: "paragraph-merge-noop",
+    }))
+    expect(result.diagnostics).toEqual(expect.objectContaining({
       targetNodeIds: [nodeId],
     }))
   })

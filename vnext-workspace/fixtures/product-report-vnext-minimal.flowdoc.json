@@ -1,0 +1,154 @@
+{
+  "packageVersion": 2,
+  "kind": "document",
+  "id": "product-report-vnext-minimal",
+  "meta": {
+    "title": "Product Report vNext Minimal",
+    "createdAt": "2026-06-20T00:00:00.000Z",
+    "updatedAt": "2026-06-20T00:00:00.000Z"
+  },
+  "fields": {
+    "version": 1,
+    "fields": {
+      "customer.name": {
+        "key": "customer.name",
+        "label": "Customer Name",
+        "type": "text",
+        "fallback": "Customer"
+      },
+      "report.total": {
+        "key": "report.total",
+        "label": "Report Total",
+        "type": "number"
+      }
+    }
+  },
+  "data": {
+    "version": 1,
+    "values": {
+      "customer.name": "Example Customer",
+      "report.total": 42
+    }
+  },
+  "document": {
+    "version": 3,
+    "document": {
+      "id": "product-report-vnext-minimal",
+      "meta": {
+        "title": "Product Report vNext Minimal"
+      },
+      "sections": [
+        {
+          "id": "section-cover",
+          "type": "section",
+          "page": {
+            "size": "A4",
+            "orientation": "portrait",
+            "margin": {
+              "top": { "value": 72, "unit": "pt" },
+              "right": { "value": 72, "unit": "pt" },
+              "bottom": { "value": 72, "unit": "pt" },
+              "left": { "value": 72, "unit": "pt" }
+            }
+          },
+          "zoneIds": ["zone-cover-body"],
+          "nodes": {
+            "zone-cover-body": {
+              "id": "zone-cover-body",
+              "type": "zone",
+              "role": "body",
+              "childIds": ["title", "summary-columns", "detail-table"]
+            },
+            "title": {
+              "id": "title",
+              "type": "text-block",
+              "role": { "role": "heading", "level": 1 },
+              "props": {},
+              "children": [
+                { "id": "title-text", "type": "text", "text": "Product Report for " },
+                { "id": "title-customer", "type": "field-ref", "key": "customer.name", "fallback": "Customer" }
+              ]
+            },
+            "summary-columns": {
+              "id": "summary-columns",
+              "type": "columns",
+              "props": { "gap": 12 },
+              "columnIds": ["summary-left", "summary-right"]
+            },
+            "summary-left": {
+              "id": "summary-left",
+              "type": "column",
+              "props": { "widthShare": 50 },
+              "childIds": ["summary-left-text"]
+            },
+            "summary-right": {
+              "id": "summary-right",
+              "type": "column",
+              "props": { "widthShare": 50 },
+              "childIds": ["summary-right-text"]
+            },
+            "summary-left-text": {
+              "id": "summary-left-text",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [{ "id": "summary-left-run", "type": "text", "text": "Prepared summary" }]
+            },
+            "summary-right-text": {
+              "id": "summary-right-text",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [
+                { "id": "summary-right-label", "type": "text", "text": "Total: " },
+                { "id": "summary-right-total", "type": "field-ref", "key": "report.total", "fallback": "0" }
+              ]
+            },
+            "detail-table": {
+              "id": "detail-table",
+              "type": "table",
+              "props": { "headerRowCount": 1, "repeatHeaderRows": true },
+              "columns": [
+                { "width": { "value": 120, "unit": "pt" } },
+                { "width": { "value": 120, "unit": "pt" } }
+              ],
+              "rowIds": ["detail-header-row"]
+            },
+            "detail-header-row": {
+              "id": "detail-header-row",
+              "type": "table-row",
+              "props": {},
+              "cellIds": ["detail-cell-a", "detail-cell-b"]
+            },
+            "detail-cell-a": {
+              "id": "detail-cell-a",
+              "type": "table-cell",
+              "props": {},
+              "childIds": ["detail-cell-a-text"]
+            },
+            "detail-cell-b": {
+              "id": "detail-cell-b",
+              "type": "table-cell",
+              "props": {},
+              "childIds": ["detail-cell-b-text"]
+            },
+            "detail-cell-a-text": {
+              "id": "detail-cell-a-text",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "detail-cell-a-run", "type": "text", "text": "Metric" }]
+            },
+            "detail-cell-b-text": {
+              "id": "detail-cell-b-text",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "detail-cell-b-run", "type": "text", "text": "Value" }]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

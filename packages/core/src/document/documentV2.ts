@@ -496,6 +496,12 @@ function assertAllowedChild(parent: LayoutNodeV2, child: LayoutNodeV2, path: str
 }
 
 function assertFlowRowWidthShare(section: DocumentSectionV2, row: FlowRowNode, path: string): void {
+  row.childIds.forEach((childId, childIndex) => {
+    const child = section.nodes[childId]
+    if (child?.type === "flow-stack" && typeof child.props.widthShare !== "number") {
+      fail(`${path}.childIds[${childIndex}]`, "flow-stack inside flow-row must have widthShare")
+    }
+  })
   const total = Number(
     row.childIds
       .reduce((sum, childId) => {

@@ -1,4 +1,4 @@
-import { createDefaultDocument, migrateDocumentToV2 } from "@/document"
+import { createDefaultDocument } from "@/document"
 import type { DocumentNode } from "@/schema"
 import { describe, expect, it } from "vitest"
 import { createInitialEditorState } from "../../editorReducer"
@@ -8,6 +8,7 @@ import {
   createDragPlacementActionResult,
   createDragPlacementOperationResult,
 } from "../editorDragOperationPlans"
+import { createEditorDocumentGraphRuntime } from "../editorOperationRuntime"
 
 function getBodyChildIds(doc: DocumentNode): string[] {
   const section = doc.document.sections[0]
@@ -48,10 +49,7 @@ function withDocumentV2GraphRuntime<T extends ReturnType<typeof createEditorOper
   return {
     ...operation,
     runtime: {
-      documentGraph: {
-        sourceModel: "document-v2" as const,
-        document: migrateDocumentToV2(state.doc),
-      },
+      documentGraph: createEditorDocumentGraphRuntime(state.doc),
     },
   }
 }
@@ -80,6 +78,32 @@ describe("editor drag operation plans", () => {
     expect(result.diagnostics).toEqual(expect.objectContaining({
       operationKind: "drag.placement",
       reducerPath: "DRAG_COMMIT",
+      placementKind: "insert-after",
+    }))
+    if (result.status !== "success") return
+    expect(getBodyChildIds(result.nextDoc)).toHaveLength(getBodyChildIds(state.doc).length + 1)
+  })
+
+  it("uses drag placement command instead of the compatibility action snapshot", () => {
+    const state = createActiveDragState()
+    const operation = {
+      ...createEditorOperationFromAction(createDragCommitAction(state)),
+      action: {
+        type: "DRAG_COMMIT" as const,
+        sectionId: "missing-section",
+        op: { kind: "insert-into-container" as const, containerId: "missing-container", containerType: "body" as const, index: 0 },
+      },
+    }
+
+    const result = createDragPlacementOperationResult(state, operation)
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "success",
+      validationPolicy: "full",
+      historyPolicy: { kind: "push" },
+    }))
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      sectionId: state.doc.document.sections[0].id,
       placementKind: "insert-after",
     }))
     if (result.status !== "success") return

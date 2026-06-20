@@ -5,18 +5,21 @@ import {
   createOperationDocumentGraphDiagnostics,
 } from "./editorDocumentGraphDiagnostics"
 import { createEditorGraphPlanningDecision } from "./editorGraphPlanningDecision"
-import type { EditorOperationEnvelope } from "./editorOperationTypes"
+import type { EditorOperationCommand, EditorOperationEnvelope } from "./editorOperationTypes"
 
 type DeleteNodeAction = Extract<EditorAction, { type: "DELETE_NODE" }>
 type DuplicateNodeAction = Extract<EditorAction, { type: "DUPLICATE_NODE" }>
 type ReorderBodyChildAction = Extract<EditorAction, { type: "REORDER_BODY_CHILD" }>
+type NodeDeleteCommand = Extract<EditorOperationCommand, { kind: "node.delete" }>
+type NodeDuplicateCommand = Extract<EditorOperationCommand, { kind: "node.duplicate" }>
+type NodeReorderCommand = Extract<EditorOperationCommand, { kind: "node.reorder" }>
 
 function createNodeDeleteCommitResult(
   state: EditorState,
-  action: DeleteNodeAction,
+  input: NodeDeleteCommand,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const targetNodeIds = operation?.scope.nodeIds ?? [action.nodeId]
+  const targetNodeIds = operation?.scope.nodeIds ?? [input.nodeId]
   const graphDiagnostics = createOperationDocumentGraphDiagnostics(state, operation, targetNodeIds)
   const graphDecision = createEditorGraphPlanningDecision({
     graphDiagnostics,
@@ -53,7 +56,7 @@ function createNodeDeleteCommitResult(
       },
     }
   }
-  const nextDoc = deleteNode(state.doc, action.nodeId)
+  const nextDoc = deleteNode(state.doc, input.nodeId)
   if (nextDoc === state.doc) {
     return {
       status: "noop",
@@ -92,14 +95,19 @@ export function createNodeDeleteActionResult(
   state: EditorState,
   action: DeleteNodeAction,
 ): EditorOperationCommitResult {
-  return createNodeDeleteCommitResult(state, action)
+  return createNodeDeleteCommitResult(state, { kind: "node.delete", nodeId: action.nodeId })
 }
 
 export function createNodeDeleteOperationResult(
   state: EditorState,
   operation: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  if (operation.kind !== "node.delete" || operation.action.type !== "DELETE_NODE") {
+  const command = operation.command?.kind === "node.delete"
+    ? operation.command
+    : operation.payload?.kind === "node.delete"
+      ? operation.payload
+      : undefined
+  if (operation.kind !== "node.delete" || !command) {
     return {
       status: "failure",
       failure: { reason: "invalid-node-delete-operation" },
@@ -111,15 +119,15 @@ export function createNodeDeleteOperationResult(
       },
     }
   }
-  return createNodeDeleteCommitResult(state, operation.action, operation)
+  return createNodeDeleteCommitResult(state, command, operation)
 }
 
 function createNodeDuplicateCommitResult(
   state: EditorState,
-  action: DuplicateNodeAction,
+  input: NodeDuplicateCommand,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const targetNodeIds = operation?.scope.nodeIds ?? [action.nodeId]
+  const targetNodeIds = operation?.scope.nodeIds ?? [input.nodeId]
   const graphDiagnostics = createOperationDocumentGraphDiagnostics(state, operation, targetNodeIds)
   const graphDecision = createEditorGraphPlanningDecision({
     graphDiagnostics,
@@ -156,7 +164,7 @@ function createNodeDuplicateCommitResult(
       },
     }
   }
-  const result = duplicateNode(state.doc, action.nodeId)
+  const result = duplicateNode(state.doc, input.nodeId)
   if (result.doc === state.doc || !result.duplicatedNodeId) {
     return {
       status: "noop",
@@ -199,14 +207,19 @@ export function createNodeDuplicateActionResult(
   state: EditorState,
   action: DuplicateNodeAction,
 ): EditorOperationCommitResult {
-  return createNodeDuplicateCommitResult(state, action)
+  return createNodeDuplicateCommitResult(state, { kind: "node.duplicate", nodeId: action.nodeId })
 }
 
 export function createNodeDuplicateOperationResult(
   state: EditorState,
   operation: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  if (operation.kind !== "node.duplicate" || operation.action.type !== "DUPLICATE_NODE") {
+  const command = operation.command?.kind === "node.duplicate"
+    ? operation.command
+    : operation.payload?.kind === "node.duplicate"
+      ? operation.payload
+      : undefined
+  if (operation.kind !== "node.duplicate" || !command) {
     return {
       status: "failure",
       failure: { reason: "invalid-node-duplicate-operation" },
@@ -218,15 +231,15 @@ export function createNodeDuplicateOperationResult(
       },
     }
   }
-  return createNodeDuplicateCommitResult(state, operation.action, operation)
+  return createNodeDuplicateCommitResult(state, command, operation)
 }
 
 function createNodeReorderCommitResult(
   state: EditorState,
-  action: ReorderBodyChildAction,
+  input: NodeReorderCommand,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const targetNodeIds = operation?.scope.nodeIds ?? [action.sourceNodeId, action.targetNodeId]
+  const targetNodeIds = operation?.scope.nodeIds ?? [input.sourceNodeId, input.targetNodeId]
   const graphDiagnostics = createOperationDocumentGraphDiagnostics(state, operation, targetNodeIds)
   const graphDecision = createEditorGraphPlanningDecision({
     graphDiagnostics,
@@ -265,10 +278,10 @@ function createNodeReorderCommitResult(
   }
   const nextDoc = reorderBodyChild(
     state.doc,
-    action.sectionId,
-    action.sourceNodeId,
-    action.targetNodeId,
-    action.position,
+    input.sectionId,
+    input.sourceNodeId,
+    input.targetNodeId,
+    input.position,
   )
   if (nextDoc === state.doc) {
     return {
@@ -292,8 +305,8 @@ function createNodeReorderCommitResult(
     validationScope: { kind: "node-subtree", nodeIds: targetNodeIds, fallback: "full-document" },
     historyPolicy: { kind: "push" },
     selectionPatch: {
-      selectedNodeId: action.sourceNodeId,
-      selectionAnchorNodeId: action.sourceNodeId,
+      selectedNodeId: input.sourceNodeId,
+      selectionAnchorNodeId: input.sourceNodeId,
     },
     diagnostics: {
       operationKind: "node.reorder",
@@ -311,14 +324,25 @@ export function createNodeReorderActionResult(
   state: EditorState,
   action: ReorderBodyChildAction,
 ): EditorOperationCommitResult {
-  return createNodeReorderCommitResult(state, action)
+  return createNodeReorderCommitResult(state, {
+    kind: "node.reorder",
+    sectionId: action.sectionId,
+    sourceNodeId: action.sourceNodeId,
+    targetNodeId: action.targetNodeId,
+    position: action.position,
+  })
 }
 
 export function createNodeReorderOperationResult(
   state: EditorState,
   operation: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  if (operation.kind !== "node.reorder" || operation.action.type !== "REORDER_BODY_CHILD") {
+  const command = operation.command?.kind === "node.reorder"
+    ? operation.command
+    : operation.payload?.kind === "node.reorder"
+      ? operation.payload
+      : undefined
+  if (operation.kind !== "node.reorder" || !command) {
     return {
       status: "failure",
       failure: { reason: "invalid-node-reorder-operation" },
@@ -330,5 +354,5 @@ export function createNodeReorderOperationResult(
       },
     }
   }
-  return createNodeReorderCommitResult(state, operation.action, operation)
+  return createNodeReorderCommitResult(state, command, operation)
 }

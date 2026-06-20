@@ -1,4 +1,4 @@
-import { createDefaultDocument, createDefaultFlowTable, migrateDocumentToV2 } from "@/document"
+import { createDefaultDocument, createDefaultFlowTable } from "@/document"
 import type { DocumentNode, FlowTableNode, LayoutNode } from "@/schema"
 import { describe, expect, it } from "vitest"
 import { createInitialEditorState } from "../../editorReducer"
@@ -8,6 +8,7 @@ import {
   createTableStructureActionResult,
   createTableStructureOperationResult,
 } from "../editorTableOperationPlans"
+import { createEditorDocumentGraphRuntime } from "../editorOperationRuntime"
 
 function createStateWithFlowTable(rowCount = 2, columnCount = 2): { state: EditorState; tableId: string; cellId: string } {
   const doc = createDefaultDocument()
@@ -59,10 +60,7 @@ function withDocumentV2GraphRuntime<T extends ReturnType<typeof createEditorOper
   return {
     ...operation,
     runtime: {
-      documentGraph: {
-        sourceModel: "document-v2" as const,
-        document: migrateDocumentToV2(state.doc),
-      },
+      documentGraph: createEditorDocumentGraphRuntime(state.doc),
     },
   }
 }
@@ -116,6 +114,21 @@ describe("editor table operation plans", () => {
     const operation = createEditorOperationFromAction(action)
 
     expect(createTableStructureOperationResult(state, operation)).toEqual(createTableStructureActionResult(state, action))
+  })
+
+  it("uses table structure command instead of compatibility snapshots", () => {
+    const { state, tableId } = createStateWithFlowTable()
+    const operation = {
+      ...createEditorOperationFromAction({ type: "TABLE_ADD_ROW", tableId, afterIndex: 0 }),
+      action: { type: "TABLE_ADD_ROW" as const, tableId: "missing-table", afterIndex: 0 },
+      payload: { kind: "table.structure.patch" as const, mutation: "add-row" as const, tableId: "missing-table", afterIndex: 0 },
+    }
+
+    const result = createTableStructureOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    expect(getFlowTable({ ...state, doc: result.nextDoc }, tableId).rowIds).toHaveLength(3)
   })
 
   it("uses DocumentNode v2 graph runtime to allow table root structure planning", () => {
@@ -228,6 +241,33 @@ describe("editor table operation plans", () => {
     }))
   })
 
+  it("uses table cell span command instead of compatibility snapshots", () => {
+    const { state, cellId } = createStateWithFlowTable()
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "UPDATE_FLOW_TABLE_CELL_SPAN",
+        cellId,
+        changes: { colspan: 2 },
+      }),
+      action: {
+        type: "UPDATE_FLOW_TABLE_CELL_SPAN" as const,
+        cellId,
+        changes: { colspan: 1 },
+      },
+      payload: { kind: "table.structure.patch" as const, mutation: "cell-span" as const, cellId, changes: { colspan: 1 } },
+    }
+
+    const result = createTableStructureOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    const table = Object.values(result.nextDoc.document.sections[0].nodes).find((node) => node.type === "flow-table") as FlowTableNode | undefined
+    const cell = table?.nodes[cellId]
+    expect(cell?.type).toBe("flow-table-cell")
+    if (cell?.type !== "flow-table-cell") return
+    expect(cell.props.colspan).toBe(2)
+  })
+
   it("uses DocumentNode v2 graph runtime to scope table cell span edits to the table", () => {
     const { state, tableId, cellId } = createStateWithFlowTable()
     const operation = withDocumentV2GraphRuntime(
@@ -275,6 +315,41 @@ describe("editor table operation plans", () => {
       graphDecision: "deny",
       graphDecisionReason: "missing-table-context",
       graphDecisionDeniedNodeIds: [paragraphId],
+    }))
+  })
+
+  it("uses delete-empty table cell paragraph command instead of compatibility snapshots", () => {
+    const { state, tableId, cellId } = createStateWithFlowTable()
+    const table = getFlowTable(state, tableId)
+    const cell = table.nodes[cellId]
+    if (cell?.type !== "flow-table-cell") {
+      throw new Error("expected flow table cell")
+    }
+    const paragraphId = cell.childIds[0]
+    const operation = {
+      ...createEditorOperationFromAction({ type: "DELETE_EMPTY_TABLE_CELL_PARAGRAPH", nodeId: paragraphId, text: "" }),
+      action: {
+        type: "DELETE_EMPTY_TABLE_CELL_PARAGRAPH" as const,
+        nodeId: "missing-paragraph",
+        text: "wrong",
+      },
+      payload: {
+        kind: "table.structure.patch" as const,
+        mutation: "delete-empty-cell-paragraph" as const,
+        nodeId: "missing-paragraph",
+        text: "wrong",
+      },
+    }
+
+    const result = createTableStructureOperationResult(state, operation)
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "noop",
+      noopReason: "delete-empty-table-cell-paragraph-noop",
+    }))
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      nodeId: paragraphId,
+      targetNodeIds: [paragraphId],
     }))
   })
 

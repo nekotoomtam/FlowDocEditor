@@ -10,6 +10,7 @@ interface FixtureVariant {
   id: string
   filename: string
   workflow: string
+  nodeCount: number
   targets: FixtureTargets
 }
 
@@ -23,19 +24,41 @@ interface FixtureTargets {
   flowRow?: Record<string, string | undefined>
   table?: {
     primaryTable?: string
+    headerRow?: string
     primaryCell?: string
     primaryRow?: string
     bodyCell?: string
     spanCell?: string
+    longTextCell?: string
+    resizeTarget?: string
   }
+  field?: Record<string, string | undefined>
+  history?: Record<string, string | undefined>
+  export?: Record<string, string | undefined>
 }
 
-function flattenTargets(targets: FixtureTargets): string[] {
-  return Object.values(targets).flatMap((value) => {
+function flattenTargetGroup(value: Record<string, string | undefined> | undefined): string[] {
+  if (value == null) return []
+  return Object.values(value).filter((item): item is string => typeof item === "string")
+}
+
+function flattenNodeTargets(targets: FixtureTargets): string[] {
+  return [
+    targets.typing,
+    targets.node,
+    targets.flowRow,
+    targets.table,
+    targets.history,
+    targets.export,
+  ].flatMap((value) => {
     if (typeof value === "string") return [value]
     if (value == null) return []
     return Object.values(value).filter((item): item is string => typeof item === "string")
   })
+}
+
+function flattenFieldTargets(targets: FixtureTargets): string[] {
+  return flattenTargetGroup(targets.field)
 }
 
 function readManifest(): FixtureManifest {
@@ -55,6 +78,7 @@ describe("DocumentNode v2 stress fixtures", () => {
       "stress-node-mutations-v2",
       "stress-flow-row-v2",
       "stress-table-v2",
+      "stress-long-v2",
     ]))
   })
 
@@ -77,11 +101,17 @@ describe("DocumentNode v2 stress fixtures", () => {
     const targets = pack.mockData?.targets as FixtureTargets
     expect(targets.typing?.primary).toBeTruthy()
     expect(targets.typing?.boundary).toBeTruthy()
+    expect(targets.typing?.pageBoundary).toBeTruthy()
+    expect(targets.typing?.deepDocument).toBeTruthy()
     expect(targets.node?.delete).toBeTruthy()
     expect(targets.node?.duplicate).toBeTruthy()
+    expect(targets.node?.split).toBeTruthy()
+    expect(targets.node?.merge).toBeTruthy()
     expect(targets.flowRow?.resizeTarget).toBeTruthy()
     expect(targets.flowRow?.addColumnTarget).toBeTruthy()
-    expect(flattenTargets(targets).every((nodeId) => index.nodeById.has(nodeId))).toBe(true)
+    expect(flattenNodeTargets(targets).every((nodeId) => index.nodeById.has(nodeId))).toBe(true)
+    const fieldKeys = new Set((pack.fields?.fields ?? []).map((field: { key: string }) => field.key))
+    expect(flattenFieldTargets(targets).every((fieldKey) => fieldKeys.has(fieldKey))).toBe(true)
     expect(targets.table?.primaryCell).toBeTruthy()
     expect(index.tableByDescendantId.get(targets.table?.primaryCell ?? "")).toBe(targets.table?.primaryTable)
   })
@@ -95,5 +125,50 @@ describe("DocumentNode v2 stress fixtures", () => {
     expect(result.doc.version).toBe(CURRENT_DOCUMENT_VERSION)
     expect(result.package?.packageVersion).toBe(CURRENT_PACKAGE_VERSION)
     expect(result.source).toBe("package")
+  })
+
+  it("publishes a long v2 fixture with legacy-scale document pressure", () => {
+    const variant = manifest.variants.find((item) => item.id === "stress-long-v2")
+    expect(variant).toBeTruthy()
+    if (!variant) return
+
+    const raw = readFixture(variant.filename)
+    const pack = JSON.parse(raw)
+    const section = pack.document.document.sections[0]
+    const body = section.nodes[section.roots.body]
+
+    expect(variant.nodeCount).toBeGreaterThanOrEqual(1400)
+    expect(Object.keys(section.nodes).length).toBeGreaterThanOrEqual(1400)
+    expect(body.childIds.length).toBeGreaterThanOrEqual(1200)
+    expect(pack.mockData?.workflow).toBe("long")
+    expect(pack.mockData?.targets?.typing?.pageBoundary).toBeTruthy()
+    expect(pack.mockData?.targets?.typing?.deepDocument).toBeTruthy()
+    expect(pack.mockData?.targets?.node?.split).toBeTruthy()
+    expect(pack.mockData?.targets?.node?.merge).toBeTruthy()
+  })
+
+  it("publishes a product report v2 anchor with fields and workflow aliases", () => {
+    const variant = manifest.variants.find((item) => item.id === "product-report-v2")
+    expect(variant).toBeTruthy()
+    if (!variant) return
+
+    const raw = readFixture(variant.filename)
+    const pack = JSON.parse(raw)
+    const sectionCount = pack.document.document.sections.length
+    const targets = pack.mockData?.targets as FixtureTargets
+    const fieldKeys = new Set(pack.fields.fields.map((field: { key: string }) => field.key))
+
+    expect(sectionCount).toBeGreaterThanOrEqual(3)
+    expect(pack.mockData?.workflow).toBe("product-report")
+    expect(pack.data?.values?.[targets.field?.reportTitle ?? ""]).toBeTruthy()
+    expect(pack.data?.values?.[targets.field?.totalAmount ?? ""]).toEqual(expect.any(Number))
+    expect(targets.node?.addAfter).toBeTruthy()
+    expect(targets.flowRow?.summaryRow).toBe(targets.flowRow?.resizeTarget)
+    expect(targets.table?.headerRow).toBeTruthy()
+    expect(targets.table?.longTextCell).toBeTruthy()
+    expect(targets.table?.resizeTarget).toBe(targets.table?.primaryTable)
+    expect(targets.history?.primaryEdit).toBeTruthy()
+    expect(targets.export?.readinessTarget).toBeTruthy()
+    expect(flattenFieldTargets(targets).every((fieldKey) => fieldKeys.has(fieldKey))).toBe(true)
   })
 })

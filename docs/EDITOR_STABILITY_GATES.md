@@ -36,14 +36,17 @@ public/mock/stress-typing-v2.flowdoc.json
 public/mock/stress-node-mutations-v2.flowdoc.json
 public/mock/stress-flow-row-v2.flowdoc.json
 public/mock/stress-table-v2.flowdoc.json
+public/mock/stress-long-v2.flowdoc.json
 ```
 
 These fixtures have semantic target aliases in `mockData.targets` and validate
 through the current runtime adapter. The smoothness and stress lifecycle smoke
-scripts can consume those aliases for targeted v2 fixture checks. The v2 set is
-the product-direction fixture set for new Document Model v2 work; the larger v1
-stress fixture remains the broader legacy regression baseline until v2 browser
-smoke evidence reaches equivalent breadth.
+scripts can consume those aliases for targeted v2 fixture checks. The focused
+v2 fixtures cover workflow-specific contracts, while `stress-long-v2` provides
+legacy-scale v2 body pressure for Phase 4 long-document probes. The v2 set is
+the product-direction fixture set for new Document Model v2 work; the v1 stress
+fixture remains the broader legacy regression baseline until v2 browser smoke
+evidence reaches equivalent breadth.
 
 Current known fixture shape from existing docs and local stress runs:
 
@@ -114,6 +117,12 @@ Document Model v2 target-alias check:
 $env:FLOWDOC_PROBE_FILE="public/mock/stress-typing-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="typing.primary"; $env:PROBE_BURST_LENGTH="1"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
 ```
 
+Document Model v2 long-document target-alias check:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="typing.deepDocument"; $env:PROBE_BURST_LENGTH="1"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
 Typing PASS requires:
 
 - `ok = true`.
@@ -154,10 +163,18 @@ Document Model v2 target-alias command:
 $env:FLOWDOC_STRESS_FILE="public/mock/stress-typing-v2.flowdoc.json"; $env:STRESS_FIRST_TARGET_ALIAS="typing.primary"; $env:STRESS_SECOND_TARGET_ALIAS="typing.boundary"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-stress-lifecycle
 ```
 
+Document Model v2 long-document target-alias command:
+
+```powershell
+$env:FLOWDOC_STRESS_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:STRESS_FIRST_TARGET_ALIAS="typing.primary"; $env:STRESS_SECOND_TARGET_ALIAS="typing.deepDocument"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-stress-lifecycle
+```
+
 PASS requires:
 
 - Stress fixture loads.
 - Click-to-switch edit stays below the script threshold.
+- Alias target reveal/scroll time is reported separately as `targetRevealMs`
+  and must not be mixed into click-to-switch runtime.
 - Exit edit stays below the script threshold.
 - Responsive finalize stays below the script threshold.
 - Preview-settle supersedes stay within the script threshold.
@@ -181,15 +198,30 @@ This gate covers:
 - drag-to-copy or add-node style insertions
 - body-child reorder and drag placement
 
+Document Model v2 long-document node mutation command:
+
+```powershell
+$env:FLOWDOC_MUTATION_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:MUTATION_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-node-mutation
+```
+
+Document Model v2 long-document split/merge command:
+
+```powershell
+$env:FLOWDOC_PROBE_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="node.split"; $env:PROBE_MODE="enter-backspace-after-dispatch"; $env:PROBE_ENTER_SPLIT_TEXT="Browser probes"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+```
+
 Current coverage:
 
 - Stress lifecycle covers delete and undo on the stress fixture.
+- Browser node-mutation smoke covers palette add and canvas drag-copy plus undo
+  on `stress-long-v2`.
+- Browser split/merge smoke covers `node.split` on `stress-long-v2`, verifies
+  split dispatch, merge dispatch, new-node removal, refocus to the previous
+  node, no full pagination before island, and zero console/page errors.
 - Outline stress covers reorder with active draft preservation on the stress
   fixture.
 - Reducer stress coverage duplicates `p_00114`, adds a flow-row stack column,
   and verifies undo restore on `flowdoc-stress-mock.flowdoc.json`.
-- Not found in the current code/docs: browser-level duplicate/add-node stress
-  smoke on `flowdoc-stress-mock.flowdoc.json`.
 
 PASS for future node-mutation work requires:
 
@@ -202,11 +234,11 @@ PASS for future node-mutation work requires:
 - No full-canvas loading overlay remains stuck.
 - Reducer/operation diagnostics record validation time, commit time, render
   invalidation scope, preview-settle time, and canvas commit time.
-- A stress fixture smoke covers add/duplicate/delete plus undo/redo. Reducer
-  smoke covers add/duplicate/undo; browser lifecycle smoke covers delete/undo.
-
-Until browser-level add/duplicate stress coverage exists, mark UI-level
-add/duplicate stability as UNKNOWN rather than PASS.
+- A stress fixture smoke covers add/duplicate/delete plus undo/redo. Browser
+  node-mutation smoke covers add and drag-copy/undo; browser lifecycle smoke
+  covers delete/undo; browser split/merge smoke covers structural
+  split/backspace merge; reducer smoke covers operation-level
+  duplicate/add/undo.
 
 ## Table Mutation Gates
 
@@ -218,6 +250,12 @@ This gate covers:
 - flow-row/stack column add
 - table span edits that affect structure
 
+Document Model v2 long-document table/flow-row structure command:
+
+```powershell
+$env:FLOWDOC_STRUCTURE_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:STRUCTURE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-structure-mutation
+```
+
 PASS requires:
 
 - Table root and affected descendants are explicit operation scope.
@@ -228,11 +266,15 @@ PASS requires:
 - A browser smoke confirms visible table structure changes on a long document
   or a named table-heavy fixture.
 
-Current gap:
+Current coverage:
 
 - Existing tests cover many core table operations and table pagination cases.
-- Not found in the current code/docs: a stress-fixture browser smoke for table
-  add/remove on `flowdoc-stress-mock.flowdoc.json`.
+- Browser structure-mutation smoke covers table add row, table add column,
+  table column resize, flow-stack add column, flow-row resize, preview settle,
+  undo restore, and zero console/page errors on `stress-long-v2`.
+- The remaining gap is legacy-v1 `flowdoc-stress-mock.flowdoc.json` parity for
+  table add/remove browser workflows. New v2 work should use `stress-long-v2`
+  first.
 
 ## Outline Reorder Gate
 

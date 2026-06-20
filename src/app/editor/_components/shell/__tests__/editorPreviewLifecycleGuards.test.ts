@@ -6,7 +6,9 @@ import {
   type EditorRenderInvalidationPlan,
 } from "../../operations/editorRenderInvalidation"
 import {
+  resolveActiveCanvasRenderInvalidationPlan,
   shouldApplyCanvasRenderInvalidationState,
+  shouldClearConsumedCanvasRenderInvalidationState,
   shouldApplyPartialPreviewPaginated,
   shouldClearPartialPreviewPaginated,
   type CanvasRenderInvalidationState,
@@ -20,8 +22,18 @@ function partial(
   generation: number,
   requestId: number,
   doc: PaginatedDocument,
+  identityGeneration = generation,
 ): EditorPartialPreviewPaginated {
-  return { generation, requestId, paginated: doc }
+  return {
+    generation,
+    requestId,
+    paginated: doc,
+    identity: {
+      source: "partial-browser-preview",
+      generation: identityGeneration,
+      requestId,
+    },
+  }
 }
 
 function plan(reason: string): EditorRenderInvalidationPlan {
@@ -65,6 +77,13 @@ describe("editor preview lifecycle guards", () => {
     expect(shouldApplyPartialPreviewPaginated(null, current)).toBe(true)
   })
 
+  it("applies partial preview state when identity metadata changes", () => {
+    const doc = paginated("partial")
+    const current = partial(2, 10, doc, 2)
+
+    expect(shouldApplyPartialPreviewPaginated(current, partial(2, 10, doc, 3))).toBe(true)
+  })
+
   it("suppresses null and repeated canvas invalidation state", () => {
     const doc = paginated("canvas")
     const currentPlan = plan("current")
@@ -74,5 +93,25 @@ describe("editor preview lifecycle guards", () => {
     expect(shouldApplyCanvasRenderInvalidationState(current, canvasState(currentPlan, doc))).toBe(false)
     expect(shouldApplyCanvasRenderInvalidationState(current, canvasState(plan("next"), doc))).toBe(true)
     expect(shouldApplyCanvasRenderInvalidationState(current, canvasState(currentPlan, paginated("next")))).toBe(true)
+  })
+
+  it("exposes a canvas render invalidation plan only for the displayed pagination snapshot", () => {
+    const displayed = paginated("displayed")
+    const stale = paginated("stale")
+    const currentPlan = plan("current")
+
+    expect(resolveActiveCanvasRenderInvalidationPlan(null, displayed)).toBeNull()
+    expect(resolveActiveCanvasRenderInvalidationPlan(canvasState(currentPlan, stale), displayed)).toBeNull()
+    expect(resolveActiveCanvasRenderInvalidationPlan(canvasState(currentPlan, displayed), displayed)).toBe(currentPlan)
+  })
+
+  it("clears consumed canvas render invalidation state only after its pagination snapshot is displayed", () => {
+    const displayed = paginated("displayed")
+    const stale = paginated("stale")
+    const currentPlan = plan("current")
+
+    expect(shouldClearConsumedCanvasRenderInvalidationState(null, displayed)).toBe(false)
+    expect(shouldClearConsumedCanvasRenderInvalidationState(canvasState(currentPlan, stale), displayed)).toBe(false)
+    expect(shouldClearConsumedCanvasRenderInvalidationState(canvasState(currentPlan, displayed), displayed)).toBe(true)
   })
 })

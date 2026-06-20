@@ -1,4 +1,4 @@
-import { createDefaultDocument, createDefaultFlowTable, migrateDocumentToV2 } from "@/document"
+import { buildDocumentGraphIndexV2, createDefaultDocument, createDefaultFlowTable, migrateDocumentToV2 } from "@/document"
 import type { DocumentNode, FlowTableNode, LayoutNode } from "@/schema"
 import { describe, expect, it } from "vitest"
 import { createDocumentGraphDiagnosticsFromV2 } from "../editorDocumentGraphDiagnostics"
@@ -85,6 +85,26 @@ describe("editor document graph diagnostics", () => {
           nodeId: "missing-node",
           parentKind: "missing",
           operationSurface: "unknown",
+        }),
+      ],
+    }))
+  })
+
+  it("uses a supplied DocumentNode v2 graph index", () => {
+    const { doc, table } = createDocumentWithFlowTable()
+    const migrated = migrateDocumentToV2(doc)
+    const index = buildDocumentGraphIndexV2(migrated)
+    index.nodeById.delete(table.id)
+
+    const diagnostics = createDocumentGraphDiagnosticsFromV2(migrated, [table.id], index)
+
+    expect(diagnostics).toEqual(expect.objectContaining({
+      graphSourceModel: "document-v2",
+      graphContextResolved: false,
+      graphTargetContexts: [
+        expect.objectContaining({
+          nodeId: table.id,
+          nodeType: undefined,
         }),
       ],
     }))

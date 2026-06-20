@@ -1,4 +1,4 @@
-import { createDefaultDocument, duplicateNode, migrateDocumentToV2 } from "@/document"
+import { createDefaultDocument, duplicateNode } from "@/document"
 import { describe, expect, it } from "vitest"
 import { createInitialEditorState } from "../../editorReducer"
 import type { EditorState } from "../../editorReducer"
@@ -11,6 +11,7 @@ import {
   createNodeReorderActionResult,
   createNodeReorderOperationResult,
 } from "../editorNodeOperationPlans"
+import { createEditorDocumentGraphRuntime } from "../editorOperationRuntime"
 
 function getFirstBodyChildId(state: EditorState): string {
   const section = state.doc.document.sections[0]
@@ -41,10 +42,7 @@ function withDocumentV2GraphRuntime<T extends ReturnType<typeof createEditorOper
   return {
     ...operation,
     runtime: {
-      documentGraph: {
-        sourceModel: "document-v2" as const,
-        document: migrateDocumentToV2(state.doc),
-      },
+      documentGraph: createEditorDocumentGraphRuntime(state.doc),
     },
   }
 }
@@ -139,6 +137,23 @@ describe("editor node operation plans", () => {
     }))
   })
 
+  it("uses node delete command instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state)
+    const operation = {
+      ...createEditorOperationFromAction({ type: "DELETE_NODE", nodeId }),
+      action: { type: "DELETE_NODE" as const, nodeId: "missing-node" },
+      payload: { kind: "node.delete" as const, nodeId: "missing-node" },
+    }
+
+    const result = createNodeDeleteOperationResult(state, operation)
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "success",
+      validationScope: { kind: "node-subtree", nodeIds: [nodeId], fallback: "full-document" },
+    }))
+  })
+
   it("uses DocumentNode v2 capabilities to reject non-deletable node targets before mutation", () => {
     const state = createInitialEditorState(createDefaultDocument())
     const nodeId = getBodyRootId(state)
@@ -227,6 +242,23 @@ describe("editor node operation plans", () => {
     expect(result.status === "success" ? result.selectionPatch?.selectedNodeId : null).not.toBe(nodeId)
   })
 
+  it("uses node duplicate command instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state)
+    const operation = {
+      ...createEditorOperationFromAction({ type: "DUPLICATE_NODE", nodeId }),
+      action: { type: "DUPLICATE_NODE" as const, nodeId: "missing-node" },
+      payload: { kind: "node.duplicate" as const, nodeId: "missing-node" },
+    }
+
+    const result = createNodeDuplicateOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    expect(result.selectionPatch?.selectedNodeId).toBeTruthy()
+    expect(result.selectionPatch?.selectedNodeId).not.toBe(nodeId)
+  })
+
   it("keeps legacy action and operation duplicate planning policy aligned", () => {
     const state = createInitialEditorState(createDefaultDocument())
     const action = { type: "DUPLICATE_NODE" as const, nodeId: "missing-node" }
@@ -295,6 +327,41 @@ describe("editor node operation plans", () => {
         }),
       ],
     }))
+  })
+
+  it("uses node reorder command instead of compatibility snapshots", () => {
+    const state = createStateWithTwoBodyChildren()
+    const [targetNodeId, sourceNodeId] = getBodyChildIds(state)
+    const sectionId = state.doc.document.sections[0].id
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "REORDER_BODY_CHILD",
+        sectionId,
+        sourceNodeId,
+        targetNodeId,
+        position: "before",
+      }),
+      action: {
+        type: "REORDER_BODY_CHILD" as const,
+        sectionId,
+        sourceNodeId: "missing-source",
+        targetNodeId: "missing-target",
+        position: "after" as const,
+      },
+      payload: {
+        kind: "node.reorder" as const,
+        sectionId,
+        sourceNodeId: "missing-source",
+        targetNodeId: "missing-target",
+        position: "after" as const,
+      },
+    }
+
+    const result = createNodeReorderOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    expect(getBodyChildIds({ ...state, doc: result.nextDoc })).toEqual([sourceNodeId, targetNodeId])
   })
 
   it("keeps legacy action and operation reorder planning behavior aligned", () => {

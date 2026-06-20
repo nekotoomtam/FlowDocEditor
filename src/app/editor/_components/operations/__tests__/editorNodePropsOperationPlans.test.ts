@@ -69,4 +69,28 @@ describe("editor node props operation plans", () => {
 
     expect(createNodePropsOperationResult(state, operation)).toEqual(createNodePropsActionResult(state, action))
   })
+
+  it("uses node props command instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state.doc)
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "UPDATE_PROPS",
+        nodeId,
+        changes: { fontSize: pt(18) },
+      }),
+      action: {
+        type: "UPDATE_PROPS" as const,
+        nodeId,
+        changes: { fontSize: pt(30) },
+      },
+      payload: { kind: "node.props.patch" as const, nodeId, changes: { fontSize: pt(30) } },
+    }
+
+    const result = createNodePropsOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    expect(getParagraph(result.nextDoc, nodeId).props.fontSize).toEqual(pt(18))
+  })
 })

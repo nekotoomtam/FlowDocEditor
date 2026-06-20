@@ -8,7 +8,7 @@ import {
 import type { DocumentNode } from "@/schema"
 import type { EditorAction, EditorState } from "../editorReducer"
 import type { EditorOperationCommitDiagnostics, EditorOperationCommitResult } from "./editorOperationCommit"
-import type { EditorOperationEnvelope } from "./editorOperationTypes"
+import type { EditorOperationCommand, EditorOperationEnvelope } from "./editorOperationTypes"
 
 type UpdateMarginAction = Extract<EditorAction, { type: "UPDATE_MARGIN" }>
 type UpdateReservedZonesAction = Extract<EditorAction, { type: "UPDATE_RESERVED_ZONES" }>
@@ -22,54 +22,97 @@ type DocumentSettingsAction =
   | EnsureHeaderFooterZoneVisibleAction
   | DisableHeaderFooterZoneIfEmptyAction
   | UpdateHeaderFooterHorizontalModeAction
+type DocumentSettingsCommand = Extract<EditorOperationCommand, { kind: "document.settings.patch" }>
 
-function shouldNoopWhenUnchanged(action: DocumentSettingsAction): boolean {
-  return action.type !== "UPDATE_MARGIN"
-}
-
-function applyDocumentSettingsAction(doc: DocumentNode, action: DocumentSettingsAction): DocumentNode {
+function createDocumentSettingsCommand(action: DocumentSettingsAction): DocumentSettingsCommand {
   switch (action.type) {
     case "UPDATE_MARGIN":
-      return updateSectionMargin(doc, action.sectionIndex, action.margin)
+      return { kind: "document.settings.patch", setting: "margin", sectionIndex: action.sectionIndex, margin: action.margin }
     case "UPDATE_RESERVED_ZONES":
-      return updateSectionReservedZones(doc, action.sectionIndex, action.reserved, action.priority)
+      return {
+        kind: "document.settings.patch",
+        setting: "reserved-zones",
+        sectionIndex: action.sectionIndex,
+        reserved: action.reserved,
+        ...(action.priority ? { priority: action.priority } : {}),
+      }
     case "ENSURE_HEADER_FOOTER_ZONE_VISIBLE":
-      return ensureSectionReservedZoneVisibleForAuthoring(doc, action.sectionIndex, action.zone)
+      return { kind: "document.settings.patch", setting: "ensure-zone-visible", sectionIndex: action.sectionIndex, zone: action.zone }
     case "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY":
-      return disableSectionReservedZoneIfEmpty(doc, action.sectionIndex, action.zone)
+      return { kind: "document.settings.patch", setting: "disable-zone-if-empty", sectionIndex: action.sectionIndex, zone: action.zone }
     case "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE":
-      return updateSectionHeaderFooterHorizontalMode(doc, action.sectionIndex, action.mode)
+      return {
+        kind: "document.settings.patch",
+        setting: "header-footer-horizontal-mode",
+        sectionIndex: action.sectionIndex,
+        mode: action.mode,
+      }
+  }
+}
+
+function reducerPathForDocumentSettingsCommand(input: DocumentSettingsCommand): DocumentSettingsAction["type"] {
+  switch (input.setting) {
+    case "margin":
+      return "UPDATE_MARGIN"
+    case "reserved-zones":
+      return "UPDATE_RESERVED_ZONES"
+    case "ensure-zone-visible":
+      return "ENSURE_HEADER_FOOTER_ZONE_VISIBLE"
+    case "disable-zone-if-empty":
+      return "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY"
+    case "header-footer-horizontal-mode":
+      return "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE"
+  }
+}
+
+function shouldNoopWhenUnchanged(input: DocumentSettingsCommand): boolean {
+  return input.setting !== "margin"
+}
+
+function applyDocumentSettingsCommand(doc: DocumentNode, input: DocumentSettingsCommand): DocumentNode {
+  switch (input.setting) {
+    case "margin":
+      return updateSectionMargin(doc, input.sectionIndex, input.margin)
+    case "reserved-zones":
+      return updateSectionReservedZones(doc, input.sectionIndex, input.reserved, input.priority)
+    case "ensure-zone-visible":
+      return ensureSectionReservedZoneVisibleForAuthoring(doc, input.sectionIndex, input.zone)
+    case "disable-zone-if-empty":
+      return disableSectionReservedZoneIfEmpty(doc, input.sectionIndex, input.zone)
+    case "header-footer-horizontal-mode":
+      return updateSectionHeaderFooterHorizontalMode(doc, input.sectionIndex, input.mode)
   }
 }
 
 function createDocumentSettingsDiagnostics(
   state: EditorState,
-  action: DocumentSettingsAction,
+  input: DocumentSettingsCommand,
 ): EditorOperationCommitDiagnostics {
-  const section = state.doc.document.sections[action.sectionIndex]
+  const reducerPath = reducerPathForDocumentSettingsCommand(input)
+  const section = state.doc.document.sections[input.sectionIndex]
   return {
     operationKind: "document.settings.patch",
-    reducerPath: action.type,
-    sectionIndex: action.sectionIndex,
+    reducerPath,
+    sectionIndex: input.sectionIndex,
     sectionId: section?.id,
     sectionExists: section != null,
     sectionCount: state.doc.document.sections.length,
-    ...(action.type === "ENSURE_HEADER_FOOTER_ZONE_VISIBLE" ||
-      action.type === "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY"
-      ? { zone: action.zone }
+    ...(input.setting === "ensure-zone-visible" ||
+      input.setting === "disable-zone-if-empty"
+      ? { zone: input.zone }
       : {}),
-    ...(action.type === "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE" ? { mode: action.mode } : {}),
+    ...(input.setting === "header-footer-horizontal-mode" ? { mode: input.mode } : {}),
   }
 }
 
 function createDocumentSettingsCommitResult(
   state: EditorState,
-  action: DocumentSettingsAction,
+  input: DocumentSettingsCommand,
 ): EditorOperationCommitResult {
-  const nextDoc = applyDocumentSettingsAction(state.doc, action)
-  const diagnostics = createDocumentSettingsDiagnostics(state, action)
+  const nextDoc = applyDocumentSettingsCommand(state.doc, input)
+  const diagnostics = createDocumentSettingsDiagnostics(state, input)
 
-  if (shouldNoopWhenUnchanged(action) && nextDoc === state.doc) {
+  if (shouldNoopWhenUnchanged(input) && nextDoc === state.doc) {
     return {
       status: "noop",
       noopReason: "document-settings-noop",
@@ -92,7 +135,7 @@ export function createDocumentSettingsActionResult(
   state: EditorState,
   action: DocumentSettingsAction,
 ): EditorOperationCommitResult {
-  return createDocumentSettingsCommitResult(state, action)
+  return createDocumentSettingsCommitResult(state, createDocumentSettingsCommand(action))
 }
 
 export function createDocumentSettingsOperationResult(
@@ -112,23 +155,23 @@ export function createDocumentSettingsOperationResult(
     }
   }
 
-  switch (operation.action.type) {
-    case "UPDATE_MARGIN":
-    case "UPDATE_RESERVED_ZONES":
-    case "ENSURE_HEADER_FOOTER_ZONE_VISIBLE":
-    case "DISABLE_HEADER_FOOTER_ZONE_IF_EMPTY":
-    case "UPDATE_HEADER_FOOTER_HORIZONTAL_MODE":
-      return createDocumentSettingsCommitResult(state, operation.action)
-    default:
-      return {
-        status: "failure",
-        failure: { reason: "invalid-document-settings-action" },
-        validationPolicy: "read-only",
-        historyPolicy: { kind: "none", reason: "invalid operation" },
-        diagnostics: {
-          operationKind: operation.kind,
-          reducerPath: "DOCUMENT_SETTINGS",
-        },
-      }
+  const command = operation.command?.kind === "document.settings.patch"
+    ? operation.command
+    : operation.payload?.kind === "document.settings.patch"
+      ? operation.payload
+      : undefined
+  if (command) {
+    return createDocumentSettingsCommitResult(state, command)
+  }
+
+  return {
+    status: "failure",
+    failure: { reason: "invalid-document-settings-action" },
+    validationPolicy: "read-only",
+    historyPolicy: { kind: "none", reason: "invalid operation" },
+    diagnostics: {
+      operationKind: operation.kind,
+      reducerPath: "DOCUMENT_SETTINGS",
+    },
   }
 }

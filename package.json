@@ -52,6 +52,8 @@
     "smoke:wysiwyg-stress-lifecycle": "node scripts/wysiwyg-stress-lifecycle-smoke.mjs",
     "smoke:wysiwyg-stress-lifecycle-repeat": "node scripts/wysiwyg-stress-lifecycle-smoke.mjs --repeat=3",
     "smoke:wysiwyg-stress-lifecycle-repeat5": "node scripts/wysiwyg-stress-lifecycle-smoke.mjs --repeat=5",
+    "smoke:wysiwyg-node-mutation": "node scripts/wysiwyg-node-mutation-smoke.mjs",
+    "smoke:wysiwyg-structure-mutation": "node scripts/wysiwyg-structure-mutation-smoke.mjs",
     "diagnose:wysiwyg-click": "node scripts/wysiwyg-click-diagnostic.mjs",
     "perf:baseline": "node scripts/flowdoc-performance-baseline.mjs",
     "perf:install-browser": "npx playwright install chromium"

@@ -33,6 +33,13 @@ function getParagraphText(doc: DocumentNode, nodeId: string): string {
     .join("")
 }
 
+function withParagraphText(paragraph: ParagraphNode, text: string): ParagraphNode {
+  return {
+    ...paragraph,
+    children: paragraph.children.map((child) => child.type === "text" ? { ...child, text } : child),
+  }
+}
+
 describe("editor text operation plans", () => {
   it("declares full validation for plain text commits", () => {
     const state = createInitialEditorState(createDefaultDocument())
@@ -71,6 +78,163 @@ describe("editor text operation plans", () => {
     expect(operationResult.diagnostics).toEqual(actionResult.diagnostics)
     if (operationResult.status !== "success" || actionResult.status !== "success") return
     expect(getParagraphText(operationResult.nextDoc, nodeId)).toBe(getParagraphText(actionResult.nextDoc, nodeId))
+  })
+
+  it("uses text draft command instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state.doc)
+    const operation = {
+      ...createEditorOperationFromAction({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text: "Command draft" }),
+      action: { type: "UPDATE_INLINE_TEXT_DRAFT" as const, nodeId, text: "Action draft" },
+      payload: { kind: "text.draft" as const, nodeId, text: "Payload draft" },
+    }
+
+    const result = createTextDraftOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    expect(getParagraphText(result.nextDoc, nodeId)).toBe("Command draft")
+  })
+
+  it("uses plain text commit command instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state.doc)
+    const operation = {
+      ...createEditorOperationFromAction({ type: "UPDATE_TEXT", nodeId, text: "Command commit" }),
+      action: { type: "UPDATE_TEXT" as const, nodeId, text: "Action commit" },
+      payload: { kind: "text.commit" as const, commitType: "update-text" as const, nodeId, text: "Payload commit" },
+    }
+
+    const result = createTextCommitOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    expect(getParagraphText(result.nextDoc, nodeId)).toBe("Command commit")
+  })
+
+  it("uses inline text commit command/runtime instead of compatibility snapshots", () => {
+    const beforeState = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(beforeState.doc)
+    const beforeText = getParagraphText(beforeState.doc, nodeId)
+    const draftResult = createTextDraftOperationResult(
+      beforeState,
+      createEditorOperationFromAction({ type: "UPDATE_INLINE_TEXT_DRAFT", nodeId, text: "Inline command text" }),
+    )
+    if (draftResult.status !== "success") {
+      throw new Error("expected inline draft setup to succeed")
+    }
+    const state = { ...beforeState, doc: draftResult.nextDoc }
+    const afterPaginated = { ...state.paginated, tocEntries: [...state.paginated.tocEntries] }
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "COMMIT_INLINE_TEXT_EDIT",
+        nodeId,
+        beforeDoc: beforeState.doc,
+        beforePaginated: beforeState.paginated,
+        beforeText,
+        afterPaginated,
+      }),
+      action: { type: "UPDATE_TEXT" as const, nodeId, text: "Action fallback text" },
+      payload: { kind: "text.commit" as const, commitType: "update-text" as const, nodeId, text: "Payload fallback text" },
+    }
+
+    const result = createTextCommitOperationResult(state, operation)
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "history-only",
+      historyPolicy: { kind: "push", entry: { doc: beforeState.doc, paginated: beforeState.paginated } },
+      paginatedPatch: { paginated: afterPaginated },
+    }))
+  })
+
+  it("uses wysiwyg text commit command/runtime instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state.doc)
+    const beforeText = getParagraphText(state.doc, nodeId)
+    const afterPaginated = { ...state.paginated, tocEntries: [...state.paginated.tocEntries] }
+    const wrongPaginated = { ...state.paginated, sections: [], tocEntries: [] }
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "COMMIT_WYSIWYG_TEXT_EDIT",
+        nodeId,
+        beforeText,
+        text: "WYSIWYG command text",
+        afterPaginated,
+      }),
+      action: {
+        type: "COMMIT_WYSIWYG_TEXT_EDIT" as const,
+        nodeId,
+        beforeText,
+        text: "WYSIWYG action text",
+        afterPaginated: wrongPaginated,
+      },
+      payload: { kind: "text.commit" as const, commitType: "update-text" as const, nodeId, text: "Payload fallback text" },
+    }
+
+    const result = createTextCommitOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    expect(getParagraphText(result.nextDoc, nodeId)).toBe("WYSIWYG command text")
+    expect(result.paginatedPatch).toEqual({ paginated: afterPaginated })
+  })
+
+  it("uses wysiwyg rich text commit command/runtime instead of compatibility snapshots", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state.doc)
+    const afterPaginated = { ...state.paginated, tocEntries: [...state.paginated.tocEntries] }
+    const commandParagraph = withParagraphText(getParagraph(state.doc, nodeId), "Rich command text")
+    const actionParagraph = withParagraphText(getParagraph(state.doc, nodeId), "Rich action text")
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "COMMIT_WYSIWYG_RICH_TEXT_EDIT",
+        nodeId,
+        paragraph: commandParagraph,
+        afterPaginated,
+      }),
+      action: {
+        type: "COMMIT_WYSIWYG_RICH_TEXT_EDIT" as const,
+        nodeId,
+        paragraph: actionParagraph,
+        afterPaginated: { ...state.paginated, sections: [], tocEntries: [] },
+      },
+      payload: { kind: "text.commit" as const, commitType: "update-text" as const, nodeId, text: "Payload fallback text" },
+    }
+
+    const result = createTextCommitOperationResult(state, operation)
+
+    expect(result.status).toBe("success")
+    if (result.status !== "success") return
+    expect(getParagraphText(result.nextDoc, nodeId)).toBe("Rich command text")
+    expect(result.paginatedPatch).toEqual({ paginated: afterPaginated })
+  })
+
+  it("fails lifecycle text commit operations when required runtime is missing", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state.doc)
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "COMMIT_WYSIWYG_TEXT_EDIT",
+        nodeId,
+        beforeText: getParagraphText(state.doc, nodeId),
+        text: "Missing runtime text",
+        afterPaginated: state.paginated,
+      }),
+      runtime: undefined,
+    }
+
+    const result = createTextCommitOperationResult(state, operation)
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "failure",
+      failure: { reason: "missing-text-commit-runtime" },
+      validationPolicy: "read-only",
+      historyPolicy: { kind: "none", reason: "missing text commit runtime" },
+    }))
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      reducerPath: "COMMIT_WYSIWYG_TEXT_EDIT",
+      missingRuntimeFields: ["textCommit.afterPaginated"],
+    }))
   })
 
   it("keeps WYSIWYG text commit action and operation policies aligned", () => {

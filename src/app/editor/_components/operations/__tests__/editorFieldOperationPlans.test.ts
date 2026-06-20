@@ -98,4 +98,35 @@ describe("editor field operation plans", () => {
     expect(fieldRef.label).toBe("Client")
     expect(fieldRef.fallback).toBe("N/A")
   })
+
+  it("uses field patch command instead of compatibility snapshots", () => {
+    const { state, nodeId, fieldRefId } = createStateWithFieldRef()
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "UPDATE_FIELD_REF",
+        fieldRefId,
+        changes: { label: "Client", fallback: "N/A" },
+      }),
+      action: {
+        type: "UPDATE_FIELD_REF" as const,
+        fieldRefId,
+        changes: { label: "Wrong", fallback: "Wrong" },
+      },
+      payload: {
+        kind: "field.patch" as const,
+        fieldRefId,
+        changes: { label: "Wrong", fallback: "Wrong" },
+      },
+    }
+
+    const result = createFieldPatchOperationResult(state, operation)
+    const fieldRef = result.status === "success"
+      ? getParagraph(result.nextDoc, nodeId).children.find((child) => child.id === fieldRefId)
+      : undefined
+
+    expect(fieldRef?.type).toBe("fieldRef")
+    if (fieldRef?.type !== "fieldRef") return
+    expect(fieldRef.label).toBe("Client")
+    expect(fieldRef.fallback).toBe("N/A")
+  })
 })

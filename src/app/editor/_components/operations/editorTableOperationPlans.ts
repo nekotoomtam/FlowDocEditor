@@ -15,7 +15,7 @@ import {
 } from "./editorDocumentGraphDiagnostics"
 import { createEditorGraphPlanningDecision } from "./editorGraphPlanningDecision"
 import type { EditorOperationCommitDiagnostics, EditorOperationCommitResult } from "./editorOperationCommit"
-import type { EditorOperationEnvelope } from "./editorOperationTypes"
+import type { EditorOperationEnvelope, EditorOperationPayload, EditorOperationStructuralRuntimeContext } from "./editorOperationTypes"
 import { createDeleteEmptyTableCellParagraphPlan } from "./editorReducerTableCellParagraphPlan"
 
 type TableAddRowAction = Extract<EditorAction, { type: "TABLE_ADD_ROW" }>
@@ -39,6 +39,13 @@ type TableStructureAction =
   | TableIdStructureAction
   | UpdateFlowTableCellSpanAction
   | DeleteEmptyTableCellParagraphAction
+type TableStructurePayload = Extract<EditorOperationPayload, { kind: "table.structure.patch" }>
+type TableIdStructurePayload = Extract<TableStructurePayload, { tableId: string }>
+type UpdateFlowTableCellSpanPayload = Extract<TableStructurePayload, { mutation: "cell-span" }>
+type DeleteEmptyTableCellParagraphPayload = Extract<TableStructurePayload, { mutation: "delete-empty-cell-paragraph" }> & {
+  history?: DeleteEmptyTableCellParagraphAction["history"]
+  paginated?: DeleteEmptyTableCellParagraphAction["paginated"]
+}
 type TableGraphPlanningResult = ReturnType<typeof createEditorGraphPlanningDecision>
 type TableGraphPlanningContext = {
   targetNodeIds: string[]
@@ -47,14 +54,35 @@ type TableGraphPlanningContext = {
   tableId?: string
 }
 
-function targetNodeIdsForTableStructureAction(action: TableStructureAction): string[] {
-  if ("tableId" in action) return [action.tableId]
-  if (action.type === "UPDATE_FLOW_TABLE_CELL_SPAN") return [action.cellId]
-  return [action.nodeId]
-}
-
 function firstTableIdFromGraphContexts(contexts: readonly EditorDocumentGraphTargetContext[]): string | undefined {
   return contexts.find((context) => context.tableId != null)?.tableId
+}
+
+function reducerPathForTablePayload(input: TableStructurePayload): TableStructureAction["type"] {
+  switch (input.mutation) {
+    case "add-row":
+      return "TABLE_ADD_ROW"
+    case "remove-row":
+      return "TABLE_REMOVE_ROW"
+    case "add-column":
+      return "TABLE_ADD_COL"
+    case "remove-column":
+      return "TABLE_REMOVE_COL"
+    case "fit-to-width":
+      return "TABLE_FIT_TO_WIDTH"
+    case "resize-column-pair":
+      return "RESIZE_TABLE_COLUMN_PAIR"
+    case "cell-span":
+      return "UPDATE_FLOW_TABLE_CELL_SPAN"
+    case "delete-empty-cell-paragraph":
+      return "DELETE_EMPTY_TABLE_CELL_PARAGRAPH"
+  }
+}
+
+function targetNodeIdsForTablePayload(input: TableStructurePayload): string[] {
+  if ("tableId" in input) return [input.tableId]
+  if (input.mutation === "cell-span") return [input.cellId]
+  return [input.nodeId]
 }
 
 function tableValidationScope(tableId: string | undefined): { kind: "table"; tableId: string; fallback: "full-document" } | undefined {
@@ -63,8 +91,9 @@ function tableValidationScope(tableId: string | undefined): { kind: "table"; tab
 
 function createTableStructurePlanningContext(
   state: EditorState,
-  action: TableStructureAction,
   operation: EditorOperationEnvelope | undefined,
+  reducerPath: TableStructureAction["type"],
+  targetNodeIds: string[],
   extra: Record<string, unknown> = {},
   options: {
     operationName: string
@@ -75,8 +104,8 @@ function createTableStructurePlanningContext(
     tableId?: string
   },
 ): TableGraphPlanningContext {
-  const targetNodeIds = operation?.scope.nodeIds ?? targetNodeIdsForTableStructureAction(action)
-  const graphDiagnostics = createOperationDocumentGraphDiagnostics(state, operation, targetNodeIds)
+  const scopedTargetNodeIds = operation?.scope.nodeIds ?? targetNodeIds
+  const graphDiagnostics = createOperationDocumentGraphDiagnostics(state, operation, scopedTargetNodeIds)
   const graphDecision = createEditorGraphPlanningDecision({
     graphDiagnostics,
     operationName: options.operationName,
@@ -87,14 +116,14 @@ function createTableStructurePlanningContext(
   })
   const tableId = options.tableId ?? firstTableIdFromGraphContexts(graphDiagnostics.graphTargetContexts)
   return {
-    targetNodeIds,
+    targetNodeIds: scopedTargetNodeIds,
     tableId,
     graphDecision,
     diagnostics: {
       operationKind: "table.structure.patch",
-      reducerPath: action.type,
+      reducerPath,
       ...extra,
-      targetNodeIds,
+      targetNodeIds: scopedTargetNodeIds,
       ...graphDiagnostics,
       ...graphDecision.diagnostics,
     },
@@ -140,46 +169,86 @@ function allowedTableGraphDecision(context: TableGraphPlanningContext): Extract<
   return context.graphDecision
 }
 
-function applyTableIdStructureAction(doc: DocumentNode, action: TableIdStructureAction): DocumentNode {
+function createTableIdStructurePayload(action: TableIdStructureAction): TableIdStructurePayload {
   switch (action.type) {
     case "TABLE_ADD_ROW":
-      return addFlowTableRow(doc, action.tableId, action.afterIndex)
+      return {
+        kind: "table.structure.patch",
+        mutation: "add-row",
+        tableId: action.tableId,
+        ...(action.afterIndex != null ? { afterIndex: action.afterIndex } : {}),
+      }
     case "TABLE_REMOVE_ROW":
-      return removeFlowTableRow(doc, action.tableId, action.rowIndex)
+      return { kind: "table.structure.patch", mutation: "remove-row", tableId: action.tableId, rowIndex: action.rowIndex }
     case "TABLE_ADD_COL":
-      return addFlowTableColumn(doc, action.tableId, action.afterIndex)
+      return {
+        kind: "table.structure.patch",
+        mutation: "add-column",
+        tableId: action.tableId,
+        ...(action.afterIndex != null ? { afterIndex: action.afterIndex } : {}),
+      }
     case "TABLE_REMOVE_COL":
-      return removeFlowTableColumn(doc, action.tableId, action.colIndex)
+      return { kind: "table.structure.patch", mutation: "remove-column", tableId: action.tableId, colIndex: action.colIndex }
     case "TABLE_FIT_TO_WIDTH":
-      return fitFlowTableToSectionWidth(doc, action.tableId)
+      return { kind: "table.structure.patch", mutation: "fit-to-width", tableId: action.tableId }
     case "RESIZE_TABLE_COLUMN_PAIR":
+      return {
+        kind: "table.structure.patch",
+        mutation: "resize-column-pair",
+        tableId: action.tableId,
+        leftColIndex: action.leftColIndex,
+        leftWidth: action.leftWidth,
+        rightWidth: action.rightWidth,
+        ...(action.paginated ? { paginated: action.paginated } : {}),
+      }
+  }
+}
+
+function createUpdateFlowTableCellSpanPayload(action: UpdateFlowTableCellSpanAction): UpdateFlowTableCellSpanPayload {
+  return { kind: "table.structure.patch", mutation: "cell-span", cellId: action.cellId, changes: action.changes }
+}
+
+function applyTableIdStructurePayload(doc: DocumentNode, input: TableIdStructurePayload): DocumentNode {
+  switch (input.mutation) {
+    case "add-row":
+      return addFlowTableRow(doc, input.tableId, input.afterIndex)
+    case "remove-row":
+      return removeFlowTableRow(doc, input.tableId, input.rowIndex)
+    case "add-column":
+      return addFlowTableColumn(doc, input.tableId, input.afterIndex)
+    case "remove-column":
+      return removeFlowTableColumn(doc, input.tableId, input.colIndex)
+    case "fit-to-width":
+      return fitFlowTableToSectionWidth(doc, input.tableId)
+    case "resize-column-pair":
       return resizeFlowTableColumnPair(
         doc,
-        action.tableId,
-        action.leftColIndex,
-        action.leftWidth,
-        action.rightWidth,
+        input.tableId,
+        input.leftColIndex,
+        input.leftWidth,
+        input.rightWidth,
       )
   }
 }
 
 function createTableIdStructureCommitResult(
   state: EditorState,
-  action: TableIdStructureAction,
+  input: TableIdStructurePayload,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const context = createTableStructurePlanningContext(state, action, operation, { tableId: action.tableId }, {
-    operationName: action.type === "RESIZE_TABLE_COLUMN_PAIR" ? "table-column-resize" : "table-structure",
+  const reducerPath = reducerPathForTablePayload(input)
+  const context = createTableStructurePlanningContext(state, operation, reducerPath, targetNodeIdsForTablePayload(input), { tableId: input.tableId }, {
+    operationName: input.mutation === "resize-column-pair" ? "table-column-resize" : "table-structure",
     allowedOperationSurfaces: ["table"],
     currentValidationPolicy: "scoped",
-    tableId: action.tableId,
+    tableId: input.tableId,
   })
   const preflightResult = tableGraphPreflightResult(context)
   if (preflightResult != null) return preflightResult
   const graphDecision = allowedTableGraphDecision(context)
 
-  const nextDoc = applyTableIdStructureAction(state.doc, action)
-  const noopReason = action.type === "RESIZE_TABLE_COLUMN_PAIR"
+  const nextDoc = applyTableIdStructurePayload(state.doc, input)
+  const noopReason = input.mutation === "resize-column-pair"
     ? "table-column-resize-noop"
     : "table-structure-noop"
 
@@ -197,10 +266,10 @@ function createTableIdStructureCommitResult(
     status: "success",
     nextDoc,
     validationPolicy: graphDecision.validationPolicy,
-    validationScope: { kind: "table", tableId: action.tableId, fallback: "full-document" },
+    validationScope: { kind: "table", tableId: input.tableId, fallback: "full-document" },
     historyPolicy: { kind: "push" },
-    paginatedPatch: action.type === "RESIZE_TABLE_COLUMN_PAIR" && action.paginated != null
-      ? { paginated: action.paginated }
+    paginatedPatch: input.mutation === "resize-column-pair" && input.paginated != null
+      ? { paginated: input.paginated }
       : undefined,
     diagnostics: {
       ...context.diagnostics,
@@ -211,10 +280,10 @@ function createTableIdStructureCommitResult(
 
 function createUpdateFlowTableCellSpanCommitResult(
   state: EditorState,
-  action: UpdateFlowTableCellSpanAction,
+  input: UpdateFlowTableCellSpanPayload,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const context = createTableStructurePlanningContext(state, action, operation, { cellId: action.cellId }, {
+  const context = createTableStructurePlanningContext(state, operation, reducerPathForTablePayload(input), targetNodeIdsForTablePayload(input), { cellId: input.cellId }, {
     operationName: "table-cell-span",
     allowedOperationSurfaces: ["table"],
     currentValidationPolicy: "full",
@@ -224,7 +293,7 @@ function createUpdateFlowTableCellSpanCommitResult(
   if (preflightResult != null) return preflightResult
   const graphDecision = allowedTableGraphDecision(context)
 
-  const nextDoc = updateFlowTableCellSpan(state.doc, action.cellId, action.changes)
+  const nextDoc = updateFlowTableCellSpan(state.doc, input.cellId, input.changes)
 
   if (nextDoc === state.doc) {
     return {
@@ -253,10 +322,10 @@ function createUpdateFlowTableCellSpanCommitResult(
 
 function createDeleteEmptyTableCellParagraphCommitResult(
   state: EditorState,
-  action: DeleteEmptyTableCellParagraphAction,
+  input: DeleteEmptyTableCellParagraphPayload,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const context = createTableStructurePlanningContext(state, action, operation, { nodeId: action.nodeId }, {
+  const context = createTableStructurePlanningContext(state, operation, reducerPathForTablePayload(input), [input.nodeId], { nodeId: input.nodeId }, {
     operationName: "delete-empty-table-cell-paragraph",
     requireTableContext: true,
     currentValidationPolicy: "full",
@@ -268,8 +337,8 @@ function createDeleteEmptyTableCellParagraphCommitResult(
 
   const plan = createDeleteEmptyTableCellParagraphPlan({
     doc: state.doc,
-    nodeId: action.nodeId,
-    text: action.text,
+    nodeId: input.nodeId,
+    text: input.text,
   })
 
   if (plan.status === "noop") {
@@ -289,8 +358,8 @@ function createDeleteEmptyTableCellParagraphCommitResult(
     validationScope: graphDecision.validationPolicy === "scoped"
       ? tableValidationScope(context.tableId)
       : undefined,
-    historyPolicy: { kind: "push", entry: action.history },
-    paginatedPatch: action.paginated != null ? { paginated: action.paginated } : undefined,
+    historyPolicy: { kind: "push", entry: input.history },
+    paginatedPatch: input.paginated != null ? { paginated: input.paginated } : undefined,
     selectionPatch: plan.selectionPatch,
     diagnostics: {
       ...context.diagnostics,
@@ -303,11 +372,18 @@ export function createTableStructureActionResult(
   state: EditorState,
   action: TableStructureAction,
 ): EditorOperationCommitResult {
-  if ("tableId" in action) return createTableIdStructureCommitResult(state, action)
+  if ("tableId" in action) return createTableIdStructureCommitResult(state, createTableIdStructurePayload(action))
   if (action.type === "UPDATE_FLOW_TABLE_CELL_SPAN") {
-    return createUpdateFlowTableCellSpanCommitResult(state, action)
+    return createUpdateFlowTableCellSpanCommitResult(state, createUpdateFlowTableCellSpanPayload(action))
   }
-  return createDeleteEmptyTableCellParagraphCommitResult(state, action)
+  return createDeleteEmptyTableCellParagraphCommitResult(state, {
+    kind: "table.structure.patch",
+    mutation: "delete-empty-cell-paragraph",
+    nodeId: action.nodeId,
+    ...(action.text !== undefined ? { text: action.text } : {}),
+    ...(action.history ? { history: action.history } : {}),
+    ...(action.paginated ? { paginated: action.paginated } : {}),
+  })
 }
 
 export function createTableStructureOperationResult(
@@ -327,28 +403,35 @@ export function createTableStructureOperationResult(
     }
   }
 
-  switch (operation.action.type) {
-    case "TABLE_ADD_ROW":
-    case "TABLE_REMOVE_ROW":
-    case "TABLE_ADD_COL":
-    case "TABLE_REMOVE_COL":
-    case "TABLE_FIT_TO_WIDTH":
-    case "RESIZE_TABLE_COLUMN_PAIR":
-      return createTableIdStructureCommitResult(state, operation.action, operation)
-    case "UPDATE_FLOW_TABLE_CELL_SPAN":
-      return createUpdateFlowTableCellSpanCommitResult(state, operation.action, operation)
-    case "DELETE_EMPTY_TABLE_CELL_PARAGRAPH":
-      return createDeleteEmptyTableCellParagraphCommitResult(state, operation.action, operation)
-    default:
-      return {
-        status: "failure",
-        failure: { reason: "invalid-table-structure-action" },
-        validationPolicy: "read-only",
-        historyPolicy: { kind: "none", reason: "invalid operation" },
-        diagnostics: {
-          operationKind: operation.kind,
-          reducerPath: "TABLE_STRUCTURE",
-        },
-      }
+  const command = operation.command?.kind === "table.structure.patch"
+    ? operation.command
+    : operation.payload?.kind === "table.structure.patch"
+      ? operation.payload
+      : undefined
+
+  if (command != null) {
+    if ("tableId" in command) {
+      return createTableIdStructureCommitResult(state, command, operation)
+    }
+    if (command.mutation === "cell-span") {
+      return createUpdateFlowTableCellSpanCommitResult(state, command, operation)
+    }
+    const runtime: EditorOperationStructuralRuntimeContext | undefined = operation.runtime?.structural
+    return createDeleteEmptyTableCellParagraphCommitResult(state, {
+      ...command,
+      ...(runtime?.history ? { history: runtime.history } : {}),
+      ...(runtime?.paginated ? { paginated: runtime.paginated } : {}),
+    }, operation)
+  }
+
+  return {
+    status: "failure",
+    failure: { reason: "invalid-table-structure-action" },
+    validationPolicy: "read-only",
+    historyPolicy: { kind: "none", reason: "invalid operation" },
+    diagnostics: {
+      operationKind: operation.kind,
+      reducerPath: "TABLE_STRUCTURE",
+    },
   }
 }

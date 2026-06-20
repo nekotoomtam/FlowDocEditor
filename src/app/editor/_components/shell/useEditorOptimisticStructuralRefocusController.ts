@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef } from "react"
+import { flushSync } from "react-dom"
 import type { TextMeasurer } from "@/layout"
 import type { PaginatedDocument } from "@/pagination"
 import type { DocumentNode } from "@/schema"
@@ -194,6 +195,7 @@ export function useEditorOptimisticStructuralRefocusController({
     dispatchEditorOperation,
     endRichWysiwygDraftSession,
     endWysiwygTextSession,
+    runSynchronousEditorUpdate: (callback) => flushSync(callback),
     setOptimisticStructuralIslandOverride: (override) => {
       if (typeof override === "function") {
         editorStructuralIslandStore.setState({ optimisticStructuralIslandOverride: (override as Function)(editorStructuralIslandStore.getState().optimisticStructuralIslandOverride) })

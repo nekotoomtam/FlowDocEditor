@@ -1,4 +1,3 @@
-import { flushSync } from "react-dom"
 import { WYSIWYG_PERF_TRACE_ENABLED } from "../wysiwygInlineEditConfig"
 import {
   finishWysiwygPerfSpan,
@@ -26,6 +25,10 @@ import type {
 import type { StructuralPreviewSettleSnapshot } from "../structuralEdit/previewSettleBridge"
 import { OPTIMISTIC_STRUCTURAL_PREVIEW_SETTLE_DEBOUNCE_MS } from "../shell/editorShellConstants"
 
+type OptimisticParagraphAction =
+  | Extract<EditorAction, { type: "SPLIT_PARAGRAPH" }>
+  | Extract<EditorAction, { type: "MERGE_PARAGRAPH" }>
+
 export interface StructuralExecutionContext {
   abortStructuralEditTransactionAndPanelDeferral: (identity: Parameters<StructuralEditController["markUrgentPainting"]>[0], reason: string) => void
   beginStructuralPanelReleaseDeferral: (plan: ReturnType<StructuralEditController["beginSplit"]>["panelDeferral"]) => unknown
@@ -33,6 +36,7 @@ export interface StructuralExecutionContext {
   dispatchEditorAction: (action: EditorAction) => void
   dispatchEditorOperation: (operation: EditorOperationEnvelope) => void
   endRichWysiwygDraftSession: () => void
+  runSynchronousEditorUpdate: (callback: () => void) => void
   setOptimisticStructuralIslandOverride: (value: OptimisticStructuralIslandOverride | null) => void
   setOptimisticStructuralRefocusPaint: (value: OptimisticStructuralRefocusPaint | null) => void
   startInlineEditAfterOptimisticStructuralChange: (
@@ -68,20 +72,75 @@ export interface StructuralExecutionContext {
   getOptimisticStructuralPreviewSettleGraceUntilRef: () => number
 }
 
+export type ParagraphSplitExecutionContext = Pick<
+  StructuralExecutionContext,
+  | "abortStructuralEditTransactionAndPanelDeferral"
+  | "beginStructuralPanelReleaseDeferral"
+  | "beginWysiwygDraftRuntimeSession"
+  | "dispatchEditorAction"
+  | "dispatchEditorOperation"
+  | "endRichWysiwygDraftSession"
+  | "setOptimisticStructuralIslandOverride"
+  | "setOptimisticStructuralRefocusPaint"
+  | "startInlineEditAfterOptimisticStructuralChange"
+  | "startPlainWysiwygTextSessionFromText"
+  | "structuralEditController"
+  | "setPendingOptimisticSplitRefocus"
+  | "setPaginatedRef"
+  | "setOptimisticLayoutRef"
+  | "setOptimisticStructuralSettleRef"
+  | "setOptimisticStructuralPreviewSettleGraceUntilRef"
+  | "setSuppressNextLayoutLoadingOverlayRef"
+>
+
+export type ParagraphMergeExecutionContext = Pick<
+  StructuralExecutionContext,
+  | "abortStructuralEditTransactionAndPanelDeferral"
+  | "beginStructuralPanelReleaseDeferral"
+  | "beginWysiwygDraftRuntimeSession"
+  | "clearWysiwygDraftPagination"
+  | "dispatchEditorOperation"
+  | "endRichWysiwygDraftSession"
+  | "endWysiwygTextSession"
+  | "runSynchronousEditorUpdate"
+  | "setOptimisticStructuralIslandOverride"
+  | "setOptimisticStructuralRefocusPaint"
+  | "startInlineEditAfterOptimisticStructuralChange"
+  | "startPlainWysiwygTextSessionFromText"
+  | "structuralEditController"
+  | "setPendingOptimisticMergeRefocus"
+  | "setPaginatedRef"
+  | "setOptimisticLayoutRef"
+  | "setOptimisticStructuralSettleRef"
+  | "setOptimisticStructuralPreviewSettleGraceUntilRef"
+  | "setSuppressNextLayoutLoadingOverlayRef"
+  | "getPaginatedRef"
+  | "getOptimisticLayoutRef"
+  | "getOptimisticStructuralSettleRef"
+  | "getOptimisticStructuralPreviewSettleGraceUntilRef"
+>
+
 function withOptimisticStructuralAction(operation: EditorOperationEnvelope): EditorOperationEnvelope {
-  switch (operation.action.type) {
-    case "SPLIT_PARAGRAPH":
-    case "MERGE_PARAGRAPH":
-      return { ...operation, action: { ...operation.action, isOptimistic: true } }
-    default:
-      return operation
+  if (operation.kind !== "paragraph.split" && operation.kind !== "paragraph.merge") {
+    return operation
+  }
+  return {
+    ...operation,
+    action: { ...(operation.action as OptimisticParagraphAction), isOptimistic: true },
+    runtime: {
+      ...operation.runtime,
+      structural: {
+        ...operation.runtime?.structural,
+        isOptimistic: true,
+      },
+    },
   }
 }
 
 export function executeParagraphSplitOperationPlan(
   plan: ParagraphSplitOperationPlan,
   pending: PendingOptimisticSplitRefocus,
-  context: StructuralExecutionContext,
+  context: ParagraphSplitExecutionContext,
 ): boolean {
   const handlerStartedAt = startWysiwygPerfSpan()
   
@@ -285,7 +344,7 @@ export function executeParagraphSplitOperationPlan(
 
 export function executeParagraphMergeOperationPlan(
   plan: ParagraphMergeOperationPlan,
-  context: StructuralExecutionContext,
+  context: ParagraphMergeExecutionContext,
 ): boolean {
   if (plan.status !== "success") return false
 
@@ -335,9 +394,12 @@ export function executeParagraphMergeOperationPlan(
   context.structuralEditController.markUrgentPainting(structuralTransactionIdentity)
   
   const flushStartedAt = startWysiwygPerfSpan()
-  flushSync(() => {
+  context.runSynchronousEditorUpdate(() => {
     const inlineSetupStartedAt = startWysiwygPerfSpan()
-    const caretIndex = plan.operation.action.type === "MERGE_PARAGRAPH" && plan.operation.action.precomputed ? plan.operation.action.precomputed.caretIndex : 0
+    const precomputed = plan.operation.runtime?.structural?.precomputed
+    const caretIndex = typeof precomputed === "object" && precomputed != null && "caretIndex" in precomputed
+      ? (precomputed as { caretIndex?: number | null }).caretIndex ?? 0
+      : 0
     inlineStarted = context.startInlineEditAfterOptimisticStructuralChange(
       plan.previousNodeId,
       caretIndex,

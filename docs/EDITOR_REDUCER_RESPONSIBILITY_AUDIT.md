@@ -556,8 +556,9 @@ Current `DUPLICATE_NODE` branch behavior:
 Why:
 
 - It exercises mutation, validation, history, selection to new node, and
-  unknown stress coverage.
-- It should force the missing add/duplicate stress smoke to be written.
+  stress coverage expectations.
+- The browser-level add/duplicate stress smoke was later added as
+  `npm.cmd run smoke:wysiwyg-node-mutation`.
 
 ### Phase 4: Table Operation Plans
 
@@ -645,9 +646,15 @@ RISK:
 
 UNKNOWN:
 
-- Browser-level add/duplicate stress behavior is not covered by the current
-  browser smoke; reducer-level stress fixture coverage exists.
 - True scoped validation for subtree/table operations is not implemented.
+
+Additional browser coverage after this audit:
+
+- `npm.cmd run smoke:wysiwyg-node-mutation` covers palette add and canvas
+  drag-copy plus undo on `public/mock/stress-long-v2.flowdoc.json`.
+- `npm.cmd run smoke:wysiwyg-structure-mutation` covers table add row, table
+  add column, table column resize, flow-stack add column, flow-row resize,
+  preview settle, and undo restore on `public/mock/stress-long-v2.flowdoc.json`.
 
 ## Next Job Item
 
@@ -660,8 +667,6 @@ Recommended next lane:
 2. Replace scoped validation fallback with a real subtree/table scoped
    assertion only after proving it preserves every `assertDocument(...)`
    invariant for touched scope, ancestors, and cross-document references.
-3. Add browser-level add/duplicate/reorder stress smoke when UI stability, not
-   reducer contract, is the target.
 
 The reducer now has a shared commit path and reducer-facing operation plans for
 node, table, flow-row, structural, draft, and text commit paths covered by this

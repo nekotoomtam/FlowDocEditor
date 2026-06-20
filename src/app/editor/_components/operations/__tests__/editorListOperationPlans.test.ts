@@ -1,13 +1,14 @@
-import { createDefaultDocument, migrateDocumentToV2, TOR_CLAUSE_LIST_STYLE_ID } from "@/document"
+import { createDefaultDocument, TOR_CLAUSE_LIST_STYLE_ID } from "@/document"
 import type { DocumentNode, ParagraphNode } from "@/schema"
 import { describe, expect, it } from "vitest"
 import { createInitialEditorState } from "../../editorReducer"
-import type { EditorState } from "../../editorReducer"
+import type { EditorAction, EditorState } from "../../editorReducer"
 import { createEditorOperationFromAction } from "../editorOperationFromAction"
 import {
   createListStructureActionResult,
   createListStructureOperationResult,
 } from "../editorListOperationPlans"
+import { createEditorDocumentGraphRuntime } from "../editorOperationRuntime"
 
 function getFirstBodyChildId(doc: DocumentNode): string {
   const section = doc.document.sections[0]
@@ -33,10 +34,7 @@ function withDocumentV2GraphRuntime<T extends ReturnType<typeof createEditorOper
   return {
     ...operation,
     runtime: {
-      documentGraph: {
-        sourceModel: "document-v2" as const,
-        document: migrateDocumentToV2(state.doc),
-      },
+      documentGraph: createEditorDocumentGraphRuntime(state.doc),
     },
   }
 }
@@ -102,6 +100,41 @@ describe("editor list operation plans", () => {
       graphDecision: "allow",
       graphDecisionAllowedSurfaces: ["inline"],
     }))
+  })
+
+  it("uses list structure command instead of the compatibility action snapshot", () => {
+    const state = createInitialEditorState(createDefaultDocument())
+    const nodeId = getFirstBodyChildId(state.doc)
+    const wrongAction: Extract<EditorAction, { type: "TOGGLE_LIST_PRESET" }> = {
+      type: "TOGGLE_LIST_PRESET",
+      nodeId: "missing-node",
+      styleId: TOR_CLAUSE_LIST_STYLE_ID,
+      instanceId: "wrong",
+      level: 2,
+    }
+    const operation = {
+      ...createEditorOperationFromAction({
+        type: "TOGGLE_LIST_PRESET",
+        nodeId,
+        styleId: TOR_CLAUSE_LIST_STYLE_ID,
+        instanceId: "tor-main",
+        level: 0,
+      }),
+      action: wrongAction,
+    }
+
+    const result = createListStructureOperationResult(state, operation)
+    const paragraph = result.status === "success" ? getParagraph(result.nextDoc, nodeId) : undefined
+
+    expect(result).toEqual(expect.objectContaining({
+      status: "success",
+      validationPolicy: "full",
+    }))
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      nodeId,
+      targetNodeIds: [nodeId],
+    }))
+    expect(paragraph?.props.list).toEqual({ instanceId: "tor-main", level: 0, itemId: nodeId })
   })
 
   it("uses DocumentNode v2 graph runtime to reject non-inline list targets", () => {

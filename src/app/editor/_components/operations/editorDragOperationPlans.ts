@@ -4,9 +4,10 @@ import type { EditorAction, EditorState } from "../editorReducer"
 import type { EditorOperationCommitResult } from "./editorOperationCommit"
 import { createOperationDocumentGraphDiagnostics } from "./editorDocumentGraphDiagnostics"
 import { createEditorGraphPlanningDecision } from "./editorGraphPlanningDecision"
-import type { EditorOperationEnvelope } from "./editorOperationTypes"
+import type { EditorOperationCommand, EditorOperationEnvelope } from "./editorOperationTypes"
 
 type DragCommitAction = Extract<EditorAction, { type: "DRAG_COMMIT" }>
+type DragPlacementCommand = Extract<EditorOperationCommand, { kind: "drag.placement" }>
 type DragGraphPlanningResult = ReturnType<typeof createEditorGraphPlanningDecision>
 
 function nodeIdsForPlacementOperation(op: PlacementOperation): string[] {
@@ -44,7 +45,7 @@ function createDragGraphPreflightResult(
   targetNodeIds: readonly string[],
   graphDiagnostics: ReturnType<typeof createOperationDocumentGraphDiagnostics>,
   graphDecision: DragGraphPlanningResult,
-  action: DragCommitAction,
+  input: DragPlacementCommand,
 ): EditorOperationCommitResult | null {
   if (graphDecision.kind === "failure") {
     return {
@@ -55,8 +56,8 @@ function createDragGraphPreflightResult(
       diagnostics: {
         operationKind: "drag.placement",
         reducerPath: "DRAG_COMMIT",
-        sectionId: action.sectionId,
-        placementKind: action.op.kind,
+        sectionId: input.sectionId,
+        placementKind: input.op.kind,
         targetNodeIds,
         ...graphDiagnostics,
         ...graphDecision.diagnostics,
@@ -73,8 +74,8 @@ function createDragGraphPreflightResult(
       diagnostics: {
         operationKind: "drag.placement",
         reducerPath: "DRAG_COMMIT",
-        sectionId: action.sectionId,
-        placementKind: action.op.kind,
+        sectionId: input.sectionId,
+        placementKind: input.op.kind,
         targetNodeIds,
         ...graphDiagnostics,
         ...graphDecision.diagnostics,
@@ -94,9 +95,21 @@ function allowedDragGraphDecision(
   return graphDecision
 }
 
+function createDragPlacementCommandFromAction(action: DragCommitAction): DragPlacementCommand {
+  return { kind: "drag.placement", sectionId: action.sectionId, op: action.op }
+}
+
+function createDragPlacementCommandFromOperation(operation: EditorOperationEnvelope): DragPlacementCommand | null {
+  return operation.command?.kind === "drag.placement"
+    ? operation.command
+    : operation.payload?.kind === "drag.placement"
+      ? operation.payload
+      : null
+}
+
 function createDragPlacementCommitResult(
   state: EditorState,
-  action: DragCommitAction,
+  input: DragPlacementCommand,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
   if (!state.drag) {
@@ -108,15 +121,15 @@ function createDragPlacementCommitResult(
       diagnostics: {
         operationKind: "drag.placement",
         reducerPath: "DRAG_COMMIT",
-        sectionId: action.sectionId,
-        placementKind: action.op.kind,
+        sectionId: input.sectionId,
+        placementKind: input.op.kind,
       },
     }
   }
 
   const targetNodeIds = uniqueNodeIds([
     ...(operation?.scope.nodeIds ?? []),
-    ...nodeIdsForPlacementOperation(action.op),
+    ...nodeIdsForPlacementOperation(input.op),
     ...nodeIdsForDragSource(state.drag.source),
   ])
   const graphDiagnostics = createOperationDocumentGraphDiagnostics(state, operation, targetNodeIds)
@@ -126,21 +139,21 @@ function createDragPlacementCommitResult(
     currentValidationPolicy: "full",
     documentV2ValidationPolicy: "full",
   })
-  const preflightResult = createDragGraphPreflightResult(targetNodeIds, graphDiagnostics, graphDecision, action)
+  const preflightResult = createDragGraphPreflightResult(targetNodeIds, graphDiagnostics, graphDecision, input)
   if (preflightResult != null) return preflightResult
   const allowedGraphDecision = allowedDragGraphDecision(graphDecision)
 
   return {
     status: "success",
-    nextDoc: applyPlacementOperation(state.doc, action.sectionId, action.op, state.drag.source),
+    nextDoc: applyPlacementOperation(state.doc, input.sectionId, input.op, state.drag.source),
     validationPolicy: "full",
     historyPolicy: { kind: "push" },
     selectionPatch: { drag: null },
     diagnostics: {
       operationKind: "drag.placement",
       reducerPath: "DRAG_COMMIT",
-      sectionId: action.sectionId,
-      placementKind: action.op.kind,
+      sectionId: input.sectionId,
+      placementKind: input.op.kind,
       targetNodeIds,
       ...graphDiagnostics,
       ...allowedGraphDecision.diagnostics,
@@ -152,14 +165,15 @@ export function createDragPlacementActionResult(
   state: EditorState,
   action: DragCommitAction,
 ): EditorOperationCommitResult {
-  return createDragPlacementCommitResult(state, action)
+  return createDragPlacementCommitResult(state, createDragPlacementCommandFromAction(action))
 }
 
 export function createDragPlacementOperationResult(
   state: EditorState,
   operation: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  if (operation.kind !== "drag.placement" || operation.action.type !== "DRAG_COMMIT") {
+  const input = createDragPlacementCommandFromOperation(operation)
+  if (operation.kind !== "drag.placement" || input == null) {
     return {
       status: "failure",
       failure: { reason: "invalid-drag-placement-operation" },
@@ -171,5 +185,5 @@ export function createDragPlacementOperationResult(
       },
     }
   }
-  return createDragPlacementCommitResult(state, operation.action, operation)
+  return createDragPlacementCommitResult(state, input, operation)
 }

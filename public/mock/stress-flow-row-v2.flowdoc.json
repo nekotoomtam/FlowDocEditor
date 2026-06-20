@@ -100,6 +100,8 @@
                 "v2_flow_row_delete_target",
                 "v2_flow_row_reorder_target",
                 "v2_flow_row_reorder_source",
+                "v2_flow_row_split_target",
+                "v2_flow_row_merge_target",
                 "v2_flow_row_body_p_001",
                 "v2_flow_row_body_p_002",
                 "v2_flow_row_body_p_003",
@@ -144,6 +146,7 @@
                 "v2_flow_row_body_p_041",
                 "v2_flow_row_body_p_042",
                 "v2_flow_row_body_p_043",
+                "v2_flow_row_typing_page_boundary",
                 "v2_flow_row_body_p_044",
                 "v2_flow_row_body_p_045",
                 "v2_flow_row_body_p_046",
@@ -180,6 +183,7 @@
                 "v2_flow_row_body_p_076",
                 "v2_flow_row_body_p_077",
                 "v2_flow_row_body_p_078",
+                "v2_flow_row_typing_deep_document",
                 "v2_flow_row_body_p_079",
                 "v2_flow_row_body_p_080",
                 "v2_flow_row_body_p_081",
@@ -473,6 +477,96 @@
                 }
               ]
             },
+            "v2_flow_row_split_target": {
+              "id": "v2_flow_row_split_target",
+              "type": "paragraph",
+              "props": {
+                "align": "left",
+                "fontSize": {
+                  "value": 11,
+                  "unit": "pt"
+                },
+                "fontFamilyKey": "default",
+                "textColor": "111827",
+                "fontWeight": "normal",
+                "fontStyle": "normal",
+                "textDecoration": "none",
+                "strikethrough": false,
+                "lineHeight": 1.45,
+                "spacingBefore": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "spacingAfter": {
+                  "value": 6,
+                  "unit": "pt"
+                },
+                "textIndent": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "indentLeft": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "indentRight": {
+                  "value": 0,
+                  "unit": "pt"
+                }
+              },
+              "children": [
+                {
+                  "id": "text_0007",
+                  "type": "text",
+                  "text": "Split target. Browser probes can place the caret inside this paragraph and split it without depending on generated ids."
+                }
+              ]
+            },
+            "v2_flow_row_merge_target": {
+              "id": "v2_flow_row_merge_target",
+              "type": "paragraph",
+              "props": {
+                "align": "left",
+                "fontSize": {
+                  "value": 11,
+                  "unit": "pt"
+                },
+                "fontFamilyKey": "default",
+                "textColor": "111827",
+                "fontWeight": "normal",
+                "fontStyle": "normal",
+                "textDecoration": "none",
+                "strikethrough": false,
+                "lineHeight": 1.45,
+                "spacingBefore": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "spacingAfter": {
+                  "value": 6,
+                  "unit": "pt"
+                },
+                "textIndent": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "indentLeft": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "indentRight": {
+                  "value": 0,
+                  "unit": "pt"
+                }
+              },
+              "children": [
+                {
+                  "id": "text_0008",
+                  "type": "text",
+                  "text": "Merge target. Browser probes can merge this paragraph with a neighbor and verify undo restores pagination."
+                }
+              ]
+            },
             "v2_flow_row_body_p_001": {
               "id": "v2_flow_row_body_p_001",
               "type": "paragraph",
@@ -512,7 +606,7 @@
               },
               "children": [
                 {
-                  "id": "text_0007",
+                  "id": "text_0009",
                   "type": "text",
                   "text": "Body paragraph 1 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -557,7 +651,7 @@
               },
               "children": [
                 {
-                  "id": "text_0008",
+                  "id": "text_0010",
                   "type": "text",
                   "text": "Body paragraph 2 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -602,7 +696,7 @@
               },
               "children": [
                 {
-                  "id": "text_0009",
+                  "id": "text_0011",
                   "type": "text",
                   "text": "Body paragraph 3 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -647,7 +741,7 @@
               },
               "children": [
                 {
-                  "id": "text_0010",
+                  "id": "text_0012",
                   "type": "text",
                   "text": "Body paragraph 4 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -692,7 +786,7 @@
               },
               "children": [
                 {
-                  "id": "text_0011",
+                  "id": "text_0013",
                   "type": "text",
                   "text": "Body paragraph 5 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -737,7 +831,7 @@
               },
               "children": [
                 {
-                  "id": "text_0012",
+                  "id": "text_0014",
                   "type": "text",
                   "text": "Body paragraph 6 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -782,7 +876,7 @@
               },
               "children": [
                 {
-                  "id": "text_0013",
+                  "id": "text_0015",
                   "type": "text",
                   "text": "Body paragraph 7 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -827,7 +921,7 @@
               },
               "children": [
                 {
-                  "id": "text_0014",
+                  "id": "text_0016",
                   "type": "text",
                   "text": "Body paragraph 8 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -872,7 +966,7 @@
               },
               "children": [
                 {
-                  "id": "text_0015",
+                  "id": "text_0017",
                   "type": "text",
                   "text": "Body paragraph 9 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -917,7 +1011,7 @@
               },
               "children": [
                 {
-                  "id": "text_0016",
+                  "id": "text_0018",
                   "type": "text",
                   "text": "Body paragraph 10 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -962,7 +1056,7 @@
               },
               "children": [
                 {
-                  "id": "text_0017",
+                  "id": "text_0019",
                   "type": "text",
                   "text": "Body paragraph 11 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1009,7 +1103,7 @@
               },
               "children": [
                 {
-                  "id": "text_0018",
+                  "id": "text_0020",
                   "type": "text",
                   "text": "Body paragraph 12 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1054,7 +1148,7 @@
               },
               "children": [
                 {
-                  "id": "text_0019",
+                  "id": "text_0021",
                   "type": "text",
                   "text": "Body paragraph 13 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1099,7 +1193,7 @@
               },
               "children": [
                 {
-                  "id": "text_0020",
+                  "id": "text_0022",
                   "type": "text",
                   "text": "Body paragraph 14 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1144,7 +1238,7 @@
               },
               "children": [
                 {
-                  "id": "text_0021",
+                  "id": "text_0023",
                   "type": "text",
                   "text": "Body paragraph 15 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1189,7 +1283,7 @@
               },
               "children": [
                 {
-                  "id": "text_0022",
+                  "id": "text_0024",
                   "type": "text",
                   "text": "Body paragraph 16 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1234,7 +1328,7 @@
               },
               "children": [
                 {
-                  "id": "text_0023",
+                  "id": "text_0025",
                   "type": "text",
                   "text": "Body paragraph 17 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1279,7 +1373,7 @@
               },
               "children": [
                 {
-                  "id": "text_0024",
+                  "id": "text_0026",
                   "type": "text",
                   "text": "Body paragraph 18 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1324,7 +1418,7 @@
               },
               "children": [
                 {
-                  "id": "text_0025",
+                  "id": "text_0027",
                   "type": "text",
                   "text": "Body paragraph 19 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1369,7 +1463,7 @@
               },
               "children": [
                 {
-                  "id": "text_0026",
+                  "id": "text_0028",
                   "type": "text",
                   "text": "Body paragraph 20 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1414,7 +1508,7 @@
               },
               "children": [
                 {
-                  "id": "text_0027",
+                  "id": "text_0029",
                   "type": "text",
                   "text": "Left flow-stack paragraph for add-column and layout mutation checks."
                 }
@@ -1459,7 +1553,7 @@
               },
               "children": [
                 {
-                  "id": "text_0028",
+                  "id": "text_0030",
                   "type": "text",
                   "text": "Right flow-stack paragraph for stable sibling and selection checks."
                 }
@@ -1648,7 +1742,7 @@
               },
               "children": [
                 {
-                  "id": "text_0029",
+                  "id": "text_0031",
                   "type": "text",
                   "text": "Body paragraph 21 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1693,7 +1787,7 @@
               },
               "children": [
                 {
-                  "id": "text_0030",
+                  "id": "text_0032",
                   "type": "text",
                   "text": "Body paragraph 22 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1738,7 +1832,7 @@
               },
               "children": [
                 {
-                  "id": "text_0031",
+                  "id": "text_0033",
                   "type": "text",
                   "text": "Body paragraph 23 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1785,7 +1879,7 @@
               },
               "children": [
                 {
-                  "id": "text_0032",
+                  "id": "text_0034",
                   "type": "text",
                   "text": "Body paragraph 24 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1830,7 +1924,7 @@
               },
               "children": [
                 {
-                  "id": "text_0033",
+                  "id": "text_0035",
                   "type": "text",
                   "text": "Body paragraph 25 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1875,7 +1969,7 @@
               },
               "children": [
                 {
-                  "id": "text_0034",
+                  "id": "text_0036",
                   "type": "text",
                   "text": "Body paragraph 26 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1920,7 +2014,7 @@
               },
               "children": [
                 {
-                  "id": "text_0035",
+                  "id": "text_0037",
                   "type": "text",
                   "text": "Body paragraph 27 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -1965,7 +2059,7 @@
               },
               "children": [
                 {
-                  "id": "text_0036",
+                  "id": "text_0038",
                   "type": "text",
                   "text": "Body paragraph 28 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2010,7 +2104,7 @@
               },
               "children": [
                 {
-                  "id": "text_0037",
+                  "id": "text_0039",
                   "type": "text",
                   "text": "Body paragraph 29 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2055,7 +2149,7 @@
               },
               "children": [
                 {
-                  "id": "text_0038",
+                  "id": "text_0040",
                   "type": "text",
                   "text": "Body paragraph 30 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2100,7 +2194,7 @@
               },
               "children": [
                 {
-                  "id": "text_0039",
+                  "id": "text_0041",
                   "type": "text",
                   "text": "Body paragraph 31 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2145,7 +2239,7 @@
               },
               "children": [
                 {
-                  "id": "text_0040",
+                  "id": "text_0042",
                   "type": "text",
                   "text": "Body paragraph 32 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2190,7 +2284,7 @@
               },
               "children": [
                 {
-                  "id": "text_0041",
+                  "id": "text_0043",
                   "type": "text",
                   "text": "Body paragraph 33 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2235,7 +2329,7 @@
               },
               "children": [
                 {
-                  "id": "text_0042",
+                  "id": "text_0044",
                   "type": "text",
                   "text": "Body paragraph 34 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2280,7 +2374,7 @@
               },
               "children": [
                 {
-                  "id": "text_0043",
+                  "id": "text_0045",
                   "type": "text",
                   "text": "Body paragraph 35 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2327,7 +2421,7 @@
               },
               "children": [
                 {
-                  "id": "text_0044",
+                  "id": "text_0046",
                   "type": "text",
                   "text": "Body paragraph 36 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2372,7 +2466,7 @@
               },
               "children": [
                 {
-                  "id": "text_0045",
+                  "id": "text_0047",
                   "type": "text",
                   "text": "Body paragraph 37 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2417,7 +2511,7 @@
               },
               "children": [
                 {
-                  "id": "text_0046",
+                  "id": "text_0048",
                   "type": "text",
                   "text": "Body paragraph 38 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2462,7 +2556,7 @@
               },
               "children": [
                 {
-                  "id": "text_0047",
+                  "id": "text_0049",
                   "type": "text",
                   "text": "Body paragraph 39 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2507,7 +2601,7 @@
               },
               "children": [
                 {
-                  "id": "text_0048",
+                  "id": "text_0050",
                   "type": "text",
                   "text": "Body paragraph 40 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2552,7 +2646,7 @@
               },
               "children": [
                 {
-                  "id": "text_0049",
+                  "id": "text_0051",
                   "type": "text",
                   "text": "Body paragraph 41 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2597,7 +2691,7 @@
               },
               "children": [
                 {
-                  "id": "text_0050",
+                  "id": "text_0052",
                   "type": "text",
                   "text": "Body paragraph 42 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2642,9 +2736,54 @@
               },
               "children": [
                 {
-                  "id": "text_0051",
+                  "id": "text_0053",
                   "type": "text",
                   "text": "Body paragraph 43 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
+                }
+              ]
+            },
+            "v2_flow_row_typing_page_boundary": {
+              "id": "v2_flow_row_typing_page_boundary",
+              "type": "paragraph",
+              "props": {
+                "align": "left",
+                "fontSize": {
+                  "value": 11,
+                  "unit": "pt"
+                },
+                "fontFamilyKey": "default",
+                "textColor": "111827",
+                "fontWeight": "normal",
+                "fontStyle": "normal",
+                "textDecoration": "none",
+                "strikethrough": false,
+                "lineHeight": 1.45,
+                "spacingBefore": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "spacingAfter": {
+                  "value": 6,
+                  "unit": "pt"
+                },
+                "textIndent": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "indentLeft": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "indentRight": {
+                  "value": 0,
+                  "unit": "pt"
+                }
+              },
+              "children": [
+                {
+                  "id": "text_0054",
+                  "type": "text",
+                  "text": "Page-boundary typing target for Stress Flow Row v2. This paragraph sits deep enough in the fixture to exercise scrolling, pagination pressure, and stale preview rejection."
                 }
               ]
             },
@@ -2687,7 +2826,7 @@
               },
               "children": [
                 {
-                  "id": "text_0052",
+                  "id": "text_0055",
                   "type": "text",
                   "text": "Body paragraph 44 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2732,7 +2871,7 @@
               },
               "children": [
                 {
-                  "id": "text_0053",
+                  "id": "text_0056",
                   "type": "text",
                   "text": "Body paragraph 45 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2777,7 +2916,7 @@
               },
               "children": [
                 {
-                  "id": "text_0054",
+                  "id": "text_0057",
                   "type": "text",
                   "text": "Body paragraph 46 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2822,7 +2961,7 @@
               },
               "children": [
                 {
-                  "id": "text_0055",
+                  "id": "text_0058",
                   "type": "text",
                   "text": "Body paragraph 47 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2869,7 +3008,7 @@
               },
               "children": [
                 {
-                  "id": "text_0056",
+                  "id": "text_0059",
                   "type": "text",
                   "text": "Body paragraph 48 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2914,7 +3053,7 @@
               },
               "children": [
                 {
-                  "id": "text_0057",
+                  "id": "text_0060",
                   "type": "text",
                   "text": "Body paragraph 49 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -2959,7 +3098,7 @@
               },
               "children": [
                 {
-                  "id": "text_0058",
+                  "id": "text_0061",
                   "type": "text",
                   "text": "Body paragraph 50 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3004,7 +3143,7 @@
               },
               "children": [
                 {
-                  "id": "text_0059",
+                  "id": "text_0062",
                   "type": "text",
                   "text": "Body paragraph 51 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3049,7 +3188,7 @@
               },
               "children": [
                 {
-                  "id": "text_0060",
+                  "id": "text_0063",
                   "type": "text",
                   "text": "Body paragraph 52 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3094,7 +3233,7 @@
               },
               "children": [
                 {
-                  "id": "text_0061",
+                  "id": "text_0064",
                   "type": "text",
                   "text": "Body paragraph 53 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3139,7 +3278,7 @@
               },
               "children": [
                 {
-                  "id": "text_0062",
+                  "id": "text_0065",
                   "type": "text",
                   "text": "Body paragraph 54 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3184,7 +3323,7 @@
               },
               "children": [
                 {
-                  "id": "text_0063",
+                  "id": "text_0066",
                   "type": "text",
                   "text": "Body paragraph 55 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3229,7 +3368,7 @@
               },
               "children": [
                 {
-                  "id": "text_0064",
+                  "id": "text_0067",
                   "type": "text",
                   "text": "Body paragraph 56 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3274,7 +3413,7 @@
               },
               "children": [
                 {
-                  "id": "text_0065",
+                  "id": "text_0068",
                   "type": "text",
                   "text": "Body paragraph 57 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3319,7 +3458,7 @@
               },
               "children": [
                 {
-                  "id": "text_0066",
+                  "id": "text_0069",
                   "type": "text",
                   "text": "Body paragraph 58 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3364,7 +3503,7 @@
               },
               "children": [
                 {
-                  "id": "text_0067",
+                  "id": "text_0070",
                   "type": "text",
                   "text": "Body paragraph 59 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3411,7 +3550,7 @@
               },
               "children": [
                 {
-                  "id": "text_0068",
+                  "id": "text_0071",
                   "type": "text",
                   "text": "Body paragraph 60 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3456,7 +3595,7 @@
               },
               "children": [
                 {
-                  "id": "text_0069",
+                  "id": "text_0072",
                   "type": "text",
                   "text": "Body paragraph 61 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3501,7 +3640,7 @@
               },
               "children": [
                 {
-                  "id": "text_0070",
+                  "id": "text_0073",
                   "type": "text",
                   "text": "Body paragraph 62 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3546,7 +3685,7 @@
               },
               "children": [
                 {
-                  "id": "text_0071",
+                  "id": "text_0074",
                   "type": "text",
                   "text": "Body paragraph 63 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3591,7 +3730,7 @@
               },
               "children": [
                 {
-                  "id": "text_0072",
+                  "id": "text_0075",
                   "type": "text",
                   "text": "Body paragraph 64 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -3636,7 +3775,7 @@
               },
               "children": [
                 {
-                  "id": "text_0073",
+                  "id": "text_0076",
                   "type": "text",
                   "text": "Step"
                 }
@@ -3746,7 +3885,7 @@
               },
               "children": [
                 {
-                  "id": "text_0074",
+                  "id": "text_0077",
                   "type": "text",
                   "text": "Mutation target"
                 }
@@ -3856,7 +3995,7 @@
               },
               "children": [
                 {
-                  "id": "text_0075",
+                  "id": "text_0078",
                   "type": "text",
                   "text": "Expected behavior"
                 }
@@ -3982,7 +4121,7 @@
               },
               "children": [
                 {
-                  "id": "text_0076",
+                  "id": "text_0079",
                   "type": "text",
                   "text": "1"
                 }
@@ -4092,7 +4231,7 @@
               },
               "children": [
                 {
-                  "id": "text_0077",
+                  "id": "text_0080",
                   "type": "text",
                   "text": "Table body row 1"
                 }
@@ -4202,7 +4341,7 @@
               },
               "children": [
                 {
-                  "id": "text_0078",
+                  "id": "text_0081",
                   "type": "text",
                   "text": "Cell text is intentionally long enough to wrap and exercise table-cell paragraph traversal."
                 }
@@ -4328,7 +4467,7 @@
               },
               "children": [
                 {
-                  "id": "text_0079",
+                  "id": "text_0082",
                   "type": "text",
                   "text": "2"
                 }
@@ -4438,7 +4577,7 @@
               },
               "children": [
                 {
-                  "id": "text_0080",
+                  "id": "text_0083",
                   "type": "text",
                   "text": "Table body row 2"
                 }
@@ -4548,7 +4687,7 @@
               },
               "children": [
                 {
-                  "id": "text_0081",
+                  "id": "text_0084",
                   "type": "text",
                   "text": "Cell text is intentionally long enough to wrap and exercise table-cell paragraph traversal."
                 }
@@ -4674,7 +4813,7 @@
               },
               "children": [
                 {
-                  "id": "text_0082",
+                  "id": "text_0085",
                   "type": "text",
                   "text": "3"
                 }
@@ -4784,7 +4923,7 @@
               },
               "children": [
                 {
-                  "id": "text_0083",
+                  "id": "text_0086",
                   "type": "text",
                   "text": "Table body row 3"
                 }
@@ -4894,7 +5033,7 @@
               },
               "children": [
                 {
-                  "id": "text_0084",
+                  "id": "text_0087",
                   "type": "text",
                   "text": "Cell text is intentionally long enough to wrap and exercise table-cell paragraph traversal."
                 }
@@ -5020,7 +5159,7 @@
               },
               "children": [
                 {
-                  "id": "text_0085",
+                  "id": "text_0088",
                   "type": "text",
                   "text": "4"
                 }
@@ -5130,7 +5269,7 @@
               },
               "children": [
                 {
-                  "id": "text_0086",
+                  "id": "text_0089",
                   "type": "text",
                   "text": "Table body row 4"
                 }
@@ -5240,7 +5379,7 @@
               },
               "children": [
                 {
-                  "id": "text_0087",
+                  "id": "text_0090",
                   "type": "text",
                   "text": "Cell text is intentionally long enough to wrap and exercise table-cell paragraph traversal."
                 }
@@ -5366,7 +5505,7 @@
               },
               "children": [
                 {
-                  "id": "text_0088",
+                  "id": "text_0091",
                   "type": "text",
                   "text": "5"
                 }
@@ -5476,7 +5615,7 @@
               },
               "children": [
                 {
-                  "id": "text_0089",
+                  "id": "text_0092",
                   "type": "text",
                   "text": "Table body row 5"
                 }
@@ -5586,7 +5725,7 @@
               },
               "children": [
                 {
-                  "id": "text_0090",
+                  "id": "text_0093",
                   "type": "text",
                   "text": "Cell text is intentionally long enough to wrap and exercise table-cell paragraph traversal."
                 }
@@ -5712,7 +5851,7 @@
               },
               "children": [
                 {
-                  "id": "text_0091",
+                  "id": "text_0094",
                   "type": "text",
                   "text": "6"
                 }
@@ -5822,7 +5961,7 @@
               },
               "children": [
                 {
-                  "id": "text_0092",
+                  "id": "text_0095",
                   "type": "text",
                   "text": "Table body row 6"
                 }
@@ -5932,7 +6071,7 @@
               },
               "children": [
                 {
-                  "id": "text_0093",
+                  "id": "text_0096",
                   "type": "text",
                   "text": "Cell text is intentionally long enough to wrap and exercise table-cell paragraph traversal."
                 }
@@ -6058,7 +6197,7 @@
               },
               "children": [
                 {
-                  "id": "text_0094",
+                  "id": "text_0097",
                   "type": "text",
                   "text": "7"
                 }
@@ -6168,7 +6307,7 @@
               },
               "children": [
                 {
-                  "id": "text_0095",
+                  "id": "text_0098",
                   "type": "text",
                   "text": "Table body row 7"
                 }
@@ -6278,7 +6417,7 @@
               },
               "children": [
                 {
-                  "id": "text_0096",
+                  "id": "text_0099",
                   "type": "text",
                   "text": "Cell text is intentionally long enough to wrap and exercise table-cell paragraph traversal."
                 }
@@ -6404,7 +6543,7 @@
               },
               "children": [
                 {
-                  "id": "text_0097",
+                  "id": "text_0100",
                   "type": "text",
                   "text": "8"
                 }
@@ -6514,7 +6653,7 @@
               },
               "children": [
                 {
-                  "id": "text_0098",
+                  "id": "text_0101",
                   "type": "text",
                   "text": "Table body row 8"
                 }
@@ -6624,7 +6763,7 @@
               },
               "children": [
                 {
-                  "id": "text_0099",
+                  "id": "text_0102",
                   "type": "text",
                   "text": "Cell text is intentionally long enough to wrap and exercise table-cell paragraph traversal."
                 }
@@ -6831,7 +6970,7 @@
               },
               "children": [
                 {
-                  "id": "text_0100",
+                  "id": "text_0103",
                   "type": "text",
                   "text": "Body paragraph 65 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -6876,7 +7015,7 @@
               },
               "children": [
                 {
-                  "id": "text_0101",
+                  "id": "text_0104",
                   "type": "text",
                   "text": "Body paragraph 66 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -6921,7 +7060,7 @@
               },
               "children": [
                 {
-                  "id": "text_0102",
+                  "id": "text_0105",
                   "type": "text",
                   "text": "Body paragraph 67 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -6966,7 +7105,7 @@
               },
               "children": [
                 {
-                  "id": "text_0103",
+                  "id": "text_0106",
                   "type": "text",
                   "text": "Body paragraph 68 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7011,7 +7150,7 @@
               },
               "children": [
                 {
-                  "id": "text_0104",
+                  "id": "text_0107",
                   "type": "text",
                   "text": "Body paragraph 69 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7056,7 +7195,7 @@
               },
               "children": [
                 {
-                  "id": "text_0105",
+                  "id": "text_0108",
                   "type": "text",
                   "text": "Body paragraph 70 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7101,7 +7240,7 @@
               },
               "children": [
                 {
-                  "id": "text_0106",
+                  "id": "text_0109",
                   "type": "text",
                   "text": "Body paragraph 71 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7148,7 +7287,7 @@
               },
               "children": [
                 {
-                  "id": "text_0107",
+                  "id": "text_0110",
                   "type": "text",
                   "text": "Body paragraph 72 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7193,7 +7332,7 @@
               },
               "children": [
                 {
-                  "id": "text_0108",
+                  "id": "text_0111",
                   "type": "text",
                   "text": "Body paragraph 73 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7238,7 +7377,7 @@
               },
               "children": [
                 {
-                  "id": "text_0109",
+                  "id": "text_0112",
                   "type": "text",
                   "text": "Body paragraph 74 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7283,7 +7422,7 @@
               },
               "children": [
                 {
-                  "id": "text_0110",
+                  "id": "text_0113",
                   "type": "text",
                   "text": "Body paragraph 75 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7328,7 +7467,7 @@
               },
               "children": [
                 {
-                  "id": "text_0111",
+                  "id": "text_0114",
                   "type": "text",
                   "text": "Body paragraph 76 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7373,7 +7512,7 @@
               },
               "children": [
                 {
-                  "id": "text_0112",
+                  "id": "text_0115",
                   "type": "text",
                   "text": "Body paragraph 77 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7418,9 +7557,54 @@
               },
               "children": [
                 {
-                  "id": "text_0113",
+                  "id": "text_0116",
                   "type": "text",
                   "text": "Body paragraph 78 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
+                }
+              ]
+            },
+            "v2_flow_row_typing_deep_document": {
+              "id": "v2_flow_row_typing_deep_document",
+              "type": "paragraph",
+              "props": {
+                "align": "left",
+                "fontSize": {
+                  "value": 11,
+                  "unit": "pt"
+                },
+                "fontFamilyKey": "default",
+                "textColor": "111827",
+                "fontWeight": "normal",
+                "fontStyle": "normal",
+                "textDecoration": "none",
+                "strikethrough": false,
+                "lineHeight": 1.45,
+                "spacingBefore": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "spacingAfter": {
+                  "value": 6,
+                  "unit": "pt"
+                },
+                "textIndent": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "indentLeft": {
+                  "value": 0,
+                  "unit": "pt"
+                },
+                "indentRight": {
+                  "value": 0,
+                  "unit": "pt"
+                }
+              },
+              "children": [
+                {
+                  "id": "text_0117",
+                  "type": "text",
+                  "text": "Deep-document typing target for Stress Flow Row v2. This target protects late-document edit responsiveness without hardcoded page or node ids."
                 }
               ]
             },
@@ -7463,7 +7647,7 @@
               },
               "children": [
                 {
-                  "id": "text_0114",
+                  "id": "text_0118",
                   "type": "text",
                   "text": "Body paragraph 79 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7508,7 +7692,7 @@
               },
               "children": [
                 {
-                  "id": "text_0115",
+                  "id": "text_0119",
                   "type": "text",
                   "text": "Body paragraph 80 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7553,7 +7737,7 @@
               },
               "children": [
                 {
-                  "id": "text_0116",
+                  "id": "text_0120",
                   "type": "text",
                   "text": "Body paragraph 81 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7598,7 +7782,7 @@
               },
               "children": [
                 {
-                  "id": "text_0117",
+                  "id": "text_0121",
                   "type": "text",
                   "text": "Body paragraph 82 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7643,7 +7827,7 @@
               },
               "children": [
                 {
-                  "id": "text_0118",
+                  "id": "text_0122",
                   "type": "text",
                   "text": "Body paragraph 83 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7690,7 +7874,7 @@
               },
               "children": [
                 {
-                  "id": "text_0119",
+                  "id": "text_0123",
                   "type": "text",
                   "text": "Body paragraph 84 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7735,7 +7919,7 @@
               },
               "children": [
                 {
-                  "id": "text_0120",
+                  "id": "text_0124",
                   "type": "text",
                   "text": "Body paragraph 85 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7780,7 +7964,7 @@
               },
               "children": [
                 {
-                  "id": "text_0121",
+                  "id": "text_0125",
                   "type": "text",
                   "text": "Body paragraph 86 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7825,7 +8009,7 @@
               },
               "children": [
                 {
-                  "id": "text_0122",
+                  "id": "text_0126",
                   "type": "text",
                   "text": "Body paragraph 87 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7870,7 +8054,7 @@
               },
               "children": [
                 {
-                  "id": "text_0123",
+                  "id": "text_0127",
                   "type": "text",
                   "text": "Body paragraph 88 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7915,7 +8099,7 @@
               },
               "children": [
                 {
-                  "id": "text_0124",
+                  "id": "text_0128",
                   "type": "text",
                   "text": "Body paragraph 89 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -7960,7 +8144,7 @@
               },
               "children": [
                 {
-                  "id": "text_0125",
+                  "id": "text_0129",
                   "type": "text",
                   "text": "Body paragraph 90 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -8005,7 +8189,7 @@
               },
               "children": [
                 {
-                  "id": "text_0126",
+                  "id": "text_0130",
                   "type": "text",
                   "text": "Body paragraph 91 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -8050,7 +8234,7 @@
               },
               "children": [
                 {
-                  "id": "text_0127",
+                  "id": "text_0131",
                   "type": "text",
                   "text": "Body paragraph 92 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -8095,7 +8279,7 @@
               },
               "children": [
                 {
-                  "id": "text_0128",
+                  "id": "text_0132",
                   "type": "text",
                   "text": "Body paragraph 93 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -8140,7 +8324,7 @@
               },
               "children": [
                 {
-                  "id": "text_0129",
+                  "id": "text_0133",
                   "type": "text",
                   "text": "Body paragraph 94 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -8185,7 +8369,7 @@
               },
               "children": [
                 {
-                  "id": "text_0130",
+                  "id": "text_0134",
                   "type": "text",
                   "text": "Body paragraph 95 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -8232,7 +8416,7 @@
               },
               "children": [
                 {
-                  "id": "text_0131",
+                  "id": "text_0135",
                   "type": "text",
                   "text": "Body paragraph 96 for Stress Flow Row v2. This fixture uses DocumentNode version 2, section roots, flow-row/flow-stack, and flattened flow-table storage without nested table node maps."
                 }
@@ -8277,7 +8461,7 @@
               },
               "children": [
                 {
-                  "id": "text_0132",
+                  "id": "text_0136",
                   "type": "text",
                   "text": "Boundary typing target near the end of Stress Flow Row v2 for page-jump and scroll stability checks."
                 }
@@ -8300,13 +8484,17 @@
     "targets": {
       "typing": {
         "primary": "v2_flow_row_typing_primary",
-        "boundary": "v2_flow_row_typing_boundary"
+        "boundary": "v2_flow_row_typing_boundary",
+        "pageBoundary": "v2_flow_row_typing_page_boundary",
+        "deepDocument": "v2_flow_row_typing_deep_document"
       },
       "node": {
         "delete": "v2_flow_row_delete_target",
         "duplicate": "v2_flow_row_duplicate_target",
         "reorderSource": "v2_flow_row_reorder_source",
-        "reorderTarget": "v2_flow_row_reorder_target"
+        "reorderTarget": "v2_flow_row_reorder_target",
+        "split": "v2_flow_row_split_target",
+        "merge": "v2_flow_row_merge_target"
       },
       "flowRow": {
         "resizeTarget": "v2_flow_row_flow_row_main",

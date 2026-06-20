@@ -282,8 +282,8 @@ export function createDocumentGraphDiagnostics(state: EditorState, nodeIds: read
 export function createDocumentGraphDiagnosticsFromV2(
   doc: DocumentNodeV2,
   nodeIds: readonly string[],
+  index: DocumentGraphIndexV2 = buildDocumentGraphIndexV2(doc),
 ): EditorDocumentGraphDiagnostics {
-  const index = buildDocumentGraphIndexV2(doc)
   const contexts = nodeIds.map((nodeId) => resolveDocumentV2GraphTargetContext(index, nodeId))
   return {
     graphSourceModel: "document-v2",
@@ -298,7 +298,11 @@ export function createOperationDocumentGraphDiagnostics(
   nodeIds: readonly string[],
 ): EditorDocumentGraphDiagnostics {
   if (operation?.runtime?.documentGraph?.sourceModel === "document-v2") {
-    return createDocumentGraphDiagnosticsFromV2(operation.runtime.documentGraph.document, nodeIds)
+    return createDocumentGraphDiagnosticsFromV2(
+      operation.runtime.documentGraph.document,
+      nodeIds,
+      operation.runtime.documentGraph.index,
+    )
   }
 
   return createDocumentGraphDiagnostics(state, nodeIds)

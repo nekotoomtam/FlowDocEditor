@@ -3,9 +3,10 @@ import type { DocumentNode } from "@/schema"
 import type { EditorAction, EditorState } from "../editorReducer"
 import { createDocumentGraphDiagnostics } from "./editorDocumentGraphDiagnostics"
 import type { EditorOperationCommitResult } from "./editorOperationCommit"
-import type { EditorOperationEnvelope } from "./editorOperationTypes"
+import type { EditorOperationCommand, EditorOperationEnvelope } from "./editorOperationTypes"
 
 type UpdatePropsAction = Extract<EditorAction, { type: "UPDATE_PROPS" }>
+type NodePropsCommand = Extract<EditorOperationCommand, { kind: "node.props.patch" }>
 
 function isDirectBodyParagraph(doc: DocumentNode, nodeId: string): boolean {
   for (const section of doc.document.sections) {
@@ -27,17 +28,17 @@ function omitHeadingLevelChange(changes: Record<string, unknown>): Record<string
 
 function createNodePropsCommitResult(
   state: EditorState,
-  action: UpdatePropsAction,
+  input: NodePropsCommand,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const changes = hasHeadingLevelChange(action.changes) && !isDirectBodyParagraph(state.doc, action.nodeId)
-    ? omitHeadingLevelChange(action.changes)
-    : action.changes
-  const targetNodeIds = operation?.scope.nodeIds ?? [action.nodeId]
+  const changes = hasHeadingLevelChange(input.changes) && !isDirectBodyParagraph(state.doc, input.nodeId)
+    ? omitHeadingLevelChange(input.changes)
+    : input.changes
+  const targetNodeIds = operation?.scope.nodeIds ?? [input.nodeId]
   const diagnostics = {
     operationKind: "node.props.patch" as const,
     reducerPath: "UPDATE_PROPS",
-    nodeId: action.nodeId,
+    nodeId: input.nodeId,
     targetNodeIds,
     ...createDocumentGraphDiagnostics(state, targetNodeIds),
   }
@@ -54,7 +55,7 @@ function createNodePropsCommitResult(
 
   return {
     status: "success",
-    nextDoc: updateNodeProps(state.doc, action.nodeId, changes),
+    nextDoc: updateNodeProps(state.doc, input.nodeId, changes),
     validationPolicy: "full",
     historyPolicy: { kind: "push" },
     diagnostics,
@@ -65,14 +66,19 @@ export function createNodePropsActionResult(
   state: EditorState,
   action: UpdatePropsAction,
 ): EditorOperationCommitResult {
-  return createNodePropsCommitResult(state, action)
+  return createNodePropsCommitResult(state, { kind: "node.props.patch", nodeId: action.nodeId, changes: action.changes })
 }
 
 export function createNodePropsOperationResult(
   state: EditorState,
   operation: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  if (operation.kind !== "node.props.patch" || operation.action.type !== "UPDATE_PROPS") {
+  const command = operation.command?.kind === "node.props.patch"
+    ? operation.command
+    : operation.payload?.kind === "node.props.patch"
+      ? operation.payload
+      : undefined
+  if (operation.kind !== "node.props.patch" || !command) {
     return {
       status: "failure",
       failure: { reason: "invalid-node-props-operation" },
@@ -84,5 +90,5 @@ export function createNodePropsOperationResult(
       },
     }
   }
-  return createNodePropsCommitResult(state, operation.action, operation)
+  return createNodePropsCommitResult(state, command, operation)
 }

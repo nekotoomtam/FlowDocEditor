@@ -245,6 +245,40 @@ or preview layout status on large documents.
 - The smoke loads `public/mock/flowdoc-stress-mock.flowdoc.json`, jumps to page
   15, switches between two paragraph/list fragments, exits WYSIWYG, deletes the
   selected fragment, and runs Undo.
+- For Document Model v2 long-document lifecycle evidence, run:
+
+  ```powershell
+  $env:FLOWDOC_STRESS_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:STRESS_FIRST_TARGET_ALIAS="typing.primary"; $env:STRESS_SECOND_TARGET_ALIAS="typing.deepDocument"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-stress-lifecycle
+  ```
+
+  The long-v2 lifecycle summary reports `targetRevealMs` separately from
+  `clickSwitchMs`; do not treat page-frame reveal/scroll time as click-to-edit
+  runtime.
+- For long-document add/copy node mutation evidence, run:
+
+  ```powershell
+  $env:FLOWDOC_MUTATION_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:MUTATION_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-node-mutation
+  ```
+
+  This covers palette add, canvas drag-copy, preview settling, and undo restore
+  on the long v2 fixture.
+- For long-document split/backspace merge evidence, run:
+
+  ```powershell
+  $env:FLOWDOC_PROBE_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:PROBE_TARGET_ALIAS="node.split"; $env:PROBE_MODE="enter-backspace-after-dispatch"; $env:PROBE_ENTER_SPLIT_TEXT="Browser probes"; $env:PROBE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-smoothness
+  ```
+
+  This covers structural Enter split, Backspace merge, previous-node refocus,
+  immediate-lane pagination isolation, and console/page error checks.
+- For long-document table/flow-row structure mutation evidence, run:
+
+  ```powershell
+  $env:FLOWDOC_STRUCTURE_FILE="public/mock/stress-long-v2.flowdoc.json"; $env:STRUCTURE_READY_TIMEOUT_MS="240000"; npm.cmd run smoke:wysiwyg-structure-mutation
+  ```
+
+  This covers table add row, table add column, table column resize, flow-stack
+  add column, flow-row resize, preview settling, and undo restore on the long v2
+  fixture.
 - To look for intermittent preview/draft lifecycle loops, run
   `npm run smoke:wysiwyg-stress-lifecycle-repeat`; this runs the same stress
   lifecycle smoke three measured times. Override with

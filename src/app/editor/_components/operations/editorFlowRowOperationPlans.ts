@@ -4,12 +4,15 @@ import type { EditorAction, EditorState } from "../editorReducer"
 import type { EditorOperationCommitResult } from "./editorOperationCommit"
 import { createOperationDocumentGraphDiagnostics } from "./editorDocumentGraphDiagnostics"
 import { createEditorGraphPlanningDecision } from "./editorGraphPlanningDecision"
-import type { EditorOperationEnvelope } from "./editorOperationTypes"
+import type { EditorOperationCommand, EditorOperationEnvelope } from "./editorOperationTypes"
 
 type FlowRowAddColumnAction = Extract<EditorAction, { type: "FLOW_ROW_ADD_COL" }>
 type ResizeColumnsAction = Extract<EditorAction, { type: "RESIZE_COLUMNS" }>
 type ResizeRowMinHeightAction = Extract<EditorAction, { type: "RESIZE_ROW_MIN_HEIGHT" }>
 type FlowRowLayoutAction = ResizeColumnsAction | ResizeRowMinHeightAction
+type FlowRowAddColumnCommand = Extract<EditorOperationCommand, { kind: "flow-row.structure.patch" }>
+type ResizeColumnsCommand = Extract<EditorOperationCommand, { kind: "flow-row.layout.patch"; layoutType: "resize-columns" }>
+type ResizeRowMinHeightCommand = Extract<EditorOperationCommand, { kind: "flow-row.layout.patch"; layoutType: "resize-row-min-height" }>
 type FlowRowGraphPlanningResult = ReturnType<typeof createEditorGraphPlanningDecision>
 
 export function resizeColumnsDocument(
@@ -90,10 +93,10 @@ function createFlowRowGraphNoopResult(
 
 function createFlowRowAddColumnCommitResult(
   state: EditorState,
-  action: FlowRowAddColumnAction,
+  input: FlowRowAddColumnCommand,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const targetNodeIds = operation?.scope.nodeIds ?? [action.rowId, ...(action.stackId ? [action.stackId] : [])]
+  const targetNodeIds = operation?.scope.nodeIds ?? [input.rowId, ...(input.stackId ? [input.stackId] : [])]
   const { graphDiagnostics, graphDecision } = createFlowRowGraphPlanningDecision(
     state,
     operation,
@@ -102,12 +105,12 @@ function createFlowRowAddColumnCommitResult(
     "scoped",
   )
   if (graphDecision.kind === "failure") {
-    return createFlowRowGraphFailureResult(action.type, "flow-row.structure.patch", targetNodeIds, graphDiagnostics, graphDecision)
+    return createFlowRowGraphFailureResult("FLOW_ROW_ADD_COL", "flow-row.structure.patch", targetNodeIds, graphDiagnostics, graphDecision)
   }
   if (graphDecision.kind === "noop") {
-    return createFlowRowGraphNoopResult(action.type, "flow-row.structure.patch", targetNodeIds, graphDiagnostics, graphDecision)
+    return createFlowRowGraphNoopResult("FLOW_ROW_ADD_COL", "flow-row.structure.patch", targetNodeIds, graphDiagnostics, graphDecision)
   }
-  const nextDoc = addFlowStackColumn(state.doc, action.rowId, action.stackId, action.position)
+  const nextDoc = addFlowStackColumn(state.doc, input.rowId, input.stackId, input.position)
 
   if (nextDoc === state.doc) {
     return {
@@ -118,7 +121,7 @@ function createFlowRowAddColumnCommitResult(
       diagnostics: {
         operationKind: "flow-row.structure.patch",
         reducerPath: "FLOW_ROW_ADD_COL",
-        rowId: action.rowId,
+        rowId: input.rowId,
         targetNodeIds,
         ...graphDiagnostics,
         ...graphDecision.diagnostics,
@@ -130,12 +133,12 @@ function createFlowRowAddColumnCommitResult(
     status: "success",
     nextDoc,
     validationPolicy: "scoped",
-    validationScope: { kind: "flow-row", rowId: action.rowId, fallback: "full-document" },
+    validationScope: { kind: "flow-row", rowId: input.rowId, fallback: "full-document" },
     historyPolicy: { kind: "push" },
     diagnostics: {
       operationKind: "flow-row.structure.patch",
       reducerPath: "FLOW_ROW_ADD_COL",
-      rowId: action.rowId,
+      rowId: input.rowId,
       validationPolicy: "scoped",
       targetNodeIds,
       ...graphDiagnostics,
@@ -148,14 +151,24 @@ export function createFlowRowAddColumnActionResult(
   state: EditorState,
   action: FlowRowAddColumnAction,
 ): EditorOperationCommitResult {
-  return createFlowRowAddColumnCommitResult(state, action)
+  return createFlowRowAddColumnCommitResult(state, {
+    kind: "flow-row.structure.patch",
+    rowId: action.rowId,
+    ...(action.stackId ? { stackId: action.stackId } : {}),
+    ...(action.position ? { position: action.position } : {}),
+  })
 }
 
 export function createFlowRowAddColumnOperationResult(
   state: EditorState,
   operation: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  if (operation.kind !== "flow-row.structure.patch" || operation.action.type !== "FLOW_ROW_ADD_COL") {
+  const command = operation.command?.kind === "flow-row.structure.patch"
+    ? operation.command
+    : operation.payload?.kind === "flow-row.structure.patch"
+      ? operation.payload
+      : undefined
+  if (operation.kind !== "flow-row.structure.patch" || !command) {
     return {
       status: "failure",
       failure: { reason: "invalid-flow-row-structure-operation" },
@@ -167,15 +180,15 @@ export function createFlowRowAddColumnOperationResult(
       },
     }
   }
-  return createFlowRowAddColumnCommitResult(state, operation.action, operation)
+  return createFlowRowAddColumnCommitResult(state, command, operation)
 }
 
 function createResizeColumnsCommitResult(
   state: EditorState,
-  action: ResizeColumnsAction,
+  input: ResizeColumnsCommand,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const targetNodeIds = operation?.scope.nodeIds ?? [action.leftStackId, action.rightStackId]
+  const targetNodeIds = operation?.scope.nodeIds ?? [input.leftStackId, input.rightStackId]
   const { graphDiagnostics, graphDecision } = createFlowRowGraphPlanningDecision(
     state,
     operation,
@@ -184,17 +197,17 @@ function createResizeColumnsCommitResult(
     "full",
   )
   if (graphDecision.kind === "failure") {
-    return createFlowRowGraphFailureResult(action.type, "flow-row.layout.patch", targetNodeIds, graphDiagnostics, graphDecision)
+    return createFlowRowGraphFailureResult("RESIZE_COLUMNS", "flow-row.layout.patch", targetNodeIds, graphDiagnostics, graphDecision)
   }
   if (graphDecision.kind === "noop") {
-    return createFlowRowGraphNoopResult(action.type, "flow-row.layout.patch", targetNodeIds, graphDiagnostics, graphDecision)
+    return createFlowRowGraphNoopResult("RESIZE_COLUMNS", "flow-row.layout.patch", targetNodeIds, graphDiagnostics, graphDecision)
   }
   const nextDoc = resizeColumnsDocument(
     state.doc,
-    action.leftStackId,
-    action.leftShare,
-    action.rightStackId,
-    action.rightShare,
+    input.leftStackId,
+    input.leftShare,
+    input.rightStackId,
+    input.rightShare,
   )
 
   return {
@@ -202,12 +215,12 @@ function createResizeColumnsCommitResult(
     nextDoc,
     validationPolicy: "full",
     historyPolicy: { kind: "push" },
-    paginatedPatch: action.paginated != null && nextDoc !== state.doc ? { paginated: action.paginated } : undefined,
+    paginatedPatch: input.paginated != null && nextDoc !== state.doc ? { paginated: input.paginated } : undefined,
     diagnostics: {
       operationKind: "flow-row.layout.patch",
       reducerPath: "RESIZE_COLUMNS",
-      leftStackId: action.leftStackId,
-      rightStackId: action.rightStackId,
+      leftStackId: input.leftStackId,
+      rightStackId: input.rightStackId,
       targetNodeIds,
       ...graphDiagnostics,
       ...graphDecision.diagnostics,
@@ -217,10 +230,10 @@ function createResizeColumnsCommitResult(
 
 function createResizeRowMinHeightCommitResult(
   state: EditorState,
-  action: ResizeRowMinHeightAction,
+  input: ResizeRowMinHeightCommand,
   operation?: EditorOperationEnvelope,
 ): EditorOperationCommitResult {
-  const targetNodeIds = operation?.scope.nodeIds ?? [action.rowId]
+  const targetNodeIds = operation?.scope.nodeIds ?? [input.rowId]
   const { graphDiagnostics, graphDecision } = createFlowRowGraphPlanningDecision(
     state,
     operation,
@@ -229,12 +242,12 @@ function createResizeRowMinHeightCommitResult(
     "full",
   )
   if (graphDecision.kind === "failure") {
-    return createFlowRowGraphFailureResult(action.type, "flow-row.layout.patch", targetNodeIds, graphDiagnostics, graphDecision)
+    return createFlowRowGraphFailureResult("RESIZE_ROW_MIN_HEIGHT", "flow-row.layout.patch", targetNodeIds, graphDiagnostics, graphDecision)
   }
   if (graphDecision.kind === "noop") {
-    return createFlowRowGraphNoopResult(action.type, "flow-row.layout.patch", targetNodeIds, graphDiagnostics, graphDecision)
+    return createFlowRowGraphNoopResult("RESIZE_ROW_MIN_HEIGHT", "flow-row.layout.patch", targetNodeIds, graphDiagnostics, graphDecision)
   }
-  const nextDoc = updateNodeProps(state.doc, action.rowId, { minHeight: action.minHeight })
+  const nextDoc = updateNodeProps(state.doc, input.rowId, { minHeight: input.minHeight })
 
   return {
     status: "success",
@@ -244,7 +257,7 @@ function createResizeRowMinHeightCommitResult(
     diagnostics: {
       operationKind: "flow-row.layout.patch",
       reducerPath: "RESIZE_ROW_MIN_HEIGHT",
-      rowId: action.rowId,
+      rowId: input.rowId,
       targetNodeIds,
       ...graphDiagnostics,
       ...graphDecision.diagnostics,
@@ -257,8 +270,21 @@ export function createFlowRowLayoutActionResult(
   action: FlowRowLayoutAction,
 ): EditorOperationCommitResult {
   return action.type === "RESIZE_COLUMNS"
-    ? createResizeColumnsCommitResult(state, action)
-    : createResizeRowMinHeightCommitResult(state, action)
+    ? createResizeColumnsCommitResult(state, {
+        kind: "flow-row.layout.patch",
+        layoutType: "resize-columns",
+        leftStackId: action.leftStackId,
+        leftShare: action.leftShare,
+        rightStackId: action.rightStackId,
+        rightShare: action.rightShare,
+        ...(action.paginated ? { paginated: action.paginated } : {}),
+      })
+    : createResizeRowMinHeightCommitResult(state, {
+        kind: "flow-row.layout.patch",
+        layoutType: "resize-row-min-height",
+        rowId: action.rowId,
+        minHeight: action.minHeight,
+      })
 }
 
 export function createFlowRowLayoutOperationResult(
@@ -278,12 +304,17 @@ export function createFlowRowLayoutOperationResult(
     }
   }
 
-  if (operation.action.type === "RESIZE_COLUMNS") {
-    return createResizeColumnsCommitResult(state, operation.action, operation)
+  const command = operation.command?.kind === "flow-row.layout.patch"
+    ? operation.command
+    : operation.payload?.kind === "flow-row.layout.patch"
+      ? operation.payload
+      : undefined
+  if (command?.layoutType === "resize-columns") {
+    return createResizeColumnsCommitResult(state, command, operation)
   }
 
-  if (operation.action.type === "RESIZE_ROW_MIN_HEIGHT") {
-    return createResizeRowMinHeightCommitResult(state, operation.action, operation)
+  if (command?.layoutType === "resize-row-min-height") {
+    return createResizeRowMinHeightCommitResult(state, command, operation)
   }
 
   return {

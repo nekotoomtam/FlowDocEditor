@@ -16,7 +16,7 @@ import {
 import type { DocumentNode, ParagraphStyleProperties } from "@/schema"
 import type { EditorAction, EditorState } from "../editorReducer"
 import type { EditorOperationCommitDiagnostics, EditorOperationCommitResult } from "./editorOperationCommit"
-import type { EditorOperationEnvelope } from "./editorOperationTypes"
+import type { EditorOperationCommand, EditorOperationEnvelope } from "./editorOperationTypes"
 
 type StylePatchAction =
   | Extract<EditorAction, { type: "UPDATE_PARAGRAPH_TEXT_STYLE" }>
@@ -31,12 +31,42 @@ type StylePatchAction =
   | Extract<EditorAction, { type: "UPDATE_TEXT_RUN_STYLE_RANGE" }>
   | Extract<EditorAction, { type: "UPDATE_PARAGRAPH_BOX_STYLE" }>
   | Extract<EditorAction, { type: "UPDATE_FLOW_STACK_BOX_STYLE" }>
+type StylePatchCommand = Extract<EditorOperationCommand, { kind: "style.patch" }>
 
 type StyleCommitOptions = {
   nodeId?: string
   styleId?: string
   selectNodeId?: string
   noopWhenUnchanged?: boolean
+}
+
+function stylePatchActionFromCommand(input: StylePatchCommand): StylePatchAction {
+  switch (input.styleType) {
+    case "paragraph-text":
+      return { type: "UPDATE_PARAGRAPH_TEXT_STYLE", nodeId: input.nodeId, changes: input.changes }
+    case "apply-paragraph-style-preset":
+      return { type: "APPLY_PARAGRAPH_STYLE_PRESET", nodeId: input.nodeId, styleId: input.styleId }
+    case "clear-paragraph-style":
+      return { type: "CLEAR_PARAGRAPH_STYLE", nodeId: input.nodeId }
+    case "detach-paragraph-style":
+      return { type: "DETACH_PARAGRAPH_STYLE", nodeId: input.nodeId }
+    case "paragraph-style-override-box":
+      return { type: "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX", nodeId: input.nodeId, changes: input.changes }
+    case "paragraph-style-overrides":
+      return { type: "PATCH_PARAGRAPH_STYLE_OVERRIDES", nodeId: input.nodeId, changes: input.changes }
+    case "paragraph-style-definition":
+      return { type: "PATCH_PARAGRAPH_STYLE_DEFINITION", styleId: input.styleId, patch: input.patch }
+    case "rename-paragraph-style-definition":
+      return { type: "RENAME_PARAGRAPH_STYLE_DEFINITION", styleId: input.styleId, name: input.name }
+    case "reset-paragraph-style-overrides":
+      return { type: "RESET_PARAGRAPH_STYLE_OVERRIDES", nodeId: input.nodeId }
+    case "text-run-style-range":
+      return { type: "UPDATE_TEXT_RUN_STYLE_RANGE", nodeId: input.nodeId, start: input.start, end: input.end, changes: input.changes }
+    case "paragraph-box-style":
+      return { type: "UPDATE_PARAGRAPH_BOX_STYLE", nodeId: input.nodeId, changes: input.changes }
+    case "flow-stack-box-style":
+      return { type: "UPDATE_FLOW_STACK_BOX_STYLE", nodeId: input.nodeId, changes: input.changes }
+  }
 }
 
 function isDirectBodyParagraph(doc: DocumentNode, nodeId: string): boolean {
@@ -242,30 +272,23 @@ export function createStylePatchOperationResult(
     }
   }
 
-  switch (operation.action.type) {
-    case "UPDATE_PARAGRAPH_TEXT_STYLE":
-    case "APPLY_PARAGRAPH_STYLE_PRESET":
-    case "CLEAR_PARAGRAPH_STYLE":
-    case "DETACH_PARAGRAPH_STYLE":
-    case "PATCH_PARAGRAPH_STYLE_OVERRIDE_BOX":
-    case "PATCH_PARAGRAPH_STYLE_OVERRIDES":
-    case "PATCH_PARAGRAPH_STYLE_DEFINITION":
-    case "RENAME_PARAGRAPH_STYLE_DEFINITION":
-    case "RESET_PARAGRAPH_STYLE_OVERRIDES":
-    case "UPDATE_TEXT_RUN_STYLE_RANGE":
-    case "UPDATE_PARAGRAPH_BOX_STYLE":
-    case "UPDATE_FLOW_STACK_BOX_STYLE":
-      return createStylePatchResult(state, operation.action)
-    default:
-      return {
-        status: "failure",
-        failure: { reason: "invalid-style-patch-action" },
-        validationPolicy: "read-only",
-        historyPolicy: { kind: "none", reason: "invalid operation" },
-        diagnostics: {
-          operationKind: operation.kind,
-          reducerPath: "STYLE_PATCH",
-        },
-      }
+  const command = operation.command?.kind === "style.patch"
+    ? operation.command
+    : operation.payload?.kind === "style.patch"
+      ? operation.payload
+      : undefined
+  if (command) {
+    return createStylePatchResult(state, stylePatchActionFromCommand(command))
+  }
+
+  return {
+    status: "failure",
+    failure: { reason: "invalid-style-patch-action" },
+    validationPolicy: "read-only",
+    historyPolicy: { kind: "none", reason: "invalid operation" },
+    diagnostics: {
+      operationKind: operation.kind,
+      reducerPath: "STYLE_PATCH",
+    },
   }
 }

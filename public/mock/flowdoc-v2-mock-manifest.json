@@ -8,17 +8,21 @@
       "workflow": "node",
       "documentVersion": 2,
       "packageVersion": 2,
-      "nodeCount": 149,
+      "nodeCount": 153,
       "targets": {
         "typing": {
           "primary": "v2_typing_primary",
-          "boundary": "v2_typing_boundary"
+          "boundary": "v2_typing_boundary",
+          "pageBoundary": "v2_typing_page_boundary",
+          "deepDocument": "v2_typing_deep_document"
         },
         "node": {
           "delete": "v2_delete_target",
           "duplicate": "v2_duplicate_target",
           "reorderSource": "v2_reorder_source",
-          "reorderTarget": "v2_reorder_target"
+          "reorderTarget": "v2_reorder_target",
+          "split": "v2_split_target",
+          "merge": "v2_merge_target"
         },
         "flowRow": {
           "resizeTarget": "v2_flow_row_main",
@@ -42,17 +46,21 @@
       "workflow": "typing",
       "documentVersion": 2,
       "packageVersion": 2,
-      "nodeCount": 209,
+      "nodeCount": 213,
       "targets": {
         "typing": {
           "primary": "v2_typing_typing_primary",
-          "boundary": "v2_typing_typing_boundary"
+          "boundary": "v2_typing_typing_boundary",
+          "pageBoundary": "v2_typing_typing_page_boundary",
+          "deepDocument": "v2_typing_typing_deep_document"
         },
         "node": {
           "delete": "v2_typing_delete_target",
           "duplicate": "v2_typing_duplicate_target",
           "reorderSource": "v2_typing_reorder_source",
-          "reorderTarget": "v2_typing_reorder_target"
+          "reorderTarget": "v2_typing_reorder_target",
+          "split": "v2_typing_split_target",
+          "merge": "v2_typing_merge_target"
         },
         "flowRow": {
           "resizeTarget": "v2_typing_flow_row_main",
@@ -76,17 +84,21 @@
       "workflow": "flow-row",
       "documentVersion": 2,
       "packageVersion": 2,
-      "nodeCount": 173,
+      "nodeCount": 177,
       "targets": {
         "typing": {
           "primary": "v2_flow_row_typing_primary",
-          "boundary": "v2_flow_row_typing_boundary"
+          "boundary": "v2_flow_row_typing_boundary",
+          "pageBoundary": "v2_flow_row_typing_page_boundary",
+          "deepDocument": "v2_flow_row_typing_deep_document"
         },
         "node": {
           "delete": "v2_flow_row_delete_target",
           "duplicate": "v2_flow_row_duplicate_target",
           "reorderSource": "v2_flow_row_reorder_source",
-          "reorderTarget": "v2_flow_row_reorder_target"
+          "reorderTarget": "v2_flow_row_reorder_target",
+          "split": "v2_flow_row_split_target",
+          "merge": "v2_flow_row_merge_target"
         },
         "flowRow": {
           "resizeTarget": "v2_flow_row_flow_row_main",
@@ -110,17 +122,21 @@
       "workflow": "table",
       "documentVersion": 2,
       "packageVersion": 2,
-      "nodeCount": 222,
+      "nodeCount": 226,
       "targets": {
         "typing": {
           "primary": "v2_table_fixture_typing_primary",
-          "boundary": "v2_table_fixture_typing_boundary"
+          "boundary": "v2_table_fixture_typing_boundary",
+          "pageBoundary": "v2_table_fixture_typing_page_boundary",
+          "deepDocument": "v2_table_fixture_typing_deep_document"
         },
         "node": {
           "delete": "v2_table_fixture_delete_target",
           "duplicate": "v2_table_fixture_duplicate_target",
           "reorderSource": "v2_table_fixture_reorder_source",
-          "reorderTarget": "v2_table_fixture_reorder_target"
+          "reorderTarget": "v2_table_fixture_reorder_target",
+          "split": "v2_table_fixture_split_target",
+          "merge": "v2_table_fixture_merge_target"
         },
         "flowRow": {
           "resizeTarget": "v2_table_fixture_flow_row_main",
@@ -134,6 +150,99 @@
           "primaryRow": "v2_table_fixture_table_row_002",
           "bodyCell": "v2_table_fixture_table_cell_004_003",
           "spanCell": "v2_table_fixture_table_cell_003_002"
+        }
+      }
+    },
+    {
+      "id": "stress-long-v2",
+      "filename": "stress-long-v2.flowdoc.json",
+      "title": "Stress Long Document v2",
+      "workflow": "long",
+      "documentVersion": 2,
+      "packageVersion": 2,
+      "nodeCount": 1474,
+      "targets": {
+        "typing": {
+          "primary": "v2_long_typing_primary",
+          "boundary": "v2_long_typing_boundary",
+          "pageBoundary": "v2_long_typing_page_boundary",
+          "deepDocument": "v2_long_typing_deep_document"
+        },
+        "node": {
+          "delete": "v2_long_delete_target",
+          "duplicate": "v2_long_duplicate_target",
+          "reorderSource": "v2_long_reorder_source",
+          "reorderTarget": "v2_long_reorder_target",
+          "split": "v2_long_split_target",
+          "merge": "v2_long_merge_target"
+        },
+        "flowRow": {
+          "resizeTarget": "v2_long_flow_row_main",
+          "addColumnTarget": "v2_long_flow_row_main",
+          "leftStack": "v2_long_flow_stack_left",
+          "rightStack": "v2_long_flow_stack_right"
+        },
+        "table": {
+          "primaryTable": "v2_long_table_main",
+          "primaryCell": "v2_long_table_cell_002_002",
+          "primaryRow": "v2_long_table_row_002",
+          "bodyCell": "v2_long_table_cell_004_003",
+          "spanCell": "v2_long_table_cell_003_002"
+        }
+      }
+    },
+    {
+      "id": "product-report-v2",
+      "filename": "product-report-v2.flowdoc.json",
+      "title": "Product Report v2",
+      "workflow": "product-report",
+      "documentVersion": 2,
+      "packageVersion": 2,
+      "nodeCount": 255,
+      "targets": {
+        "typing": {
+          "primary": "product_report_typing_primary",
+          "boundary": "product_report_typing_boundary",
+          "pageBoundary": "product_report_typing_page_boundary",
+          "deepDocument": "product_report_typing_deep_document"
+        },
+        "node": {
+          "addAfter": "product_report_add_after_target",
+          "delete": "product_report_delete_target",
+          "duplicate": "product_report_duplicate_target",
+          "reorderSource": "product_report_reorder_source",
+          "reorderTarget": "product_report_reorder_target",
+          "split": "product_report_split_target",
+          "merge": "product_report_merge_target"
+        },
+        "flowRow": {
+          "summaryRow": "product_report_summary_flow_row",
+          "resizeTarget": "product_report_summary_flow_row",
+          "addColumnTarget": "product_report_summary_flow_row",
+          "leftStack": "product_report_summary_left_stack",
+          "rightStack": "product_report_summary_right_stack"
+        },
+        "table": {
+          "primaryTable": "product_report_kpi_table",
+          "headerRow": "product_report_kpi_row_001",
+          "primaryRow": "product_report_kpi_row_002",
+          "primaryCell": "product_report_kpi_cell_002_002",
+          "bodyCell": "product_report_kpi_cell_004_003",
+          "longTextCell": "product_report_kpi_cell_006_002",
+          "resizeTarget": "product_report_kpi_table"
+        },
+        "field": {
+          "reportTitle": "report.title",
+          "reportDate": "report.date",
+          "ownerName": "owner.name",
+          "totalAmount": "summary.totalAmount",
+          "riskLevel": "summary.riskLevel"
+        },
+        "history": {
+          "primaryEdit": "product_report_history_primary_edit"
+        },
+        "export": {
+          "readinessTarget": "product_report_export_readiness"
         }
       }
     }

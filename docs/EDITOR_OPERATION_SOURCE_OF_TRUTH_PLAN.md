@@ -1,6 +1,6 @@
 # Editor Operation Source Of Truth Plan
 
-Status: Active delegated job plan for moving editor runtime dispatch from
+Status: Historical and implementation ledger for moving editor runtime dispatch from
 action-first to operation-first. Phase 1 dispatch migration, Phase 2
 structural operation dispatch, and the first Phase 3 node mutation pilots are
 complete. The basic node mutation group is now covered, and Phase 4 has started
@@ -8,15 +8,21 @@ with flow-row structure/layout and table structure operation result helpers.
 Document settings, text draft/commit, node props, field patch, style patch, list
 structure, drag placement, and paragraph split/merge operation result helpers
 are now covered. Runtime operation dispatch now injects DocumentNode v2 graph
-context for graph-backed operation families. Stress-fixture and browser
-evidence are still pending.
+context for graph-backed operation families. Node delete, duplicate, reorder,
+node props, field patch, text draft/plain text commit, flow-row structure/layout,
+table structure, document settings, and style operations now carry semantic
+operation payloads that their planners read before the compatibility
+`EditorAction` snapshot.
+Stress-fixture and browser evidence are still pending.
 Document Model v2 is now the accepted direction for broad table/flow-row and
 fixture redesign work; see `docs/DOCUMENT_MODEL_V2_PLAN.md` and
 `docs/DOCUMENT_MODEL_V2_CONTRACT.md`.
 
-Use this plan with `docs/EDITOR_OPERATION_ARCHITECTURE.md` when the goal is
-to make Operation Architecture the source of truth rather than metadata wrapped
-around legacy reducer dispatch.
+Use this plan with `docs/EDITOR_OPERATION_ARCHITECTURE.md` for implementation
+history. For the current Phase 2 design gate that separates stable operation
+commands, legacy UI action snapshots, runtime context, operation plans, and
+future AI/external caller semantics, use
+`docs/EDITOR_OPERATION_COMMAND_ARCHITECTURE_PLAN.md`.
 
 ## Request
 
@@ -44,6 +50,9 @@ later from an `EditorAction`.
 - `src/app/editor/_components/editorReducer.ts` still owns the compatibility
   action switch for `legacy.action` and state-only commands, but every
   non-legacy `EditorOperationKind` is routed by operation kind before fallback.
+- `EditorOperationEnvelope.action` remains as a compatibility snapshot, but
+  the migrated node, field, text, flow-row, table, document settings, and style
+  planners read semantic `EditorOperationEnvelope.payload` values first.
 
 ## Phase Plan
 
@@ -183,6 +192,8 @@ Architecture checkpoint:
 | 2026-06-19 | 4 | Apply shared graph-backed planning to paragraph, list, and drag operation groups. | Done |
 | 2026-06-19 | 4 | Inject DocumentNode v2 graph runtime automatically in the editor operation dispatch path. | Done |
 | 2026-06-19 | 4 | Record scoped validation as a full-validation fallback deferral, not an implemented subtree validator. | Deferred |
+| 2026-06-19 | 4 | Add semantic operation payloads for node delete, duplicate, reorder, and node props planning. | Done |
+| 2026-06-19 | 4 | Add semantic operation payloads for field, text draft/plain commit, flow-row, table structure, document settings, and style planning. | Done |
 
 ## Verification
 
