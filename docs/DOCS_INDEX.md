@@ -41,7 +41,7 @@ For a new session:
 | Node model vNext contract | `docs/NODE_MODEL_VNEXT_CONTRACT.md` |
 | Node relationship graph vNext | `docs/NODE_RELATIONSHIP_GRAPH_VNEXT_PLAN.md` |
 | Node model vNext package/schema boundary | `docs/NODE_MODEL_VNEXT_PACKAGE_SCHEMA_BOUNDARY_PLAN.md` |
-| Node model vNext prototype adapter | `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` |
+| Node model vNext prototype adapter evidence | `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` |
 | vNext extractable workspace | `vnext-workspace/README.md`, `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` |
 | Editor runtime Document Model v2 | `docs/EDITOR_RUNTIME_DOCUMENT_MODEL_V2_PLAN.md` |
 | Test strategy | `docs/TEST_STRATEGY.md` |
@@ -205,9 +205,9 @@ Export, renderer, package, field, or data work:
 - `docs/NODE_MODEL_VNEXT_PACKAGE_SCHEMA_BOUNDARY_PLAN.md` when vNext document
   schema, package envelope, migration, field/data, or adapter boundaries are in
   scope
-- `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` when import/export or
-  migration work needs to translate current/prototype document shapes into
-  vNext names
+- `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` only as historical
+  prototype evidence, or if the owner explicitly requests a separate external
+  converter. Canonical vNext core work should use `vnext-workspace/docs/WORKSPACE_BOUNDARY.md`.
 - `docs/EXPORT_RENDERER_CONTRACT.md`
 - `docs/FLOWDOC_PACKAGE_CONTRACT.md`
 - `docs/FIELD_REGISTRY_CONTRACT.md`

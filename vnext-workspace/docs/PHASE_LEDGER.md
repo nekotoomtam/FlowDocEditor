@@ -11,16 +11,58 @@ Parent goal:
 | 3 | Package/schema boundary | done | parent repo docs |
 | 4 | Prototype adapter plan | done | parent repo docs |
 | 5 | First schema/graph slice | done | parent repo core slice |
-| 5.5 | Extractable workspace | in progress | this folder |
-| 6 | vNext product fixture | next | fixtures and tests |
-| 7 | Legacy migration adapter | pending | migration tests |
-| 8 | Package v2/document v3 parser | pending | persistence tests |
-| 9 | vNext operations | pending | operation tests |
-| 10 | Pagination/export integration | pending | renderer tests |
+| 5.5 | Extractable workspace | done | this folder |
+| 6 | vNext product fixture | done | `fixtures/product-report-vnext.flowdoc.json`; `tests/packageFixture.test.ts` |
+| 7 | Legacy cutoff and canonical-only boundary | done | `README.md`; `docs/WORKSPACE_BOUNDARY.md` |
+| 8 | Canonical package parser/serializer | done | `src/persistence/package.ts`; `tests/packageFixture.test.ts` |
+| 9 | vNext operations | done | `src/operations/documentOperations.ts`; `tests/operations.test.ts` |
+| 10 | Pagination/export integration | in_progress | `src/pagination/paginationPlan.ts`; `tests/paginationPlan.test.ts` |
 | 11 | Editor runtime bridge | pending | editor tests and smokes |
 | 12 | Move to new repository | pending | repository extraction checklist |
 
 ## Current Rule
 
-This workspace should prefer isolated vNext implementation over reuse. Reuse is
-allowed only through explicit migration or compatibility adapters.
+This workspace should prefer isolated vNext implementation over reuse.
+Current/prototype structures are reference evidence only and are not accepted
+inputs for exported core. The canonical persisted input is
+`FlowDocPackage.packageVersion = 2` with `document.version = 3`. Any future
+one-off converter must live outside exported core and outside required vNext
+checks.
+
+## Phase 10 Boundary
+
+Current pagination/export work is vNext-only and planning-only:
+
+- `buildVNextPaginationPlan(...)` produces page boxes, zone source order,
+  source item split-policy hints, and measurement status.
+- `buildVNextExportPlan(...)` declares that PDF and DOCX consume measured
+  pagination output and must not relayout.
+- `resolveVNextPaginationInvalidation(...)` maps operation results to stale or
+  unchanged pagination/export readiness.
+
+This phase does not import the parent layout engine, perform text measurement,
+place page fragments, or render PDF/DOCX yet.
+
+## Phase 9 Baseline
+
+Current operation commands are graph-backed and canonical-only:
+
+- `node.delete`
+- `node.duplicate`
+- `node.reorder`
+- `columns.insert`
+- `columns.layout.patch`
+- `text-block.insert`
+- `text-block.text.replace`
+- `table.row.insert`
+- `table.row.delete`
+- `table.column.insert`
+- `table.column.delete`
+
+They return validation policy, history policy, render invalidation, and graph
+scope metadata. `createVNextOperationHistoryRecord(...)` converts committed and
+rejected operation results into JSON-serializable history-ready records.
+`appendVNextOperationHistoryRecord(...)` and
+`replayVNextOperationHistory(...)` provide an in-memory replay contract. This
+does not persist durable operation history or integrate with the current editor
+runtime yet.

@@ -17,18 +17,24 @@ future project root, not as a submodule of the current editor implementation.
 - Direct imports from `../src/app`.
 - Direct imports from editor reducer, renderer, pagination, or persistence
   runtime paths.
-- Current/prototype node names as vNext public API.
+- Current/prototype node names as vNext public API or accepted canonical input.
 
-## Legacy Access Rule
+## Prototype Cutoff Rule
 
-Legacy/current structures may enter this workspace only through files named
-with one of these terms:
+Current/prototype structures are reference evidence only. They must not enter
+the exported vNext source path, package parser, fixture contract, or required
+test suite as supported input.
 
-- `legacy`
-- `compat`
-- `migration`
+The canonical vNext input is:
 
-Those files must document their exit criteria.
+```text
+FlowDocPackage.packageVersion = 2
+  -> document.version = 3
+```
+
+Old document versions and prototype node names should be rejected by canonical
+vNext parsers. If the project ever needs a one-off converter, keep it outside
+exported core and outside required vNext checks.
 
 ## Extraction Rule
 
@@ -37,6 +43,6 @@ Before this workspace moves to a new repository, it should have:
 - package-local type-check;
 - package-local tests;
 - vNext product fixture;
-- package v2/document v3 parser tests;
-- migration diagnostics for supported legacy inputs;
+- package v2/document v3 parser and serializer tests;
+- no exported migration or compatibility adapter for old document shapes;
 - no imports from the parent app runtime.

@@ -1,4 +1,6 @@
 export * from "./schema/document.js"
 export * from "./graph/relationshipGraph.js"
 export * from "./persistence/package.js"
+export * from "./operations/documentOperations.js"
+export * from "./pagination/paginationPlan.js"
 export * from "./errors.js"

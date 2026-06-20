@@ -4,8 +4,8 @@ Status: Phase 3 design baseline for Node Model vNext.
 
 Use this document after `docs/NODE_MODEL_VNEXT_CONTRACT.md` and
 `docs/NODE_RELATIONSHIP_GRAPH_VNEXT_PLAN.md` when deciding persisted schema
-versioning, package envelope compatibility, migration APIs, fixture shape, and
-adapter boundaries for vNext.
+versioning, package envelope compatibility, canonical parser behavior, fixture
+shape, and cutoff boundaries for vNext.
 
 This is a boundary contract, not an implementation patch. It does not change
 runtime save/load behavior by itself.
@@ -14,16 +14,17 @@ runtime save/load behavior by itself.
 
 The owner accepted a semi-rebuild direction for the node model. Phase 1 locked
 the vNext node vocabulary. Phase 2 locked the relationship graph. Phase 3
-decides where that model sits relative to persisted packages and migration.
+decides where that model sits relative to persisted packages and canonical
+vNext input.
 
 Request-to-plan trace:
 
 ```text
 User request
   -> Node Model vNext Plan
-    -> Phase 3: package/schema boundary and migration strategy
-      -> Job item: decide document version, package version, migration inputs,
-         and adapter stance
+    -> Phase 3: package/schema boundary and canonical input strategy
+      -> Job item: decide document version, package version, accepted inputs,
+         and cutoff stance
         -> Execution step: write this plan
 ```
 
@@ -31,12 +32,12 @@ Current position:
 
 - Request: keep stepping back from the prototype before implementation.
 - Plan: Node Model vNext Plan.
-- Phase: Phase 3, package/schema boundary and migration strategy.
-- Job item: define versioning and migration ownership.
+- Phase: Phase 3, package/schema boundary and canonical input strategy.
+- Job item: define versioning and cutoff ownership.
 - Status: done.
 - Why this item is current: the node set and graph are explicit, but vNext
-  needs a stable persisted boundary before adapters or implementation slices.
-- Next transition: Phase 4, prototype adapter plan, captured in
+  needs a stable persisted boundary before implementation slices.
+- Next transition: Phase 4, prototype evidence plan, captured in
   `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md`.
 
 ## Evidence
@@ -111,14 +112,18 @@ FlowDocPackage.packageVersion = 2
 
 unless package-level fields change.
 
-Valid transition shape:
+Canonical vNext persisted shape:
 
 ```text
 FlowDocPackage v2
   -> fields: FieldRegistryV1
   -> data?: DataSnapshotV1
-  -> document: DocumentNode v1 | DocumentNode v2 | DocumentNode v3
+  -> document: DocumentNode v3
 ```
+
+The parent application may still carry older package/document readers while it
+is being replaced. The extractable vNext workspace is stricter: old document
+versions and prototype node names are not accepted by exported core.
 
 `FlowDocPackage v3` should be reserved for package envelope changes, not node
 renaming.
@@ -162,68 +167,67 @@ Bump `document.version` when authored document JSON changes:
 For vNext, the target is document v3 because the authored model is no longer a
 compatible extension of v2.
 
-## Migration Inputs
+## Canonical Inputs
 
-vNext import should accept these inputs:
+vNext import should accept only the canonical package shape:
 
 | Input | Role | Behavior |
 |---|---|---|
-| Raw `DocumentNode v1` | Legacy import | Parse, normalize, migrate to v3, surface warnings |
-| `FlowDocPackage v1` with document v1 | Legacy package import | Convert package to v2 envelope, migrate document to v3 |
-| `FlowDocPackage v2` with document v1 | Current compatibility input | Migrate document to v3 |
-| `FlowDocPackage v2` with document v2 | Prototype evidence input | Migrate/adapt document to v3 |
-| Raw `DocumentNode v2` | Fixture/prototype input | Migrate document to v3 through explicit migration API |
 | `FlowDocPackage v2` with document v3 | Canonical vNext package | Parse and validate as vNext |
 
-Unsupported inputs should fail with structured reasons, not silent repair.
+Unsupported inputs should fail with structured reasons, not silent repair. This
+includes raw document inputs, document v1/v2, `FlowDocPackage v1`, and package
+v2 files containing prototype/current node names.
 
-## Migration API Direction
+## Parser API Direction
 
-vNext should introduce explicit migration functions rather than extending the
-v2 adapter invisibly.
+vNext should introduce explicit canonical parse/serialize helpers rather than
+extending the v2 adapter invisibly.
 
 Suggested API shape:
 
 ```ts
-type DocumentMigrationIssue = {
+type VNextParseIssue = {
   severity: "error" | "warning";
   code: string;
   path: string;
   message: string;
 };
 
-type DocumentVNextMigrationResult =
-  | { ok: true; document: DocumentNodeVNext; issues: DocumentMigrationIssue[] }
-  | { ok: false; reason: "unsupported-version" | "invalid-document"; issues: DocumentMigrationIssue[] };
+type FlowDocVNextParseResult =
+  | { ok: true; package: FlowDocPackageV2DocumentVNext; issues: VNextParseIssue[] }
+  | { ok: false; reason: "unsupported-version" | "invalid-package"; issues: VNextParseIssue[] };
 
-function migrateDocumentToVNext(input: DocumentNode | DocumentNodeV2): DocumentVNextMigrationResult;
 function assertDocumentVNext(input: unknown): asserts input is DocumentNodeVNext;
+function parseFlowDocPackageV2DocumentVNext(input: unknown): FlowDocVNextParseResult;
+function serializeFlowDocPackageV2DocumentVNext(input: FlowDocPackageV2DocumentVNext): unknown;
 function buildRelationshipGraphVNext(document: DocumentNodeVNext): NodeRelationshipGraph;
 ```
 
 The first implementation may use narrower names such as `DocumentNodeV3`, but
 the boundary should remain "vNext document schema in, vNext graph out".
 
-## Adapter Stance
+## Cutoff Stance
 
-Adapters are allowed during migration, but they must be named as adapters and
-must not become the final source of truth.
+Adapters are not part of the exported vNext core. Prototype/current structures
+are reference evidence only.
 
 Allowed:
 
-- `migrateDocumentToVNext(...)` from v1/v2/prototype inputs.
-- A temporary `adaptDocumentVNextToCurrentDocument(...)` only when the current
-  runtime still cannot consume vNext directly.
-- A read-only graph adapter that maps prototype nodes into vNext graph facts
-  for comparison tests.
+- `parseFlowDocPackageV2DocumentVNext(...)` for package v2/document v3.
+- `serializeFlowDocPackageV2DocumentVNext(...)` for package v2/document v3.
+- A future one-off converter outside exported core, only if the owner explicitly
+  asks for it.
 
 Not allowed as final architecture:
 
 - saving vNext documents while the editor secretly edits v1 runtime state;
+- accepting document v1/v2 or prototype node names in the canonical vNext
+  parser;
 - exposing `paragraph`, `flow-row`, `flow-stack`, or `flow-table` as vNext
   concepts from graph queries;
 - treating package metadata as layout/render/export truth;
-- adding another adapter layer without an exit plan.
+- adding an adapter layer to exported core.
 
 ## Runtime Boundary
 
@@ -286,7 +290,7 @@ The fixture should prove:
 - columns/column summary layout;
 - table/table-row/table-cell detail layout;
 - inline field-ref and page-number;
-- migration warnings are visible when generated from v1/v2 inputs.
+- canonical parser failures are explicit when old/prototype inputs are supplied.
 
 ## Tests And Gates
 
@@ -294,8 +298,8 @@ Phase 4 and later should add focused tests in this order:
 
 1. vNext schema accepts a tiny document v3 package inside package v2.
 2. vNext schema rejects prototype node names as final vNext nodes.
-3. v1/v2 migration produces text-block, zone, columns, and table nodes.
-4. relationship graph builds from the migrated vNext document.
+3. package v2 with document v1/v2 is rejected by canonical vNext parser.
+4. relationship graph builds from canonical vNext documents.
 5. package v2 with document v3 round-trips through parse/serialize helpers.
 6. product-report-vNext fixture passes schema and graph assertions.
 
@@ -317,12 +321,12 @@ Current job lane:
 |---|---|---|---|---|---|
 | 1 | Evidence check | Docs/code reading | Current package/document version split is verified | done | package contract, document v2 contract, `documentPersistence.ts` |
 | 2 | Boundary decision | Docs | vNext target document version and package envelope rule are explicit | done | this document |
-| 3 | Migration API plan | Docs | Migration inputs, output shape, adapter stance, and error surface are explicit | done | this document |
-| 4 | Prototype adapter plan | Docs/tests | v2/current runtime adapters are mapped to vNext without leaking prototype names | done | `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` |
+| 3 | Canonical parser plan | Docs | Accepted input, output shape, cutoff stance, and error surface are explicit | done | this document |
+| 4 | Prototype evidence plan | Docs/tests | v2/current runtime lessons are mapped without making old names vNext API | done | `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` |
 | 5 | Schema skeleton | Core/tests | Minimal document v3 type/schema/assertion exists | done | `packages/core/src/schema/documentVNext.ts`; `packages/core/src/document/documentVNext.test.ts` |
 | 5.5 | Extractable workspace | Repo structure/docs/tests | vNext package/schema work has a temporary standalone home | done | `vnext-workspace/README.md`; `vnext-workspace/src/persistence/package.ts`; `vnext-workspace/tests/packageFixture.test.ts` |
-| 6 | Product fixture | Fixture/tests/smoke | Product-report vNext fixture exists and becomes the acceptance anchor | next | fixture and smoke evidence |
-| 7 | Persistence parser slice | App/core tests | Package v2 with document v3 parses and serializes intentionally outside the app runtime first | pending | persistence tests |
+| 6 | Product fixture | Fixture/tests/smoke | Product-report vNext fixture exists and becomes the acceptance anchor | done | `vnext-workspace/fixtures/product-report-vnext.flowdoc.json`; `vnext-workspace/tests/packageFixture.test.ts` |
+| 7 | Persistence parser slice | App/core tests | Package v2 with document v3 parses and serializes intentionally outside the app runtime first | done | `vnext-workspace/src/persistence/package.ts`; `vnext-workspace/tests/packageFixture.test.ts` |
 
 ## Stop Conditions
 
@@ -332,7 +336,7 @@ Stop for owner review before:
 - changing `FlowDocPackage.packageVersion`;
 - making package-level `history` normative;
 - changing field registry or data snapshot major versions;
-- removing v1/v2 import support;
+- reintroducing v1/v2 import support into exported vNext core;
 - removing product-report-v2 coverage before product-report-vNext coverage
   exists;
 - claiming editor runtime is vNext-native while it still depends on a current
@@ -342,7 +346,7 @@ Continue autonomously when:
 
 - refining the boundary doc;
 - linking docs;
-- drafting adapter plans;
+- tightening canonical parser and cutoff docs;
 - writing non-runtime schema examples;
 - adding tests that assert docs-level fixture shape without changing runtime
   save/load behavior.
@@ -352,11 +356,11 @@ Continue autonomously when:
 When a versioning choice is unclear, decide in this order:
 
 1. authored document schema clarity;
-2. package compatibility;
-3. explicit migration diagnostics;
+2. canonical package clarity;
+3. explicit parse diagnostics;
 4. graph facts as runtime truth;
 5. field/data continuity;
 6. product-report workflow evidence;
-7. adapter removability.
+7. no hidden adapters.
 
 Do not create `FlowDocPackage v3` just because vNext changes node names.

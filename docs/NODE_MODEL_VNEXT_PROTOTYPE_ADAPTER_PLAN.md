@@ -1,6 +1,12 @@
 # Node Model vNext Prototype Adapter Plan
 
-Status: Phase 4 design baseline for Node Model vNext.
+Status: Phase 4 prototype evidence reference for Node Model vNext.
+
+Cutoff update: this document is superseded for the main vNext implementation
+path. It remains useful evidence for why the vocabulary changed, but the
+extractable `vnext-workspace` must not implement, export, or require the
+legacy/prototype migration adapter described here. Canonical vNext input is
+package v2 containing document v3.
 
 Use this document after `docs/NODE_MODEL_VNEXT_PACKAGE_SCHEMA_BOUNDARY_PLAN.md`
 when mapping current/prototype document shapes, graph facts, placement
@@ -30,14 +36,19 @@ Current position:
 
 - Request: continue from package/schema boundary into adapter design.
 - Plan: Node Model vNext Plan.
-- Phase: Phase 5.5, extractable workspace.
-- Job item: create a temporary vNext home that can move to a new repository.
+- Phase: Phase 9, vNext operation integration.
+- Job item: keep prototype operation names out of the exported vNext operation
+  boundary.
 - Status: done.
-- Why this item is current: Phase 3 decided document v3 inside package v2; now
-  vNext has an adapter strategy, a first schema/graph implementation slice, and
-  a standalone workspace boundary for future repo extraction.
-- Next transition: Phase 6, product fixture migration inside
-  `vnext-workspace/`.
+- Why this item is current: Phase 3 decided document v3 inside package v2,
+  Phase 5/5.5 created a standalone vNext slice, and Phase 6 created a
+  product-shaped vNext fixture. The owner confirmed no legacy users need
+  compatibility, so the adapter strategy below is now reference-only. Phase 8
+  backs that cutoff with canonical package parse/serialize behavior, and Phase
+  9 now has graph-backed vNext command names, table/columns structure commands,
+  and history-ready operation records rather than prototype operation names.
+- Next transition: Phase 10, pagination/export integration from canonical vNext
+  document structure.
 
 ## Evidence
 
@@ -84,14 +95,18 @@ unobservable from vNext graph/operation APIs.
 
 ## Adapter Principle
 
-Adapters are migration tools, not architecture.
+Adapters are migration tools, not architecture. For the main vNext path, they
+are now out of scope. The lanes below are historical/reference mappings only
+unless the owner explicitly asks for a separate one-off converter outside
+exported core.
 
-Allowed adapter lanes:
+Reference adapter lanes:
 
 ```text
 Persisted v1/v2 input
-  -> migrateDocumentToVNext
+  -> external one-off converter outside exported core
   -> DocumentNode.version = 3
+  -> canonical vNext package parser
   -> buildRelationshipGraphVNext
 ```
 
@@ -356,7 +371,9 @@ The bridge must be retired when:
 
 ## Tests And Gates
 
-Phase 5 should start with tests that make the adapter boundary executable:
+The executable vNext test path should now prefer canonical package/document v3
+checks. The list below is historical adapter evidence, not a required vNext
+core implementation sequence:
 
 1. migrate a minimal v2 body root to vNext section plus body zone.
 2. migrate paragraph heading/list/normal nodes to text-block roles.
@@ -384,17 +401,21 @@ Current job lane:
 |---|---|---|---|---|---|
 | 1 | Evidence check | Docs/code reading | v2 graph, schema, placement, operation, and runtime adapter constraints are identified | done | this document |
 | 2 | Concept mapping | Docs | Prototype-to-vNext concept mapping is explicit | done | this document |
-| 3 | Adapter lane design | Docs | Import, runtime compatibility, graph comparison, placement, and operation adapters have boundaries | done | this document |
-| 4 | Exit criteria | Docs | Conditions for retiring compatibility bridges are explicit | done | this document |
+| 3 | Adapter lane design | Docs | Historical import, runtime compatibility, graph comparison, placement, and operation adapter ideas are documented as reference | done | this document |
+| 4 | Cutoff criteria | Docs | Prototype adapters are marked non-core for vNext workspace | done | this document; `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` |
 | 5 | First implementation slice | Core schema/graph/tests | Minimal vNext schema and graph tests prove zones/text-block/columns basics | done | `packages/core/src/schema/documentVNext.ts`; `packages/core/src/document/documentVNext.ts`; `packages/core/src/document/documentVNext.test.ts` |
 | 5.5 | Extractable workspace | Repo structure/docs/tests | vNext has a temporary home that can move to a new repository | done | `vnext-workspace/README.md`; `vnext-workspace/docs/WORKSPACE_BOUNDARY.md`; `vnext-workspace/tests` |
-| 6 | Product fixture migration | Fixture/tests/smoke | product-report-vNext becomes the product anchor | next | `vnext-workspace/fixtures/product-report-vnext-minimal.flowdoc.json` |
+| 6 | Product fixture | Fixture/tests/smoke | product-report-vNext becomes the product anchor | done | `vnext-workspace/fixtures/product-report-vnext.flowdoc.json`; `vnext-workspace/tests/packageFixture.test.ts` |
+| 7 | Legacy cutoff | Docs/tests | vNext core no longer exports or requires a legacy/prototype adapter | done | `vnext-workspace/README.md`; `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` |
+| 8 | Canonical package parser | Persistence/tests | Package v2/document v3 parse and serialize behavior is explicit | done | `vnext-workspace/src/persistence/package.ts`; `vnext-workspace/tests/packageFixture.test.ts` |
+| 9 | vNext operations | Operation tests | Graph-backed vNext command names and history-ready records exist without prototype operation names | done | `vnext-workspace/src/operations/documentOperations.ts`; `vnext-workspace/tests/operations.test.ts` |
 
 ## Stop Conditions
 
 Stop for owner review before:
 
 - implementing broad runtime conversion;
+- adding a legacy/prototype migration adapter to exported vNext core;
 - silently adapting vNext saves back to v1 as the primary authored truth;
 - accepting legacy `row` / `stack` migration rules that lose structure;
 - deciding column box styling or nested columns without product evidence;
@@ -404,10 +425,10 @@ Stop for owner review before:
 
 Continue autonomously when:
 
-- adding narrow migration tests;
+- marking adapter content as non-core reference;
 - drafting vNext schema skeletons;
 - adding graph diagnostics tests;
-- writing adapter comparison tests;
+- writing canonical parser/graph tests;
 - linking docs and updating phase maps.
 
 ## Decision Rule
@@ -416,10 +437,9 @@ When reuse conflicts with model clarity, prefer:
 
 1. vNext node vocabulary;
 2. explicit graph facts;
-3. migration diagnostics;
-4. temporary compatibility with named exit criteria;
-5. product anchor evidence;
-6. old runtime convenience only behind adapters.
+3. canonical package/document v3 input;
+4. product anchor evidence;
+5. old runtime behavior as evidence only.
 
 Do not call a prototype name "vNext" just because current code already supports
 it.

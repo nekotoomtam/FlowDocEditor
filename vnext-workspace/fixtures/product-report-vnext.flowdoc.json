@@ -1,0 +1,512 @@
+{
+  "packageVersion": 2,
+  "kind": "document",
+  "id": "product-report-vnext",
+  "meta": {
+    "title": "Product Report vNext",
+    "createdAt": "2026-06-20T00:00:00.000Z",
+    "updatedAt": "2026-06-20T00:00:00.000Z"
+  },
+  "fields": {
+    "version": 1,
+    "fields": {
+      "customer.name": {
+        "key": "customer.name",
+        "label": "Customer Name",
+        "type": "text",
+        "fallback": "Customer"
+      },
+      "customer.segment": {
+        "key": "customer.segment",
+        "label": "Customer Segment",
+        "type": "text",
+        "fallback": "Segment"
+      },
+      "report.period": {
+        "key": "report.period",
+        "label": "Report Period",
+        "type": "text",
+        "fallback": "Current Period"
+      },
+      "report.total": {
+        "key": "report.total",
+        "label": "Report Total",
+        "type": "number"
+      },
+      "report.riskLevel": {
+        "key": "report.riskLevel",
+        "label": "Risk Level",
+        "type": "enum",
+        "fallback": "Normal"
+      },
+      "prepared.by": {
+        "key": "prepared.by",
+        "label": "Prepared By",
+        "type": "text",
+        "fallback": "Team"
+      }
+    }
+  },
+  "data": {
+    "version": 1,
+    "values": {
+      "customer.name": "Example Customer",
+      "customer.segment": "Enterprise",
+      "report.period": "Q2 2026",
+      "report.total": 42,
+      "report.riskLevel": "Normal",
+      "prepared.by": "Document Team"
+    }
+  },
+  "document": {
+    "version": 3,
+    "document": {
+      "id": "product-report-vnext",
+      "meta": {
+        "title": "Product Report vNext"
+      },
+      "sections": [
+        {
+          "id": "section-cover",
+          "type": "section",
+          "page": {
+            "size": "A4",
+            "orientation": "portrait",
+            "margin": {
+              "top": { "value": 72, "unit": "pt" },
+              "right": { "value": 72, "unit": "pt" },
+              "bottom": { "value": 72, "unit": "pt" },
+              "left": { "value": 72, "unit": "pt" }
+            },
+            "headerReserved": 36,
+            "footerReserved": 42,
+            "headerFooterHorizontalMode": "body"
+          },
+          "zoneIds": ["cover-first-header", "cover-body", "cover-first-footer"],
+          "nodes": {
+            "cover-first-header": {
+              "id": "cover-first-header",
+              "type": "zone",
+              "role": "first-page-header",
+              "childIds": ["cover-header-label"]
+            },
+            "cover-body": {
+              "id": "cover-body",
+              "type": "zone",
+              "role": "body",
+              "childIds": ["cover-title", "cover-subtitle", "cover-meta-columns", "cover-divider", "cover-note"]
+            },
+            "cover-first-footer": {
+              "id": "cover-first-footer",
+              "type": "zone",
+              "role": "first-page-footer",
+              "childIds": ["cover-footer-page"]
+            },
+            "cover-header-label": {
+              "id": "cover-header-label",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "cover-header-label-text", "type": "text", "text": "Confidential Product Report" }]
+            },
+            "cover-title": {
+              "id": "cover-title",
+              "type": "text-block",
+              "role": { "role": "heading", "level": 1 },
+              "props": {},
+              "children": [
+                { "id": "cover-title-prefix", "type": "text", "text": "Product Report for " },
+                { "id": "cover-title-customer", "type": "field-ref", "key": "customer.name", "fallback": "Customer" }
+              ]
+            },
+            "cover-subtitle": {
+              "id": "cover-subtitle",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [
+                { "id": "cover-subtitle-period-label", "type": "text", "text": "Reporting period: " },
+                { "id": "cover-subtitle-period", "type": "field-ref", "key": "report.period", "fallback": "Current Period" }
+              ]
+            },
+            "cover-meta-columns": {
+              "id": "cover-meta-columns",
+              "type": "columns",
+              "props": { "gap": 18, "alignY": "top" },
+              "columnIds": ["cover-meta-left", "cover-meta-right"]
+            },
+            "cover-meta-left": {
+              "id": "cover-meta-left",
+              "type": "column",
+              "props": { "widthShare": 55 },
+              "childIds": ["cover-segment-label", "cover-segment-value"]
+            },
+            "cover-meta-right": {
+              "id": "cover-meta-right",
+              "type": "column",
+              "props": { "widthShare": 45 },
+              "childIds": ["cover-risk-label", "cover-risk-value"]
+            },
+            "cover-segment-label": {
+              "id": "cover-segment-label",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "cover-segment-label-text", "type": "text", "text": "Segment" }]
+            },
+            "cover-segment-value": {
+              "id": "cover-segment-value",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [{ "id": "cover-segment-field", "type": "field-ref", "key": "customer.segment", "fallback": "Segment" }]
+            },
+            "cover-risk-label": {
+              "id": "cover-risk-label",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "cover-risk-label-text", "type": "text", "text": "Risk level" }]
+            },
+            "cover-risk-value": {
+              "id": "cover-risk-value",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [{ "id": "cover-risk-field", "type": "field-ref", "key": "report.riskLevel", "fallback": "Normal" }]
+            },
+            "cover-divider": {
+              "id": "cover-divider",
+              "type": "divider",
+              "props": {}
+            },
+            "cover-note": {
+              "id": "cover-note",
+              "type": "text-block",
+              "role": { "role": "note" },
+              "props": {},
+              "children": [
+                { "id": "cover-note-prefix", "type": "text", "text": "Prepared by " },
+                { "id": "cover-note-author", "type": "field-ref", "key": "prepared.by", "fallback": "Team" }
+              ]
+            },
+            "cover-footer-page": {
+              "id": "cover-footer-page",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [
+                { "id": "cover-footer-page-label", "type": "text", "text": "Page " },
+                { "id": "cover-footer-page-number", "type": "page-number" }
+              ]
+            }
+          }
+        },
+        {
+          "id": "section-toc",
+          "type": "section",
+          "page": {
+            "size": "A4",
+            "orientation": "portrait",
+            "margin": {
+              "top": { "value": 60, "unit": "pt" },
+              "right": { "value": 60, "unit": "pt" },
+              "bottom": { "value": 60, "unit": "pt" },
+              "left": { "value": 60, "unit": "pt" }
+            },
+            "headerReserved": 34,
+            "footerReserved": 40,
+            "headerFooterHorizontalMode": "body"
+          },
+          "zoneIds": ["toc-header", "toc-body", "toc-footer"],
+          "nodes": {
+            "toc-header": {
+              "id": "toc-header",
+              "type": "zone",
+              "role": "header",
+              "childIds": ["toc-header-title"]
+            },
+            "toc-body": {
+              "id": "toc-body",
+              "type": "zone",
+              "role": "body",
+              "childIds": ["toc-heading", "toc-generated", "toc-caption"]
+            },
+            "toc-footer": {
+              "id": "toc-footer",
+              "type": "zone",
+              "role": "footer",
+              "childIds": ["toc-footer-page"]
+            },
+            "toc-header-title": {
+              "id": "toc-header-title",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "toc-header-title-text", "type": "text", "text": "Product Report" }]
+            },
+            "toc-heading": {
+              "id": "toc-heading",
+              "type": "text-block",
+              "role": { "role": "heading", "level": 2 },
+              "props": {},
+              "children": [{ "id": "toc-heading-text", "type": "text", "text": "Contents" }]
+            },
+            "toc-generated": {
+              "id": "toc-generated",
+              "type": "toc",
+              "props": { "title": "Contents", "maxLevel": 3 }
+            },
+            "toc-caption": {
+              "id": "toc-caption",
+              "type": "text-block",
+              "role": { "role": "caption" },
+              "props": {},
+              "children": [{ "id": "toc-caption-text", "type": "text", "text": "Generated entries are render output, not authored child nodes." }]
+            },
+            "toc-footer-page": {
+              "id": "toc-footer-page",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [
+                { "id": "toc-footer-page-label", "type": "text", "text": "Page " },
+                { "id": "toc-footer-page-number", "type": "page-number" }
+              ]
+            }
+          }
+        },
+        {
+          "id": "section-body",
+          "type": "section",
+          "page": {
+            "size": "A4",
+            "orientation": "portrait",
+            "margin": {
+              "top": { "value": 54, "unit": "pt" },
+              "right": { "value": 54, "unit": "pt" },
+              "bottom": { "value": 54, "unit": "pt" },
+              "left": { "value": 54, "unit": "pt" }
+            },
+            "headerReserved": 36,
+            "footerReserved": 42,
+            "headerFooterHorizontalMode": "body",
+            "pageNumberStart": 1
+          },
+          "zoneIds": ["body-header", "body-main", "body-footer"],
+          "nodes": {
+            "body-header": {
+              "id": "body-header",
+              "type": "zone",
+              "role": "header",
+              "childIds": ["body-header-title"]
+            },
+            "body-main": {
+              "id": "body-main",
+              "type": "zone",
+              "role": "body",
+              "childIds": ["body-heading", "body-summary", "body-list-1", "body-list-2", "body-metrics-heading", "body-metrics-table", "body-page-break", "body-followup-heading", "body-followup-text"]
+            },
+            "body-footer": {
+              "id": "body-footer",
+              "type": "zone",
+              "role": "footer",
+              "childIds": ["body-footer-page"]
+            },
+            "body-header-title": {
+              "id": "body-header-title",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [
+                { "id": "body-header-title-prefix", "type": "field-ref", "key": "customer.name", "fallback": "Customer" },
+                { "id": "body-header-title-separator", "type": "text", "text": " - " },
+                { "id": "body-header-title-period", "type": "field-ref", "key": "report.period", "fallback": "Current Period" }
+              ]
+            },
+            "body-heading": {
+              "id": "body-heading",
+              "type": "text-block",
+              "role": { "role": "heading", "level": 2 },
+              "props": {},
+              "children": [{ "id": "body-heading-text", "type": "text", "text": "Executive Summary" }]
+            },
+            "body-summary": {
+              "id": "body-summary",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [
+                { "id": "body-summary-a", "type": "text", "text": "This report highlights current product health for " },
+                { "id": "body-summary-customer", "type": "field-ref", "key": "customer.name", "fallback": "Customer" },
+                { "id": "body-summary-b", "type": "text", "text": "." }
+              ]
+            },
+            "body-list-1": {
+              "id": "body-list-1",
+              "type": "text-block",
+              "role": {
+                "role": "list-item",
+                "list": { "instanceId": "exec-actions", "level": 0, "itemId": "exec-actions-1" }
+              },
+              "props": {},
+              "children": [{ "id": "body-list-1-text", "type": "text", "text": "Review adoption movement against the product baseline." }]
+            },
+            "body-list-2": {
+              "id": "body-list-2",
+              "type": "text-block",
+              "role": {
+                "role": "list-item",
+                "list": { "instanceId": "exec-actions", "level": 0, "itemId": "exec-actions-2" }
+              },
+              "props": {},
+              "children": [{ "id": "body-list-2-text", "type": "text", "text": "Confirm risk items before export readiness review." }]
+            },
+            "body-metrics-heading": {
+              "id": "body-metrics-heading",
+              "type": "text-block",
+              "role": { "role": "heading", "level": 3 },
+              "props": {},
+              "children": [{ "id": "body-metrics-heading-text", "type": "text", "text": "Metric Detail" }]
+            },
+            "body-metrics-table": {
+              "id": "body-metrics-table",
+              "type": "table",
+              "props": { "headerRowCount": 1, "repeatHeaderRows": true, "align": "left" },
+              "columns": [
+                { "width": { "value": 132, "unit": "pt" } },
+                { "width": { "value": 132, "unit": "pt" } },
+                { "width": { "value": 132, "unit": "pt" } }
+              ],
+              "rowIds": ["metrics-header-row", "metrics-data-row"]
+            },
+            "metrics-header-row": {
+              "id": "metrics-header-row",
+              "type": "table-row",
+              "props": {},
+              "cellIds": ["metric-header-name", "metric-header-value", "metric-header-risk"]
+            },
+            "metric-header-name": {
+              "id": "metric-header-name",
+              "type": "table-cell",
+              "props": {},
+              "childIds": ["metric-header-name-text"]
+            },
+            "metric-header-value": {
+              "id": "metric-header-value",
+              "type": "table-cell",
+              "props": {},
+              "childIds": ["metric-header-value-text"]
+            },
+            "metric-header-risk": {
+              "id": "metric-header-risk",
+              "type": "table-cell",
+              "props": {},
+              "childIds": ["metric-header-risk-text"]
+            },
+            "metric-header-name-text": {
+              "id": "metric-header-name-text",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "metric-header-name-run", "type": "text", "text": "Metric" }]
+            },
+            "metric-header-value-text": {
+              "id": "metric-header-value-text",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "metric-header-value-run", "type": "text", "text": "Value" }]
+            },
+            "metric-header-risk-text": {
+              "id": "metric-header-risk-text",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [{ "id": "metric-header-risk-run", "type": "text", "text": "Risk" }]
+            },
+            "metrics-data-row": {
+              "id": "metrics-data-row",
+              "type": "table-row",
+              "props": {},
+              "cellIds": ["metric-value-name", "metric-value-total", "metric-value-risk"]
+            },
+            "metric-value-name": {
+              "id": "metric-value-name",
+              "type": "table-cell",
+              "props": {},
+              "childIds": ["metric-value-name-text"]
+            },
+            "metric-value-total": {
+              "id": "metric-value-total",
+              "type": "table-cell",
+              "props": {},
+              "childIds": ["metric-value-total-text"]
+            },
+            "metric-value-risk": {
+              "id": "metric-value-risk",
+              "type": "table-cell",
+              "props": {},
+              "childIds": ["metric-value-risk-text"]
+            },
+            "metric-value-name-text": {
+              "id": "metric-value-name-text",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [{ "id": "metric-value-name-run", "type": "text", "text": "Total active items" }]
+            },
+            "metric-value-total-text": {
+              "id": "metric-value-total-text",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [{ "id": "metric-value-total-field", "type": "field-ref", "key": "report.total", "fallback": "0" }]
+            },
+            "metric-value-risk-text": {
+              "id": "metric-value-risk-text",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [{ "id": "metric-value-risk-field", "type": "field-ref", "key": "report.riskLevel", "fallback": "Normal" }]
+            },
+            "body-page-break": {
+              "id": "body-page-break",
+              "type": "page-break",
+              "props": {}
+            },
+            "body-followup-heading": {
+              "id": "body-followup-heading",
+              "type": "text-block",
+              "role": { "role": "heading", "level": 3 },
+              "props": {},
+              "children": [{ "id": "body-followup-heading-text", "type": "text", "text": "Follow-up" }]
+            },
+            "body-followup-text": {
+              "id": "body-followup-text",
+              "type": "text-block",
+              "role": { "role": "paragraph" },
+              "props": {},
+              "children": [
+                { "id": "body-followup-line-a", "type": "text", "text": "Next review owner: " },
+                { "id": "body-followup-owner", "type": "field-ref", "key": "prepared.by", "fallback": "Team" },
+                { "id": "body-followup-break", "type": "line-break" },
+                { "id": "body-followup-line-b", "type": "text", "text": "Confirm export parity before runtime bridge work." }
+              ]
+            },
+            "body-footer-page": {
+              "id": "body-footer-page",
+              "type": "text-block",
+              "role": { "role": "label" },
+              "props": {},
+              "children": [
+                { "id": "body-footer-page-label", "type": "text", "text": "Page " },
+                { "id": "body-footer-page-number", "type": "page-number" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

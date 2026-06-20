@@ -10,12 +10,15 @@ stand on its own.
 ## Boundary
 
 - This workspace must not import current editor runtime code.
-- Legacy/current code may be referenced only from explicit migration or
-  compatibility files.
+- Current/prototype code is reference evidence only. It must not enter the
+  exported vNext source path as an accepted input model.
 - Tests must run from this folder without depending on the app runtime.
 - Fixtures in this folder should use vNext shape and sanitized data.
-- Package envelope compatibility stays explicit: package v2 may contain
-  document v3.
+- Package envelope compatibility stays explicit: the canonical vNext persisted
+  input is package v2 containing document v3.
+- Old document versions and prototype node names are rejected by the canonical
+  vNext parser. Any future one-off conversion tool must live outside exported
+  core and outside required vNext checks.
 
 ## Local Commands
 
@@ -43,11 +46,24 @@ From the current parent repository without installing this folder separately:
   `spacer`
 - Implemented graph baseline: parent refs, child indexes, nearest context,
   capabilities, and relationship diagnostics
+- Product-shaped fixture: `fixtures/product-report-vnext.flowdoc.json`
+- Canonical package boundary: parse, safe-parse, and serialize package v2 with
+  document v3
+- Operation baseline: graph-backed `node.delete`, `node.duplicate`,
+  `node.reorder`, `columns.insert`, `columns.layout.patch`,
+  `text-block.insert`, `text-block.text.replace`, `table.row.insert`, and
+  `table.row.delete`, `table.column.insert`, and `table.column.delete`
+  commands with validation, history policy, render invalidation, and scope
+  metadata
+- Durable history-ready operation record helper for committed and rejected
+  operation results, plus append/replay helpers for operation history records
+- Pagination/export planning boundary: page boxes, source item order,
+  renderer contract, and operation invalidation from canonical vNext documents
 
 Not implemented yet:
 
-- migration from document v1/v2 to v3;
 - editor runtime integration;
-- pagination/export integration;
-- durable operation history;
-- full product-report fixture acceptance.
+- measured pagination and page breaking;
+- PDF/DOCX renderer implementation;
+- durable operation history persistence outside the in-memory replay helper;
+- product-level editor acceptance smokes.

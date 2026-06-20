@@ -32,17 +32,23 @@ Current position:
 
 - Request: step back and design the next node model from the product goal.
 - Plan: Node Model vNext Plan.
-- Phase: Phase 5.5, extractable workspace.
-- Job item: create a temporary vNext home that can move to a new repository.
-- Status: done.
+- Phase: Phase 10, pagination/export integration.
+- Job item: establish the first vNext-only pagination/export planning boundary.
+- Status: in_progress.
 - Why this item is current: Phase 1 locked the node set, Phase 2 locked the
-  relationship graph, Phase 3 locked the persisted boundary, and Phase 4 now
-  defines how prototype evidence can feed vNext without leaking old names.
-  Phase 5 proves a small vNext schema/graph slice in code without wiring
-  persistence or editor runtime. Phase 5.5 moves that direction into an
-  isolated workspace boundary.
-- Next transition: Phase 6, product fixture and migration/parser slices inside
-  `vnext-workspace/`.
+  relationship graph, Phase 3 locked the persisted boundary, Phase 5/5.5 moved
+  the slice into an isolated workspace, and Phase 6 created a product-shaped
+  vNext fixture. The owner confirmed there are no users to preserve, so vNext
+  should cut old/prototype input from the canonical core instead of carrying a
+  legacy adapter. Phase 8 now gives that cutoff an executable package
+  parse/serialize API. Phase 9 now has graph-backed commands for delete,
+  duplicate, reorder, columns insert/layout, text-block insert/replace, and
+  table row/column insert/delete, plus JSON-serializable history-ready records
+  and in-memory replay helpers for committed and rejected operation results.
+- Phase 10 now starts with page-box/source-order/export-contract planning from
+  canonical vNext document structure without importing the parent layout engine.
+- Next transition: continue Phase 10 with measured pagination/page-fragment
+  output once the vNext planning boundary is accepted.
 
 ## Evidence From The Prototype
 
@@ -89,7 +95,9 @@ selection, drop, history, pagination, and export layers build on top of it.
 ## Non-Goals
 
 - Do not implement vNext in this contract.
-- Do not rename current runtime nodes in place without a migration plan.
+- Do not rename current runtime nodes in place as the vNext architecture.
+- Do not preserve prototype input compatibility in vNext core; a converter, if
+  ever needed, must be a separate tool outside exported core.
 - Do not make `flow-row` / `flow-stack` final by only changing display labels.
 - Do not keep `paragraph` as the final text primitive.
 - Do not make table a special case of layout columns.
@@ -614,19 +622,21 @@ Rules:
 - Operation commands must be deterministic and auditable.
 - Generated ids may be created by the operation layer, not by the caller.
 
-## Migration Stance
+## Prototype Cutoff Stance
 
-Current prototype names are evidence, not final constraints.
+Current prototype names are evidence, not supported vNext input. The canonical
+vNext workspace should accept package v2 containing document v3 and reject old
+document versions or prototype node names in exported core.
 
-Mapping direction:
+Reference mapping for any external one-off converter:
 
 | Prototype/current | vNext direction |
 |---|---|
 | `paragraph` | `text-block role=paragraph` |
 | heading paragraph props | `text-block role=heading` |
 | list paragraph props | `text-block role=list-item` |
-| legacy `row` | migrate/reject; do not author |
-| legacy `stack` | migrate/reject; do not author |
+| legacy `row` | reject in vNext core; external converter may map only when safe |
+| legacy `stack` | reject in vNext core; external converter may map only when safe |
 | `flow-row` | `columns` |
 | `flow-stack` | `column` |
 | `flow-table` | `table` |
@@ -634,14 +644,15 @@ Mapping direction:
 | `flow-table-cell` | `table-cell` |
 | body root stack/body ambiguity | `zone role=body/header/footer/...` |
 
-Do not migrate all runtime code at once. The first implementation should build
-the relationship contract and adapter boundaries before replacing every node
-name.
+Do not build the vNext core around old runtime compatibility. Prototype/runtime
+code may remain as evidence in the parent repository, but exported vNext APIs,
+fixtures, and package parsing should stay canonical-only.
 
 ## Product Anchor
 
-`product-report-v2` remains the product evidence anchor while vNext is
-designed.
+`product-report-v2` remains prototype evidence while vNext is designed.
+`vnext-workspace/fixtures/product-report-vnext.flowdoc.json` is the vNext
+acceptance anchor for canonical document v3 shape.
 
 The future vNext product anchor should cover:
 
@@ -676,14 +687,15 @@ Current job lane:
 |---|---|---|---|---|---|
 | 1 | Baseline contract | Docs | Node set, text-block role model, containment, capabilities, and relationship rules are explicit | done | this document; `docs/DOCS_INDEX.md` |
 | 2 | Relationship graph design | Core/editor design docs | Runtime graph index shape, selection/drop/history/validation scopes are accepted | done | `docs/NODE_RELATIONSHIP_GRAPH_VNEXT_PLAN.md` |
-| 3 | Package/schema boundary design | Persistence/docs/tests | Decide document version/package version boundary and migration strategy | done | `docs/NODE_MODEL_VNEXT_PACKAGE_SCHEMA_BOUNDARY_PLAN.md` |
-| 4 | Prototype adapter plan | Core/editor docs/tests | Current v2/runtime adapters are mapped to vNext without big-bang rewrite | done | `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` |
+| 3 | Package/schema boundary design | Persistence/docs/tests | Decide document version/package version boundary and canonical input stance | done | `docs/NODE_MODEL_VNEXT_PACKAGE_SCHEMA_BOUNDARY_PLAN.md` |
+| 4 | Prototype evidence mapping | Core/editor docs/tests | Current v2/runtime lessons are mapped without making old names vNext API | done | `docs/NODE_MODEL_VNEXT_PROTOTYPE_ADAPTER_PLAN.md` |
 | 5 | First implementation slice | Core schema/graph/tests | A small vNext graph or adapter proves text-block/zone/columns basics | done | `packages/core/src/schema/documentVNext.ts`; `packages/core/src/document/documentVNext.ts`; `packages/core/src/document/documentVNext.test.ts` |
 | 5.5 | Extractable workspace | Repo structure/docs/tests | vNext has a temporary home that can move to a new repository and runs local checks | done | `vnext-workspace/README.md`; `vnext-workspace/docs/WORKSPACE_BOUNDARY.md`; `vnext-workspace/tests` |
-| 6 | Product anchor migration | Fixture/tests/smoke | Product-report anchor exists in vNext shape and passes selected gates | next | `vnext-workspace/fixtures/product-report-vnext-minimal.flowdoc.json` |
-| 7 | Migration adapter | Migration/tests | v1/v2 inputs migrate to document v3 with diagnostics | pending | migration tests |
-| 8 | Package parser | Persistence/tests | Package v2 with document v3 parse/serialize behavior is explicit | pending | persistence tests |
-| 9 | Operation integration | Editor operation plans/tests | Operations consume relationship graph instead of UI-specific inference | pending | operation tests and browser smoke |
+| 6 | Product anchor fixture | Fixture/tests/smoke | Product-report anchor exists in vNext shape and passes selected gates | done | `vnext-workspace/fixtures/product-report-vnext.flowdoc.json`; `vnext-workspace/tests/packageFixture.test.ts` |
+| 7 | Legacy cutoff | Docs/tests | vNext core rejects old/prototype shapes instead of exporting a legacy adapter | done | `vnext-workspace/README.md`; `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` |
+| 8 | Canonical package parser | Persistence/tests | Package v2 with document v3 parse/serialize behavior is explicit | done | `vnext-workspace/src/persistence/package.ts`; `vnext-workspace/tests/packageFixture.test.ts` |
+| 9 | Operation integration | Editor operation plans/tests | Operations consume relationship graph instead of UI-specific inference | done | `vnext-workspace/src/operations/documentOperations.ts`; `vnext-workspace/tests/operations.test.ts` |
+| 10 | Pagination/export integration | Renderer/pagination tests | vNext document structure has explicit pagination/export invalidation and rendering boundaries | in_progress | `vnext-workspace/src/pagination/paginationPlan.ts`; `vnext-workspace/tests/paginationPlan.test.ts` |
 
 ## Stop Conditions
 
@@ -691,6 +703,7 @@ Stop for owner review before:
 
 - changing persisted document version;
 - changing FlowDoc package envelope version;
+- reintroducing legacy/current input compatibility into exported vNext core;
 - removing current v2 fixture coverage;
 - replacing operation runtime paths;
 - changing undo/redo semantics;
@@ -703,7 +716,7 @@ Continue autonomously when:
 - refining this design doc;
 - adding evidence links;
 - drafting relationship graph shape;
-- mapping prototype names to vNext names;
+- tightening vNext cutoff docs/tests;
 - writing non-runtime design tests or examples;
 - updating docs index references.
 
@@ -717,7 +730,7 @@ model, prefer:
 3. stable history scope;
 4. valid pagination/export semantics;
 5. product-report workflow correctness;
-6. compatibility adapters that can be removed later.
+6. canonical-only import boundaries.
 
 Do not keep a prototype node name merely because existing code can be patched to
 survive it.
