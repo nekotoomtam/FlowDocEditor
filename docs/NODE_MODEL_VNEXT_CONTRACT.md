@@ -33,8 +33,8 @@ Current position:
 - Request: step back and design the next node model from the product goal.
 - Plan: Node Model vNext Plan.
 - Phase: Phase 10, pagination/export integration.
-- Job item: extend the vNext-only pagination/export boundary from planning to
-  measured page fragments.
+- Job item: replace opaque columns pagination with measured column child
+  fragments.
 - Status: in_progress.
 - Why this item is current: Phase 1 locked the node set, Phase 2 locked the
   relationship graph, Phase 3 locked the persisted boundary, Phase 5/5.5 moved
@@ -50,9 +50,14 @@ Current position:
   measured skeleton that emits page fragments, forced page breaks, text-block
   line fragments, static header/footer fragments, and basic page-number inline
   resolution without importing the parent layout engine.
-- Next transition: continue Phase 10 with production measurement decisions,
-  table/columns fragmentation, final TOC page resolution, and renderer/export
-  consumption tests.
+- Phase 10.2 adds stable text measurement cache keys, line boxes, measurement
+  profiles, operation-driven cache invalidation, and measurement metadata on
+  text fragments.
+- Phase 10.3 adds `widthShare`/gap-based column geometry and measured child
+  fragments so column text is measured against its actual column width.
+- Next transition: continue Phase 10 with a renderer-backed measurement profile
+  implementation, table pagination, multi-page columns balancing, final TOC
+  page resolution, and renderer/export consumption tests.
 
 ## Evidence From The Prototype
 
@@ -699,7 +704,7 @@ Current job lane:
 | 7 | Legacy cutoff | Docs/tests | vNext core rejects old/prototype shapes instead of exporting a legacy adapter | done | `vnext-workspace/README.md`; `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` |
 | 8 | Canonical package parser | Persistence/tests | Package v2 with document v3 parse/serialize behavior is explicit | done | `vnext-workspace/src/persistence/package.ts`; `vnext-workspace/tests/packageFixture.test.ts` |
 | 9 | Operation integration | Editor operation plans/tests | Operations consume relationship graph instead of UI-specific inference | done | `vnext-workspace/src/operations/documentOperations.ts`; `vnext-workspace/tests/operations.test.ts` |
-| 10 | Pagination/export integration | Renderer/pagination tests | vNext document structure has explicit pagination/export invalidation, measured page fragments, and rendering boundaries | in_progress | `vnext-workspace/src/pagination/paginationPlan.ts`; `vnext-workspace/src/pagination/measuredPagination.ts`; `vnext-workspace/tests/paginationPlan.test.ts`; `vnext-workspace/tests/measuredPagination.test.ts` |
+| 10 | Pagination/export integration | Renderer/pagination tests | vNext document structure has explicit pagination/export invalidation, measurement contracts, measured page fragments, column child fragments, and rendering boundaries | in_progress | `vnext-workspace/src/pagination/paginationPlan.ts`; `vnext-workspace/src/pagination/textMeasurement.ts`; `vnext-workspace/src/pagination/measuredPagination.ts`; `vnext-workspace/tests/paginationPlan.test.ts`; `vnext-workspace/tests/textMeasurement.test.ts`; `vnext-workspace/tests/measuredPagination.test.ts` |
 
 ## Stop Conditions
 

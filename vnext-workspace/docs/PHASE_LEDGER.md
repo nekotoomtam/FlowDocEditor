@@ -16,7 +16,7 @@ Parent goal:
 | 7 | Legacy cutoff and canonical-only boundary | done | `README.md`; `docs/WORKSPACE_BOUNDARY.md` |
 | 8 | Canonical package parser/serializer | done | `src/persistence/package.ts`; `tests/packageFixture.test.ts` |
 | 9 | vNext operations | done | `src/operations/documentOperations.ts`; `tests/operations.test.ts` |
-| 10 | Pagination/export integration | in_progress | `src/pagination/paginationPlan.ts`; `src/pagination/measuredPagination.ts`; `tests/paginationPlan.test.ts`; `tests/measuredPagination.test.ts` |
+| 10 | Pagination/export integration | in_progress | `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts` |
 | 11 | Editor runtime bridge | pending | editor tests and smokes |
 | 12 | Move to new repository | pending | repository extraction checklist |
 
@@ -39,6 +39,11 @@ boundary and measured skeleton output:
 - `paginateVNextDocument(...)` consumes the vNext plan and emits measured page
   fragments for body/static zones, forced page breaks, text-block line
   fragmentation, and basic page-number inline resolution.
+- `measureVNextText(...)` defines the vNext text measurement boundary with
+  stable cache keys, line boxes, measurement profiles, cache hit/miss metadata,
+  and operation-driven cache invalidation.
+- `columns` nodes now produce `widthShare`/gap-based container and child
+  fragments instead of one opaque atomic fragment.
 - `createApproximateVNextTextMeasurer(...)` provides deterministic measurement
   for tests and early local integration without importing the parent runtime.
 - `buildVNextExportPlan(...)` declares that PDF and DOCX consume measured
@@ -46,9 +51,9 @@ boundary and measured skeleton output:
 - `resolveVNextPaginationInvalidation(...)` maps operation results to stale or
   unchanged pagination/export readiness.
 
-This phase does not import the parent layout engine, provide production text
-measurement, split tables/columns across pages, finalize TOC page references,
-or render PDF/DOCX yet.
+This phase does not import the parent layout engine, provide a renderer-backed
+measurement profile implementation, split tables/columns across multiple pages,
+finalize TOC page references, or render PDF/DOCX yet.
 
 ## Phase 9 Baseline
 

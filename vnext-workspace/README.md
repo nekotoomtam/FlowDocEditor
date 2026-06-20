@@ -62,12 +62,16 @@ From the current parent repository without installing this folder separately:
 - Measured pagination skeleton: page fragments, forced page breaks, text-block
   line fragmentation, static header/footer fragments, and page-number inline
   resolution from canonical vNext documents
+- Text measurement contract: stable cache keys, line boxes, reusable
+  measurement cache, operation invalidation, and pagination fragment metadata
+- Columns pagination skeleton: `widthShare`/gap-based column geometry with
+  measured child fragments and column metadata
 
 Not implemented yet:
 
 - editor runtime integration;
-- production text measurement, table/columns fragmentation, and final
-  pagination-aware TOC page resolution;
+- renderer-backed text measurement profile implementation, table/columns
+  multi-page fragmentation, and final pagination-aware TOC page resolution;
 - PDF/DOCX renderer implementation;
 - durable operation history persistence outside the in-memory replay helper;
 - product-level editor acceptance smokes.

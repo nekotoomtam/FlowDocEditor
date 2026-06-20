@@ -1,5 +1,7 @@
 import type {
   AuthoredNode,
+  ColumnNode,
+  ColumnsNode,
   DocumentNode,
   DocumentSection,
   InlineNode,
@@ -18,29 +20,36 @@ import {
   type VNextPaginationSourceItem,
   type VNextPaginationSplitPolicy,
 } from "./paginationPlan.js"
+import {
+  createApproximateVNextTextMeasurer,
+  measureVNextText,
+  type VNextTextMeasurement,
+  type VNextTextMeasurementCache,
+  type VNextTextMeasurer,
+} from "./textMeasurement.js"
+
+export {
+  createApproximateVNextTextMeasurer,
+  createVNextTextMeasurementCache,
+  createVNextTextMeasurementCacheKey,
+  measureVNextText,
+  resolveVNextTextMeasurementInvalidation,
+} from "./textMeasurement.js"
+export type {
+  VNextTextMeasurement,
+  VNextTextMeasurementCache,
+  VNextTextMeasurementInput,
+  VNextTextMeasurementInvalidation,
+  VNextTextMeasurementLineBox,
+  VNextTextMeasurer,
+} from "./textMeasurement.js"
 
 type FieldValue = string | number | boolean | null
 
-export interface VNextTextMeasurementInput {
-  sectionId: SectionId
-  nodeId: NodeId
-  text: string
-  availableWidthPt: number
-}
-
-export interface VNextTextMeasurement {
-  lines: string[]
-  lineHeightPt: number
-  widthPt: number
-  heightPt: number
-}
-
-export interface VNextTextMeasurer {
-  measure(input: VNextTextMeasurementInput): VNextTextMeasurement
-}
-
 export interface VNextMeasuredPaginationOptions {
   textMeasurer?: VNextTextMeasurer
+  measurementCache?: VNextTextMeasurementCache
+  measurementProfileId?: string
   data?: Record<string, FieldValue>
 }
 
@@ -50,8 +59,8 @@ export interface VNextMeasuredPaginationWarning {
     | "missing-source-item"
     | "static-zone-overflow"
     | "page-break-in-static-zone-ignored"
+    | "page-break-in-columns-ignored"
     | "toc-page-resolution-pending"
-    | "columns-atomic-skeleton"
     | "table-atomic-skeleton"
   sectionId: SectionId
   nodeId: NodeId
@@ -118,50 +127,29 @@ interface LayoutState {
   yPt: number
 }
 
+interface LayoutArea {
+  xPt: number
+  widthPt: number
+}
+
+interface ColumnLayoutArea extends LayoutArea {
+  columnsId: NodeId
+  columnId: NodeId
+  columnIndex: number
+  columnCount: number
+}
+
+interface MeasurementContext {
+  documentId: string
+  textMeasurer: VNextTextMeasurer
+  measurementCache?: VNextTextMeasurementCache
+  measurementProfileId?: string
+  data: Record<string, FieldValue>
+}
+
 function unitToPt(value: UnitValue): number {
   if (value.unit === "pt") return value.value
   return Number(((value.value * 72) / 25.4).toFixed(2))
-}
-
-function splitTextToLines(text: string, maxCharsPerLine: number): string[] {
-  const sourceLines = text.split("\n")
-  const lines: string[] = []
-
-  sourceLines.forEach((sourceLine) => {
-    if (sourceLine.length === 0) {
-      lines.push("")
-      return
-    }
-
-    for (let index = 0; index < sourceLine.length; index += maxCharsPerLine) {
-      lines.push(sourceLine.slice(index, index + maxCharsPerLine))
-    }
-  })
-
-  return lines.length > 0 ? lines : [""]
-}
-
-export function createApproximateVNextTextMeasurer(options: {
-  charWidthPt?: number
-  lineHeightPt?: number
-} = {}): VNextTextMeasurer {
-  const charWidthPt = options.charWidthPt ?? 6
-  const lineHeightPt = options.lineHeightPt ?? 14
-
-  return {
-    measure(input) {
-      const maxCharsPerLine = Math.max(1, Math.floor(input.availableWidthPt / charWidthPt))
-      const lines = splitTextToLines(input.text, maxCharsPerLine)
-      const longestLineLength = lines.reduce((max, line) => Math.max(max, line.length), 0)
-
-      return {
-        lines,
-        lineHeightPt,
-        widthPt: Math.min(input.availableWidthPt, longestLineLength * charWidthPt),
-        heightPt: lines.length * lineHeightPt,
-      }
-    },
-  }
 }
 
 function inlineText(inlines: readonly InlineNode[], data: Record<string, FieldValue>, pageNumber: number): string {
@@ -215,12 +203,77 @@ function fragmentAreaForStaticZone(pageBox: VNextPageBox, zoneRole: ZoneRole): {
   }
 }
 
+function columnLayoutAreas(
+  section: DocumentSection,
+  columns: ColumnsNode,
+  area: LayoutArea,
+): ColumnLayoutArea[] {
+  const columnCount = columns.columnIds.length
+  const gapPt = columns.props.gap ?? 0
+  const availableWidthPt = Math.max(1, area.widthPt - gapPt * Math.max(0, columnCount - 1))
+  const shares = columns.columnIds.map((columnId) => {
+    const column = section.nodes[columnId]
+    return column?.type === "column" ? column.props.widthShare ?? 100 / columnCount : 100 / columnCount
+  })
+  const totalShare = shares.reduce((sum, share) => sum + share, 0) || 100
+  let xPt = area.xPt
+
+  return columns.columnIds.map((columnId, columnIndex) => {
+    const widthPt = columnIndex === columnCount - 1
+      ? Math.max(1, area.xPt + area.widthPt - xPt)
+      : Math.max(1, Number(((availableWidthPt * shares[columnIndex]) / totalShare).toFixed(2)))
+    const columnArea: ColumnLayoutArea = {
+      xPt,
+      widthPt,
+      columnsId: columns.id,
+      columnId,
+      columnIndex,
+      columnCount,
+    }
+    xPt += widthPt + gapPt
+    return columnArea
+  })
+}
+
 function textBlockText(
   node: TextBlockNode,
   data: Record<string, FieldValue>,
   pageNumber: number,
 ): string {
   return inlineText(node.children, data, pageNumber)
+}
+
+function textStyleKeyForNode(node: AuthoredNode): string {
+  if (node.type !== "text-block") return `${node.type}:default`
+  const roleKey = node.role.role === "heading" ? `heading:${node.role.level}` : node.role.role
+  return node.props.textStyleId ?? `text-block:${roleKey}`
+}
+
+function measurementMetadata(measurement: VNextTextMeasurement): Record<string, string | number | boolean | null> {
+  return {
+    measurementCacheKey: measurement.cacheKey,
+    measurementCacheStatus: measurement.cacheStatus,
+    measurementProfileId: measurement.measurementProfileId,
+    lineCount: measurement.lines.length,
+  }
+}
+
+function measureNodeText(
+  context: MeasurementContext,
+  sectionId: SectionId,
+  node: AuthoredNode,
+  text: string,
+  availableWidthPt: number,
+): VNextTextMeasurement {
+  return measureVNextText({
+    documentId: context.documentId,
+    sectionId,
+    nodeId: node.id,
+    text,
+    availableWidthPt,
+    styleKey: textStyleKeyForNode(node),
+    measurementProfileId: context.measurementProfileId,
+  }, context.textMeasurer, context.measurementCache)
 }
 
 function tocText(document: DocumentNode, node: Extract<AuthoredNode, { type: "toc" }>): string {
@@ -245,12 +298,11 @@ function estimateChildrenHeight(
   childIds: readonly NodeId[],
   availableWidthPt: number,
   pageNumber: number,
-  measurer: VNextTextMeasurer,
-  data: Record<string, FieldValue>,
+  context: MeasurementContext,
 ): number {
   return childIds.reduce((total, childId) => {
     const child = section.nodes[childId]
-    return total + (child == null ? 0 : estimateNodeHeight(document, section, child, availableWidthPt, pageNumber, measurer, data))
+    return total + (child == null ? 0 : estimateNodeHeight(document, section, child, availableWidthPt, pageNumber, context))
   }, 0)
 }
 
@@ -260,8 +312,7 @@ function estimateTableRowHeight(
   row: TableRowNode,
   availableWidthPt: number,
   pageNumber: number,
-  measurer: VNextTextMeasurer,
-  data: Record<string, FieldValue>,
+  context: MeasurementContext,
 ): number {
   if (row.props.height != null) return unitToPt(row.props.height)
 
@@ -269,7 +320,7 @@ function estimateTableRowHeight(
   const cellContentHeight = row.cellIds.reduce((maxHeight, cellId) => {
     const cell = section.nodes[cellId]
     if (cell?.type !== "table-cell") return maxHeight
-    const height = estimateNodeHeight(document, section, cell, cellWidthPt, pageNumber, measurer, data)
+    const height = estimateNodeHeight(document, section, cell, cellWidthPt, pageNumber, context)
     return Math.max(maxHeight, height)
   }, 0)
 
@@ -282,16 +333,10 @@ function estimateNodeHeight(
   node: AuthoredNode,
   availableWidthPt: number,
   pageNumber: number,
-  measurer: VNextTextMeasurer,
-  data: Record<string, FieldValue>,
+  context: MeasurementContext,
 ): number {
   if (node.type === "text-block") {
-    return measurer.measure({
-      sectionId: section.id,
-      nodeId: node.id,
-      text: textBlockText(node, data, pageNumber),
-      availableWidthPt,
-    }).heightPt
+    return measureNodeText(context, section.id, node, textBlockText(node, context.data, pageNumber), availableWidthPt).heightPt
   }
 
   if (node.type === "divider") {
@@ -302,27 +347,20 @@ function estimateNodeHeight(
   if (node.type === "page-break") return 0
 
   if (node.type === "toc") {
-    return measurer.measure({
-      sectionId: section.id,
-      nodeId: node.id,
-      text: tocText(document, node),
-      availableWidthPt,
-    }).heightPt
+    return measureNodeText(context, section.id, node, tocText(document, node), availableWidthPt).heightPt
   }
 
   if (node.type === "zone" || node.type === "column" || node.type === "table-cell") {
-    return estimateChildrenHeight(document, section, node.childIds, availableWidthPt, pageNumber, measurer, data)
+    return estimateChildrenHeight(document, section, node.childIds, availableWidthPt, pageNumber, context)
   }
 
   if (node.type === "columns") {
-    const gapPt = node.props.gap ?? 0
-    const columnWidthPt = Math.max(1, (availableWidthPt - gapPt * Math.max(0, node.columnIds.length - 1)) / node.columnIds.length)
-    const columnHeights = node.columnIds.map((columnId) => {
-      const column = section.nodes[columnId]
+    const columnHeights = columnLayoutAreas(section, node, { xPt: 0, widthPt: availableWidthPt }).map((columnArea) => {
+      const column = section.nodes[columnArea.columnId]
       if (column?.type !== "column") return 0
       return Math.max(
         column.props.minHeight ?? 0,
-        estimateNodeHeight(document, section, column, columnWidthPt, pageNumber, measurer, data),
+        estimateNodeHeight(document, section, column, columnArea.widthPt, pageNumber, context),
       )
     })
 
@@ -335,7 +373,7 @@ function estimateNodeHeight(
     const rowHeight = node.rowIds.reduce((total, rowId) => {
       const row = section.nodes[rowId]
       return total + (row?.type === "table-row"
-        ? estimateTableRowHeight(document, section, row, availableWidthPt, pageNumber, measurer, data)
+        ? estimateTableRowHeight(document, section, row, availableWidthPt, pageNumber, context)
         : 0)
     }, 0)
 
@@ -343,7 +381,7 @@ function estimateNodeHeight(
   }
 
   if (node.type === "table-row") {
-    return estimateTableRowHeight(document, section, node, availableWidthPt, pageNumber, measurer, data)
+    return estimateTableRowHeight(document, section, node, availableWidthPt, pageNumber, context)
   }
 
   return 0
@@ -371,6 +409,13 @@ export function paginateVNextDocument(
   const paginationPlan = buildVNextPaginationPlan(document)
   const textMeasurer = options.textMeasurer ?? createApproximateVNextTextMeasurer()
   const data = options.data ?? {}
+  const measurementContext: MeasurementContext = {
+    documentId: document.document.id,
+    textMeasurer,
+    measurementCache: options.measurementCache,
+    measurementProfileId: options.measurementProfileId,
+    data,
+  }
   const sourceItemsByKey = new Map<string, VNextPaginationSourceItem>()
   const pages: VNextMeasuredPage[] = []
   const warnings: VNextMeasuredPaginationWarning[] = []
@@ -492,12 +537,18 @@ export function paginateVNextDocument(
       }
     }
 
+    const bodyLayoutArea = (): LayoutArea => ({
+      xPt: pageBox.contentXPt,
+      widthPt: pageBox.contentWidthPt,
+    })
+
     const placeBlock = (
       zone: ZoneNode,
       node: AuthoredNode,
       kind: VNextMeasuredFragmentKind,
       heightPt: number,
       metadata?: Record<string, string | number | boolean | null>,
+      area: LayoutArea = bodyLayoutArea(),
     ): void => {
       ensureBlockSpace(node, heightPt)
       addFragment(
@@ -506,9 +557,9 @@ export function paginateVNextDocument(
         node,
         kind,
         {
-          xPt: pageBox.contentXPt,
+          xPt: area.xPt,
           yPt: state.yPt,
-          widthPt: pageBox.contentWidthPt,
+          widthPt: area.widthPt,
           heightPt,
         },
         metadata == null ? {} : { metadata },
@@ -516,13 +567,14 @@ export function paginateVNextDocument(
       state.yPt += heightPt
     }
 
-    const layoutTextBlock = (zone: ZoneNode, node: TextBlockNode): void => {
-      const measurement = textMeasurer.measure({
-        sectionId: section.id,
-        nodeId: node.id,
-        text: textBlockText(node, data, state.page.pageNumber),
-        availableWidthPt: pageBox.contentWidthPt,
-      })
+    const layoutTextBlock = (zone: ZoneNode, node: TextBlockNode, area: LayoutArea = bodyLayoutArea()): void => {
+      const measurement = measureNodeText(
+        measurementContext,
+        section.id,
+        node,
+        textBlockText(node, data, state.page.pageNumber),
+        area.widthPt,
+      )
       const lines = measurement.lines.length > 0 ? measurement.lines : [""]
       let lineIndex = 0
 
@@ -551,9 +603,9 @@ export function paginateVNextDocument(
           node,
           "text",
           {
-            xPt: pageBox.contentXPt,
+            xPt: area.xPt,
             yPt: state.yPt,
-            widthPt: pageBox.contentWidthPt,
+            widthPt: area.widthPt,
             heightPt,
           },
           {
@@ -562,6 +614,7 @@ export function paginateVNextDocument(
             lineEnd: lineIndex + take,
             continuesFromPreviousPage: lineIndex > 0,
             continuesOnNextPage: lineIndex + take < lines.length,
+            metadata: measurementMetadata(measurement),
           },
         )
 
@@ -570,6 +623,161 @@ export function paginateVNextDocument(
 
         if (lineIndex < lines.length) moveToNextPage()
       }
+    }
+
+    const addColumnBlockFragment = (
+      zone: ZoneNode,
+      node: AuthoredNode,
+      area: ColumnLayoutArea,
+      yPt: number,
+      heightPt: number,
+      kind: VNextMeasuredFragmentKind,
+      metadata: Record<string, string | number | boolean | null> = {},
+    ): void => {
+      addFragment(
+        state.page,
+        zone,
+        node,
+        kind,
+        {
+          xPt: area.xPt,
+          yPt,
+          widthPt: area.widthPt,
+          heightPt,
+        },
+        {
+          metadata: {
+            ...metadata,
+            columnsId: area.columnsId,
+            columnId: area.columnId,
+            columnIndex: area.columnIndex,
+            columnCount: area.columnCount,
+          },
+        },
+      )
+    }
+
+    const layoutColumnTextBlock = (
+      zone: ZoneNode,
+      node: TextBlockNode,
+      area: ColumnLayoutArea,
+      cursor: { yPt: number },
+    ): void => {
+      const measurement = measureNodeText(
+        measurementContext,
+        section.id,
+        node,
+        textBlockText(node, data, state.page.pageNumber),
+        area.widthPt,
+      )
+      addColumnBlockFragment(
+        zone,
+        node,
+        area,
+        cursor.yPt,
+        measurement.heightPt,
+        "text",
+        {
+          ...measurementMetadata(measurement),
+          lineStart: 0,
+          lineEnd: measurement.lines.length,
+        },
+      )
+      const fragment = state.page.fragments.at(-1)
+      if (fragment != null && fragment.nodeId === node.id) {
+        fragment.text = measurement.lines.join("\n")
+        fragment.lineStart = 0
+        fragment.lineEnd = measurement.lines.length
+      }
+      cursor.yPt += measurement.heightPt
+    }
+
+    const layoutColumnNode = (
+      zone: ZoneNode,
+      nodeId: NodeId,
+      area: ColumnLayoutArea,
+      cursor: { yPt: number },
+    ): void => {
+      const node = section.nodes[nodeId]
+      if (node == null) return
+
+      if (node.type === "text-block") {
+        layoutColumnTextBlock(zone, node, area, cursor)
+        return
+      }
+
+      if (node.type === "page-break") {
+        addWarning({
+          code: "page-break-in-columns-ignored",
+          sectionId: section.id,
+          nodeId: node.id,
+          pageIndex: state.page.pageIndex,
+          message: `Page break "${node.id}" in columns "${area.columnsId}" is ignored.`,
+        })
+        return
+      }
+
+      if (node.type === "column" || node.type === "table-cell" || node.type === "zone") {
+        node.childIds.forEach((childId) => layoutColumnNode(zone, childId, area, cursor))
+        return
+      }
+
+      const heightPt = estimateNodeHeight(document, section, node, area.widthPt, state.page.pageNumber, measurementContext)
+      const kind: VNextMeasuredFragmentKind = node.type === "toc"
+        ? "generated"
+        : node.type === "table" || node.type === "columns"
+          ? "container"
+          : "block"
+      addColumnBlockFragment(zone, node, area, cursor.yPt, heightPt, kind)
+      cursor.yPt += heightPt
+    }
+
+    const layoutColumns = (zone: ZoneNode, node: ColumnsNode): void => {
+      const bodyArea = bodyLayoutArea()
+      const areas = columnLayoutAreas(section, node, bodyArea)
+      const columnHeights = areas.map((area) => {
+        const column = section.nodes[area.columnId]
+        if (column?.type !== "column") return 0
+        return Math.max(
+          column.props.minHeight ?? 0,
+          estimateNodeHeight(document, section, column, area.widthPt, state.page.pageNumber, measurementContext),
+        )
+      })
+      const heightPt = Math.max(node.props.minHeight ?? 0, ...columnHeights, 0)
+      ensureBlockSpace(node, heightPt)
+      const topYPt = state.yPt
+
+      addFragment(
+        state.page,
+        zone,
+        node,
+        "container",
+        {
+          xPt: bodyArea.xPt,
+          yPt: topYPt,
+          widthPt: bodyArea.widthPt,
+          heightPt,
+        },
+        {
+          metadata: {
+            columnCount: areas.length,
+            gapPt: node.props.gap ?? 0,
+            measuredAs: "columns-fragments",
+          },
+        },
+      )
+
+      areas.forEach((area) => {
+        const column = section.nodes[area.columnId]
+        if (column?.type !== "column") return
+        const cursor = { yPt: topYPt }
+        addColumnBlockFragment(zone, column, area, cursor.yPt, columnHeights[area.columnIndex], "container", {
+          measuredAs: "column-container",
+        })
+        column.childIds.forEach((childId) => layoutColumnNode(zone, childId, area, cursor))
+      })
+
+      state.yPt = topYPt + heightPt
     }
 
     const layoutNode = (zone: ZoneNode, nodeId: NodeId): void => {
@@ -604,16 +812,7 @@ export function paginateVNextDocument(
       }
 
       if (node.type === "columns") {
-        addWarning({
-          code: "columns-atomic-skeleton",
-          sectionId: section.id,
-          nodeId: node.id,
-          pageIndex: state.page.pageIndex,
-          message: `Columns node "${node.id}" is measured as one fragment in this skeleton.`,
-        })
-        placeBlock(zone, node, "container", estimateNodeHeight(document, section, node, pageBox.contentWidthPt, state.page.pageNumber, textMeasurer, data), {
-          columnCount: node.columnIds.length,
-        })
+        layoutColumns(zone, node)
         return
       }
 
@@ -625,7 +824,7 @@ export function paginateVNextDocument(
           pageIndex: state.page.pageIndex,
           message: `Table node "${node.id}" is measured as one fragment in this skeleton.`,
         })
-        placeBlock(zone, node, "container", estimateNodeHeight(document, section, node, pageBox.contentWidthPt, state.page.pageNumber, textMeasurer, data), {
+        placeBlock(zone, node, "container", estimateNodeHeight(document, section, node, pageBox.contentWidthPt, state.page.pageNumber, measurementContext), {
           rowCount: node.rowIds.length,
         })
         return
@@ -639,13 +838,8 @@ export function paginateVNextDocument(
           pageIndex: state.page.pageIndex,
           message: `TOC node "${node.id}" uses placeholder page numbers in this skeleton.`,
         })
-        const measurement = textMeasurer.measure({
-          sectionId: section.id,
-          nodeId: node.id,
-          text: tocText(document, node),
-          availableWidthPt: pageBox.contentWidthPt,
-        })
-        placeBlock(zone, node, "generated", measurement.heightPt, { lineCount: measurement.lines.length })
+        const measurement = measureNodeText(measurementContext, section.id, node, tocText(document, node), pageBox.contentWidthPt)
+        placeBlock(zone, node, "generated", measurement.heightPt, measurementMetadata(measurement))
         return
       }
 
@@ -653,7 +847,7 @@ export function paginateVNextDocument(
         zone,
         node,
         "block",
-        estimateNodeHeight(document, section, node, pageBox.contentWidthPt, state.page.pageNumber, textMeasurer, data),
+        estimateNodeHeight(document, section, node, pageBox.contentWidthPt, state.page.pageNumber, measurementContext),
       )
     }
 
@@ -675,7 +869,7 @@ export function paginateVNextDocument(
         return
       }
 
-      const heightPt = estimateNodeHeight(document, section, node, area.widthPt, page.pageNumber, textMeasurer, data)
+      const heightPt = estimateNodeHeight(document, section, node, area.widthPt, page.pageNumber, measurementContext)
       const commonGeometry = {
         xPt: area.xPt,
         yPt: cursor.yPt,
@@ -685,16 +879,12 @@ export function paginateVNextDocument(
 
       if (node.type === "text-block") {
         const text = textBlockText(node, data, page.pageNumber)
-        const measurement = textMeasurer.measure({
-          sectionId: section.id,
-          nodeId: node.id,
-          text,
-          availableWidthPt: area.widthPt,
-        })
+        const measurement = measureNodeText(measurementContext, section.id, node, text, area.widthPt)
         addFragment(page, zone, node, "text", commonGeometry, {
           text: measurement.lines.join("\n"),
           lineStart: 0,
           lineEnd: measurement.lines.length,
+          metadata: measurementMetadata(measurement),
         })
       } else if (node.type === "toc") {
         addFragment(page, zone, node, "generated", commonGeometry, { metadata: { generated: true } })

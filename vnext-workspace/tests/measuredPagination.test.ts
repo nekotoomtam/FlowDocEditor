@@ -4,7 +4,9 @@ import type { AuthoredNode, DocumentNode, InlineNode, TextBlockRole } from "../s
 import { parseFlowDocPackageV2DocumentVNext } from "../src/persistence/package.js"
 import {
   createApproximateVNextTextMeasurer,
+  createVNextTextMeasurementCache,
   paginateVNextDocument,
+  type VNextTextMeasurer,
 } from "../src/pagination/measuredPagination.js"
 
 function pt(value: number) {
@@ -96,6 +98,41 @@ function longTextDoc(): DocumentNode {
   }
 }
 
+function columnsDoc(): DocumentNode {
+  const sharedText = "x".repeat(30)
+
+  return {
+    version: 3,
+    document: {
+      id: "measured-columns-doc",
+      meta: { title: "Measured Columns" },
+      sections: [{
+        id: "section-main",
+        type: "section",
+        page: {
+          size: "A4",
+          orientation: "portrait",
+          margin: {
+            top: pt(72),
+            right: pt(72),
+            bottom: pt(72),
+            left: pt(72),
+          },
+        },
+        zoneIds: ["body-zone"],
+        nodes: {
+          "body-zone": { id: "body-zone", type: "zone", role: "body", childIds: ["columns"] },
+          columns: { id: "columns", type: "columns", props: { gap: 12 }, columnIds: ["left", "right"] },
+          left: { id: "left", type: "column", props: { widthShare: 25 }, childIds: ["left-text"] },
+          right: { id: "right", type: "column", props: { widthShare: 75 }, childIds: ["right-text"] },
+          "left-text": textBlock("left-text", sharedText),
+          "right-text": textBlock("right-text", sharedText),
+        },
+      }],
+    },
+  }
+}
+
 function parseFixture(name: string) {
   const fixtureUrl = new URL(`../fixtures/${name}`, import.meta.url)
   const raw = readFileSync(fixtureUrl, "utf8")
@@ -148,6 +185,109 @@ describe("vNext measured pagination skeleton", () => {
       continuesOnNextPage: false,
     })
     expect(fragments.every((fragment) => fragment.splitPolicy === "line")).toBe(true)
+  })
+
+  it("reuses the measurement contract cache and annotates text fragments", () => {
+    const cache = createVNextTextMeasurementCache()
+    const approximate = createApproximateVNextTextMeasurer()
+    let measureCalls = 0
+    const countingMeasurer: VNextTextMeasurer = {
+      measure(input) {
+        measureCalls += 1
+        return approximate.measure(input)
+      },
+    }
+
+    const first = paginateVNextDocument(pageBreakDoc(), {
+      textMeasurer: countingMeasurer,
+      measurementCache: cache,
+      measurementProfileId: "browser-layout-v1",
+    })
+    const callsAfterFirstRun = measureCalls
+    const second = paginateVNextDocument(pageBreakDoc(), {
+      textMeasurer: countingMeasurer,
+      measurementCache: cache,
+      measurementProfileId: "browser-layout-v1",
+    })
+
+    const firstBefore = first.pages[0]?.fragments.find((fragment) => fragment.nodeId === "before")
+    const secondBefore = second.pages[0]?.fragments.find((fragment) => fragment.nodeId === "before")
+
+    expect(callsAfterFirstRun).toBeGreaterThan(0)
+    expect(measureCalls).toBe(callsAfterFirstRun)
+    expect(firstBefore?.metadata).toMatchObject({
+      measurementCacheStatus: "miss",
+      measurementProfileId: "browser-layout-v1",
+      lineCount: 1,
+    })
+    expect(secondBefore?.metadata).toMatchObject({
+      measurementCacheStatus: "hit",
+      measurementProfileId: "browser-layout-v1",
+      lineCount: 1,
+    })
+    expect(secondBefore?.metadata?.measurementCacheKey).toBe(firstBefore?.metadata?.measurementCacheKey)
+  })
+
+  it("measures columns as child fragments using column geometry", () => {
+    const pagination = paginateVNextDocument(columnsDoc(), {
+      textMeasurer: createApproximateVNextTextMeasurer({ charWidthPt: 10, lineHeightPt: 12 }),
+      measurementProfileId: "columns-test",
+    })
+    const fragments = pagination.pages[0]?.fragments ?? []
+    const columns = fragments.find((fragment) => fragment.nodeId === "columns")
+    const left = fragments.find((fragment) => fragment.nodeId === "left")
+    const right = fragments.find((fragment) => fragment.nodeId === "right")
+    const leftText = fragments.find((fragment) => fragment.nodeId === "left-text")
+    const rightText = fragments.find((fragment) => fragment.nodeId === "right-text")
+
+    expect(columns).toMatchObject({
+      kind: "container",
+      widthPt: 451.28,
+      metadata: {
+        columnCount: 2,
+        gapPt: 12,
+        measuredAs: "columns-fragments",
+      },
+    })
+    expect(left).toMatchObject({
+      kind: "container",
+      xPt: 72,
+      widthPt: 109.82,
+      metadata: {
+        columnsId: "columns",
+        columnId: "left",
+        columnIndex: 0,
+      },
+    })
+    expect(right).toMatchObject({
+      kind: "container",
+      xPt: 193.82,
+      widthPt: 329.46,
+      metadata: {
+        columnsId: "columns",
+        columnId: "right",
+        columnIndex: 1,
+      },
+    })
+    expect(leftText).toMatchObject({
+      kind: "text",
+      widthPt: 109.82,
+      metadata: {
+        columnId: "left",
+        measurementProfileId: "columns-test",
+        lineCount: 3,
+      },
+    })
+    expect(rightText).toMatchObject({
+      kind: "text",
+      widthPt: 329.46,
+      metadata: {
+        columnId: "right",
+        measurementProfileId: "columns-test",
+        lineCount: 1,
+      },
+    })
+    expect(pagination.warnings.map((warning) => warning.code)).not.toContain("columns-atomic-skeleton")
   })
 
   it("measures the product-shaped vNext fixture with canonical nodes only", () => {
