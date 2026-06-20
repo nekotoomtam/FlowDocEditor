@@ -59,11 +59,15 @@ From the current parent repository without installing this folder separately:
   operation results, plus append/replay helpers for operation history records
 - Pagination/export planning boundary: page boxes, source item order,
   renderer contract, and operation invalidation from canonical vNext documents
+- Measured pagination skeleton: page fragments, forced page breaks, text-block
+  line fragmentation, static header/footer fragments, and page-number inline
+  resolution from canonical vNext documents
 
 Not implemented yet:
 
 - editor runtime integration;
-- measured pagination and page breaking;
+- production text measurement, table/columns fragmentation, and final
+  pagination-aware TOC page resolution;
 - PDF/DOCX renderer implementation;
 - durable operation history persistence outside the in-memory replay helper;
 - product-level editor acceptance smokes.
