@@ -5,6 +5,8 @@ import type {
   DocumentNode,
   DocumentSection,
   InlineNode,
+  TableCellNode,
+  TableNode,
   TableRowNode,
   TextBlockNode,
   UnitValue,
@@ -60,8 +62,9 @@ export interface VNextMeasuredPaginationWarning {
     | "static-zone-overflow"
     | "page-break-in-static-zone-ignored"
     | "page-break-in-columns-ignored"
+    | "page-break-in-table-cell-ignored"
     | "toc-page-resolution-pending"
-    | "table-atomic-skeleton"
+    | "table-row-forced-overflow"
   sectionId: SectionId
   nodeId: NodeId
   pageIndex?: number
@@ -137,6 +140,23 @@ interface ColumnLayoutArea extends LayoutArea {
   columnId: NodeId
   columnIndex: number
   columnCount: number
+}
+
+interface TableColumnLayoutArea extends LayoutArea {
+  tableId: NodeId
+  columnIndex: number
+  columnCount: number
+}
+
+interface TableCellLayoutArea extends LayoutArea {
+  tableId: NodeId
+  rowId: NodeId
+  cellId: NodeId
+  rowIndex: number
+  cellIndex: number
+  columnIndex: number
+  columnCount: number
+  isHeaderRow: boolean
 }
 
 interface MeasurementContext {
@@ -235,6 +255,28 @@ function columnLayoutAreas(
   })
 }
 
+function tableColumnLayoutAreas(table: TableNode, area: LayoutArea): TableColumnLayoutArea[] {
+  const columnCount = table.columns.length
+  const rawWidths = table.columns.map((column) => Math.max(1, unitToPt(column.width)))
+  const rawTotal = rawWidths.reduce((sum, width) => sum + width, 0) || columnCount
+  let xPt = area.xPt
+
+  return rawWidths.map((rawWidth, columnIndex) => {
+    const widthPt = columnIndex === columnCount - 1
+      ? Math.max(1, area.xPt + area.widthPt - xPt)
+      : Math.max(1, Number(((area.widthPt * rawWidth) / rawTotal).toFixed(2)))
+    const columnArea: TableColumnLayoutArea = {
+      xPt,
+      widthPt,
+      tableId: table.id,
+      columnIndex,
+      columnCount,
+    }
+    xPt += widthPt
+    return columnArea
+  })
+}
+
 function textBlockText(
   node: TextBlockNode,
   data: Record<string, FieldValue>,
@@ -310,17 +352,18 @@ function estimateTableRowHeight(
   document: DocumentNode,
   section: DocumentSection,
   row: TableRowNode,
-  availableWidthPt: number,
+  columnAreas: readonly TableColumnLayoutArea[],
   pageNumber: number,
   context: MeasurementContext,
 ): number {
   if (row.props.height != null) return unitToPt(row.props.height)
 
-  const cellWidthPt = Math.max(1, availableWidthPt / row.cellIds.length)
   const cellContentHeight = row.cellIds.reduce((maxHeight, cellId) => {
+    const cellIndex = row.cellIds.indexOf(cellId)
     const cell = section.nodes[cellId]
     if (cell?.type !== "table-cell") return maxHeight
-    const height = estimateNodeHeight(document, section, cell, cellWidthPt, pageNumber, context)
+    const widthPt = Math.max(1, columnAreas[cellIndex]?.widthPt ?? 1)
+    const height = estimateNodeHeight(document, section, cell, Math.max(1, widthPt - 8), pageNumber, context)
     return Math.max(maxHeight, height)
   }, 0)
 
@@ -370,10 +413,11 @@ function estimateNodeHeight(
   if (node.type === "table") {
     const marginTopPt = node.props.marginTop == null ? 0 : unitToPt(node.props.marginTop)
     const marginBottomPt = node.props.marginBottom == null ? 0 : unitToPt(node.props.marginBottom)
+    const columnAreas = tableColumnLayoutAreas(node, { xPt: 0, widthPt: availableWidthPt })
     const rowHeight = node.rowIds.reduce((total, rowId) => {
       const row = section.nodes[rowId]
       return total + (row?.type === "table-row"
-        ? estimateTableRowHeight(document, section, row, availableWidthPt, pageNumber, context)
+        ? estimateTableRowHeight(document, section, row, columnAreas, pageNumber, context)
         : 0)
     }, 0)
 
@@ -381,7 +425,15 @@ function estimateNodeHeight(
   }
 
   if (node.type === "table-row") {
-    return estimateTableRowHeight(document, section, node, availableWidthPt, pageNumber, context)
+    const cellWidthPt = Math.max(1, availableWidthPt / node.cellIds.length)
+    const columnAreas = node.cellIds.map((_, columnIndex) => ({
+      xPt: columnIndex * cellWidthPt,
+      widthPt: cellWidthPt,
+      tableId: "unknown-table",
+      columnIndex,
+      columnCount: node.cellIds.length,
+    }))
+    return estimateTableRowHeight(document, section, node, columnAreas, pageNumber, context)
   }
 
   return 0
@@ -780,6 +832,530 @@ export function paginateVNextDocument(
       state.yPt = topYPt + heightPt
     }
 
+    const layoutTable = (zone: ZoneNode, table: TableNode): void => {
+      const tableArea = bodyLayoutArea()
+      const columnAreas = tableColumnLayoutAreas(table, tableArea)
+      const headerRowCount = Math.min(table.props.headerRowCount ?? 0, table.rowIds.length)
+      const headerRowIds = table.rowIds.slice(0, headerRowCount)
+      const marginTopPt = table.props.marginTop == null ? 0 : unitToPt(table.props.marginTop)
+      const marginBottomPt = table.props.marginBottom == null ? 0 : unitToPt(table.props.marginBottom)
+      let segmentIndex = 0
+      let segment: {
+        fragment: VNextMeasuredFragment
+        topYPt: number
+        rowCount: number
+        repeatedHeaderRowCount: number
+      } | null = null
+
+      if (marginTopPt > 0) {
+        if (marginTopPt > remainingBodyHeight(state) && state.page.bodyFragmentIds.length > 0) moveToNextPage()
+        state.yPt += marginTopPt
+      }
+
+      const updateSegment = (): void => {
+        if (segment == null) return
+        segment.fragment.heightPt = Number((state.yPt - segment.topYPt).toFixed(2))
+        segment.fragment.metadata = {
+          ...segment.fragment.metadata,
+          rowCount: segment.rowCount,
+          repeatedHeaderRowCount: segment.repeatedHeaderRowCount,
+        }
+      }
+
+      const startSegment = (): void => {
+        const topYPt = state.yPt
+        const fragment = addFragment(
+          state.page,
+          zone,
+          table,
+          "container",
+          {
+            xPt: tableArea.xPt,
+            yPt: topYPt,
+            widthPt: tableArea.widthPt,
+            heightPt: 0,
+          },
+          {
+            metadata: {
+              tableId: table.id,
+              tableSegmentIndex: segmentIndex,
+              columnCount: table.columns.length,
+              headerRowCount,
+              repeatHeaderRows: table.props.repeatHeaderRows !== false,
+              measuredAs: "table-row-fragments",
+            },
+          },
+        )
+        segment = {
+          fragment,
+          topYPt,
+          rowCount: 0,
+          repeatedHeaderRowCount: 0,
+        }
+        segmentIndex += 1
+      }
+
+      const tableCellArea = (
+        row: TableRowNode,
+        rowIndex: number,
+        cell: TableCellNode,
+        cellIndex: number,
+        isHeaderRow: boolean,
+      ): TableCellLayoutArea => {
+        const columnArea = columnAreas[cellIndex] ?? columnAreas.at(-1) ?? {
+          xPt: tableArea.xPt,
+          widthPt: tableArea.widthPt,
+          tableId: table.id,
+          columnIndex: cellIndex,
+          columnCount: row.cellIds.length,
+        }
+
+        return {
+          xPt: columnArea.xPt,
+          widthPt: columnArea.widthPt,
+          tableId: table.id,
+          rowId: row.id,
+          cellId: cell.id,
+          rowIndex,
+          cellIndex,
+          columnIndex: columnArea.columnIndex,
+          columnCount: columnArea.columnCount,
+          isHeaderRow,
+        }
+      }
+
+      const addTableFragment = (
+        node: AuthoredNode,
+        kind: VNextMeasuredFragmentKind,
+        geometry: { xPt: number; yPt: number; widthPt: number; heightPt: number },
+        metadata: Record<string, string | number | boolean | null>,
+      ): VNextMeasuredFragment => addFragment(state.page, zone, node, kind, geometry, { metadata })
+
+      const layoutTableCellChild = (
+        child: AuthoredNode,
+        cellArea: TableCellLayoutArea,
+        rowYPt: number,
+        cursor: { yPt: number },
+      ): void => {
+        const contentXPt = cellArea.xPt + 4
+        const contentWidthPt = Math.max(1, cellArea.widthPt - 8)
+        const baseMetadata = {
+          tableId: cellArea.tableId,
+          rowId: cellArea.rowId,
+          cellId: cellArea.cellId,
+          rowIndex: cellArea.rowIndex,
+          cellIndex: cellArea.cellIndex,
+          columnIndex: cellArea.columnIndex,
+          isHeaderRow: cellArea.isHeaderRow,
+        }
+
+        if (child.type === "text-block") {
+          const measurement = measureNodeText(
+            measurementContext,
+            section.id,
+            child,
+            textBlockText(child, data, state.page.pageNumber),
+            contentWidthPt,
+          )
+          addTableFragment(
+            child,
+            "text",
+            {
+              xPt: contentXPt,
+              yPt: cursor.yPt,
+              widthPt: contentWidthPt,
+              heightPt: measurement.heightPt,
+            },
+            {
+              ...baseMetadata,
+              cellChildPolicy: "measured-lines",
+              ...measurementMetadata(measurement),
+            },
+          )
+          const fragment = state.page.fragments.at(-1)
+          if (fragment != null && fragment.nodeId === child.id) {
+            fragment.text = measurement.lines.join("\n")
+            fragment.lineStart = 0
+            fragment.lineEnd = measurement.lines.length
+          }
+          cursor.yPt += measurement.heightPt
+          return
+        }
+
+        if (child.type === "page-break") {
+          addWarning({
+            code: "page-break-in-table-cell-ignored",
+            sectionId: section.id,
+            nodeId: child.id,
+            pageIndex: state.page.pageIndex,
+            message: `Page break "${child.id}" in table cell "${cellArea.cellId}" is ignored.`,
+          })
+          return
+        }
+
+        const heightPt = estimateNodeHeight(document, section, child, contentWidthPt, state.page.pageNumber, measurementContext)
+        addTableFragment(
+          child,
+          child.type === "toc" ? "generated" : "block",
+          {
+            xPt: contentXPt,
+            yPt: rowYPt + 4,
+            widthPt: contentWidthPt,
+            heightPt,
+          },
+          {
+            ...baseMetadata,
+            cellChildPolicy: child.type === "toc" ? "generated-atomic" : "atomic",
+          },
+        )
+        cursor.yPt += heightPt
+      }
+
+      const rowHasSplittableText = (row: TableRowNode): boolean => (
+        row.props.allowBreak !== false &&
+        row.cellIds.every((cellId) => {
+          const cell = section.nodes[cellId]
+          return cell?.type === "table-cell" && cell.childIds.every((childId) => section.nodes[childId]?.type === "text-block")
+        }) &&
+        row.cellIds.some((cellId) => {
+          const cell = section.nodes[cellId]
+          return cell?.type === "table-cell" && cell.childIds.length > 0
+        })
+      )
+
+      const placeSplitRow = (row: TableRowNode, rowIndex: number): void => {
+        type TextState = {
+          child: TextBlockNode
+          measurement: VNextTextMeasurement
+          lineIndex: number
+          cellArea: TableCellLayoutArea
+          cellIndex: number
+        }
+        type CellState = {
+          cell: TableCellNode
+          cellArea: TableCellLayoutArea
+          textStates: TextState[]
+        }
+
+        const isHeaderRow = rowIndex < headerRowCount
+        const cellStates: CellState[] = row.cellIds.flatMap((cellId, cellIndex) => {
+          const cell = section.nodes[cellId]
+          if (cell?.type !== "table-cell") return []
+          const cellArea = tableCellArea(row, rowIndex, cell, cellIndex, isHeaderRow)
+          const contentWidthPt = Math.max(1, cellArea.widthPt - 8)
+          const textStates = cell.childIds.flatMap((childId): TextState[] => {
+            const child = section.nodes[childId]
+            if (child?.type !== "text-block") return []
+            return [{
+              child,
+              measurement: measureNodeText(
+                measurementContext,
+                section.id,
+                child,
+                textBlockText(child, data, state.page.pageNumber),
+                contentWidthPt,
+              ),
+              lineIndex: 0,
+              cellArea,
+              cellIndex,
+            }]
+          })
+
+          return [{ cell, cellArea, textStates }]
+        })
+
+        const hasRemainingText = (): boolean => cellStates.some((cellState) => (
+          cellState.textStates.some((textState) => textState.lineIndex < textState.measurement.lines.length)
+        ))
+
+        let splitIndex = 0
+        while (hasRemainingText()) {
+          if (segment == null) startSegment()
+
+          let availableHeightPt = remainingBodyHeight(state)
+          if (availableHeightPt <= 8 && state.page.bodyFragmentIds.length > 0) {
+            updateSegment()
+            moveToNextPage()
+            segment = null
+            repeatHeadersOnNewPage(rowIndex)
+            if (segment == null) startSegment()
+            availableHeightPt = remainingBodyHeight(state)
+          }
+
+          const rowYPt = state.yPt
+          const contentCapacityPt = Math.max(0, availableHeightPt - 8)
+          const placements: Array<{
+            textState: TextState
+            lineStart: number
+            lineEnd: number
+            yOffsetPt: number
+            heightPt: number
+          }> = []
+          let madeProgress = false
+
+          cellStates.forEach((cellState) => {
+            let cellUsedHeightPt = 0
+            cellState.textStates.forEach((textState) => {
+              if (textState.lineIndex >= textState.measurement.lines.length) return
+
+              const remainingCellHeightPt = Math.max(0, contentCapacityPt - cellUsedHeightPt)
+              let take = Math.min(
+                textState.measurement.lines.length - textState.lineIndex,
+                Math.floor(remainingCellHeightPt / textState.measurement.lineHeightPt),
+              )
+
+              if (!madeProgress && take <= 0) take = 1
+              if (take <= 0) return
+
+              const lineStart = textState.lineIndex
+              const lineEnd = lineStart + take
+              const heightPt = take * textState.measurement.lineHeightPt
+              placements.push({
+                textState,
+                lineStart,
+                lineEnd,
+                yOffsetPt: cellUsedHeightPt,
+                heightPt,
+              })
+              textState.lineIndex = lineEnd
+              cellUsedHeightPt += heightPt
+              madeProgress = true
+            })
+          })
+
+          if (!madeProgress) {
+            addWarning({
+              code: "table-row-forced-overflow",
+              sectionId: section.id,
+              nodeId: row.id,
+              pageIndex: state.page.pageIndex,
+              message: `Table row "${row.id}" could not place a split text slice without forced overflow.`,
+            })
+            break
+          }
+
+          const rowContentHeightPt = placements.reduce((maxHeight, placement) => (
+            Math.max(maxHeight, placement.yOffsetPt + placement.heightPt)
+          ), 0)
+          const rowSliceHeightPt = Math.max(8, rowContentHeightPt + 8)
+          const continuesFromPreviousPage = splitIndex > 0
+          const continuesOnNextPage = cellStates.some((cellState) => (
+            cellState.textStates.some((textState) => textState.lineIndex < textState.measurement.lines.length)
+          ))
+
+          addTableFragment(
+            row,
+            "container",
+            {
+              xPt: tableArea.xPt,
+              yPt: rowYPt,
+              widthPt: tableArea.widthPt,
+              heightPt: rowSliceHeightPt,
+            },
+            {
+              tableId: table.id,
+              rowId: row.id,
+              rowIndex,
+              isHeaderRow,
+              isRepeatedHeader: false,
+              isSplitRow: true,
+              rowSplitIndex: splitIndex,
+              continuesFromPreviousPage,
+              continuesOnNextPage,
+            },
+          )
+
+          cellStates.forEach((cellState) => {
+            addTableFragment(
+              cellState.cell,
+              "container",
+              {
+                xPt: cellState.cellArea.xPt,
+                yPt: rowYPt,
+                widthPt: cellState.cellArea.widthPt,
+                heightPt: rowSliceHeightPt,
+              },
+              {
+                tableId: table.id,
+                rowId: row.id,
+                cellId: cellState.cell.id,
+                rowIndex,
+                cellIndex: cellState.cellArea.cellIndex,
+                columnIndex: cellState.cellArea.columnIndex,
+                isHeaderRow,
+                isRepeatedHeader: false,
+                isSplitRow: true,
+                rowSplitIndex: splitIndex,
+                continuesFromPreviousPage,
+                continuesOnNextPage,
+                hasContentInSlice: placements.some((placement) => placement.textState.cellArea.cellId === cellState.cell.id),
+              },
+            )
+          })
+
+          placements.forEach((placement) => {
+            const textState = placement.textState
+            const contentXPt = textState.cellArea.xPt + 4
+            const contentWidthPt = Math.max(1, textState.cellArea.widthPt - 8)
+            const textContinuesFromPreviousPage = placement.lineStart > 0
+            const textContinuesOnNextPage = placement.lineEnd < textState.measurement.lines.length
+            addTableFragment(
+              textState.child,
+              "text",
+              {
+                xPt: contentXPt,
+                yPt: rowYPt + 4 + placement.yOffsetPt,
+                widthPt: contentWidthPt,
+                heightPt: placement.heightPt,
+              },
+              {
+                tableId: table.id,
+                rowId: row.id,
+                cellId: textState.cellArea.cellId,
+                rowIndex,
+                cellIndex: textState.cellIndex,
+                columnIndex: textState.cellArea.columnIndex,
+                isHeaderRow,
+                isRepeatedHeader: false,
+                isSplitRow: true,
+                rowSplitIndex: splitIndex,
+                cellChildPolicy: "splittable-lines",
+                ...measurementMetadata(textState.measurement),
+              },
+            )
+            const fragment = state.page.fragments.at(-1)
+            if (fragment != null && fragment.nodeId === textState.child.id) {
+              fragment.text = textState.measurement.lines.slice(placement.lineStart, placement.lineEnd).join("\n")
+              fragment.lineStart = placement.lineStart
+              fragment.lineEnd = placement.lineEnd
+              fragment.continuesFromPreviousPage = textContinuesFromPreviousPage
+              fragment.continuesOnNextPage = textContinuesOnNextPage
+            }
+          })
+
+          state.yPt += rowSliceHeightPt
+          if (segment != null) segment.rowCount += 1
+          updateSegment()
+          splitIndex += 1
+
+          if (continuesOnNextPage) {
+            updateSegment()
+            moveToNextPage()
+            segment = null
+            repeatHeadersOnNewPage(rowIndex)
+          }
+        }
+      }
+
+      const placeRow = (row: TableRowNode, rowIndex: number, isRepeatedHeader: boolean): void => {
+        const isHeaderRow = rowIndex < headerRowCount
+        const rowHeightPt = estimateTableRowHeight(document, section, row, columnAreas, state.page.pageNumber, measurementContext)
+        if (rowHeightPt > pageBox.contentHeightPt) {
+          addWarning({
+            code: "table-row-forced-overflow",
+            sectionId: section.id,
+            nodeId: row.id,
+            pageIndex: state.page.pageIndex,
+            message: `Table row "${row.id}" is taller than the body content area.`,
+          })
+        }
+
+        if (segment == null) startSegment()
+
+        const rowYPt = state.yPt
+        addTableFragment(
+          row,
+          "container",
+          {
+            xPt: tableArea.xPt,
+            yPt: rowYPt,
+            widthPt: tableArea.widthPt,
+            heightPt: rowHeightPt,
+          },
+          {
+            tableId: table.id,
+            rowId: row.id,
+            rowIndex,
+            isHeaderRow,
+            isRepeatedHeader,
+          },
+        )
+
+        row.cellIds.forEach((cellId, cellIndex) => {
+          const cell = section.nodes[cellId]
+          if (cell?.type !== "table-cell") return
+
+          const cellArea = tableCellArea(row, rowIndex, cell, cellIndex, isHeaderRow)
+          addTableFragment(
+            cell,
+            "container",
+            {
+              xPt: cellArea.xPt,
+              yPt: rowYPt,
+              widthPt: cellArea.widthPt,
+              heightPt: rowHeightPt,
+            },
+            {
+              tableId: table.id,
+              rowId: row.id,
+              cellId: cell.id,
+              rowIndex,
+              cellIndex,
+              columnIndex: cellArea.columnIndex,
+              isHeaderRow,
+              isRepeatedHeader,
+            },
+          )
+
+          const cursor = { yPt: rowYPt + 4 }
+          cell.childIds.forEach((childId) => {
+            const child = section.nodes[childId]
+            if (child != null) layoutTableCellChild(child, cellArea, rowYPt, cursor)
+          })
+        })
+
+        state.yPt += rowHeightPt
+        if (segment != null) {
+          segment.rowCount += 1
+          if (isRepeatedHeader) segment.repeatedHeaderRowCount += 1
+        }
+        updateSegment()
+      }
+
+      const repeatHeadersOnNewPage = (forRowIndex: number): void => {
+        if (headerRowIds.length === 0 || table.props.repeatHeaderRows === false || forRowIndex < headerRowCount) return
+        headerRowIds.forEach((headerRowId, headerIndex) => {
+          const headerRow = section.nodes[headerRowId]
+          if (headerRow?.type === "table-row") placeRow(headerRow, headerIndex, true)
+        })
+      }
+
+      table.rowIds.forEach((rowId, rowIndex) => {
+        const row = section.nodes[rowId]
+        if (row?.type !== "table-row") return
+
+        const rowHeightPt = estimateTableRowHeight(document, section, row, columnAreas, state.page.pageNumber, measurementContext)
+        if (rowHeightPt > pageBox.contentHeightPt && rowHasSplittableText(row)) {
+          placeSplitRow(row, rowIndex)
+          return
+        }
+
+        const hasRowsInCurrentSegment = segment != null && segment.rowCount > 0
+        const pageHasPriorContent = segment == null && state.page.bodyFragmentIds.length > 0
+        if (rowHeightPt > remainingBodyHeight(state) && (hasRowsInCurrentSegment || pageHasPriorContent)) {
+          updateSegment()
+          moveToNextPage()
+          segment = null
+          repeatHeadersOnNewPage(rowIndex)
+        }
+
+        placeRow(row, rowIndex, false)
+      })
+
+      updateSegment()
+      if (marginBottomPt > 0) state.yPt += marginBottomPt
+    }
+
     const layoutNode = (zone: ZoneNode, nodeId: NodeId): void => {
       const node = section.nodes[nodeId]
       if (node == null) return
@@ -817,16 +1393,7 @@ export function paginateVNextDocument(
       }
 
       if (node.type === "table") {
-        addWarning({
-          code: "table-atomic-skeleton",
-          sectionId: section.id,
-          nodeId: node.id,
-          pageIndex: state.page.pageIndex,
-          message: `Table node "${node.id}" is measured as one fragment in this skeleton.`,
-        })
-        placeBlock(zone, node, "container", estimateNodeHeight(document, section, node, pageBox.contentWidthPt, state.page.pageNumber, measurementContext), {
-          rowCount: node.rowIds.length,
-        })
+        layoutTable(zone, node)
         return
       }
 

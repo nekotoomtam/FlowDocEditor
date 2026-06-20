@@ -33,8 +33,7 @@ Current position:
 - Request: step back and design the next node model from the product goal.
 - Plan: Node Model vNext Plan.
 - Phase: Phase 10, pagination/export integration.
-- Job item: replace opaque columns pagination with measured column child
-  fragments.
+- Job item: replace opaque table pagination with row-level table fragments.
 - Status: in_progress.
 - Why this item is current: Phase 1 locked the node set, Phase 2 locked the
   relationship graph, Phase 3 locked the persisted boundary, Phase 5/5.5 moved
@@ -55,9 +54,21 @@ Current position:
   text fragments.
 - Phase 10.3 adds `widthShare`/gap-based column geometry and measured child
   fragments so column text is measured against its actual column width.
+- Phase 10.4 adds table page segments, row fragments, cell fragments, measured
+  cell text metadata, row-level page breaks, and repeated header rows.
+- Phase 10.4.5 adds measured-line splitting for over-tall breakable table rows
+  when their cell children are text blocks; `allowBreak=false` rows remain
+  atomic and emit overflow warnings.
+- Phase 10.4.6 makes table cell child policy explicit for measured text,
+  atomic spacer/divider, generated TOC, and ignored page-break nodes.
+- Phase 10.4.8 adds measured pagination export readiness so blocking table
+  overflow warnings can block export without giving renderers layout authority.
+- Table pagination direction is locked in
+  `vnext-workspace/docs/TABLE_PAGINATION_VNEXT_PLAN.md`: implement row-level
+  pagination plus splittable cell text before attempting a full table engine.
 - Next transition: continue Phase 10 with a renderer-backed measurement profile
-  implementation, table pagination, multi-page columns balancing, final TOC
-  page resolution, and renderer/export consumption tests.
+  implementation, non-text table cell splitting, multi-page columns balancing,
+  final TOC page resolution, and renderer/export consumption tests.
 
 ## Evidence From The Prototype
 
@@ -704,7 +715,7 @@ Current job lane:
 | 7 | Legacy cutoff | Docs/tests | vNext core rejects old/prototype shapes instead of exporting a legacy adapter | done | `vnext-workspace/README.md`; `vnext-workspace/docs/WORKSPACE_BOUNDARY.md` |
 | 8 | Canonical package parser | Persistence/tests | Package v2 with document v3 parse/serialize behavior is explicit | done | `vnext-workspace/src/persistence/package.ts`; `vnext-workspace/tests/packageFixture.test.ts` |
 | 9 | Operation integration | Editor operation plans/tests | Operations consume relationship graph instead of UI-specific inference | done | `vnext-workspace/src/operations/documentOperations.ts`; `vnext-workspace/tests/operations.test.ts` |
-| 10 | Pagination/export integration | Renderer/pagination tests | vNext document structure has explicit pagination/export invalidation, measurement contracts, measured page fragments, column child fragments, and rendering boundaries | in_progress | `vnext-workspace/src/pagination/paginationPlan.ts`; `vnext-workspace/src/pagination/textMeasurement.ts`; `vnext-workspace/src/pagination/measuredPagination.ts`; `vnext-workspace/tests/paginationPlan.test.ts`; `vnext-workspace/tests/textMeasurement.test.ts`; `vnext-workspace/tests/measuredPagination.test.ts` |
+| 10 | Pagination/export integration | Renderer/pagination tests | vNext document structure has explicit pagination/export invalidation, measurement contracts, measured page fragments, column child fragments, row-level table fragments, and rendering boundaries | in_progress | `vnext-workspace/docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `vnext-workspace/src/pagination/paginationPlan.ts`; `vnext-workspace/src/pagination/textMeasurement.ts`; `vnext-workspace/src/pagination/measuredPagination.ts`; `vnext-workspace/src/pagination/exportReadiness.ts`; `vnext-workspace/tests/paginationPlan.test.ts`; `vnext-workspace/tests/textMeasurement.test.ts`; `vnext-workspace/tests/measuredPagination.test.ts`; `vnext-workspace/tests/exportReadiness.test.ts` |
 
 ## Stop Conditions
 

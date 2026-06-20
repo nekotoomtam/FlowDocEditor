@@ -66,12 +66,23 @@ From the current parent repository without installing this folder separately:
   measurement cache, operation invalidation, and pagination fragment metadata
 - Columns pagination skeleton: `widthShare`/gap-based column geometry with
   measured child fragments and column metadata
+- Table pagination skeleton: row-level page breaks, repeated header row
+  fragments, cell geometry, measured cell text metadata, and over-tall
+  breakable text-cell row splits
+- Table cell block policy: measured text, atomic spacer/divider, generated TOC,
+  and ignored page-break behavior is explicit in fragment metadata/warnings
+- Export readiness gate: measured pagination reports ready, ready-with-warnings,
+  or blocked without letting renderers relayout
+- Table direction plan: `docs/TABLE_PAGINATION_VNEXT_PLAN.md` selects
+  row-level pagination plus splittable cell text before the deferred full table
+  engine path
 
 Not implemented yet:
 
 - editor runtime integration;
-- renderer-backed text measurement profile implementation, table/columns
-  multi-page fragmentation, and final pagination-aware TOC page resolution;
+- renderer-backed text measurement profile implementation, non-text table-cell
+  content splitting, multi-page column balancing, and final
+  pagination-aware TOC page resolution;
 - PDF/DOCX renderer implementation;
 - durable operation history persistence outside the in-memory replay helper;
 - product-level editor acceptance smokes.

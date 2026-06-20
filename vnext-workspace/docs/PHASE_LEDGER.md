@@ -16,7 +16,7 @@ Parent goal:
 | 7 | Legacy cutoff and canonical-only boundary | done | `README.md`; `docs/WORKSPACE_BOUNDARY.md` |
 | 8 | Canonical package parser/serializer | done | `src/persistence/package.ts`; `tests/packageFixture.test.ts` |
 | 9 | vNext operations | done | `src/operations/documentOperations.ts`; `tests/operations.test.ts` |
-| 10 | Pagination/export integration | in_progress | `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts` |
+| 10 | Pagination/export integration | in_progress | `docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `src/pagination/exportReadiness.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts`; `tests/exportReadiness.test.ts` |
 | 11 | Editor runtime bridge | pending | editor tests and smokes |
 | 12 | Move to new repository | pending | repository extraction checklist |
 
@@ -44,6 +44,18 @@ boundary and measured skeleton output:
   and operation-driven cache invalidation.
 - `columns` nodes now produce `widthShare`/gap-based container and child
   fragments instead of one opaque atomic fragment.
+- `table` nodes now produce page-segment, row, cell, and measured text
+  fragments with row-level page breaks and repeated header rows.
+- over-tall breakable table rows whose cell children are text blocks now split
+  by measured line ranges while `allowBreak=false` rows stay atomic and warn.
+- table cell child policy is explicit for measured text, atomic spacer/divider,
+  generated TOC, and ignored page-break nodes.
+- `assessVNextMeasuredPaginationExportReadiness(...)` reports ready,
+  ready-with-warnings, or blocked from measured pagination warnings while
+  preserving the no-relayout renderer contract.
+- `docs/TABLE_PAGINATION_VNEXT_PLAN.md` locks the selected table direction as
+  row-level pagination plus splittable cell text, with full table-engine work
+  deferred until the B path is stable.
 - `createApproximateVNextTextMeasurer(...)` provides deterministic measurement
   for tests and early local integration without importing the parent runtime.
 - `buildVNextExportPlan(...)` declares that PDF and DOCX consume measured
@@ -52,8 +64,9 @@ boundary and measured skeleton output:
   unchanged pagination/export readiness.
 
 This phase does not import the parent layout engine, provide a renderer-backed
-measurement profile implementation, split tables/columns across multiple pages,
-finalize TOC page references, or render PDF/DOCX yet.
+measurement profile implementation, split non-text table cell content across
+pages, balance columns across multiple pages, finalize TOC page references, or
+render PDF/DOCX yet.
 
 ## Phase 9 Baseline
 
