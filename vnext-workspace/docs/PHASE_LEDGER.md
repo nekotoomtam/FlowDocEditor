@@ -16,7 +16,7 @@ Parent goal:
 | 7 | Legacy cutoff and canonical-only boundary | done | `README.md`; `docs/WORKSPACE_BOUNDARY.md` |
 | 8 | Canonical package parser/serializer | done | `src/persistence/package.ts`; `tests/packageFixture.test.ts` |
 | 9 | vNext operations | done | `src/operations/documentOperations.ts`; `tests/operations.test.ts` |
-| 10 | Pagination/export integration | in_progress | `docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `src/pagination/exportReadiness.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts`; `tests/exportReadiness.test.ts` |
+| 10 | Pagination/export integration | in_progress | `docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `src/pagination/rendererConsumption.ts`; `src/pagination/exportReadiness.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts`; `tests/rendererConsumption.test.ts`; `tests/exportReadiness.test.ts` |
 | 11 | Editor runtime bridge | pending | editor tests and smokes |
 | 12 | Move to new repository | pending | repository extraction checklist |
 
@@ -50,9 +50,13 @@ boundary and measured skeleton output:
   by measured line ranges while `allowBreak=false` rows stay atomic and warn.
 - table cell child policy is explicit for measured text, atomic spacer/divider,
   generated TOC, and ignored page-break nodes.
+- `buildVNextMeasuredRendererConsumption(...)` converts measured fragments into
+  renderer commands without accepting authored document input, and blocks when
+  table fragments lack geometry, hierarchy, line-range, or table metadata.
 - `assessVNextMeasuredPaginationExportReadiness(...)` reports ready,
-  ready-with-warnings, or blocked from measured pagination warnings while
-  preserving the no-relayout renderer contract.
+  ready-with-warnings, or blocked from measured pagination warnings and
+  renderer-consumption issues while preserving the no-relayout renderer
+  contract.
 - `docs/TABLE_PAGINATION_VNEXT_PLAN.md` locks the selected table direction as
   row-level pagination plus splittable cell text, with full table-engine work
   deferred until the B path is stable.
@@ -66,7 +70,7 @@ boundary and measured skeleton output:
 This phase does not import the parent layout engine, provide a renderer-backed
 measurement profile implementation, split non-text table cell content across
 pages, balance columns across multiple pages, finalize TOC page references, or
-render PDF/DOCX yet.
+render PDF/DOCX beyond the measured-fragment consumption contract yet.
 
 ## Phase 9 Baseline
 

@@ -4,6 +4,7 @@ import {
   assessVNextMeasuredPaginationExportReadiness,
   createApproximateVNextTextMeasurer,
   paginateVNextDocument,
+  type VNextMeasuredPagination,
 } from "../src/index.js"
 
 function pt(value: number) {
@@ -130,6 +131,10 @@ function warningDoc(): DocumentNode {
   }
 }
 
+function clonePagination(pagination: VNextMeasuredPagination): VNextMeasuredPagination {
+  return JSON.parse(JSON.stringify(pagination)) as VNextMeasuredPagination
+}
+
 describe("vNext measured pagination export readiness", () => {
   it("marks warning-free measured pagination as ready", () => {
     const pagination = paginateVNextDocument(simpleDoc())
@@ -147,6 +152,15 @@ describe("vNext measured pagination export readiness", () => {
           mayRelayout: false,
           mayUseSourceDocumentForStructure: true,
         },
+      },
+      rendererConsumption: {
+        source: "vnext-measured-pagination",
+        status: "consumable",
+        consumes: "measured-pagination-fragments",
+        requiresAuthoredDocumentForLayout: false,
+        mayRelayout: false,
+        blockingIssueCount: 0,
+        warningIssueCount: 0,
       },
       blockingIssues: [],
       warningIssues: [],
@@ -192,5 +206,34 @@ describe("vNext measured pagination export readiness", () => {
 
     expect(readiness.status).toBe("ready")
     expect(readiness.blockingIssues).toEqual([])
+  })
+
+  it("blocks export when measured table fragments are not renderer-consumable", () => {
+    const pagination = paginateVNextDocument(tableDoc(true), {
+      textMeasurer: createApproximateVNextTextMeasurer({ charWidthPt: 20, lineHeightPt: 30 }),
+    })
+    const broken = clonePagination(pagination)
+    const cellFragment = broken.pages
+      .flatMap((page) => page.fragments)
+      .find((fragment) => fragment.nodeId === "cell")
+
+    if (cellFragment?.metadata == null) {
+      throw new Error("Expected table cell metadata in test setup.")
+    }
+
+    delete cellFragment.metadata.tableId
+
+    const readiness = assessVNextMeasuredPaginationExportReadiness(broken)
+
+    expect(readiness.status).toBe("blocked")
+    expect(readiness.rendererConsumption).toMatchObject({
+      status: "blocked",
+      blockingIssueCount: expect.any(Number),
+    })
+    expect(readiness.blockingIssues).toContainEqual(expect.objectContaining({
+      severity: "blocking",
+      code: "table-fragment-missing-metadata",
+      nodeId: "cell",
+    }))
   })
 })

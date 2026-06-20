@@ -1,10 +1,14 @@
 import type { VNextMeasuredPagination, VNextMeasuredPaginationWarning } from "./measuredPagination.js"
+import {
+  buildVNextMeasuredRendererConsumption,
+  type VNextMeasuredRendererConsumptionIssue,
+} from "./rendererConsumption.js"
 
 export type VNextExportReadinessStatus = "ready" | "ready-with-warnings" | "blocked"
 
 export interface VNextExportReadinessIssue {
   severity: "blocking" | "warning"
-  code: VNextMeasuredPaginationWarning["code"]
+  code: VNextMeasuredPaginationWarning["code"] | VNextMeasuredRendererConsumptionIssue["code"]
   sectionId: string
   nodeId: string
   pageIndex?: number
@@ -27,6 +31,15 @@ export interface VNextMeasuredPaginationExportReadiness {
       mayUseSourceDocumentForStructure: true
     }
   }
+  rendererConsumption: {
+    source: "vnext-measured-pagination"
+    status: "consumable" | "blocked"
+    consumes: "measured-pagination-fragments"
+    requiresAuthoredDocumentForLayout: false
+    mayRelayout: false
+    blockingIssueCount: number
+    warningIssueCount: number
+  }
   blockingIssues: VNextExportReadinessIssue[]
   warningIssues: VNextExportReadinessIssue[]
 }
@@ -48,10 +61,26 @@ function toIssue(warning: VNextMeasuredPaginationWarning): VNextExportReadinessI
   }
 }
 
+function rendererIssueToIssue(issue: VNextMeasuredRendererConsumptionIssue): VNextExportReadinessIssue {
+  return {
+    severity: issue.severity,
+    code: issue.code,
+    sectionId: issue.sectionId,
+    nodeId: issue.nodeId,
+    pageIndex: issue.pageIndex,
+    message: issue.message,
+  }
+}
+
 export function assessVNextMeasuredPaginationExportReadiness(
   pagination: VNextMeasuredPagination,
 ): VNextMeasuredPaginationExportReadiness {
-  const issues = pagination.warnings.map(toIssue)
+  const rendererConsumption = buildVNextMeasuredRendererConsumption(pagination)
+  const issues = [
+    ...pagination.warnings.map(toIssue),
+    ...rendererConsumption.blockingIssues.map(rendererIssueToIssue),
+    ...rendererConsumption.warningIssues.map(rendererIssueToIssue),
+  ]
   const blockingIssues = issues.filter((issue) => issue.severity === "blocking")
   const warningIssues = issues.filter((issue) => issue.severity === "warning")
 
@@ -74,6 +103,15 @@ export function assessVNextMeasuredPaginationExportReadiness(
         mayRelayout: false,
         mayUseSourceDocumentForStructure: true,
       },
+    },
+    rendererConsumption: {
+      source: rendererConsumption.source,
+      status: rendererConsumption.status,
+      consumes: rendererConsumption.rendererContract.consumes,
+      requiresAuthoredDocumentForLayout: rendererConsumption.rendererContract.requiresAuthoredDocumentForLayout,
+      mayRelayout: rendererConsumption.rendererContract.mayRelayout,
+      blockingIssueCount: rendererConsumption.blockingIssues.length,
+      warningIssueCount: rendererConsumption.warningIssues.length,
     },
     blockingIssues,
     warningIssues,

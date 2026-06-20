@@ -203,8 +203,9 @@ Acceptance before enabling spans:
 
 ### 10.4.8 Renderer/Export Gate
 
-Status: readiness contract implemented; renderer consumption tests are still
-not implemented.
+Status: renderer consumption contract and readiness gate implemented for
+measured fragments; PDF/DOCX renderer implementations are still not
+implemented.
 
 Rules:
 
@@ -233,13 +234,16 @@ The current 10.4 working tree has:
   text, atomic blocks, generated TOC, and ignored page breaks.
 - measured pagination export readiness reports ready, ready-with-warnings, or
   blocked from pagination warnings without renderer relayout.
+- renderer-consumption audit converts measured fragments into renderer commands
+  without authored document input and blocks export when table geometry,
+  hierarchy, line ranges, or metadata would require renderer-side inference.
 
 It does not yet have:
 
 - row minHeight rename or explicit schema migration;
 - splitting for non-text cell children;
 - colspan/rowspan support;
-- renderer consumption tests.
+- concrete PDF/DOCX renderer implementations.
 
 ## Stop Conditions
 
