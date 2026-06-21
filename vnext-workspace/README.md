@@ -86,15 +86,30 @@ From the current parent repository without installing this folder separately:
   parent editor runtime integration
 - Phase 11 import boundary: `../docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`
   keeps this folder in-repo for now and allows parent editor imports only
-  through the future bridge host
+  through the parent bridge host
+- Parent editor bridge host:
+  `../src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts` consumes
+  the vNext public entrypoint and returns bounded read-only readiness snapshots
 - Read-only editor bridge runtime: `src/editorBridge/runtime.ts` composes
   canonical package parsing, relationship graph, measured pagination,
   renderer-consumption audit, export readiness, and supported operation kinds
   without accepting current runtime document input
+- Editor/generation boundary map:
+  `../docs/EDITOR_GENERATION_BOUNDARY_MAP.md` separates editor-authored
+  template truth, generation request data, bound runtime views, measured
+  pagination, renderer-consumption, and preview/export artifacts
+- Parent read-only generation diagnostic:
+  `../src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts`
+  consumes the parent bridge host and reports generation readiness without
+  consuming request data, rendering artifacts, replacing API routes, or
+  mutating editor state
 
 Not implemented yet:
 
 - editor runtime integration;
+- public vNext generation API or replacement for current `/api/paginate` and
+  `/api/export`;
+- form-slot or submission-state runtime;
 - renderer-backed text measurement profile implementation, non-text table-cell
   content splitting, multi-page column balancing, and final
   pagination-aware TOC page resolution;

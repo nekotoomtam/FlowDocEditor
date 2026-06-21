@@ -46,6 +46,7 @@ For a new session:
 | Editor runtime Document Model v2 | `docs/EDITOR_RUNTIME_DOCUMENT_MODEL_V2_PLAN.md` |
 | Editor vNext runtime bridge | `docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md` |
 | Editor vNext import boundary | `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md` |
+| Editor/generation boundary | `docs/EDITOR_GENERATION_BOUNDARY_MAP.md` |
 | Test strategy | `docs/TEST_STRATEGY.md` |
 | Browser smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Editor UX | `docs/EDITOR_UX_CONTRACT.md` |
@@ -157,6 +158,9 @@ Layout, pagination, or cross-page behavior:
   runtime to the extractable vNext core after Phase 10
 - `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md` before adding parent editor
   imports of the vNext workspace
+- `docs/EDITOR_GENERATION_BOUNDARY_MAP.md` when preview/export, API-first
+  document generation, or editor template versus generated output truth is in
+  scope
 - `docs/EDITOR_OPERATION_ARCHITECTURE.md` when editor mutation routing or
   operation migration is in scope
 - `docs/EDITOR_OPERATION_COMMAND_ARCHITECTURE_PLAN.md` when operation command,
@@ -218,6 +222,9 @@ Export, renderer, package, field, or data work:
   prototype evidence, or if the owner explicitly requests a separate external
   converter. Canonical vNext core work should use `vnext-workspace/docs/WORKSPACE_BOUNDARY.md`.
 - `docs/EXPORT_RENDERER_CONTRACT.md`
+- `docs/EDITOR_GENERATION_BOUNDARY_MAP.md` when the change touches
+  editor-authored templates, generation requests, preview/export APIs, bound
+  data snapshots, or the difference between authored and generated output
 - `docs/FLOWDOC_PACKAGE_CONTRACT.md`
 - `docs/FIELD_REGISTRY_CONTRACT.md`
 - `docs/DATA_SNAPSHOT_CONTRACT.md`

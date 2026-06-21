@@ -22,7 +22,7 @@ site for vNext:
 ```text
 src/app/editor/_components/vnextBridge/
   editorVNextBridgeHost.ts
-  editorVNextBridgeHost.test.ts
+  __tests__/editorVNextBridgeHost.test.ts
 ```
 
 The host may import the vNext public entrypoint during the temporary phase:
@@ -104,9 +104,32 @@ For 11.3 parent host implementation:
 - no changes to reducer, `EditorState.doc`, undo/redo, active inline edit, or
   visible pagination/rendering.
 
-## Next Step
+## Current Phase 11 Position
 
-Proceed to Phase 11.3:
+Phase 11.3 implemented the parent bridge host:
+
+```text
+src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts
+```
+
+Phase 11.4 then mapped current compatibility readers and the API-first
+generation boundary:
+
+```text
+docs/EDITOR_GENERATION_BOUNDARY_MAP.md
+```
+
+Phase 11.5 implemented the first read-only generation diagnostic consumer:
+
+```text
+src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts
+```
+
+Next step: proceed to Phase 11.6 with a first mutating operation pilot design.
+Do not wire vNext into visible editor rendering or replace `/api/export` /
+`/api/paginate` before the later runtime flip review gate.
+
+Original Phase 11.3 target:
 
 ```text
 Parent editor bridge host

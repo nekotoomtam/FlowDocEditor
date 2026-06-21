@@ -17,7 +17,7 @@ Parent goal:
 | 8 | Canonical package parser/serializer | done | `src/persistence/package.ts`; `tests/packageFixture.test.ts` |
 | 9 | vNext operations | done | `src/operations/documentOperations.ts`; `tests/operations.test.ts` |
 | 10 | Pagination/export integration | done | `docs/PHASE_10_CLOSE_AUDIT.md`; `docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `src/pagination/rendererConsumption.ts`; `src/pagination/exportReadiness.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts`; `tests/rendererConsumption.test.ts`; `tests/exportReadiness.test.ts` |
-| 11 | Editor runtime bridge | in_progress | `../docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`; `../docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`; `src/editorBridge/runtime.ts`; `tests/editorBridgeRuntime.test.ts` |
+| 11 | Editor runtime bridge | in_progress | `../docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`; `../docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`; `../docs/EDITOR_GENERATION_BOUNDARY_MAP.md`; `src/editorBridge/runtime.ts`; `tests/editorBridgeRuntime.test.ts`; `../src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts`; `../src/app/editor/_components/vnextBridge/__tests__/editorVNextBridgeHost.test.ts`; `../src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts`; `../src/app/editor/_components/vnextBridge/__tests__/editorGenerationReadiness.test.ts` |
 | 12 | Move to new repository | pending | repository extraction checklist |
 
 ## Current Rule
@@ -91,9 +91,20 @@ Current Phase 11 progress:
   renderer-consumption audit, export readiness, and supported operation kinds.
 - Raw/current runtime document input is rejected by the bridge parser.
 - Import boundary is locked: do not move repo yet, do not add this folder to
-  root workspaces yet, and allow parent editor imports only through the future
-  Phase 11.3 bridge host.
-- Parent editor bridge hosting remains next.
+  root workspaces yet, and allow parent editor imports only through the Phase
+  11.3 bridge host.
+- Parent editor bridge host is implemented as a read-only bounded snapshot API.
+- Editor/generation boundary mapping is documented in
+  `../docs/EDITOR_GENERATION_BOUNDARY_MAP.md`: editor-authored template truth,
+  generation request truth, bound runtime view, measured pagination,
+  renderer-consumption, and output artifacts are separate.
+- Current `/api/paginate` and `/api/export` remain current-runtime-shaped
+  endpoints; the vNext bridge remains canonical-package-only.
+- First read-only generation diagnostic consumer is implemented in the parent
+  app. It calls the bridge host, records request data as not consumed, and
+  reports no editor state/history/selection/pagination/canvas/API side effects.
+- The next Phase 11 item is a first mutating operation pilot design, not
+  visible editor rendering or API replacement.
 
 ## Phase 9 Baseline
 

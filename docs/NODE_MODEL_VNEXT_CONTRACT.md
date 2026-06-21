@@ -33,8 +33,8 @@ Current position:
 - Request: step back and design the next node model from the product goal.
 - Plan: Node Model vNext Plan.
 - Phase: Phase 11, editor runtime bridge.
-- Job item: temporary vNext import boundary.
-- Status: in_progress.
+- Job item: first read-only generation diagnostic consumer.
+- Status: done.
 - Why this item is current: Phase 1 locked the node set, Phase 2 locked the
   relationship graph, Phase 3 locked the persisted boundary, Phase 5/5.5 moved
   the slice into an isolated workspace, and Phase 6 created a product-shaped
@@ -81,6 +81,21 @@ Current position:
 - Phase 11.1 is locked by `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`: do
   not move repo yet, do not add `vnext-workspace` to root workspaces yet, and
   allow parent imports only through the future Phase 11.3 bridge host.
+- Phase 11.3 adds
+  `src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts`, a
+  read-only parent host that returns bounded diagnostics/readiness snapshots
+  without mutating editor state, history, pagination, reducer output, or canvas
+  rendering.
+- Phase 11.4 adds `docs/EDITOR_GENERATION_BOUNDARY_MAP.md`, locking the first
+  product path as editor-authored template to API-first document generation.
+  Generated preview/export output is derived state, not a new authored
+  document. Future form/slot/submission work is acknowledged as a later lane
+  and remains outside Phase 11.
+- Phase 11.5 adds
+  `src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts`, a
+  read-only parent consumer that calls the bridge host and reports generation
+  readiness without consuming request data, creating output artifacts, replacing
+  API routes, or mutating editor state/history/selection/pagination/canvas.
 
 ## Evidence From The Prototype
 
@@ -728,7 +743,7 @@ Current job lane:
 | 8 | Canonical package parser | Persistence/tests | Package v2 with document v3 parse/serialize behavior is explicit | done | `vnext-workspace/src/persistence/package.ts`; `vnext-workspace/tests/packageFixture.test.ts` |
 | 9 | Operation integration | Editor operation plans/tests | Operations consume relationship graph instead of UI-specific inference | done | `vnext-workspace/src/operations/documentOperations.ts`; `vnext-workspace/tests/operations.test.ts` |
 | 10 | Pagination/export integration | Renderer/pagination tests | vNext document structure has explicit pagination/export invalidation, measurement contracts, measured page fragments, column child fragments, row-level table fragments, and rendering boundaries | done | `vnext-workspace/docs/PHASE_10_CLOSE_AUDIT.md`; `vnext-workspace/docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `vnext-workspace/src/pagination/paginationPlan.ts`; `vnext-workspace/src/pagination/textMeasurement.ts`; `vnext-workspace/src/pagination/measuredPagination.ts`; `vnext-workspace/src/pagination/rendererConsumption.ts`; `vnext-workspace/src/pagination/exportReadiness.ts`; `vnext-workspace/tests/paginationPlan.test.ts`; `vnext-workspace/tests/textMeasurement.test.ts`; `vnext-workspace/tests/measuredPagination.test.ts`; `vnext-workspace/tests/rendererConsumption.test.ts`; `vnext-workspace/tests/exportReadiness.test.ts` |
-| 11 | Editor runtime bridge | Editor bridge design/tests/smokes | Current editor runtime consumes vNext core through an explicit bridge without making legacy/runtime structures the source of truth | in_progress | `docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`; `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`; `vnext-workspace/src/editorBridge/runtime.ts`; `vnext-workspace/tests/editorBridgeRuntime.test.ts` |
+| 11 | Editor runtime bridge | Editor bridge design/tests/smokes | Current editor runtime consumes vNext core through an explicit bridge without making legacy/runtime structures the source of truth | in_progress | `docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`; `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`; `docs/EDITOR_GENERATION_BOUNDARY_MAP.md`; `vnext-workspace/src/editorBridge/runtime.ts`; `vnext-workspace/tests/editorBridgeRuntime.test.ts`; `src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts`; `src/app/editor/_components/vnextBridge/__tests__/editorVNextBridgeHost.test.ts`; `src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts`; `src/app/editor/_components/vnextBridge/__tests__/editorGenerationReadiness.test.ts` |
 
 ## Stop Conditions
 

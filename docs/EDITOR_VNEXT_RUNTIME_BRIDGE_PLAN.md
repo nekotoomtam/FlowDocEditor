@@ -30,14 +30,14 @@ Current position:
   move to a new repository.
 - Plan: Node Model vNext Plan.
 - Phase: Phase 11, editor runtime bridge.
-- Job item: temporary parent import boundary.
+- Job item: first read-only generation diagnostic consumer.
 - Status: done.
 - Why this item is current: Phase 10 is closed for the vNext core
   pagination/export boundary in
   `vnext-workspace/docs/PHASE_10_CLOSE_AUDIT.md`. Direct editor runtime edits
   would be risky without a bridge boundary.
-- Next transition: implement the parent app bridge host through the temporary
-  import boundary.
+- Next transition: design the first mutating operation pilot without bypassing
+  history or validation policy.
 
 ## Current Evidence
 
@@ -50,6 +50,9 @@ Current position:
 | `vnext-workspace/README.md` says old document versions and prototype node names are rejected by the canonical vNext parser. | The bridge must not add legacy compatibility inside exported vNext core. |
 | `vnext-workspace/docs/PHASE_10_CLOSE_AUDIT.md` closes core pagination/export truth around measured fragments and export readiness. | The editor bridge can use vNext measured pagination as derived truth once package/runtime boundaries are clear. |
 | root `package.json` workspaces include `packages/*`, not `vnext-workspace`. | Importing vNext into the parent app needs an explicit temporary or final package boundary. |
+| `src/app/api/paginate/route.ts` and `src/app/api/export/route.ts` accept current `DocumentNode` payloads. | Existing server preview/export routes are current-runtime generation endpoints, not final vNext package APIs. |
+| `src/app/editor/_components/shell/useEditorPreviewDocumentController.ts` binds fill-mode data before pagination. | The current editor already separates authored template data from a bound preview document, but only in current runtime shape. |
+| `src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts` wraps the bridge host and reports read-only generation readiness without consuming data or producing artifacts. | Phase 11.5 has a parent-app consumer that exercises the bridge boundary without visible editor or API route mutation. |
 
 ## Design Rules
 
@@ -96,10 +99,10 @@ Important:
 | 11.0 | Bridge design boundary | Docs | Bridge rules, evidence, phases, stop conditions, and first implementation target are explicit | done | this document |
 | 11.1 | Package/import boundary | Build/package docs/tests | Decide how the parent app imports vNext during the temporary repo phase without hiding the future extraction boundary | done | `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md` |
 | 11.2 | Read-only vNext bridge runtime | vNext workspace code/tests | A bridge runtime can parse a canonical vNext package, build graph, paginate, audit renderer consumption, and report export readiness without current editor input | done | `vnext-workspace/src/editorBridge/runtime.ts`; `vnext-workspace/tests/editorBridgeRuntime.test.ts` |
-| 11.3 | Parent editor bridge host | Parent app bridge module/tests | Parent editor can request a vNext bridge snapshot behind an explicit feature/diagnostic boundary | next | pending |
-| 11.4 | Compatibility reader map | Docs/tests | Current render, selection, WYSIWYG, property, pagination, and export readers are mapped to bridge-ready or current-only status | pending | pending |
-| 11.5 | First read-only UI/diagnostic consumer | Parent app or dev tool | One consumer displays or logs vNext bridge readiness without mutating editor state/history | pending | pending |
-| 11.6 | First mutating operation pilot | Operation bridge/tests | One vNext operation can be planned/applied through bridge semantics without bypassing history or validation policy | pending | pending |
+| 11.3 | Parent editor bridge host | Parent app bridge module/tests | Parent editor can request a vNext bridge snapshot behind an explicit feature/diagnostic boundary | done | `src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts`; `src/app/editor/_components/vnextBridge/__tests__/editorVNextBridgeHost.test.ts` |
+| 11.4 | Compatibility reader map and generation boundary | Docs/tests | Current render, selection, WYSIWYG, property, pagination, export, and API generation readers are mapped to bridge-ready or current-only status | done | `docs/EDITOR_GENERATION_BOUNDARY_MAP.md` |
+| 11.5 | First read-only UI/diagnostic consumer | Parent app or dev tool | One consumer displays or logs vNext bridge/generation readiness without mutating editor state/history | done | `src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts`; `src/app/editor/_components/vnextBridge/__tests__/editorGenerationReadiness.test.ts` |
+| 11.6 | First mutating operation pilot | Operation bridge/tests | One vNext operation can be planned/applied through bridge semantics without bypassing history or validation policy | next | pending |
 | 11.7 | Runtime flip review gate | Review/browser smokes | Evidence exists before replacing current runtime source for any editor surface | pending | pending |
 
 ## Recommended First Implementation
@@ -163,6 +166,82 @@ All other parent editor/runtime files must consume the host output instead of
 importing vNext source directly.
 
 See `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`.
+
+## Phase 11.3 Parent Host
+
+Implemented host:
+
+```text
+src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts
+```
+
+The host:
+
+- imports only the vNext public entrypoint;
+- accepts canonical vNext package input only;
+- calls `safeCreateVNextEditorBridgeRuntime(...)`;
+- returns a bounded read-only snapshot for diagnostics/readiness;
+- does not expose full graph, pagination, renderer, or runtime objects;
+- does not mutate editor state, history, pagination, reducer output, or visible
+  canvas rendering.
+
+Focused tests verify:
+
+- canonical vNext fixture input returns a bounded snapshot;
+- raw/current-document-shaped input is rejected;
+- the parent app import boundary has only this host importing
+  `vnext-workspace/src`.
+
+## Phase 11.4 Generation Boundary
+
+Implemented map:
+
+```text
+docs/EDITOR_GENERATION_BOUNDARY_MAP.md
+```
+
+The map locks the first product path as API-first document generation:
+
+- the editor owns authored template/package state;
+- generation requests own request data and output options;
+- binding, pagination, renderer consumption, and export artifacts are derived
+  runtime/output state;
+- generated preview/export output is not a new authored document and must not
+  replace editor state, selection, history, or saved template data;
+- future form/slot/submission work is acknowledged as a later lane and is not
+  part of Phase 11.
+
+The map also records that current `/api/paginate` and `/api/export` routes
+consume current `DocumentNode` payloads today, while the vNext bridge host and
+vNext bridge runtime consume canonical vNext package input only.
+
+## Phase 11.5 Generation Diagnostic Consumer
+
+Implemented consumer:
+
+```text
+src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts
+```
+
+The consumer:
+
+- calls the Phase 11.3 bridge host only;
+- accepts canonical vNext package input through the host boundary;
+- returns a bounded read-only generation readiness snapshot;
+- reports request data as `not-provided` or `provided-not-consumed`;
+- reports that binding runtime view, output artifact, public generation API,
+  and current API route replacement are not implemented;
+- keeps editor state, history, selection, paginated preview, canvas rendering,
+  and API routes as explicit `false` side effects.
+
+Focused tests verify:
+
+- canonical vNext package input returns a read-only generation readiness
+  snapshot;
+- optional data is recorded but not consumed;
+- raw/current-document-shaped input remains blocked with no side effects;
+- the parent app import guard still allows only the bridge host to import
+  `vnext-workspace/src`.
 
 ## Stop Conditions
 
