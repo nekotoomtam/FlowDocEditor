@@ -17,7 +17,7 @@ Parent goal:
 | 8 | Canonical package parser/serializer | done | `src/persistence/package.ts`; `tests/packageFixture.test.ts` |
 | 9 | vNext operations | done | `src/operations/documentOperations.ts`; `tests/operations.test.ts` |
 | 10 | Pagination/export integration | done | `docs/PHASE_10_CLOSE_AUDIT.md`; `docs/TABLE_PAGINATION_VNEXT_PLAN.md`; `src/pagination/paginationPlan.ts`; `src/pagination/textMeasurement.ts`; `src/pagination/measuredPagination.ts`; `src/pagination/rendererConsumption.ts`; `src/pagination/exportReadiness.ts`; `tests/paginationPlan.test.ts`; `tests/textMeasurement.test.ts`; `tests/measuredPagination.test.ts`; `tests/rendererConsumption.test.ts`; `tests/exportReadiness.test.ts` |
-| 11 | Editor runtime bridge | in_progress | `../docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`; `../docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`; `../docs/EDITOR_GENERATION_BOUNDARY_MAP.md`; `src/editorBridge/runtime.ts`; `tests/editorBridgeRuntime.test.ts`; `../src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts`; `../src/app/editor/_components/vnextBridge/__tests__/editorVNextBridgeHost.test.ts`; `../src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts`; `../src/app/editor/_components/vnextBridge/__tests__/editorGenerationReadiness.test.ts` |
+| 11 | Editor runtime bridge | done | `../docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md`; `../docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md`; `../docs/EDITOR_GENERATION_BOUNDARY_MAP.md`; `../docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md`; `src/editorBridge/runtime.ts`; `tests/editorBridgeRuntime.test.ts`; `../src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts`; `../src/app/editor/_components/vnextBridge/__tests__/editorVNextBridgeHost.test.ts`; `../src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts`; `../src/app/editor/_components/vnextBridge/__tests__/editorGenerationReadiness.test.ts`; `../src/app/editor/_components/vnextBridge/__tests__/editorVNextOperationPilot.test.ts` |
 | 12 | Move to new repository | pending | repository extraction checklist |
 
 ## Current Rule
@@ -103,8 +103,15 @@ Current Phase 11 progress:
 - First read-only generation diagnostic consumer is implemented in the parent
   app. It calls the bridge host, records request data as not consumed, and
   reports no editor state/history/selection/pagination/canvas/API side effects.
-- The next Phase 11 item is a first mutating operation pilot design, not
-  visible editor rendering or API replacement.
+- First mutating operation pilot is implemented through the parent bridge host.
+  It runs `text-block.text.replace`, returns validation/history-ready/scope and
+  render-invalidation metadata, and reports no current editor state/history/
+  selection/pagination/canvas/API side effects.
+- Runtime flip review gate is documented in
+  `../docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md`. It passes Phase 11 as a
+  bridge-readiness baseline and blocks visible editor runtime flip until a
+  separate post-Phase-11 plan resolves reducer state, history, canvas,
+  selection, WYSIWYG, pagination, and export/API dependencies.
 
 ## Phase 9 Baseline
 

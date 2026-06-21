@@ -7,6 +7,10 @@ verify, review, and continue until the process is complete.
 This is a job-level intake. For bounded sub-task handoff, use
 `TASK_HANDOFF.md`.
 
+For a long-running delegated job, create or update
+`ACTIVE_WORKFLOW_LEDGER.md` after intake. The active workflow ledger is the
+execution queue; this file is the intake and checkpoint template.
+
 ## Job Title
 
 [short name]
@@ -65,6 +69,10 @@ The job is done when:
 
 ## Job Plan
 
+This table is enough for short delegated jobs. For long-running work, move the
+queue into `ACTIVE_WORKFLOW_LEDGER.md` so the current job item, evidence, and
+next transition stay visible across sessions.
+
 Request to plan trace:
 
 ```text
@@ -79,7 +87,7 @@ Current position:
 
 - Request:
 - Plan:
-- Phase:
+- Phase: [optional tracking label, not the stop condition]
 - Job item:
 - Status:
 - Why this item is current:
@@ -101,6 +109,9 @@ Allowed statuses:
 
 Use this section whenever the job uses phases, milestones, tracks, waves, or
 any named multi-step plan.
+
+Phases are tracking labels. They do not replace the job item ledger and they do
+not cause Codex to stop by themselves.
 
 Parent goal:
 
@@ -133,6 +144,8 @@ next job item moves to a later phase.
 - Reason:
 - Evidence:
 - Work still open:
+- Next job item that Codex will execute or the stop condition that prevents
+  continuing:
 
 ## Stop Conditions
 

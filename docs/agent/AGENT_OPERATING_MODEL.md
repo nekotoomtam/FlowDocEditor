@@ -25,9 +25,16 @@ The short role definitions live in
 [`CODEX_ROLES.md`](./CODEX_ROLES.md). The pass/fail standard lives in
 [`REVIEW_GATE.md`](./REVIEW_GATE.md). The job-level loop for broad delegated
 goals lives in [`JOB_OPERATING_MODEL.md`](./JOB_OPERATING_MODEL.md). The task
-setup template lives in [`TASK_HANDOFF.md`](./TASK_HANDOFF.md). The job intake
-and ledger template lives in
+setup template lives in [`TASK_HANDOFF.md`](./TASK_HANDOFF.md). The active job
+ledger template lives in
+[`ACTIVE_WORKFLOW_LEDGER.md`](./ACTIVE_WORKFLOW_LEDGER.md). The job intake and
+checkpoint template lives in
 [`JOB_INTAKE_TEMPLATE.md`](./JOB_INTAKE_TEMPLATE.md).
+
+This document owns bounded task role routing. It does not own the stop
+condition for broad delegated jobs. When the user has delegated a multi-step
+goal, `JOB_OPERATING_MODEL.md` owns continuation, `Next job item`, and the
+active job ledger. The roles below are applied inside each job item.
 
 Project architecture and ownership boundaries are defined by:
 
@@ -107,7 +114,7 @@ Output:
 2. Scope and out-of-scope
 3. Evidence gathered
 4. Role assignments, if multiple roles are used
-5. Minimal next action
+5. Next job item for delegated jobs, or minimal next action for bounded tasks
 
 ### Design Reviewer
 
@@ -356,7 +363,7 @@ Handoff requirements for worker agents:
 | Task type | First role | Support roles | Required reading | Verification default |
 |---|---|---|---|---|
 | Docs-only operating guidance | Docs Steward | Blocker Reviewer | `AGENTS.md`, `DOCS_INDEX.md`, agent docs | `git diff --check` |
-| Broad delegated job, image, or problem | Lead Agent | Design Reviewer, Regression Hunter, Minimal Patch Implementer, Test Planner, Blocker Reviewer as needed | `AGENTS.md`, `DOCS_INDEX.md`, `JOB_OPERATING_MODEL.md`, `JOB_INTAKE_TEMPLATE.md` when a durable plan is needed, task-specific contracts | job-specific focused checks; broaden only when risk requires |
+| Broad delegated job, image, or problem | Lead Agent | Design Reviewer, Regression Hunter, Minimal Patch Implementer, Test Planner, Blocker Reviewer as needed | `AGENTS.md`, `DOCS_INDEX.md`, `JOB_OPERATING_MODEL.md`, `ACTIVE_WORKFLOW_LEDGER.md` when a durable execution queue is needed, `JOB_INTAKE_TEMPLATE.md` for intake/checkpoints, task-specific contracts | job-specific focused checks; broaden only when risk requires |
 | Small UI copy/panel wiring | Minimal Patch Implementer | Test Planner | relevant editor component and `EDITOR_UX_CONTRACT.md` if interaction changes | type-check; focused app tests if logic changed |
 | Inline edit or WYSIWYG behavior | Design Reviewer | Regression Hunter, Test Planner, Blocker Reviewer | `EDITOR_UX_CONTRACT.md`, `WYSIWYG_EDITOR_ROADMAP.md`, `BROWSER_SMOKE_CHECKLIST.md`, `TEST_STRATEGY.md` | type-check, focused app tests, editor smoke/browser check |
 | Undo/redo or editor state race | Design Reviewer | Regression Hunter, Blocker Reviewer | `EDITOR_UX_CONTRACT.md`, `ARCHITECTURE_OVERVIEW.md`, `TEST_STRATEGY.md` | focused app tests, type-check, editor smoke |
@@ -437,6 +444,10 @@ Review output must use:
 - `UNKNOWN`
 - `Minimal next patch`
 
+For broad delegated jobs, `Minimal next patch` is only a blocker or handoff
+field. If the delegated plan still has executable work, report and continue
+with `Next job item` instead.
+
 Implementation output must include:
 
 - files changed
@@ -510,8 +521,9 @@ breaks the work into reversible role-owned steps, and iterates through
 implementation, verification, review, and replanning until the goal is met or a
 stop condition requires owner input. In this mode, `Minimal next patch` is an
 internal loop step, not the final stopping point while the delegated plan still
-has executable required work. Use `JOB_INTAKE_TEMPLATE.md` when the job needs a
-durable plan, ledger, or owner checkpoint.
+has executable required work. Use `ACTIVE_WORKFLOW_LEDGER.md` when the job
+needs a durable execution queue or current-position pointer. Use
+`JOB_INTAKE_TEMPLATE.md` for intake and owner checkpoints.
 
 ## Maintenance
 

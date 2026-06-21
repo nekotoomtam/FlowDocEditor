@@ -103,6 +103,17 @@ From the current parent repository without installing this folder separately:
   consumes the parent bridge host and reports generation readiness without
   consuming request data, rendering artifacts, replacing API routes, or
   mutating editor state
+- Parent operation pilot:
+  `runEditorVNextTextReplaceOperationPilot(...)` in
+  `../src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts` runs one
+  canonical vNext `text-block.text.replace` operation and returns validation,
+  history-ready, scope, and render-invalidation metadata without applying it to
+  current editor state or exposing a full mutated document
+- Runtime flip review gate:
+  `../docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md` passes Phase 11 bridge
+  readiness and blocks visible editor runtime flip until a separate plan
+  resolves current reducer state, history, canvas, selection, WYSIWYG,
+  pagination, and export/API dependencies
 
 Not implemented yet:
 

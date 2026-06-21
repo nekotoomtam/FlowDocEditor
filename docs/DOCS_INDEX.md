@@ -16,10 +16,12 @@ For a new session:
    unclear
 6. `docs/agent/JOB_OPERATING_MODEL.md` when the user delegates a broad goal,
    image, or problem for Codex to break down and iterate on
-7. `docs/agent/JOB_INTAKE_TEMPLATE.md` when a delegated job needs a durable
-   plan, ledger, or owner checkpoint
-8. The smallest task-specific contract below
-9. `docs/WORK_LOG_RECENT.md` only when recent implementation context is needed
+7. `docs/agent/ACTIVE_WORKFLOW_LEDGER.md` when a delegated job needs a durable
+   execution queue, current-position pointer, or cross-session ledger
+8. `docs/agent/JOB_INTAKE_TEMPLATE.md` when a delegated job needs initial
+   intake or an owner checkpoint
+9. The smallest task-specific contract below
+10. `docs/WORK_LOG_RECENT.md` only when recent implementation context is needed
 
 ## Source Of Truth Map
 
@@ -27,9 +29,10 @@ For a new session:
 |---|---|
 | Agent operating rules | `AGENTS.md` |
 | Agent roles | `docs/agent/CODEX_ROLES.md` |
-| Detailed agent workflow | `docs/agent/AGENT_OPERATING_MODEL.md` |
-| Goal-oriented job workflow | `docs/agent/JOB_OPERATING_MODEL.md` |
-| Job intake and ledger template | `docs/agent/JOB_INTAKE_TEMPLATE.md` |
+| Detailed bounded-task role workflow | `docs/agent/AGENT_OPERATING_MODEL.md` |
+| Delegated job workflow and stop conditions | `docs/agent/JOB_OPERATING_MODEL.md` |
+| Active delegated job execution ledger | `docs/agent/ACTIVE_WORKFLOW_LEDGER.md` |
+| Delegated job intake and checkpoint template | `docs/agent/JOB_INTAKE_TEMPLATE.md` |
 | Handoff template | `docs/agent/TASK_HANDOFF.md` |
 | Review gate | `docs/agent/REVIEW_GATE.md` |
 | Product direction | `docs/PRODUCT_DIRECTION.md` |
@@ -47,6 +50,14 @@ For a new session:
 | Editor vNext runtime bridge | `docs/EDITOR_VNEXT_RUNTIME_BRIDGE_PLAN.md` |
 | Editor vNext import boundary | `docs/EDITOR_VNEXT_IMPORT_BOUNDARY_DECISION.md` |
 | Editor/generation boundary | `docs/EDITOR_GENERATION_BOUNDARY_MAP.md` |
+| Editor vNext runtime flip review gate | `docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md` |
+| Editor vNext usable runtime active ledger | `docs/EDITOR_VNEXT_USABLE_RUNTIME_LEDGER.md` |
+| Editor vNext hidden runtime surface | `docs/EDITOR_VNEXT_HIDDEN_RUNTIME_SURFACE_PLAN.md` |
+| Editor vNext operation commit adapter | `docs/EDITOR_VNEXT_OPERATION_COMMIT_ADAPTER_PLAN.md` |
+| Editor vNext API-first generation | `docs/EDITOR_VNEXT_API_FIRST_GENERATION_PLAN.md` |
+| Editor vNext artifact generation active ledger | `docs/EDITOR_VNEXT_ARTIFACT_GENERATION_LEDGER.md` |
+| Editor vNext preview artifact | `docs/EDITOR_VNEXT_PREVIEW_ARTIFACT_PLAN.md` |
+| Editor vNext SVG preview proof | `docs/EDITOR_VNEXT_SVG_PREVIEW_PROOF_LEDGER.md`, `docs/EDITOR_VNEXT_SVG_PREVIEW_PROOF_PLAN.md` |
 | Test strategy | `docs/TEST_STRATEGY.md` |
 | Browser smoke checks | `docs/BROWSER_SMOKE_CHECKLIST.md` |
 | Editor UX | `docs/EDITOR_UX_CONTRACT.md` |
@@ -92,8 +103,10 @@ Agent or review work:
 - `docs/agent/AGENT_OPERATING_MODEL.md`
 - `docs/agent/JOB_OPERATING_MODEL.md` when the user delegates a broad goal,
   image, or problem for Codex to break down and iterate on
-- `docs/agent/JOB_INTAKE_TEMPLATE.md` when the delegated job needs a durable
-  plan, ledger, or owner checkpoint
+- `docs/agent/ACTIVE_WORKFLOW_LEDGER.md` when the delegated job needs a durable
+  execution queue, current-position pointer, or cross-session ledger
+- `docs/agent/JOB_INTAKE_TEMPLATE.md` when the delegated job needs initial
+  intake or an owner checkpoint
 - `docs/agent/TASK_HANDOFF.md`
 - `docs/agent/REVIEW_GATE.md`
 
@@ -161,6 +174,25 @@ Layout, pagination, or cross-page behavior:
 - `docs/EDITOR_GENERATION_BOUNDARY_MAP.md` when preview/export, API-first
   document generation, or editor template versus generated output truth is in
   scope
+- `docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md` before replacing current
+  editor runtime, canvas, pagination, history, export/API, or visible source of
+  truth with vNext
+- `docs/EDITOR_VNEXT_USABLE_RUNTIME_LEDGER.md` when continuing post-Phase-11
+  work toward a usable vNext runtime path before repository extraction or
+  visible runtime flip
+- `docs/EDITOR_VNEXT_HIDDEN_RUNTIME_SURFACE_PLAN.md` before implementing the
+  first hidden vNext runtime truth surface
+- `docs/EDITOR_VNEXT_OPERATION_COMMIT_ADAPTER_PLAN.md` before adapting vNext
+  operation pilot output toward editor commit or history semantics
+- `docs/EDITOR_VNEXT_API_FIRST_GENERATION_PLAN.md` before adding a vNext
+  generation/readiness API route or changing generation request shape
+- `docs/EDITOR_VNEXT_ARTIFACT_GENERATION_LEDGER.md` when continuing the
+  post-usable-runtime artifact generation lane
+- `docs/EDITOR_VNEXT_PREVIEW_ARTIFACT_PLAN.md` before returning measured
+  preview artifact output from vNext
+- `docs/EDITOR_VNEXT_SVG_PREVIEW_PROOF_LEDGER.md` and
+  `docs/EDITOR_VNEXT_SVG_PREVIEW_PROOF_PLAN.md` before turning measured preview
+  artifact commands into bounded SVG preview proof output
 - `docs/EDITOR_OPERATION_ARCHITECTURE.md` when editor mutation routing or
   operation migration is in scope
 - `docs/EDITOR_OPERATION_COMMAND_ARCHITECTURE_PLAN.md` when operation command,

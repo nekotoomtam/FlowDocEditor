@@ -48,7 +48,9 @@ change, for example:
 
 ## Parent Host Contract
 
-The parent bridge host should be read-only at first.
+The parent bridge host was read-only through Phase 11.5. Phase 11.6 adds a
+test/dev-facing mutating operation pilot while keeping the same import
+boundary and avoiding current editor runtime side effects.
 
 Allowed:
 
@@ -59,6 +61,9 @@ Allowed:
 - expose `ready`, `ready-with-warnings`, or `blocked` state;
 - include page count, graph counts, renderer-consumption counts, and export
   readiness counts.
+- run the first scoped operation pilot, `text-block.text.replace`, and return
+  validation, history-ready, scope, and render-invalidation metadata without
+  applying the result to current editor state.
 
 Not allowed:
 
@@ -70,6 +75,8 @@ Not allowed:
 - drive visible canvas rendering;
 - import vNext internal modules directly;
 - create vNext compatibility inside exported vNext core.
+- expose operation pilots as visible editor mutations before the runtime flip
+  review gate.
 
 ## Why Not Move Repo Now
 
@@ -125,9 +132,22 @@ Phase 11.5 implemented the first read-only generation diagnostic consumer:
 src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts
 ```
 
-Next step: proceed to Phase 11.6 with a first mutating operation pilot design.
-Do not wire vNext into visible editor rendering or replace `/api/export` /
-`/api/paginate` before the later runtime flip review gate.
+Phase 11.6 implemented the first mutating operation pilot through the same
+host:
+
+```text
+runEditorVNextTextReplaceOperationPilot(...)
+```
+
+Phase 11.7 added the runtime flip review gate:
+
+```text
+docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md
+```
+
+The gate passes Phase 11 bridge readiness but blocks visible editor runtime
+flip. Do not wire vNext into visible editor rendering or replace `/api/export`
+/ `/api/paginate` without a separate approved post-Phase-11 plan.
 
 Original Phase 11.3 target:
 

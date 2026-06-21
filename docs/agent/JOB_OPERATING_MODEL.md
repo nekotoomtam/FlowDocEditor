@@ -18,6 +18,28 @@ active contracts, or code/test evidence. This model extends
 `AGENT_OPERATING_MODEL.md`; it does not replace the existing review, design,
 implementation, or verification roles.
 
+## Mode Precedence
+
+For broad delegated goals, this document owns the job-level execution loop,
+continuation policy, ledger, and stop conditions.
+
+`AGENT_OPERATING_MODEL.md` and `CODEX_ROLES.md` still define the roles used
+inside a job item, but they do not decide when the whole delegated job stops.
+If guidance appears to conflict, use this order:
+
+1. `AGENTS.md` for project-level behavior and safety.
+2. This document for broad delegated job workflow.
+3. `ACTIVE_WORKFLOW_LEDGER.md` for durable execution queues,
+   current-position pointers, evidence ledgers, and continuation state.
+4. `JOB_INTAKE_TEMPLATE.md` for initial intake and owner checkpoints.
+5. `AGENT_OPERATING_MODEL.md` and `CODEX_ROLES.md` for role behavior inside a
+   job item.
+6. Task-specific contracts, code, and tests for product behavior.
+
+Project phases, architecture phases, and milestone names are tracking labels.
+They are not the execution driver and they are not stop conditions by
+themselves.
+
 ## Job Contract
 
 Before running a job, establish the smallest useful contract:
@@ -45,8 +67,9 @@ Before running a job, establish the smallest useful contract:
 If the contract is incomplete but the next step is low-risk exploration, Codex
 may start with evidence gathering and mark missing decisions as `UNKNOWN`.
 
-Use `JOB_INTAKE_TEMPLATE.md` when the job needs a durable plan, ledger, owner
-checkpoint, or handoff across sessions.
+Use `ACTIVE_WORKFLOW_LEDGER.md` when the job needs a durable execution queue,
+current-position pointer, evidence ledger, or handoff across sessions. Use
+`JOB_INTAKE_TEMPLATE.md` for the initial intake and owner checkpoint shape.
 
 ## Delegated Job Execution
 
@@ -109,6 +132,11 @@ step is read-only evidence gathering. The plan can be compact, but it must name:
 - the definition of done for the whole job
 - the known stop conditions or owner-decision gates
 
+The job plan must include an active job ledger unless the user explicitly asks
+for review-only output. The ledger is the execution queue. Use
+`ACTIVE_WORKFLOW_LEDGER.md` for long-running or cross-session work. A phase map
+may also exist, but it is only a tracking aid.
+
 The plan is a working tool. It may be revised as evidence changes, but changes
 that expand scope or cross a risk gate must be reported before execution.
 
@@ -133,6 +161,10 @@ Definitions:
   progress easier to track.
 - `Job item`: the currently executable unit of work inside a phase.
 - `Execution step`: the immediate inspect, edit, verify, or review action.
+
+Do not let `Phase` replace `Job item`. A phase can become done while the larger
+job continues. A job should stop only when the definition of done is met or a
+stop condition is hit.
 
 Codex must maintain a current-position pointer whenever the plan has phases or
 multiple job items:
@@ -206,9 +238,14 @@ During delegated work, Codex should track job item state:
 - `accepted`: integrated into the final result or explicitly accepted by the
   owner
 
-The ledger may be maintained in the conversation, a task plan, or a durable doc
-when the job is long-running. Codex should not treat the whole job as done while
-required job items remain `pending`, `in_progress`, or `blocked`.
+The ledger may be maintained in the conversation, a task plan, or
+`ACTIVE_WORKFLOW_LEDGER.md` when the job is long-running. Codex should not
+treat the whole job as done while required job items remain `pending`,
+`in_progress`, or `blocked`.
+
+When both a project phase ledger and an active job ledger exist, the active job
+ledger controls continuation. The project phase ledger is evidence for where
+the architecture stands; it is not the agent's execution state machine.
 
 ## Job Loop
 
@@ -349,8 +386,10 @@ Final job output must include:
 - `AGENT_OPERATING_MODEL.md` remains the detailed role and ownership model.
 - `REVIEW_GATE.md` remains the pass/fail standard.
 - `TASK_HANDOFF.md` remains the handoff template for bounded sub-tasks.
-- `JOB_INTAKE_TEMPLATE.md` remains the template for delegated job plans,
-  ledgers, and owner checkpoints.
+- `ACTIVE_WORKFLOW_LEDGER.md` remains the template for delegated job execution
+  queues, current-position pointers, evidence ledgers, and continuation state.
+- `JOB_INTAKE_TEMPLATE.md` remains the template for delegated job intake and
+  owner checkpoints.
 
 This document owns only the job-level loop: goal contract, autonomy boundaries,
 iteration, replanning, stop conditions, and final handoff.

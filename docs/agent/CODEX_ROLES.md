@@ -6,6 +6,11 @@ multi-agent division of work, routing rules, and handoff requirements, see
 goals, image/problem intake, iteration loops, and stop conditions, see
 [`JOB_OPERATING_MODEL.md`](./JOB_OPERATING_MODEL.md).
 
+For delegated jobs, these roles are item-level roles only. They do not define
+the stopping point for the whole job. `JOB_OPERATING_MODEL.md` owns the loop
+and stop conditions; `ACTIVE_WORKFLOW_LEDGER.md` owns the durable execution
+queue and current-position pointer when one is needed.
+
 ---
 
 ## Role: Design Reviewer
@@ -64,7 +69,9 @@ Output:
 
 ## Role: Minimal Patch Implementer
 
-Use only after the design is accepted.
+Use after the design is accepted, or when the active delegated job item is
+already inside an accepted plan and is small, reversible, and low-risk enough to
+execute.
 
 In delegated jobs, this is an item-level execution role. It keeps each job item
 small and reversible, but it does not make `Minimal next patch` the stopping

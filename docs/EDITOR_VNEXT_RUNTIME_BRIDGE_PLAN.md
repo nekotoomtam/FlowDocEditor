@@ -1,6 +1,7 @@
 # Editor vNext Runtime Bridge Plan
 
-Status: Active Phase 11 design plan.
+Status: Phase 11 bridge baseline complete; visible runtime flip blocked by
+review gate.
 
 Use this document before connecting the current editor runtime to the vNext
 core. The bridge must not make legacy/current runtime structures the vNext
@@ -30,14 +31,15 @@ Current position:
   move to a new repository.
 - Plan: Node Model vNext Plan.
 - Phase: Phase 11, editor runtime bridge.
-- Job item: first read-only generation diagnostic consumer.
+- Job item: runtime flip review gate.
 - Status: done.
 - Why this item is current: Phase 10 is closed for the vNext core
   pagination/export boundary in
   `vnext-workspace/docs/PHASE_10_CLOSE_AUDIT.md`. Direct editor runtime edits
   would be risky without a bridge boundary.
-- Next transition: design the first mutating operation pilot without bypassing
-  history or validation policy.
+- Next transition: continue through
+  `docs/EDITOR_VNEXT_USABLE_RUNTIME_LEDGER.md`. Do not flip visible editor
+  runtime without satisfying `docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md`.
 
 ## Current Evidence
 
@@ -53,6 +55,8 @@ Current position:
 | `src/app/api/paginate/route.ts` and `src/app/api/export/route.ts` accept current `DocumentNode` payloads. | Existing server preview/export routes are current-runtime generation endpoints, not final vNext package APIs. |
 | `src/app/editor/_components/shell/useEditorPreviewDocumentController.ts` binds fill-mode data before pagination. | The current editor already separates authored template data from a bound preview document, but only in current runtime shape. |
 | `src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts` wraps the bridge host and reports read-only generation readiness without consuming data or producing artifacts. | Phase 11.5 has a parent-app consumer that exercises the bridge boundary without visible editor or API route mutation. |
+| `src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts` exposes `runEditorVNextTextReplaceOperationPilot(...)`. | Phase 11.6 can run one vNext content mutation and return validation, history-ready, and render-invalidation metadata without applying it to current editor state. |
+| `docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md` marks visible runtime flip as FAIL / BLOCKER while passing the bridge baseline. | Phase 11 is complete as a bridge readiness slice, not as a visible editor runtime replacement. |
 
 ## Design Rules
 
@@ -102,8 +106,8 @@ Important:
 | 11.3 | Parent editor bridge host | Parent app bridge module/tests | Parent editor can request a vNext bridge snapshot behind an explicit feature/diagnostic boundary | done | `src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts`; `src/app/editor/_components/vnextBridge/__tests__/editorVNextBridgeHost.test.ts` |
 | 11.4 | Compatibility reader map and generation boundary | Docs/tests | Current render, selection, WYSIWYG, property, pagination, export, and API generation readers are mapped to bridge-ready or current-only status | done | `docs/EDITOR_GENERATION_BOUNDARY_MAP.md` |
 | 11.5 | First read-only UI/diagnostic consumer | Parent app or dev tool | One consumer displays or logs vNext bridge/generation readiness without mutating editor state/history | done | `src/app/editor/_components/vnextBridge/editorGenerationReadiness.ts`; `src/app/editor/_components/vnextBridge/__tests__/editorGenerationReadiness.test.ts` |
-| 11.6 | First mutating operation pilot | Operation bridge/tests | One vNext operation can be planned/applied through bridge semantics without bypassing history or validation policy | next | pending |
-| 11.7 | Runtime flip review gate | Review/browser smokes | Evidence exists before replacing current runtime source for any editor surface | pending | pending |
+| 11.6 | First mutating operation pilot | Operation bridge/tests | One vNext operation can be planned/applied through bridge semantics without bypassing history or validation policy | done | `src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts`; `src/app/editor/_components/vnextBridge/__tests__/editorVNextOperationPilot.test.ts` |
+| 11.7 | Runtime flip review gate | Review/browser smokes | Evidence exists before replacing current runtime source for any editor surface | done | `docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md` |
 
 ## Recommended First Implementation
 
@@ -243,6 +247,64 @@ Focused tests verify:
 - the parent app import guard still allows only the bridge host to import
   `vnext-workspace/src`.
 
+## Phase 11.6 Operation Pilot
+
+Implemented pilot:
+
+```text
+runEditorVNextTextReplaceOperationPilot(...)
+```
+
+Location:
+
+```text
+src/app/editor/_components/vnextBridge/editorVNextBridgeHost.ts
+```
+
+The pilot:
+
+- supports only `text-block.text.replace` in this first slice;
+- accepts canonical vNext package input through the bridge host boundary;
+- runs the vNext operation against the canonical package document;
+- returns a bounded operation snapshot, not the full mutated document;
+- returns the vNext durable-history-ready record for committed and rejected
+  operation results;
+- reports validation policy, history intent, operation scope, and render
+  invalidation from the vNext operation result;
+- keeps editor state, current editor history, selection, paginated preview,
+  canvas rendering, persistence, and API routes as explicit non-side effects.
+
+Focused tests verify:
+
+- a canonical package can commit `text-block.text.replace` with full
+  validation, content history intent, text-content render invalidation, and a
+  committed history-ready record;
+- missing target operations return rejected history-ready records instead of
+  bypassing history/audit;
+- raw/current-document-shaped input is blocked before the operation runs;
+- the parent app import guard still allows only the bridge host to import
+  `vnext-workspace/src`.
+
+## Phase 11.7 Runtime Flip Review Gate
+
+Implemented review:
+
+```text
+docs/EDITOR_VNEXT_RUNTIME_FLIP_REVIEW_GATE.md
+```
+
+Outcome:
+
+- PASS for Phase 11 bridge readiness.
+- FAIL / BLOCKER for visible editor runtime flip.
+
+The gate records that bridge host, generation diagnostic, and text replace
+operation pilot are valid bridge evidence. It also records that current
+`EditorState.doc`, `state.paginated`, undo/redo history, canvas readers,
+selection context, WYSIWYG/inline edit, preview pagination, `/api/paginate`,
+and `/api/export` still depend on current runtime structures. Replacing any of
+those visible surfaces needs a separate approved plan.
+
 ## Stop Conditions
 
 Stop for owner review before:
@@ -293,7 +355,7 @@ For visible editor integration:
 
 - Should the temporary parent app import vNext through `vnext-workspace`, a new
   `packages/vnext-core`, or only after repository extraction?
-- Should the first parent editor consumer be a hidden diagnostics panel,
-  development console report, or test-only bridge host?
-- Which mutating operation should be the first vNext operation pilot after
-  read-only bridge runtime is proven?
+- `docs/EDITOR_VNEXT_USABLE_RUNTIME_LEDGER.md` is the selected
+  post-Phase-11 active workflow. It starts with a hidden vNext runtime truth
+  surface before operation commit, API-first generation, editor integration,
+  or repository extraction.
